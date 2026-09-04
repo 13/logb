@@ -1,3 +1,4 @@
+pub mod activities;
 pub mod auth;
 pub mod objects;
 pub mod settings;
@@ -15,6 +16,7 @@ pub fn router() -> Router<App> {
         .merge(users::router())
         .merge(settings::router())
         .merge(objects::router())
+        .merge(activities::router())
 }
 
 async fn health() -> Json<serde_json::Value> {
