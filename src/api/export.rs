@@ -1,7 +1,7 @@
 use super::attachments::{self, AttachmentOut};
-use super::objects::{load_owned_object, ObjectRow};
-use super::activities::ActivityRow;
-use super::reminders::ReminderRow;
+use super::objects::{load_owned_object, ObjectInput, ObjectRow};
+use super::activities::{ActivityInput, ActivityRow};
+use super::reminders::{ReminderInput, ReminderRow};
 use super::settings;
 use crate::auth::AuthUser;
 use crate::db;
@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use sqlx::Sqlite;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
@@ -218,7 +219,10 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         Ok((data, blobs))
     }).await.map_err(|e| AppError::Internal(e.to_string()))??;
 
+    validate_import(&data)?;
+
     let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0 };
+    let mut tx = state.db.begin().await?;
     for o in data.objects {
         let now = db::now();
         let (object_id,): (i64,) = sqlx::query_as(
@@ -226,7 +230,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
              archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
             .bind(user.id).bind(&o.name).bind(&o.category).bind(&o.counter_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .fetch_one(&state.db).await?;
+            .fetch_one(&mut *tx).await?;
         counts.objects += 1;
 
         let mut activity_ids = Vec::new();
@@ -236,16 +240,16 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(&a.title).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(&a.created_at).bind(&now)
-                .fetch_one(&state.db).await?;
+                .fetch_one(&mut *tx).await?;
             activity_ids.push(aid);
             counts.activities += 1;
             for x in &a.attachments {
-                if import_attachment(&state, user.id, object_id, Some(aid), x, &blobs).await?.is_some() { counts.attachments += 1; }
+                if import_attachment(&state, &mut tx, user.id, object_id, Some(aid), x, &blobs).await?.is_some() { counts.attachments += 1; }
             }
         }
         let mut cover: Option<i64> = None;
         for x in &o.attachments {
-            if let Some(att_id) = import_attachment(&state, user.id, object_id, None, x, &blobs).await? {
+            if let Some(att_id) = import_attachment(&state, &mut tx, user.id, object_id, None, x, &blobs).await? {
                 counts.attachments += 1;
                 if o.cover_sha256.as_deref() == Some(x.sha256.as_str()) { cover = Some(att_id); }
             }
@@ -254,12 +258,12 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             if let Some(sha) = &o.cover_sha256 {
                 let row: Option<(i64,)> = sqlx::query_as(
                     "SELECT a.id FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? AND f.sha256 = ? AND a.kind = 'photo' LIMIT 1")
-                    .bind(object_id).bind(sha).fetch_optional(&state.db).await?;
+                    .bind(object_id).bind(sha).fetch_optional(&mut *tx).await?;
                 cover = row.map(|r| r.0);
             }
         }
         if let Some(c) = cover {
-            sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ?").bind(c).bind(object_id).execute(&state.db).await?;
+            sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ?").bind(c).bind(object_id).execute(&mut *tx).await?;
         }
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
@@ -268,20 +272,95 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(object_id).bind(&r.title).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
-                .execute(&state.db).await?;
+                .execute(&mut *tx).await?;
             counts.reminders += 1;
         }
     }
+    tx.commit().await?;
     Ok(Json(counts))
+}
+
+/// Validates every object, activity, attachment and reminder in a parsed archive up
+/// front, before the import loop writes a single row, so a bad entry anywhere rejects
+/// the whole import with a 400 rather than leaving a partial import behind. Reuses the
+/// same validators the normal write paths use (`ObjectInput::validate`,
+/// `ActivityInput::validate`, `ReminderInput::validate`), so the rules stay identical to
+/// what `POST /objects`, `POST .../activities` and `POST .../reminders` already enforce.
+fn validate_import(data: &Export) -> Result<(), AppError> {
+    for (oi, o) in data.objects.iter().enumerate() {
+        let mut obj_input = ObjectInput {
+            name: o.name.clone(),
+            category: o.category.clone(),
+            counter_unit: o.counter_unit.clone(),
+            description: o.description.clone(),
+            purchase_date: o.purchase_date.clone(),
+            purchase_price_cents: o.purchase_price_cents,
+            archived: None,
+            cover_attachment_id: None,
+        };
+        obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
+
+        // `ActivityInput::validate` only reads `object.counter_unit`; the rest of this
+        // stand-in row is never inspected, since the real object doesn't exist yet.
+        let object_stub = ObjectRow {
+            id: 0, user_id: 0, name: o.name.clone(), category: o.category.clone(),
+            counter_unit: o.counter_unit.clone(), description: o.description.clone(),
+            purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
+            archived_at: o.archived_at.clone(), cover_attachment_id: None,
+            created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
+        };
+
+        for (ai, a) in o.activities.iter().enumerate() {
+            let mut act_input = ActivityInput {
+                date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
+                notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
+            };
+            act_input.validate(&object_stub)
+                .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;
+            for x in &a.attachments {
+                validate_attachment_kind(&x.kind)
+                    .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} attachment", o.name)))?;
+            }
+        }
+        for x in &o.attachments {
+            validate_attachment_kind(&x.kind).map_err(|e| tag(e, &format!("object {oi} ({}) attachment", o.name)))?;
+        }
+        for (ri, r) in o.reminders.iter().enumerate() {
+            let mut rem_input = ReminderInput {
+                title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(),
+                due_counter: r.due_counter, repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
+            };
+            rem_input.validate(o.counter_unit.as_deref())
+                .map_err(|e| tag(e, &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title)))?;
+        }
+    }
+    Ok(())
+}
+
+/// Mirrors the `attachments` table's `CHECK (kind IN ('photo', 'document'))`.
+fn validate_attachment_kind(kind: &str) -> Result<(), AppError> {
+    if kind != "photo" && kind != "document" {
+        return Err(AppError::BadRequest(format!("attachment kind must be photo or document, got '{kind}'")));
+    }
+    Ok(())
+}
+
+/// Prefixes a `BadRequest` message with where in the archive it came from; other error
+/// variants pass through unchanged.
+fn tag(e: AppError, location: &str) -> AppError {
+    match e {
+        AppError::BadRequest(msg) => AppError::BadRequest(format!("{location}: {msg}")),
+        other => other,
+    }
 }
 
 /// Returns the new attachment id, or None when the blob is missing from the archive.
 async fn import_attachment(
-    state: &App, user_id: i64, object_id: i64, activity_id: Option<i64>,
+    state: &App, tx: &mut sqlx::Transaction<'_, Sqlite>, user_id: i64, object_id: i64, activity_id: Option<i64>,
     x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>,
 ) -> Result<Option<i64>, AppError> {
     let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
-        .bind(user_id).bind(&x.sha256).fetch_optional(&state.db).await?;
+        .bind(user_id).bind(&x.sha256).fetch_optional(&mut **tx).await?;
     let file_id = match existing {
         Some((id,)) => id,
         None => {
@@ -297,7 +376,7 @@ async fn import_attachment(
                 .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
                 .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
                 .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
-                .fetch_one(&state.db).await;
+                .fetch_one(&mut **tx).await;
             let id = match inserted {
                 Ok((id,)) => {
                     if let Some(img) = &image { state.storage.write_thumb(id, &img.thumb_jpeg).await?; }
@@ -308,7 +387,7 @@ async fn import_attachment(
                 // not an error -- reuse the row the winner just created.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
                     let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
-                        .bind(user_id).bind(&x.sha256).fetch_one(&state.db).await?;
+                        .bind(user_id).bind(&x.sha256).fetch_one(&mut **tx).await?;
                     id
                 }
                 Err(e) => return Err(e.into()),
@@ -319,6 +398,6 @@ async fn import_attachment(
     let (id,): (i64,) = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")
         .bind(object_id).bind(activity_id).bind(file_id).bind(&x.kind).bind(&x.caption).bind(&x.created_at)
-        .fetch_one(&state.db).await?;
+        .fetch_one(&mut **tx).await?;
     Ok(Some(id))
 }

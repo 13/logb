@@ -46,16 +46,21 @@ pub struct ReminderOut {
     pub due: bool,
 }
 
-fn parse_date(s: &str) -> NaiveDate {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").expect("dates are validated on write")
+/// Parses a stored `YYYY-MM-DD` date. Returns `None` on malformed input instead of
+/// panicking -- a row's date column is not guaranteed valid (e.g. an archive import
+/// bypassing normal validation), and a panic in a request handler is never acceptable.
+fn parse_date(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
-fn today() -> NaiveDate { parse_date(&db::today()) }
+fn today() -> NaiveDate {
+    parse_date(&db::today()).expect("server-generated date is always valid")
+}
 
 impl From<ReminderRow> for ReminderOut {
     fn from(row: ReminderRow) -> Self {
         let due = row.done_at.is_none()
-            && is_due(today(), row.current_counter, row.due_date.as_deref().map(parse_date), row.due_counter);
+            && is_due(today(), row.current_counter, row.due_date.as_deref().and_then(parse_date), row.due_counter);
         ReminderOut { row, due }
     }
 }
@@ -88,7 +93,7 @@ pub struct ReminderInput {
 }
 
 impl ReminderInput {
-    fn validate(&mut self, counter_unit: Option<&str>) -> Result<(), AppError> {
+    pub(crate) fn validate(&mut self, counter_unit: Option<&str>) -> Result<(), AppError> {
         self.title = self.title.trim().to_string();
         if self.title.is_empty() { return Err(AppError::BadRequest("title is required".into())); }
         if let Some(d) = &self.due_date { validate_date(d)?; }
@@ -203,7 +208,7 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         .bind(db::now()).bind(body.activity_id).bind(id)
         .execute(&state.db).await?;
 
-    let base_date = activity.as_ref().map(|a| parse_date(&a.date)).unwrap_or_else(today);
+    let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
     let base_counter = activity.as_ref().and_then(|a| a.counter_value).or(stats(&state, r.object_id).await?.current_counter);
     let repeat = Repeat { months: r.repeat_months.map(|m| m as u32), counter: r.repeat_counter };
     let next = match next_due(base_date, base_counter, r.due_counter, repeat) {

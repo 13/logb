@@ -70,7 +70,7 @@ pub fn validate_date(s: &str) -> Result<(), AppError> {
 }
 
 impl ObjectInput {
-    fn validate(&mut self) -> Result<(), AppError> {
+    pub(crate) fn validate(&mut self) -> Result<(), AppError> {
         self.name = self.name.trim().to_string();
         self.category = self.category.trim().to_string();
         if self.name.is_empty() { return Err(AppError::BadRequest("name is required".into())); }

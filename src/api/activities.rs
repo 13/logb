@@ -47,7 +47,7 @@ pub struct ActivityInput {
 }
 
 impl ActivityInput {
-    fn validate(&mut self, object: &ObjectRow) -> Result<(), AppError> {
+    pub(crate) fn validate(&mut self, object: &ObjectRow) -> Result<(), AppError> {
         validate_date(&self.date)?;
         if !CATEGORIES.contains(&self.category.as_str()) {
             return Err(AppError::BadRequest(format!("category must be one of {}", CATEGORIES.join(", "))));

@@ -2,6 +2,34 @@ mod common;
 use reqwest::multipart::{Form, Part};
 use serde_json::json;
 
+/// Zips a single `data.json` entry containing `data`, as a real export archive would.
+fn zip_data_json(data: &serde_json::Value) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("data.json", opts).unwrap();
+        std::io::Write::write_all(&mut w, serde_json::to_vec(data).unwrap().as_slice()).unwrap();
+        w.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+/// A minimal version-1 export with a single object and no activities/attachments/reminders,
+/// for tests to graft a hostile field onto.
+fn base_object() -> serde_json::Value {
+    json!({
+        "name": "Golf", "category": "car", "counter_unit": "km", "description": "",
+        "purchase_date": null, "purchase_price_cents": null, "archived_at": null,
+        "created_at": "2024-01-01T00:00:00Z", "cover_sha256": null,
+        "activities": [], "attachments": [], "reminders": []
+    })
+}
+
+fn export_shell(object: serde_json::Value) -> serde_json::Value {
+    json!({ "version": 1, "exported_at": "2024-01-01T00:00:00Z", "currency": "EUR", "objects": [object] })
+}
+
 fn png() -> Vec<u8> {
     let img = image::DynamicImage::new_rgb8(64, 32);
     let mut out = std::io::Cursor::new(Vec::new());
@@ -62,4 +90,53 @@ async fn export_import_round_trip() {
     assert_eq!(res.status(), 404);
     let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(b"nope".to_vec()).send().await.unwrap();
     assert_eq!(res.status(), 400);
+}
+
+/// A well-formed version-1 archive whose reminder carries an unparseable `due_date`
+/// must be rejected outright, and must not leave a partial import behind.
+#[tokio::test]
+async fn import_rejects_invalid_reminder_due_date() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["reminders"] = json!([{
+        "title": "Oil", "notes": "", "due_date": "not-a-date", "due_counter": null,
+        "repeat_months": null, "repeat_counter": null, "done_at": null,
+        "done_activity_index": null, "created_at": "2024-01-01T00:00:00Z"
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs.len(), 0, "rejected import must not persist anything");
+
+    // The reminders read path must survive: no panic, a clean 200.
+    let res = anna.get(app.url("/reminders/due")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+/// A well-formed version-1 archive whose activity carries a `category` outside the
+/// fixed set must also be rejected, and must not leave a partial import behind.
+#[tokio::test]
+async fn import_rejects_invalid_activity_category() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["activities"] = json!([{
+        "date": "2024-01-01", "category": "not-a-category", "title": "Oops", "notes": "",
+        "counter_value": null, "cost_cents": null, "created_at": "2024-01-01T00:00:00Z", "attachments": []
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs.len(), 0, "rejected import must not persist anything");
 }
