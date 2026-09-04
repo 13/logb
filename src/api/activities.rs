@@ -160,6 +160,11 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned_activity(&state, user.id, id).await?;
+    sqlx::query(
+        "UPDATE objects SET cover_attachment_id = NULL \
+         WHERE cover_attachment_id IN (SELECT id FROM attachments WHERE activity_id = ?)",
+    )
+    .bind(id).execute(&state.db).await?;
     sqlx::query("DELETE FROM activities WHERE id = ?").bind(id).execute(&state.db).await?;
     attachments::purge_orphan_files(&state).await?;
     Ok(StatusCode::NO_CONTENT)

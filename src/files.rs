@@ -1,4 +1,5 @@
 use image::DynamicImage;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -33,9 +34,25 @@ impl Storage {
             return Ok(());
         }
         tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        let tmp = path.with_extension("part");
+        let mut token = [0u8; 16];
+        rand::rng().fill(&mut token);
+        let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
         tokio::fs::write(&tmp, bytes).await?;
-        tokio::fs::rename(tmp, path).await
+        match tokio::fs::rename(&tmp, &path).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Another concurrent writer for the same content hash may have won the
+                // race and already produced the destination file. Since the path is
+                // derived from the content hash, that file has identical bytes to ours.
+                if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    Ok(())
+                } else {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    Err(e)
+                }
+            }
+        }
     }
 
     pub async fn write_thumb(&self, file_id: i64, jpeg: &[u8]) -> std::io::Result<()> {
@@ -158,5 +175,35 @@ mod tests {
         assert_eq!(s.blob_path("abcdef"), PathBuf::from("/data/files/ab/abcdef"));
         assert_eq!(s.thumb_path(7), PathBuf::from("/data/thumbs/7.jpg"));
         assert_eq!(sha256_hex(b"").len(), 64);
+    }
+
+    #[tokio::test]
+    async fn concurrent_write_blob_for_same_content_never_errors_or_leaves_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path()).unwrap();
+        let bytes = b"identical bytes uploaded concurrently".to_vec();
+        let sha = sha256_hex(&bytes);
+
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let storage = storage.clone();
+            let sha = sha.clone();
+            let bytes = bytes.clone();
+            tasks.push(tokio::spawn(async move { storage.write_blob(&sha, &bytes).await }));
+        }
+        for t in tasks {
+            assert!(t.await.unwrap().is_ok());
+        }
+
+        let path = storage.blob_path(&sha);
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), bytes);
+
+        let shard_dir = path.parent().unwrap();
+        let mut entries = tokio::fs::read_dir(shard_dir).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().to_string());
+        }
+        assert_eq!(names, vec![sha], "no stray temporary files left behind: {names:?}");
     }
 }

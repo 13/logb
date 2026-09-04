@@ -100,6 +100,36 @@ async fn documents_and_activity_attachments() {
 }
 
 #[tokio::test]
+async fn activity_delete_clears_stale_cover() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let act: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2024-01-01", "category": "repair", "title": "Brakes" })).send().await.unwrap().json().await.unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    let res = app.client.post(&base)
+        .multipart(form(png(10, 10), "front.png", "image/png").text("activity_id", act["id"].to_string()))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let photo: serde_json::Value = res.json().await.unwrap();
+
+    // set as cover
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "Golf", "category": "car", "counter_unit": "km", "cover_attachment_id": photo["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let obj: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(obj["cover_attachment_id"], photo["id"]);
+
+    // deleting the activity cascades the attachment and must clear the now-dangling cover
+    assert_eq!(app.client.delete(app.url(&format!("/activities/{}", act["id"]))).send().await.unwrap().status(), 204);
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert!(obj["cover_attachment_id"].is_null(), "cover cleared after activity-cascade delete");
+}
+
+#[tokio::test]
 async fn rejects_bad_uploads_and_isolates_users() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
