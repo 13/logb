@@ -1,0 +1,28 @@
+use clap::Parser;
+use std::path::PathBuf;
+
+/// memto — complete history of your owned objects.
+#[derive(Parser, Clone, Debug)]
+#[command(name = "memto", version)]
+pub struct Config {
+    /// Directory for database, files and thumbnails.
+    #[arg(long, env = "MEMTO_DATA_DIR", default_value = "./data")]
+    pub data_dir: PathBuf,
+    #[arg(long, env = "MEMTO_BIND", default_value = "0.0.0.0")]
+    pub bind: String,
+    #[arg(long, env = "MEMTO_PORT", default_value_t = 8080)]
+    pub port: u16,
+    #[arg(long, env = "MEMTO_MAX_UPLOAD_MB", default_value_t = 50)]
+    pub max_upload_mb: usize,
+    /// auto | true | false — auto sets Secure when X-Forwarded-Proto is https.
+    #[arg(long, env = "MEMTO_SECURE_COOKIE", default_value = "auto")]
+    pub secure_cookie: String,
+    #[arg(long, env = "MEMTO_LOG", default_value = "info")]
+    pub log: String,
+}
+
+impl Config {
+    pub fn max_upload_bytes(&self) -> usize {
+        self.max_upload_mb * 1024 * 1024
+    }
+}

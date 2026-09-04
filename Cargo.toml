@@ -1,0 +1,39 @@
+[package]
+name = "memto"
+version = "0.1.0"
+edition = "2021"
+description = "Complete history of your owned objects"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart", "macros"] }
+axum-extra = { version = "0.12", features = ["cookie"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.7", features = ["compression-gzip", "trace"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
+argon2 = "0.6"
+rand = "0.10"
+rust-embed = "8"
+image = "0.25"
+kamadak-exif = "0.6"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+sha2 = "0.11"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+mime_guess = "2"
+time = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
