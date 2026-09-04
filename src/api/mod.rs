@@ -1,10 +1,14 @@
+pub mod auth;
+
 use crate::state::App;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
 pub fn router() -> Router<App> {
-    Router::new().route("/health", get(health))
+    Router::new()
+        .route("/health", get(health))
+        .merge(auth::router())
 }
 
 async fn health() -> Json<serde_json::Value> {
