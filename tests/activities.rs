@@ -81,5 +81,6 @@ async fn isolation() {
     assert_eq!(anna.get(&base).send().await.unwrap().status(), 404);
     assert_eq!(anna.post(&base).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
     assert_eq!(anna.get(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
+    assert_eq!(anna.patch(app.url(&format!("/activities/{}", a["id"]))).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
     assert_eq!(anna.delete(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
 }
