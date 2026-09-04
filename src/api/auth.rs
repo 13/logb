@@ -69,7 +69,12 @@ async fn login(
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE username = ?")
         .bind(&body.username)
         .fetch_optional(&state.db).await?;
-    let (id, hash) = row.ok_or(AppError::Unauthorized)?;
+    let Some((id, hash)) = row else {
+        // No such user: still do a full Argon2 verification so this path takes about as long
+        // as the "wrong password" path below, and the two can't be told apart by timing.
+        auth::verify_dummy_password(&body.password);
+        return Err(AppError::Unauthorized);
+    };
     if !auth::verify_password(&body.password, &hash) {
         return Err(AppError::Unauthorized);
     }

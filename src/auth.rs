@@ -40,6 +40,20 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A real Argon2 PHC hash of a fixed, never-used password, generated once with this crate's
+/// own hasher (`Argon2::default().hash_password(..)`). It exists only so `verify_dummy_password`
+/// can burn roughly the same time as a real `verify_password` call when a username doesn't
+/// exist, so login can't be timed to tell "no such user" apart from "wrong password".
+const DUMMY_PASSWORD_HASH: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$K0anc3UcBp8GE52U1zxCzw$4TOrZfpM/TiigOVMz3BMtOfr7nYLDPeV4VLD+buYL4Y";
+
+/// Runs a full Argon2 verification against a fixed dummy hash so the "user not found" login
+/// path costs about as much time as the "wrong password" path (see `DUMMY_PASSWORD_HASH`).
+/// The result is always `false` and is not meant to be checked; only the timing matters.
+pub fn verify_dummy_password(password: &str) {
+    verify_password(password, DUMMY_PASSWORD_HASH);
+}
+
 pub fn validate_username(u: &str) -> Result<(), AppError> {
     let ok = (3..=32).contains(&u.len())
         && u.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
@@ -154,5 +168,16 @@ impl FromRequestParts<App> for AdminUser {
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
         let user = AuthUser::from_request_parts(parts, state).await?;
         if user.is_admin { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dummy_password_hash_parses_and_rejects_wrong_password() {
+        assert!(PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok(), "DUMMY_PASSWORD_HASH must be a valid PHC string");
+        assert!(!verify_password("definitely-not-the-password", DUMMY_PASSWORD_HASH));
     }
 }
