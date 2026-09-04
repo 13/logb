@@ -1,0 +1,15 @@
+services:
+  memto:
+    build: .
+    image: memto:latest
+    container_name: memto
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      MEMTO_MAX_UPLOAD_MB: "50"
+      MEMTO_SECURE_COOKIE: "auto"
+      MEMTO_LOG: "info"
+      MEMTO_TRUST_PROXY: "false"

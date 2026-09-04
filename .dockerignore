@@ -1,0 +1,7 @@
+target
+data
+dist
+frontend/node_modules
+frontend/dist
+frontend/test-results
+.git
