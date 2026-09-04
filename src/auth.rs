@@ -119,8 +119,13 @@ pub fn removal_cookie() -> Cookie<'static> {
         .build()
 }
 
-/// First `X-Forwarded-For` hop if present, else the socket peer address.
-pub fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+/// The socket peer address, or the first `X-Forwarded-For` hop when the
+/// deployment is configured to trust a proxy. Without that flag the header is
+/// ignored, so a client cannot spoof its way past the login rate limit.
+pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+    if !state.config.trust_proxy {
+        return peer.ip();
+    }
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -174,10 +179,64 @@ impl FromRequestParts<App> for AdminUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::state::AppState;
+    use axum::http::HeaderValue;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn dummy_password_hash_parses_and_rejects_wrong_password() {
         assert!(PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok(), "DUMMY_PASSWORD_HASH must be a valid PHC string");
         assert!(!verify_password("definitely-not-the-password", DUMMY_PASSWORD_HASH));
+    }
+
+    async fn test_state(trust_proxy: bool) -> App {
+        let dir = tempfile::tempdir().unwrap();
+        let db = db::connect(dir.path()).await.unwrap();
+        let config = Config {
+            data_dir: dir.path().to_path_buf(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            max_upload_mb: 2,
+            secure_cookie: "false".into(),
+            log: "warn".into(),
+            trust_proxy,
+        };
+        Arc::new(AppState { db, config, login_attempts: Mutex::new(HashMap::new()) })
+    }
+
+    fn peer() -> SocketAddr {
+        "203.0.113.9:12345".parse().unwrap()
+    }
+
+    fn headers_with_xff(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[tokio::test]
+    async fn client_ip_ignores_header_when_trust_proxy_is_off() {
+        let state = test_state(false).await;
+        let headers = headers_with_xff("198.51.100.7");
+        assert_eq!(client_ip(&state, &headers, peer()), peer().ip());
+    }
+
+    #[tokio::test]
+    async fn client_ip_uses_first_hop_when_trust_proxy_is_on() {
+        let state = test_state(true).await;
+        let headers = headers_with_xff("198.51.100.7, 10.0.0.1");
+        assert_eq!(client_ip(&state, &headers, peer()), "198.51.100.7".parse::<IpAddr>().unwrap());
+    }
+
+    #[tokio::test]
+    async fn client_ip_falls_back_to_peer_when_trust_proxy_on_but_header_missing_or_unparseable() {
+        let state = test_state(true).await;
+        let no_header = HeaderMap::new();
+        assert_eq!(client_ip(&state, &no_header, peer()), peer().ip());
+
+        let bad_header = headers_with_xff("not-an-ip");
+        assert_eq!(client_ip(&state, &bad_header, peer()), peer().ip());
     }
 }

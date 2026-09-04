@@ -19,6 +19,10 @@ pub struct Config {
     pub secure_cookie: String,
     #[arg(long, env = "MEMTO_LOG", default_value = "info")]
     pub log: String,
+    /// Trust `X-Forwarded-For` for the client IP. Enable only behind a reverse
+    /// proxy that overwrites the header; otherwise clients can spoof it.
+    #[arg(long, env = "MEMTO_TRUST_PROXY", default_value_t = false)]
+    pub trust_proxy: bool,
 }
 
 impl Config {

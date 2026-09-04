@@ -65,7 +65,7 @@ async fn login(
     jar: CookieJar,
     Json(body): Json<Credentials>,
 ) -> Result<(CookieJar, Json<AuthUser>), AppError> {
-    auth::check_login_rate(&state, auth::client_ip(&headers, peer))?;
+    auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE username = ?")
         .bind(&body.username)
         .fetch_optional(&state.db).await?;

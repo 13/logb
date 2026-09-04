@@ -16,6 +16,7 @@ pub async fn spawn() -> TestApp {
         max_upload_mb: 2,
         secure_cookie: "false".into(),
         log: "warn".into(),
+        trust_proxy: false,
     };
     let app = memto::build(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
