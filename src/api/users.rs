@@ -53,7 +53,11 @@ async fn create(
          RETURNING id, username, is_admin, lang, created_at",
     )
     .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(body.is_admin).bind(db::now())
-    .fetch_one(&state.db).await?;
+    .fetch_one(&state.db).await
+    .map_err(|e| match e.as_database_error().filter(|d| d.is_unique_violation()) {
+        Some(_) => AppError::Conflict("username already taken".into()),
+        None => AppError::from(e),
+    })?;
     Ok((StatusCode::CREATED, Json(user)))
 }
 
@@ -78,21 +82,31 @@ async fn update(
     }
     let _ = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")
         .bind(id).fetch_optional(&state.db).await?.ok_or(AppError::NotFound)?;
+
+    // Validate every field before writing anything, so a later-rejected field
+    // can't leave an earlier field's write committed.
     if let Some(p) = &body.password {
         auth::validate_password(p)?;
-        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-            .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
     }
     if let Some(a) = body.is_admin {
         if me.id == id && !a {
             return Err(AppError::BadRequest("cannot remove your own admin role".into()));
         }
-        sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(a).bind(id).execute(&state.db).await?;
     }
     if let Some(l) = &body.lang {
         if !matches!(l.as_str(), "en" | "de") {
             return Err(AppError::BadRequest("lang must be en or de".into()));
         }
+    }
+
+    if let Some(p) = &body.password {
+        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
+    }
+    if let Some(a) = body.is_admin {
+        sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(a).bind(id).execute(&state.db).await?;
+    }
+    if let Some(l) = &body.lang {
         sqlx::query("UPDATE users SET lang = ? WHERE id = ?").bind(l).bind(id).execute(&state.db).await?;
     }
     let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")

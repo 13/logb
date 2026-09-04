@@ -47,6 +47,29 @@ async fn non_admin_is_limited_to_self() {
 }
 
 #[tokio::test]
+async fn rejected_field_does_not_leave_partial_write() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let me: serde_json::Value = app.client.get(app.url("/auth/me")).send().await.unwrap().json().await.unwrap();
+
+    // Password is valid and would apply first; is_admin is a self-demotion and must be
+    // rejected. The password write must not survive that rejection.
+    let res = app
+        .client
+        .patch(app.url(&format!("/users/{}", me["id"])))
+        .json(&json!({ "password": "newpass1", "is_admin": false }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+
+    let c = common::new_client();
+    assert_eq!(app.login(&c, "ben", "correct horse").await.status(), 200, "original password must still work");
+    let c2 = common::new_client();
+    assert_eq!(app.login(&c2, "ben", "newpass1").await.status(), 401, "rejected update must not have changed the password");
+}
+
+#[tokio::test]
 async fn settings_currency() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
