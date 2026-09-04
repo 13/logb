@@ -228,7 +228,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, category, counter_unit, description, purchase_date, purchase_price_cents, \
              archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
-            .bind(user.id).bind(&o.name).bind(&o.category).bind(&o.counter_unit).bind(&o.description)
+            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
             .fetch_one(&mut *tx).await?;
         counts.objects += 1;
@@ -238,7 +238,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
-                .bind(object_id).bind(&a.date).bind(&a.category).bind(&a.title).bind(&a.notes)
+                .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(&a.created_at).bind(&now)
                 .fetch_one(&mut *tx).await?;
             activity_ids.push(aid);
@@ -270,7 +270,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             sqlx::query(
                 "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(object_id).bind(&r.title).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
+                .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .execute(&mut *tx).await?;
             counts.reminders += 1;

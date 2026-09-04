@@ -119,6 +119,42 @@ async fn import_rejects_invalid_reminder_due_date() {
     assert_eq!(res.status(), 200);
 }
 
+/// An archive with untrimmed whitespace around object name/category, activity title
+/// and reminder title must be stored trimmed, matching what `POST /objects` et al.
+/// already do -- import must not bypass the trimming every other write path applies.
+#[tokio::test]
+async fn import_trims_padded_strings() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["name"] = json!("  Golf  ");
+    object["category"] = json!("  car  ");
+    object["activities"] = json!([{
+        "date": "2024-01-01", "category": "repair", "title": "  Brakes  ", "notes": "",
+        "counter_value": null, "cost_cents": null, "created_at": "2024-01-01T00:00:00Z", "attachments": []
+    }]);
+    object["reminders"] = json!([{
+        "title": "  Oil  ", "notes": "", "due_date": null, "due_counter": 5000,
+        "repeat_months": null, "repeat_counter": null, "done_at": null,
+        "done_activity_index": null, "created_at": "2024-01-01T00:00:00Z"
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["name"], "Golf");
+    assert_eq!(objs[0]["category"], "car");
+    let id = objs[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/activities"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(acts[0]["title"], "Brakes");
+    let rems: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/reminders"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(rems[0]["title"], "Oil");
+}
+
 /// A well-formed version-1 archive whose activity carries a `category` outside the
 /// fixed set must also be rejected, and must not leave a partial import behind.
 #[tokio::test]

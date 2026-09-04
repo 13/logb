@@ -225,3 +225,43 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
     };
     Ok(Json(DoneOut { done: load_owned(&state, user.id, id).await?.into(), next }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `ReminderRow` with sensible defaults, so each test only sets the fields it cares about.
+    fn row() -> ReminderRow {
+        ReminderRow {
+            id: 1, object_id: 1, title: "Oil change".into(), notes: "".into(),
+            due_date: None, due_counter: None, repeat_months: None, repeat_counter: None,
+            done_at: None, done_activity_id: None, created_at: "2024-01-01T00:00:00Z".into(),
+            object_name: "Golf".into(), counter_unit: None, current_counter: None,
+        }
+    }
+
+    #[test]
+    fn unparseable_due_date_does_not_panic_and_is_not_due() {
+        let bad = ReminderRow { due_date: Some("not-a-date".into()), done_at: None, ..row() };
+        let out = ReminderOut::from(bad);
+        assert!(!out.due, "an unparseable stored date must not make a reminder due");
+    }
+
+    #[test]
+    fn valid_past_due_date_is_due() {
+        let good = ReminderRow { due_date: Some("2020-01-01".into()), done_at: None, ..row() };
+        let out = ReminderOut::from(good);
+        assert!(out.due, "a valid past due_date must still mark the reminder due");
+    }
+
+    #[test]
+    fn unparseable_due_date_does_not_block_the_counter_path() {
+        let row = ReminderRow {
+            due_date: Some("not-a-date".into()), done_at: None,
+            due_counter: Some(10_000), current_counter: Some(10_000),
+            ..row()
+        };
+        let out = ReminderOut::from(row);
+        assert!(out.due, "a bad due_date must not stop the counter-based due check from firing");
+    }
+}
