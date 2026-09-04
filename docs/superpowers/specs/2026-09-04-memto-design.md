@@ -103,7 +103,7 @@ POST /reminders/:id/done {activity_id?}  marks done; if repeat set, creates the
                                           next reminder (date + repeat_months,
                                           counter + repeat_counter)
 GET /reminders/due                      across all user's objects (dashboard)
-GET /export                             zip: data.json + files
+GET /export?object_id=                  zip: data.json + files; optional single object
 POST /import                            zip from /export; merges into current user
 GET /health
 ```
