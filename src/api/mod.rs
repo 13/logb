@@ -1,6 +1,7 @@
 pub mod activities;
 pub mod attachments;
 pub mod auth;
+pub mod export;
 pub mod objects;
 pub mod reminders;
 pub mod settings;
@@ -21,6 +22,7 @@ pub fn router(max_upload_bytes: usize) -> Router<App> {
         .merge(activities::router())
         .merge(reminders::router())
         .merge(attachments::router(max_upload_bytes))
+        .merge(export::router())
 }
 
 async fn health() -> Json<serde_json::Value> {
