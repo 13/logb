@@ -21,3 +21,39 @@ async fn spa_fallback_serves_index_or_503_when_not_built() {
         assert_eq!(res.headers()["cache-control"], "no-cache");
     }
 }
+
+/// `/api` and `/api/` (no trailing segment) must still get the JSON error body, not the
+/// HTML app shell.
+#[tokio::test]
+async fn bare_api_path_is_json_404() {
+    let app = common::spawn().await;
+    let root = app.base.trim_end_matches("/api").to_string();
+
+    for path in ["/api", "/api/"] {
+        let res = reqwest::get(format!("{root}{path}")).await.unwrap();
+        assert_eq!(res.status(), 404, "path {path}");
+        let body: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(body["error"], "not_found", "path {path}");
+    }
+}
+
+/// A non-canonical path under `/api` (double slash) must still get the JSON error body
+/// rather than falling through to the HTML app shell.
+///
+/// Note: `/./api/does-not-exist` is NOT exercised here. `reqwest` (via the `url` crate)
+/// removes `.` dot-segments while parsing the request URL, so by the time the request
+/// reaches the server the path is already the canonical `/api/does-not-exist` - asserting
+/// on it here would pass vacuously without exercising the fix. That case is covered
+/// instead by a unit test of `spa::normalize` in `src/spa.rs`
+/// (`dot_segment_prefix_is_still_api`), which operates on the raw path string. The `url`
+/// crate does not collapse a leading `//`, so that bypass reaches the server unmodified and
+/// is meaningfully covered here.
+#[tokio::test]
+async fn double_slash_api_path_is_json_404() {
+    let app = common::spawn().await;
+    let root = app.base.trim_end_matches("/api").to_string();
+    let res = reqwest::get(format!("{root}//api/does-not-exist")).await.unwrap();
+    assert_eq!(res.status(), 404);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+}
