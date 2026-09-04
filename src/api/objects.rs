@@ -200,5 +200,6 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned_object(&state, user.id, id).await?;
     sqlx::query("DELETE FROM objects WHERE id = ?").bind(id).execute(&state.db).await?;
+    super::attachments::purge_orphan_files(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }

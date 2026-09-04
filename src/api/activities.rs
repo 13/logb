@@ -1,3 +1,4 @@
+use super::attachments::{self, AttachmentOut};
 use super::objects::{load_owned_object, validate_date, ObjectRow};
 use crate::auth::AuthUser;
 use crate::db;
@@ -66,6 +67,26 @@ impl ActivityInput {
     }
 }
 
+#[derive(Serialize)]
+pub struct ActivityOut {
+    #[serde(flatten)]
+    pub activity: ActivityRow,
+    pub attachments: Vec<AttachmentOut>,
+}
+
+pub async fn with_attachments(state: &App, rows: Vec<ActivityRow>) -> Result<Vec<ActivityOut>, AppError> {
+    let object_id = match rows.first() { Some(r) => r.object_id, None => return Ok(vec![]) };
+    let all = attachments::for_object(state, object_id).await?;
+    Ok(rows.into_iter().map(|activity| {
+        let attachments = all.iter().filter(|a| a.activity_id == Some(activity.id)).cloned().collect();
+        ActivityOut { activity, attachments }
+    }).collect())
+}
+
+async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError> {
+    Ok(with_attachments(state, vec![row]).await?.pop().unwrap())
+}
+
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
@@ -97,12 +118,13 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     .fetch_all(&state.db).await?)
 }
 
-async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ActivityRow>>, AppError> {
+async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ActivityOut>>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
-    Ok(Json(list_for_object(&state, object_id, &q).await?))
+    let rows = list_for_object(&state, object_id, &q).await?;
+    Ok(Json(with_attachments(&state, rows).await?))
 }
 
-async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<(StatusCode, Json<ActivityRow>), AppError> {
+async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<(StatusCode, Json<ActivityOut>), AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
     body.validate(&object)?;
     let now = db::now();
@@ -114,14 +136,15 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(&now).bind(&now)
     .fetch_one(&state.db).await?;
-    Ok((StatusCode::CREATED, Json(row)))
+    Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)))
 }
 
-async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ActivityRow>, AppError> {
-    Ok(Json(load_owned_activity(&state, user.id, id).await?))
+async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ActivityOut>, AppError> {
+    let row = load_owned_activity(&state, user.id, id).await?;
+    Ok(Json(one_out(&state, row).await?))
 }
 
-async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Json<ActivityRow>, AppError> {
+async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Json<ActivityOut>, AppError> {
     let existing = load_owned_activity(&state, user.id, id).await?;
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
     body.validate(&object)?;
@@ -131,11 +154,13 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(db::now()).bind(id)
     .execute(&state.db).await?;
-    Ok(Json(load_owned_activity(&state, user.id, id).await?))
+    let row = load_owned_activity(&state, user.id, id).await?;
+    Ok(Json(one_out(&state, row).await?))
 }
 
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned_activity(&state, user.id, id).await?;
     sqlx::query("DELETE FROM activities WHERE id = ?").bind(id).execute(&state.db).await?;
+    attachments::purge_orphan_files(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }

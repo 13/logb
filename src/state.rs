@@ -7,6 +7,7 @@ use std::time::Instant;
 
 pub struct AppState {
     pub db: SqlitePool,
+    pub storage: crate::files::Storage,
     pub config: Config,
     /// login attempts per IP: (count, window start)
     pub login_attempts: Mutex<HashMap<IpAddr, (u32, Instant)>>,

@@ -194,6 +194,7 @@ mod tests {
     async fn test_state(trust_proxy: bool) -> App {
         let dir = tempfile::tempdir().unwrap();
         let db = db::connect(dir.path()).await.unwrap();
+        let storage = crate::files::Storage::new(dir.path()).unwrap();
         let config = Config {
             data_dir: dir.path().to_path_buf(),
             bind: "127.0.0.1".into(),
@@ -203,7 +204,7 @@ mod tests {
             log: "warn".into(),
             trust_proxy,
         };
-        Arc::new(AppState { db, config, login_attempts: Mutex::new(HashMap::new()) })
+        Arc::new(AppState { db, storage, config, login_attempts: Mutex::new(HashMap::new()) })
     }
 
     fn peer() -> SocketAddr {

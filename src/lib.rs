@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod files;
 pub mod state;
 
 use axum::Router;
@@ -15,12 +16,15 @@ use std::sync::{Arc, Mutex};
 /// Build the application router with all state initialised (database created and migrated).
 pub async fn build(config: Config) -> Result<Router, db::BoxError> {
     let db = db::connect(&config.data_dir).await?;
+    let storage = files::Storage::new(&config.data_dir)?;
+    let max_upload_bytes = config.max_upload_bytes();
     let state: App = Arc::new(AppState {
         db,
+        storage,
         config,
         login_attempts: Mutex::new(HashMap::new()),
     });
     Ok(Router::new()
-        .nest("/api", api::router())
+        .nest("/api", api::router(max_upload_bytes))
         .with_state(state))
 }
