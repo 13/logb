@@ -11,6 +11,7 @@
   import ObjectForm from './routes/ObjectForm.svelte';
   import ObjectDetail from './routes/ObjectDetail.svelte';
   import ActivityForm from './routes/ActivityForm.svelte';
+  import ReminderForm from './routes/ReminderForm.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -38,6 +39,8 @@
     ['/objects/:id/edit', ObjectForm],
     ['/objects/:id/activities/new', ActivityForm],
     ['/objects/:id/activities/:aid', ActivityForm],
+    ['/objects/:id/reminders/new', ReminderForm],
+    ['/objects/:id/reminders/:rid', ReminderForm],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
