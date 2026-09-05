@@ -43,7 +43,17 @@ cargo test                     # backend tests
 cd frontend && npm test        # frontend unit tests
 cd frontend && npm run e2e     # Playwright against the built binary
 ./build.sh                     # full build into dist/
+cargo clippy --all-targets -- -D warnings   # lint gate, as CI runs it
 ```
+
+`frontend/dist/` is embedded into the binary at compile time, so it must exist
+for `cargo build` to work; a fresh clone gets an empty one (the SPA then serves
+a 503 until `npm run build` fills it).
+
+CI (`.github/workflows/ci.yml`) runs clippy, the backend tests, the frontend
+type check, unit tests and bundle, Playwright end-to-end, and a Docker build
+whose image has to answer `/api/health`. There is no `cargo fmt` gate: the
+codebase uses single-line guard clauses that stable rustfmt cannot express.
 
 End-to-end tests run the real binary against the built SPA on port 8099 with a
 scratch data directory (`.e2e-data`, wiped on each run):
