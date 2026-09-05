@@ -9,6 +9,8 @@
   import Login from './routes/Login.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import ObjectForm from './routes/ObjectForm.svelte';
+  import ObjectDetail from './routes/ObjectDetail.svelte';
+  import ActivityForm from './routes/ActivityForm.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -32,7 +34,10 @@
   const routes: Array<[string, Component<any>]> = [
     ['/', Dashboard],
     ['/objects/new', ObjectForm],
+    ['/objects/:id', ObjectDetail],
     ['/objects/:id/edit', ObjectForm],
+    ['/objects/:id/activities/new', ActivityForm],
+    ['/objects/:id/activities/:aid', ActivityForm],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
