@@ -155,3 +155,108 @@ async fn rejects_bad_uploads_and_isolates_users() {
     assert_eq!(anna.delete(app.url(&format!("/attachments/{}", a["id"]))).send().await.unwrap().status(), 404);
     assert_eq!(anna.patch(app.url(&format!("/attachments/{}", a["id"]))).json(&json!({ "caption": "x" })).send().await.unwrap().status(), 404);
 }
+
+/// A cover must be a photo of the object being patched: pointing at another object's photo
+/// is a 400, not a silent cross-object reference.
+#[tokio::test]
+async fn cover_must_belong_to_the_patched_object() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", None).await;
+    let b = app.create_object(&app.client, "Bike", None).await;
+    let (a_id, b_id) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{a_id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
+        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": photo["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "another object's photo must not become this object's cover");
+
+    // A document of the right object is refused too -- covers are photos.
+    let doc: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{b_id}/attachments")))
+        .multipart(form(b"manual".to_vec(), "m.txt", "text/plain"))
+        .send().await.unwrap().json().await.unwrap();
+    let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
+        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": doc["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+/// Sending `cover_attachment_id: null` clears the cover; omitting the field keeps it.
+#[tokio::test]
+async fn cover_can_be_set_kept_and_cleared() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+
+    let url = app.url(&format!("/objects/{id}"));
+    let set: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf", "category": "car", "cover_attachment_id": photo["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(set["cover_attachment_id"], photo["id"]);
+    assert_eq!(set["cover_file_id"], photo["file_id"]);
+
+    // Field omitted: the cover survives an unrelated edit.
+    let kept: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf GTI", "category": "car" }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(kept["cover_attachment_id"], photo["id"]);
+
+    // Explicit null: cleared.
+    let cleared: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf GTI", "category": "car", "cover_attachment_id": null }))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(cleared["cover_attachment_id"].is_null(), "{cleared}");
+    assert!(cleared["cover_file_id"].is_null(), "{cleared}");
+}
+
+/// Deleting an object must take its files with it, not just its attachment rows.
+#[tokio::test]
+async fn deleting_an_object_purges_its_files() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = photo["file_id"].as_i64().unwrap();
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap().status(), 200);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 200);
+
+    assert_eq!(app.client.delete(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 204);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap().status(), 404);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 404);
+}
+
+/// A non-ASCII filename has to survive as `filename*`, and must not knock the response back
+/// to a bare `inline`.
+#[tokio::test]
+async fn download_keeps_a_non_ascii_filename() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let doc: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(b"rechnung".to_vec(), "Anhängerkupplung — Rechnung.txt", "text/plain"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = doc["file_id"].as_i64().unwrap();
+
+    let res = app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let cd = res.headers()["content-disposition"].to_str().unwrap().to_string();
+    assert!(cd.starts_with("attachment;"), "{cd}");
+    assert!(cd.contains("filename*=UTF-8''Anh%C3%A4ngerkupplung"), "{cd}");
+}

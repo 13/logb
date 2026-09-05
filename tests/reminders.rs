@@ -87,3 +87,22 @@ async fn crud_validation_and_isolation() {
     assert_eq!(anna.delete(app.url(&format!("/reminders/{rid}"))).send().await.unwrap().status(), 404);
     assert_eq!(app.client.delete(app.url(&format!("/reminders/{rid}"))).send().await.unwrap().status(), 204);
 }
+
+/// Completing a reminder twice is a conflict, not a second completion.
+#[tokio::test]
+async fn a_reminder_cannot_be_completed_twice() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Oil", "due_date": "2020-01-01" }))
+        .send().await.unwrap().json().await.unwrap();
+    let done_url = app.url(&format!("/reminders/{}/done", r["id"]));
+
+    assert_eq!(app.client.post(&done_url).json(&json!({})).send().await.unwrap().status(), 200);
+    let res = app.client.post(&done_url).json(&json!({})).send().await.unwrap();
+    assert_eq!(res.status(), 409, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "conflict");
+}

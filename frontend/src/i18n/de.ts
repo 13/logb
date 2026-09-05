@@ -54,6 +54,7 @@ export default {
   'object.current': 'Aktuell',
   'object.since': 'Besitz seit',
   'object.set-cover': 'Als Titelbild',
+  'object.clear-cover': 'Titelbild entfernen',
   'object.saved': 'Gespeichert',
 
   'tab.timeline': 'Verlauf',

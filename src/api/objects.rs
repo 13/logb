@@ -6,7 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -61,8 +61,21 @@ pub struct ObjectInput {
     pub purchase_price_cents: Option<i64>,
     #[serde(default)]
     pub archived: Option<bool>,
-    #[serde(default)]
-    pub cover_attachment_id: Option<i64>,
+    /// Three-state on PATCH: absent keeps the current cover, `null` clears it, an id sets it.
+    /// A plain `Option` cannot tell "absent" from "null", which is why the cover could
+    /// previously only ever be set, never removed.
+    #[serde(default, deserialize_with = "double_option")]
+    pub cover_attachment_id: Option<Option<i64>>,
+}
+
+/// Deserializes a present field -- including an explicit `null` -- as `Some(..)`, leaving
+/// `None` to mean "the client did not send this field at all".
+fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(d).map(Some)
 }
 
 pub fn validate_date(s: &str) -> Result<(), AppError> {
@@ -188,20 +201,25 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         Some(false) => None,
         None => existing.archived_at.clone(),
     };
-    if let Some(cover) = body.cover_attachment_id {
-        let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = ? AND object_id = ? AND kind = 'photo'")
-            .bind(cover).bind(id).fetch_optional(&state.db).await?;
-        if ok.is_none() {
-            return Err(AppError::BadRequest("cover_attachment_id must be a photo of this object".into()));
+    let cover_attachment_id = match body.cover_attachment_id {
+        None => existing.cover_attachment_id,
+        Some(None) => None,
+        Some(Some(cover)) => {
+            let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = ? AND object_id = ? AND kind = 'photo'")
+                .bind(cover).bind(id).fetch_optional(&state.db).await?;
+            if ok.is_none() {
+                return Err(AppError::BadRequest("cover_attachment_id must be a photo of this object".into()));
+            }
+            Some(cover)
         }
-    }
+    };
     sqlx::query(
         "UPDATE objects SET name = ?, category = ?, counter_unit = ?, description = ?, purchase_date = ?, \
          purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at)
-    .bind(body.cover_attachment_id.or(existing.cover_attachment_id)).bind(db::now()).bind(id)
+    .bind(cover_attachment_id).bind(db::now()).bind(id)
     .execute(&state.db).await?;
     let row = load_owned_object(&state, user.id, id).await?;
     Ok(Json(with_stats(&state, row).await?))

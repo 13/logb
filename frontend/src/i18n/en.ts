@@ -54,6 +54,7 @@ export default {
   'object.current': 'Current',
   'object.since': 'Owned since',
   'object.set-cover': 'Use as cover',
+  'object.clear-cover': 'Remove cover',
   'object.saved': 'Saved',
 
   'tab.timeline': 'Timeline',

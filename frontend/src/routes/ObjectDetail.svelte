@@ -72,7 +72,7 @@
       <Timeline objectId={oid} {activities} unit={object.counter_unit} bind:category />
       <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
     {:else if tab === 'documents'}
-      <Documents objectId={oid} onchanged={loadObject} />
+      <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities(); }} />
     {:else}

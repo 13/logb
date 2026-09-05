@@ -161,6 +161,12 @@ async fn upload(
         Some((id,)) => id,
         None => {
             state.storage.write_blob(&sha, &bytes).await?;
+            // The thumbnail is named after the file id, so it can only be written once the
+            // row exists -- but the row must not become visible before the thumbnail does, or
+            // a client that sees the new file can ask for a /thumb that is not on disk yet.
+            // Writing both inside one transaction closes that window: other connections see
+            // the row only at commit, by which point the JPEG is already written.
+            let mut tx = state.db.begin().await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -168,25 +174,26 @@ async fn upload(
             .bind(user.id).bind(&sha).bind(&name).bind(&mime).bind(bytes.len() as i64)
             .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
             .bind(image.as_ref().and_then(|i| i.taken_at.clone())).bind(db::now())
-            .fetch_one(&state.db).await;
-            let id = match inserted {
+            .fetch_one(&mut *tx).await;
+            match inserted {
                 Ok((id,)) => {
                     if let Some(img) = &image {
                         state.storage.write_thumb(id, &img.thumb_jpeg).await?;
                     }
+                    tx.commit().await?;
                     id
                 }
                 // Two concurrent uploads of identical bytes for the same user: the loser's
                 // INSERT trips the UNIQUE(user_id, sha256) constraint. That's a cache hit,
                 // not an error -- reuse the row the winner just created.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+                    tx.rollback().await?;
                     let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
                         .bind(user.id).bind(&sha).fetch_one(&state.db).await?;
                     id
                 }
                 Err(e) => return Err(e.into()),
-            };
-            id
+            }
         }
     };
 
@@ -244,17 +251,79 @@ fn file_response(bytes: Vec<u8>, mime: &str, disposition: String) -> Response {
     ).into_response()
 }
 
+/// Percent-encodes `name` for the `filename*` parameter of RFC 6266 / RFC 5987. Everything
+/// outside that grammar's `attr-char` set is escaped, so the result is always plain ASCII.
+fn encode_ext_value(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// A `Content-Disposition` value that is always a valid header: the plain `filename` is
+/// reduced to printable ASCII for old clients, and the real name -- accents, CJK, emoji --
+/// rides along UTF-8-encoded in `filename*`, which every current browser prefers.
+///
+/// Building it this way matters because a header value that fails to parse used to fall back
+/// to a bare `inline`, silently turning an intended download into an in-page render.
+fn content_disposition(inline: bool, original_name: &str) -> String {
+    let kind = if inline { "inline" } else { "attachment" };
+    let ascii: String = original_name
+        .chars()
+        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' })
+        .map(|c| if matches!(c, '"' | '\\') { '_' } else { c })
+        .collect();
+    let ascii = if ascii.trim().is_empty() { "download".to_string() } else { ascii };
+    format!("{kind}; filename=\"{ascii}\"; filename*=UTF-8\'\'{}", encode_ext_value(original_name))
+}
+
 async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
     let inline = f.mime.starts_with("image/") || f.mime == "application/pdf";
-    let safe_name = f.original_name.replace(['"', '\\', '\r', '\n'], "_");
-    let disposition = format!("{}; filename=\"{}\"", if inline { "inline" } else { "attachment" }, safe_name);
-    Ok(file_response(bytes, &f.mime, disposition))
+    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name)))
 }
 
 async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let bytes = tokio::fs::read(state.storage.thumb_path(f.id)).await.map_err(|_| AppError::NotFound)?;
     Ok(file_response(bytes, "image/jpeg", "inline".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_disposition;
+
+    #[test]
+    fn ascii_names_pass_through_in_both_parameters() {
+        let cd = content_disposition(false, "invoice.pdf");
+        assert_eq!(cd, "attachment; filename=\"invoice.pdf\"; filename*=UTF-8''invoice.pdf");
+    }
+
+    #[test]
+    fn non_ascii_names_survive_in_the_extended_parameter() {
+        let cd = content_disposition(true, "Anhängerkupplung.jpg");
+        assert!(cd.starts_with("inline; filename=\"Anh_ngerkupplung.jpg\""), "{cd}");
+        assert!(cd.ends_with("filename*=UTF-8''Anh%C3%A4ngerkupplung.jpg"), "{cd}");
+        assert!(cd.is_ascii(), "the header value must be sendable as-is: {cd}");
+    }
+
+    #[test]
+    fn quotes_and_control_characters_cannot_break_out_of_the_quoted_string() {
+        let cd = content_disposition(false, "a\"; rm -rf /\r\n.txt");
+        assert!(!cd["attachment; filename=\"".len()..].starts_with('"'));
+        assert_eq!(cd.matches('"').count(), 2, "{cd}");
+        assert!(!cd.contains('\r') && !cd.contains('\n'), "{cd}");
+    }
+
+    #[test]
+    fn a_name_with_nothing_printable_still_yields_a_filename() {
+        let cd = content_disposition(false, "  ");
+        assert!(cd.contains("filename=\"download\""), "{cd}");
+    }
 }
