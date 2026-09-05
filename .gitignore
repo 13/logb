@@ -1,0 +1,10 @@
+/target
+/data
+/dist
+/.e2e-data
+frontend/node_modules
+frontend/dist/*
+!frontend/dist/.gitkeep
+frontend/test-results
+frontend/playwright-report
+.superpowers/

@@ -1,0 +1,86 @@
+mod common;
+use serde_json::json;
+
+fn act(date: &str, category: &str, counter: Option<i64>, cost: Option<i64>) -> serde_json::Value {
+    json!({ "date": date, "category": category, "title": format!("{category} on {date}"),
+            "notes": "", "counter_value": counter, "cost_cents": cost })
+}
+
+#[tokio::test]
+async fn timeline_totals_and_counter() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    for a in [
+        act("2024-01-10", "maintenance", Some(100_000), Some(25_000)),
+        act("2024-06-01", "repair", Some(104_500), Some(80_000)),
+        act("2024-03-15", "fuel", Some(102_000), None),
+    ] {
+        let res = app.client.post(&base).json(&a).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    let dates: Vec<&str> = list.iter().map(|a| a["date"].as_str().unwrap()).collect();
+    assert_eq!(dates, ["2024-06-01", "2024-03-15", "2024-01-10"], "newest first");
+
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(obj["stats"]["total_cost_cents"], 105_000);
+    assert_eq!(obj["stats"]["activity_count"], 3);
+    assert_eq!(obj["stats"]["current_counter"], 104_500);
+
+    let fuel: Vec<serde_json::Value> = app.client.get(format!("{base}?category=fuel")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(fuel.len(), 1);
+    let h1: Vec<serde_json::Value> = app.client.get(format!("{base}?from=2024-01-01&to=2024-03-31")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(h1.len(), 2);
+
+    let aid = list[0]["id"].as_i64().unwrap();
+    let res = app.client.patch(app.url(&format!("/activities/{aid}"))).json(&act("2024-06-02", "repair", Some(104_600), Some(90_000))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let one: serde_json::Value = app.client.get(app.url(&format!("/activities/{aid}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(one["cost_cents"], 90_000);
+
+    assert_eq!(app.client.delete(app.url(&format!("/activities/{aid}"))).send().await.unwrap().status(), 204);
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(obj["stats"]["total_cost_cents"], 25_000);
+    assert_eq!(obj["stats"]["current_counter"], 102_000);
+}
+
+#[tokio::test]
+async fn validation() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let home = app.create_object(&app.client, "Home", None).await;
+    let car_base = app.url(&format!("/objects/{}/activities", car["id"]));
+    let home_base = app.url(&format!("/objects/{}/activities", home["id"]));
+    for (base, body) in [
+        (&car_base, act("2024-13-01", "repair", None, None)),
+        (&car_base, act("2024-01-01", "party", None, None)),
+        (&car_base, json!({ "date": "2024-01-01", "category": "repair", "title": "  " })),
+        (&car_base, act("2024-01-01", "repair", Some(-5), None)),
+        (&car_base, act("2024-01-01", "repair", None, Some(-1))),
+        (&home_base, act("2024-01-01", "repair", Some(10), None)),
+    ] {
+        let res = app.client.post(base).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 400, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn isolation() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/activities", car["id"]));
+    let a: serde_json::Value = app.client.post(&base).json(&act("2024-01-01", "repair", None, Some(1))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(anna.get(&base).send().await.unwrap().status(), 404);
+    assert_eq!(anna.post(&base).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
+    assert_eq!(anna.get(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
+    assert_eq!(anna.patch(app.url(&format!("/activities/{}", a["id"]))).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
+    assert_eq!(anna.delete(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
+}
