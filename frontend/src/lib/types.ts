@@ -10,7 +10,7 @@ export interface ObjectStats { total_cost_cents: number; activity_count: number;
 export interface MemObject {
   id: number; user_id: number; name: string; category: string; counter_unit: CounterUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null;
-  cover_attachment_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
+  cover_attachment_id: number | null; cover_file_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
 }
 export interface ObjectInput {
   name: string; category: string; counter_unit: CounterUnit; description: string;

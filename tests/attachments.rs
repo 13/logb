@@ -51,6 +51,7 @@ async fn upload_photo_dedup_thumb_and_serve() {
     assert_eq!(res.status(), 200);
     let obj: serde_json::Value = res.json().await.unwrap();
     assert_eq!(obj["cover_attachment_id"], a1["id"]);
+    assert_eq!(obj["cover_file_id"], a1["file_id"]);
 
     // delete one attachment: file stays (still referenced); delete the other: file + blobs gone
     assert_eq!(app.client.delete(app.url(&format!("/attachments/{}", a2["id"]))).send().await.unwrap().status(), 204);

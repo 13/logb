@@ -43,6 +43,8 @@ pub struct ObjectOut {
     #[serde(flatten)]
     pub object: ObjectRow,
     pub stats: ObjectStats,
+    /// file_id of the cover attachment, so the client can build a thumbnail URL directly
+    pub cover_file_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +120,15 @@ pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError>
 
 async fn with_stats(state: &App, object: ObjectRow) -> Result<ObjectOut, AppError> {
     let stats = stats(state, object.id).await?;
-    Ok(ObjectOut { object, stats })
+    let cover_file_id = match object.cover_attachment_id {
+        Some(id) => sqlx::query_as::<_, (i64,)>("SELECT file_id FROM attachments WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .map(|r| r.0),
+        None => None,
+    };
+    Ok(ObjectOut { object, stats, cover_file_id })
 }
 
 #[derive(Deserialize)]

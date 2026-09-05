@@ -8,6 +8,7 @@
   import Setup from './routes/Setup.svelte';
   import Login from './routes/Login.svelte';
   import Dashboard from './routes/Dashboard.svelte';
+  import ObjectForm from './routes/ObjectForm.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -30,6 +31,8 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const routes: Array<[string, Component<any>]> = [
     ['/', Dashboard],
+    ['/objects/new', ObjectForm],
+    ['/objects/:id/edit', ObjectForm],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
