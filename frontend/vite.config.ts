@@ -2,6 +2,9 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
+import { readFileSync } from 'node:fs';
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 export default defineConfig({
   plugins: [
@@ -29,6 +32,7 @@ export default defineConfig({
       },
     }),
   ],
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   server: { proxy: { '/api': 'http://localhost:8080' } },
   test: { environment: 'node', include: ['tests/**/*.test.ts'] },
 });

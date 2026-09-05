@@ -12,6 +12,7 @@
   import ObjectDetail from './routes/ObjectDetail.svelte';
   import ActivityForm from './routes/ActivityForm.svelte';
   import ReminderForm from './routes/ReminderForm.svelte';
+  import Settings from './routes/Settings.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -41,6 +42,7 @@
     ['/objects/:id/activities/:aid', ActivityForm],
     ['/objects/:id/reminders/new', ReminderForm],
     ['/objects/:id/reminders/:rid', ReminderForm],
+    ['/settings', Settings],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
