@@ -1,0 +1,35 @@
+export function money(cents: number | null | undefined, currency: string, locale: string): string {
+  if (cents === null || cents === undefined) return '';
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(cents / 100);
+}
+
+export function fmtDate(iso: string | null | undefined, locale: string): string {
+  if (!iso) return '';
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return new Intl.DateTimeFormat(locale, { year: 'numeric', month: locale === 'de' ? '2-digit' : 'short', day: locale === 'de' ? '2-digit' : 'numeric' })
+    .format(new Date(Date.UTC(y, m - 1, d, 12)));
+}
+
+export function counter(value: number | null | undefined, unit: string | null, locale: string): string {
+  if (value === null || value === undefined) return '';
+  const n = new Intl.NumberFormat(locale).format(value);
+  return unit ? `${n} ${unit}` : n;
+}
+
+export function todayIso(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** "12.50" / "12,50" / "12" → cents; empty → null; invalid → NaN */
+export function parseMoney(s: string): number | null {
+  const t = s.trim().replace(/\s/g, '').replace(',', '.');
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+
+export function centsToInput(cents: number | null): string {
+  return cents === null ? '' : (cents / 100).toFixed(2);
+}
