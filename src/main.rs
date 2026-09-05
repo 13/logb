@@ -10,7 +10,8 @@ async fn main() -> Result<(), memto::db::BoxError> {
         .with_env_filter(EnvFilter::new(config.log.clone()))
         .init();
     let addr = format!("{}:{}", config.bind, config.port);
-    let app = memto::build(config).await?;
+    let (app, state) = memto::build_with_state(config).await?;
+    memto::notify::spawn(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("memto listening on http://{addr}");
     axum::serve(

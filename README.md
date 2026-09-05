@@ -28,6 +28,9 @@ content-addressed), `thumbs/`. Back up by stopping the container and copying
 | `MEMTO_PORT`          | `8080`    |                                                                                                                              |
 | `MEMTO_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
 | `MEMTO_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
+| `MEMTO_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
+| `MEMTO_NOTIFY_HOUR`   | `8`       | UTC hour the digest goes out                                                                                                 |
+| `MEMTO_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
 | `MEMTO_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `MEMTO_LOG`           | `info`    | tracing filter                                                                                                               |
 | `MEMTO_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
@@ -61,6 +64,25 @@ scratch data directory (`.e2e-data`, wiped on each run):
 ```bash
 cd frontend && npm run e2e
 ```
+
+## Reminder notifications
+
+memto sends no mail of its own. Point `MEMTO_NOTIFY_URL` at a webhook you
+already run and it POSTs one digest a day, at `MEMTO_NOTIFY_HOUR` UTC, listing
+every reminder that is due across all users:
+
+```bash
+MEMTO_NOTIFY_URL=https://ntfy.sh/my-private-topic MEMTO_NOTIFY_FORMAT=text
+```
+
+With `text` the body is the message and the summary rides in a `Title` header,
+which is what ntfy and similar services render. The default `json` posts
+`{ "title", "message", "reminders": [...] }` for a webhook that wants structure.
+
+The digest is a notification, not a queue: the day is marked as handled before
+the request goes out, so an endpoint that is down costs one failed request a
+day rather than one a minute. Reminders lost to a failure stay due and appear
+in the next day's digest.
 
 ## Search
 

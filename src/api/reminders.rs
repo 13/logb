@@ -134,7 +134,10 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
-async fn due_list(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ReminderOut>>, AppError> {
+/// Every reminder of `user_id` that is due right now, in the order the dashboard shows them.
+/// Shared with the notifier so a digest and the due banner can never disagree about what
+/// "due" means.
+pub async fn due_for_user(state: &App, user_id: i64) -> Result<Vec<ReminderOut>, AppError> {
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
@@ -143,8 +146,12 @@ async fn due_list(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<R
          WHERE o.user_id = ? AND r.done_at IS NULL AND o.archived_at IS NULL \
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )
-    .bind(user.id).fetch_all(&state.db).await?;
-    Ok(Json(rows.into_iter().map(ReminderOut::from).filter(|r| r.due).collect()))
+    .bind(user_id).fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(ReminderOut::from).filter(|r| r.due).collect())
+}
+
+async fn due_list(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ReminderOut>>, AppError> {
+    Ok(Json(due_for_user(&state, user.id).await?))
 }
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<(StatusCode, Json<ReminderOut>), AppError> {

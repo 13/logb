@@ -28,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 mime_guess = "2"
 time = "0.3"
+reqwest = { version = "0.13", features = ["json"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }

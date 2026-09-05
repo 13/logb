@@ -5,6 +5,7 @@ pub mod db;
 pub mod domain;
 pub mod error;
 pub mod files;
+pub mod notify;
 pub mod spa;
 pub mod state;
 
@@ -19,6 +20,12 @@ use tower_http::trace::TraceLayer;
 
 /// Build the application router with all state initialised (database created and migrated).
 pub async fn build(config: Config) -> Result<Router, db::BoxError> {
+    Ok(build_with_state(config).await?.0)
+}
+
+/// As `build`, but also hands back the shared state, for callers that run background work
+/// against it (the reminder digest scheduler). Tests use `build`, so they never start it.
+pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxError> {
     let db = db::connect(&config.data_dir).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
@@ -29,7 +36,7 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
         config,
         login_attempts: Mutex::new(HashMap::new()),
     });
-    Ok(Router::new()
+    let router = Router::new()
         .nest("/api", api::router(max_upload, max_import))
         .fallback(spa::handler)
         // The default predicate already skips images, gRPC and event streams. Export archives
@@ -39,5 +46,6 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
             DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
         ))
         .layer(TraceLayer::new_for_http())
-        .with_state(state))
+        .with_state(state.clone());
+    Ok((router, state))
 }
