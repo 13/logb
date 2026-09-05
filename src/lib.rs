@@ -21,6 +21,7 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
     let db = db::connect(&config.data_dir).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
+    let max_import = config.max_import_bytes();
     let state: App = Arc::new(AppState {
         db,
         storage,
@@ -28,7 +29,7 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
         login_attempts: Mutex::new(HashMap::new()),
     });
     Ok(Router::new()
-        .nest("/api", api::router(max_upload))
+        .nest("/api", api::router(max_upload, max_import))
         .fallback(spa::handler)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

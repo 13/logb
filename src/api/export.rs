@@ -19,11 +19,11 @@ use sqlx::Sqlite;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-pub fn router() -> Router<App> {
+pub fn router(max_import_bytes: usize) -> Router<App> {
     Router::new()
         .route("/export", get(export))
         .route("/import", post(import))
-        .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(max_import_bytes))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -198,12 +198,34 @@ pub struct ImportCounts {
     pub reminders: usize,
 }
 
+/// Reads one archive entry into `out`, drawing from a decompression budget shared by the whole
+/// archive and failing with 413 the moment it would be exceeded.
+///
+/// The cap is applied to the bytes actually produced, not to the entry's declared uncompressed
+/// size: that header is written by whoever built the archive, so a "zip bomb" can advertise a
+/// few kilobytes and still inflate to gigabytes. `take(limit + 1)` lets exactly one byte past
+/// the budget through, which is enough to detect the overrun without buffering it.
+fn read_capped<R: Read>(r: &mut R, out: &mut Vec<u8>, remaining: &mut usize) -> Result<(), AppError> {
+    let limit = *remaining;
+    let n = r.take(limit as u64 + 1).read_to_end(out)?;
+    if n > limit {
+        return Err(AppError::TooLarge);
+    }
+    *remaining -= n;
+    Ok(())
+}
+
 async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result<Json<ImportCounts>, AppError> {
+    let budget = state.config.max_import_inflated_bytes();
     let (data, blobs) = tokio::task::spawn_blocking(move || -> Result<(Export, HashMap<String, Vec<u8>>), AppError> {
         let mut z = zip::ZipArchive::new(Cursor::new(body.to_vec()))
             .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
+        let mut remaining = budget;
         let mut json = Vec::new();
-        z.by_name("data.json").map_err(|_| AppError::BadRequest("data.json missing".into()))?.read_to_end(&mut json)?;
+        {
+            let mut f = z.by_name("data.json").map_err(|_| AppError::BadRequest("data.json missing".into()))?;
+            read_capped(&mut f, &mut json, &mut remaining)?;
+        }
         let data: Export = serde_json::from_slice(&json).map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
         if data.version != 1 { return Err(AppError::BadRequest(format!("unsupported export version {}", data.version))); }
         let mut blobs = HashMap::new();
@@ -212,7 +234,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let name = f.name().to_string();
             if let Some(sha) = name.strip_prefix("files/") {
                 let mut b = Vec::new();
-                f.read_to_end(&mut b)?;
+                read_capped(&mut f, &mut b, &mut remaining)?;
                 if files::sha256_hex(&b) == sha { blobs.insert(sha.to_string(), b); }
             }
         }

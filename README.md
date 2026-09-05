@@ -21,15 +21,16 @@ content-addressed), `thumbs/`. Back up by stopping the container and copying
 
 ## Configuration
 
-| Env                    | Default   |                                                |
-|-------------------------|-----------|------------------------------------------------|
-| `MEMTO_DATA_DIR`       | `./data`  | database, files, thumbnails                    |
-| `MEMTO_BIND`           | `0.0.0.0` |                                                |
-| `MEMTO_PORT`           | `8080`    |                                                |
-| `MEMTO_MAX_UPLOAD_MB`  | `50`      | per file                                       |
-| `MEMTO_SECURE_COOKIE`  | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false` |
-| `MEMTO_LOG`            | `info`    | tracing filter                                 |
-| `MEMTO_TRUST_PROXY`    | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
+| Env                   | Default   |                                                                                                                              |
+|-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
+| `MEMTO_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
+| `MEMTO_BIND`          | `0.0.0.0` |                                                                                                                              |
+| `MEMTO_PORT`          | `8080`    |                                                                                                                              |
+| `MEMTO_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
+| `MEMTO_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
+| `MEMTO_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
+| `MEMTO_LOG`           | `info`    | tracing filter                                                                                                               |
+| `MEMTO_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
 
 Put memto behind a reverse proxy with HTTPS when exposing it beyond your LAN.
 

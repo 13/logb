@@ -14,6 +14,7 @@ pub async fn spawn() -> TestApp {
         bind: "127.0.0.1".into(),
         port: 0,
         max_upload_mb: 2,
+        max_import_mb: 4,
         secure_cookie: "false".into(),
         log: "warn".into(),
         trust_proxy: false,

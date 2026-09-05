@@ -176,3 +176,44 @@ async fn import_rejects_invalid_activity_category() {
     let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs.len(), 0, "rejected import must not persist anything");
 }
+
+/// A tiny archive whose entries inflate to far more than the import budget must be refused
+/// before the bytes are buffered, not after. `max_import_mb` is 4 in the test harness, so the
+/// decompression budget is 8 MiB; 32 MiB of zeroes deflates to a few kilobytes.
+#[tokio::test]
+async fn import_rejects_a_zip_bomb() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("data.json", opts).unwrap();
+        std::io::Write::write_all(&mut w, serde_json::to_vec(&export_shell(base_object())).unwrap().as_slice()).unwrap();
+        w.start_file("files/0000000000000000000000000000000000000000000000000000000000000000", opts).unwrap();
+        std::io::Write::write_all(&mut w, &vec![0u8; 32 * 1024 * 1024]).unwrap();
+        w.finish().unwrap();
+    }
+    let bomb = cursor.into_inner();
+    assert!(bomb.len() < 1024 * 1024, "the bomb itself must be small: {} bytes", bomb.len());
+
+    let res = app.client.post(app.url("/import")).body(bomb).send().await.unwrap();
+    assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
+
+    // Nothing was written: the archive never reached the import transaction.
+    let objects: serde_json::Value = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objects.as_array().unwrap().len(), 0, "{objects}");
+}
+
+/// The archive body itself is bounded by `max_import_mb` (4 MiB in tests), independent of how
+/// well it compresses.
+#[tokio::test]
+async fn import_rejects_an_oversized_archive_body() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    // Incompressible random-ish bytes, so the stored archive really is over the body limit.
+    let big: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    let res = app.client.post(app.url("/import")).body(big).send().await.unwrap();
+    assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
+}
