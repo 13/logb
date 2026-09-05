@@ -13,6 +13,7 @@ use config::Config;
 use state::{App, AppState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
@@ -31,7 +32,12 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
     Ok(Router::new()
         .nest("/api", api::router(max_upload, max_import))
         .fallback(spa::handler)
-        .layer(CompressionLayer::new())
+        // The default predicate already skips images, gRPC and event streams. Export archives
+        // are the other already-compressed response memto serves: gzipping a zip burns CPU on
+        // both ends for no gain.
+        .layer(CompressionLayer::new().compress_when(
+            DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state))
 }

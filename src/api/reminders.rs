@@ -209,7 +209,12 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         .execute(&state.db).await?;
 
     let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
-    let base_counter = activity.as_ref().and_then(|a| a.counter_value).or(stats(&state, r.object_id).await?.current_counter);
+    // Only fall back to the object's highest reading when the linked activity has none:
+    // `.or(..)` on an awaited value would run the stats query even in the common case.
+    let base_counter = match activity.as_ref().and_then(|a| a.counter_value) {
+        Some(c) => Some(c),
+        None => stats(&state, r.object_id).await?.current_counter,
+    };
     let repeat = Repeat { months: r.repeat_months.map(|m| m as u32), counter: r.repeat_counter };
     let next = match next_due(base_date, base_counter, r.due_counter, repeat) {
         Some((date, counter)) => {

@@ -60,12 +60,38 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
     .ok_or(AppError::NotFound)
 }
 
-/// Delete `files` rows (and blobs) that no attachment references any more.
-pub async fn purge_orphan_files(state: &App) -> Result<(), AppError> {
-    let orphans: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, sha256 FROM files WHERE id NOT IN (SELECT file_id FROM attachments)",
-    )
-    .fetch_all(&state.db).await?;
+/// The distinct `file_id`s an object's attachments point at, collected *before* those
+/// attachments are deleted so `purge_orphan_files` knows which files to re-check.
+pub async fn files_of_object(state: &App, object_id: i64) -> Result<Vec<i64>, AppError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE object_id = ?")
+        .bind(object_id).fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// As `files_of_object`, for the attachments hanging off a single activity.
+pub async fn files_of_activity(state: &App, activity_id: i64) -> Result<Vec<i64>, AppError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE activity_id = ?")
+        .bind(activity_id).fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Delete the `files` rows (and blobs) among `candidates` that no attachment references any
+/// more. Callers pass the ids the deletion could plausibly have orphaned; the previous version
+/// re-scanned the whole `files` table on every single delete.
+pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), AppError> {
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let mut orphans: Vec<(i64, String)> = Vec::new();
+    for &file_id in candidates {
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, sha256 FROM files WHERE id = ? AND id NOT IN (SELECT file_id FROM attachments)",
+        )
+        .bind(file_id).fetch_optional(&state.db).await?;
+        if let Some(r) = row {
+            orphans.push(r);
+        }
+    }
     for (id, sha) in orphans {
         sqlx::query("DELETE FROM files WHERE id = ?").bind(id).execute(&state.db).await?;
         let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
@@ -221,7 +247,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     sqlx::query("UPDATE objects SET cover_attachment_id = NULL WHERE id = ? AND cover_attachment_id = ?")
         .bind(a.object_id).bind(id).execute(&state.db).await?;
     sqlx::query("DELETE FROM attachments WHERE id = ?").bind(id).execute(&state.db).await?;
-    purge_orphan_files(&state).await?;
+    purge_orphan_files(&state, &[a.file_id]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

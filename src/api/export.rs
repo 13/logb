@@ -86,16 +86,24 @@ struct Export {
     objects: Vec<ObjectExport>,
 }
 
-fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> AttachmentExport {
-    AttachmentExport {
-        sha256: sha_by_file[&a.file_id].clone(),
+/// The `files` row an attachment points at always belongs to the same user (attachments hang
+/// off that user's objects), so a miss here means the two tables disagree. Report it as an
+/// internal error rather than panicking on a bare `HashMap` index.
+fn sha_of(sha_by_file: &HashMap<i64, String>, file_id: i64) -> Result<String, AppError> {
+    sha_by_file.get(&file_id).cloned()
+        .ok_or_else(|| AppError::Internal(format!("attachment references unknown file {file_id}")))
+}
+
+fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> Result<AttachmentExport, AppError> {
+    Ok(AttachmentExport {
+        sha256: sha_of(sha_by_file, a.file_id)?,
         original_name: a.original_name.clone(),
         mime: a.mime.clone(),
         kind: a.kind.clone(),
         caption: a.caption.clone(),
         taken_at: a.taken_at.clone(),
         created_at: a.created_at.clone(),
-    }
+    })
 }
 
 #[derive(Deserialize)]
@@ -129,21 +137,22 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
              r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
              NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? ORDER BY r.id")
             .bind(o.id).fetch_all(&state.db).await?;
-        for a in &atts { blobs.push(sha_by_file[&a.file_id].clone()); }
+        for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
         let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
-        let cover_sha256 = o.cover_attachment_id
-            .and_then(|cid| atts.iter().find(|a| a.id == cid))
-            .map(|a| sha_by_file[&a.file_id].clone());
+        let cover_sha256 = match o.cover_attachment_id.and_then(|cid| atts.iter().find(|a| a.id == cid)) {
+            Some(a) => Some(sha_of(&sha_by_file, a.file_id)?),
+            None => None,
+        };
         out.push(ObjectExport {
             name: o.name, category: o.category, counter_unit: o.counter_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
-            activities: acts.iter().map(|a| ActivityExport {
+            activities: acts.iter().map(|a| Ok(ActivityExport {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
                 counter_value: a.counter_value, cost_cents: a.cost_cents, created_at: a.created_at.clone(),
-                attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect(),
-            }).collect(),
-            attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect(),
+                attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
+            })).collect::<Result<Vec<_>, AppError>>()?,
+            attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             reminders: rems.iter().map(|r| ReminderExport {
                 title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(), due_counter: r.due_counter,
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter, done_at: r.done_at.clone(),

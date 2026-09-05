@@ -165,7 +165,8 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
          WHERE cover_attachment_id IN (SELECT id FROM attachments WHERE activity_id = ?)",
     )
     .bind(id).execute(&state.db).await?;
+    let files = attachments::files_of_activity(&state, id).await?;
     sqlx::query("DELETE FROM activities WHERE id = ?").bind(id).execute(&state.db).await?;
-    attachments::purge_orphan_files(&state).await?;
+    attachments::purge_orphan_files(&state, &files).await?;
     Ok(StatusCode::NO_CONTENT)
 }

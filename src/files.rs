@@ -44,6 +44,10 @@ impl Storage {
                 // Another concurrent writer for the same content hash may have won the
                 // race and already produced the destination file. Since the path is
                 // derived from the content hash, that file has identical bytes to ours.
+                //
+                // Unreachable on Linux, where POSIX rename() replaces an existing
+                // destination atomically; this arm is here for platforms whose rename
+                // fails when the destination exists.
                 if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                     let _ = tokio::fs::remove_file(&tmp).await;
                     Ok(())
