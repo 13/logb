@@ -56,7 +56,8 @@
     return {
       ...input,
       cost_cents: parseMoney(costText),
-      counter_value: counterText.trim() === '' ? null : Number(counterText),
+      // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
+      counter_value: String(counterText).trim() === '' ? null : Number(counterText),
     };
   }
 

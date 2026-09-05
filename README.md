@@ -44,6 +44,13 @@ cd frontend && npm run e2e     # Playwright against the built binary
 ./build.sh                     # full build into dist/
 ```
 
+End-to-end tests run the real binary against the built SPA on port 8099 with a
+scratch data directory (`.e2e-data`, wiped on each run):
+
+```bash
+cd frontend && npm run e2e
+```
+
 ## API
 
 JSON under `/api`, cookie session. See `docs/superpowers/specs/2026-09-04-memto-design.md`.
