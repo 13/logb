@@ -88,6 +88,12 @@ export default {
   'cat.fuel': 'Tanken / Laden',
   'cat.other': 'Sonstiges',
 
+  'search.title': 'Suche',
+  'search.placeholder': 'Objekte und Aktivitäten durchsuchen',
+  'search.objects': 'Objekte',
+  'search.activities': 'Aktivitäten',
+  'search.archived': 'archiviert',
+  'search.none': 'Nichts gefunden.',
   'docs.empty': 'Noch keine Dokumente oder Fotos.',
   'docs.upload': 'Hochladen',
   'docs.caption': 'Beschriftung',

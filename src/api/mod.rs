@@ -4,6 +4,7 @@ pub mod auth;
 pub mod export;
 pub mod objects;
 pub mod reminders;
+pub mod search;
 pub mod settings;
 pub mod users;
 
@@ -21,6 +22,7 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
         .merge(objects::router())
         .merge(activities::router())
         .merge(reminders::router())
+        .merge(search::router())
         .merge(attachments::router(max_upload_bytes))
         .merge(export::router(max_import_bytes))
 }

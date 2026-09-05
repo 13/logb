@@ -62,6 +62,14 @@ scratch data directory (`.e2e-data`, wiped on each run):
 cd frontend && npm run e2e
 ```
 
+## Search
+
+`GET /api/search?q=...` returns the caller's own objects and activities whose
+name, category, description, title or notes contain the term (`limit`, default
+25, caps at 100). The magnifier on the dashboard opens the same thing. It is a
+substring scan, not a full-text index: instant at household scale, and
+case-insensitive for ASCII only, so `olwechsel` will not find `Ölwechsel`.
+
 ## API
 
 JSON under `/api`, cookie session. See `docs/superpowers/specs/2026-09-04-memto-design.md`.

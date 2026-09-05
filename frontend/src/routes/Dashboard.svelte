@@ -24,7 +24,9 @@
 </script>
 
 <main>
-  <TopBar title={$t('dash.title')} showSettings />
+  <TopBar title={$t('dash.title')} showSettings>
+    <button class="ghost" aria-label={$t('search.title')} onclick={() => go('/search')}>🔍</button>
+  </TopBar>
 
   {#if due.length > 0}
     <div class="banner">

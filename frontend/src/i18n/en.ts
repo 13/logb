@@ -88,6 +88,12 @@ export default {
   'cat.fuel': 'Fuel / charge',
   'cat.other': 'Other',
 
+  'search.title': 'Search',
+  'search.placeholder': 'Search objects and activities',
+  'search.objects': 'Objects',
+  'search.activities': 'Activities',
+  'search.archived': 'archived',
+  'search.none': 'Nothing found.',
   'docs.empty': 'No documents or photos yet.',
   'docs.upload': 'Upload',
   'docs.caption': 'Caption',

@@ -36,3 +36,9 @@ export interface Reminder {
 export interface ReminderInput { title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null }
 export interface DoneOut { done: Reminder; next: Reminder | null }
 export interface ImportCounts { objects: number; activities: number; attachments: number; reminders: number }
+
+export interface ActivityHit {
+  id: number; object_id: number; object_name: string; date: string; category: Category; title: string;
+  notes: string; counter_value: number | null; cost_cents: number | null;
+}
+export interface SearchResults { objects: MemObject[]; activities: ActivityHit[] }
