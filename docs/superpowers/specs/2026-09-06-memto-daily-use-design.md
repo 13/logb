@@ -142,9 +142,11 @@ the current dashboard call keep their behavior exactly. Each item gains:
 - `days_until: number | null` — negative when overdue
 - `counter_until: number | null` — counter distance remaining
 
-`POST /reminders/{id}/snooze { "days": 7 }` pushes `due_date` forward by `days`; when
-`due_date` is null it is set to today + days. Rejects a reminder that is already done
-(409) and `days` outside 1..365 (400). The `CHECK (due_date IS NOT NULL OR due_counter
+`POST /reminders/{id}/snooze { "days": 7 }` sets `due_date` to `days` after the later of
+today and the current `due_date` — snoozing means "not now, in a week", so a reminder
+three months overdue lands a week out, not three months in the past plus seven days.
+A null `due_date` becomes today + days. Rejects a reminder that is already done (409)
+and `days` outside 1..365 (400). The `CHECK (due_date IS NOT NULL OR due_counter
 IS NOT NULL)` constraint is satisfied either way.
 
 ### C4. UI
