@@ -109,6 +109,12 @@ async fn mark_sent(state: &App, date: &str) -> Result<(), AppError> {
 /// misconfigured costs one failed request per day rather than one per minute until midnight.
 /// The trade is that a digest lost to a transient failure is not retried; the reminders stay
 /// due and appear in tomorrow's.
+///
+/// That trade is about the POST, and the marker is therefore written only once the digest has
+/// actually been built: a failure inside `collect` (a pool timeout, a locked database) means
+/// nothing was ever assembled, so marking the day there would drop that day's reminders on
+/// the floor without a single request having left the process. A tick that collects nothing
+/// still marks the day -- "nothing was due" is a handled day, not a failed one.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
     if state.config.notify_url.is_none() || hour_now < state.config.notify_hour {
         return Ok(None);
@@ -117,8 +123,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
     if last_sent(state).await?.as_deref() == Some(today.as_str()) {
         return Ok(None);
     }
+    let digest = collect(state).await?;
     mark_sent(state, &today).await?;
-    let Some(digest) = collect(state).await? else { return Ok(None) };
+    let Some(digest) = digest else { return Ok(None) };
     send(state, &digest).await?;
     Ok(Some(digest))
 }

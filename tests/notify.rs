@@ -131,3 +131,28 @@ async fn a_failing_endpoint_is_not_retried_until_tomorrow() {
     assert!(memto::notify::tick(&app.state, 9).await.is_err(), "the failure is reported");
     assert!(memto::notify::tick(&app.state, 9).await.unwrap().is_none(), "but the day is done");
 }
+
+/// The day is deliberately marked as handled before the POST, so a dead endpoint costs one
+/// request per day rather than one per minute. That reasoning covers the POST only: a failure
+/// while COLLECTING the digest means no digest was ever built, let alone sent, and burning the
+/// day on it silently drops that day's reminders entirely.
+#[tokio::test]
+async fn a_failure_while_collecting_does_not_burn_the_day() {
+    let (url, inbox) = webhook().await;
+    let app = common::spawn_with(|c| { c.notify_url = Some(url); c.notify_hour = 8; }).await;
+    seed_overdue(&app).await;
+
+    // Break collection only -- `settings` (where the sent-marker lives) stays intact, which is
+    // what makes this distinguishable from a tick that could not record anything at all.
+    sqlx::query("ALTER TABLE reminders RENAME TO reminders_hidden")
+        .execute(&app.state.db).await.unwrap();
+    assert!(memto::notify::tick(&app.state, 9).await.is_err(), "collect must surface its failure");
+    assert!(inbox.received().is_empty(), "nothing was sent");
+
+    sqlx::query("ALTER TABLE reminders_hidden RENAME TO reminders")
+        .execute(&app.state.db).await.unwrap();
+    let digest = memto::notify::tick(&app.state, 9).await.unwrap()
+        .expect("the same day must still be retried once collection works again");
+    assert_eq!(digest.reminders.len(), 2);
+    assert_eq!(inbox.received().len(), 1);
+}
