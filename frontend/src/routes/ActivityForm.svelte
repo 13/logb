@@ -4,7 +4,7 @@
   import FilePicker from '../lib/FilePicker.svelte';
   import { api, fileUrl } from '../lib/api';
   import { go, back } from '../lib/router';
-  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney } from '../lib/format';
+  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { locale, t } from '../i18n';
   import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
@@ -72,9 +72,8 @@
       cost_cents: parseMoney(costText),
       // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
       counter_value: String(counterText).trim() === '' ? null : Number(counterText),
-      // Empty stays null; a non-numeric entry becomes NaN, same as parseMoney, and is
-      // caught by validateActivity below rather than silently serializing to null.
-      quantity_milli: String(quantityText).trim() === '' ? null : Math.round(Number(quantityText) * 1000),
+      // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
+      quantity_milli: parseQuantity(quantityText),
     };
   }
 

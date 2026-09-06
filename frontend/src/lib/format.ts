@@ -34,6 +34,14 @@ export function centsToInput(cents: number | null): string {
   return cents === null ? '' : (cents / 100).toFixed(2);
 }
 
+/** "41.3" / "41,3" / "41" → milli-units; empty → null; invalid → NaN */
+export function parseQuantity(s: string): number | null {
+  const t = s.trim().replace(/\s/g, '').replace(',', '.');
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 1000) : NaN;
+}
+
 /**
  * Milli-cents per unit, rendered as money.
  *

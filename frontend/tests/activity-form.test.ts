@@ -22,6 +22,8 @@ describe('activity form', () => {
     expect(validateActivity({ ...base, title: '' })).toBe('activity.title');
     expect(validateActivity({ ...base, title: 'x', date: '' })).toBe('activity.date');
     expect(validateActivity({ ...base, title: 'x', cost_cents: NaN })).toBe('activity.cost');
+    expect(validateActivity({ ...base, title: 'x', counter_value: NaN })).toBe('activity.counter');
+    expect(validateActivity({ ...base, title: 'x', quantity_milli: NaN })).toBe('activity.quantity');
     expect(validateActivity({ ...base, title: 'x' })).toBeNull();
   });
 

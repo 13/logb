@@ -17,7 +17,9 @@
       .catch((e) => (error = (e as Error).message));
   });
 
-  /** Bar width as a percentage of the largest bucket, so the widest bar always fills the row. */
+  /** Bar width as a percentage of the largest bucket, so the widest bar always fills the row.
+   *  No negative-width guard: the API rejects cost_cents < 0 at the boundary
+   *  (see `ActivityInput::validate` in src/api/activities.rs), so `value` is never negative here. */
   function pct(value: number, all: { cost_cents: number }[]): number {
     const max = Math.max(...all.map((b) => b.cost_cents), 1);
     return Math.round((value / max) * 100);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { money, fmtDate, counter, todayIso, perCounter, quantity } from '../src/lib/format';
+import { money, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity } from '../src/lib/format';
 
 describe('format', () => {
   it('formats cents as currency', () => {
@@ -46,5 +46,27 @@ describe('quantity', () => {
   });
   it('renders nothing when there is no value', () => {
     expect(quantity(null, 'l', 'en')).toBe('');
+  });
+});
+
+describe('parseQuantity', () => {
+  it('normalises a comma to a dot, like parseMoney', () => {
+    expect(parseQuantity('41,3')).toBe(41_300);
+  });
+  it('accepts a dot', () => {
+    expect(parseQuantity('41.3')).toBe(41_300);
+  });
+  it('accepts an integer', () => {
+    expect(parseQuantity('41')).toBe(41_000);
+  });
+  it('treats empty string as no value', () => {
+    expect(parseQuantity('')).toBeNull();
+  });
+  it('rejects non-numeric input as NaN', () => {
+    expect(parseQuantity('abc')).toBeNaN();
+  });
+  it('rounds x1000 scaling exactly, without floating-point drift', () => {
+    expect(parseQuantity('0.1')).toBe(100);
+    expect(parseQuantity('41.3')).toBe(41_300);
   });
 });
