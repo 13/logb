@@ -29,6 +29,7 @@ export default {
   'dash.due': '{n} Erinnerungen fällig',
   'dash.due-one': '1 Erinnerung fällig',
   'dash.archived': 'Archiviert',
+  'dash.log': 'Erfassen',
 
   'object.new': 'Neues Objekt',
   'object.edit': 'Objekt bearbeiten',
@@ -80,6 +81,9 @@ export default {
   'activity.add-files': 'Fotos oder Dateien hinzufügen',
   'activity.use-exif-date': 'Fotodatum {date} übernehmen',
   'activity.uploading': 'Lädt hoch…',
+  'activity.repeat': 'Wiederholen',
+  'activity.take-photo': 'Foto aufnehmen',
+  'activity.discard-draft': 'Eintrag und hochgeladene Dateien verwerfen?',
 
   'cat.maintenance': 'Wartung',
   'cat.repair': 'Reparatur',

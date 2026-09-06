@@ -29,6 +29,7 @@ export default {
   'dash.due': '{n} reminders due',
   'dash.due-one': '1 reminder due',
   'dash.archived': 'Archived',
+  'dash.log': 'Log',
 
   'object.new': 'New object',
   'object.edit': 'Edit object',
@@ -80,6 +81,9 @@ export default {
   'activity.add-files': 'Add photos or files',
   'activity.use-exif-date': 'Use photo date {date}',
   'activity.uploading': 'Uploading…',
+  'activity.repeat': 'Repeat',
+  'activity.take-photo': 'Take photo',
+  'activity.discard-draft': 'Discard this entry and its uploads?',
 
   'cat.maintenance': 'Maintenance',
   'cat.repair': 'Repair',

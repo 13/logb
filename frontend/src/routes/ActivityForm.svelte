@@ -5,9 +5,9 @@
   import { api, fileUrl } from '../lib/api';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney } from '../lib/format';
-  import { emptyActivity, exifDate, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { locale, t } from '../i18n';
-  import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput } from '../lib/types';
+  import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -21,6 +21,10 @@
   let saved = $state<Activity | null>(null);
   let error = $state('');
   let busy = $state(false);
+  let allSuggestions = $state<TitleSuggestion[]>([]);
+  const suggestions = $derived(suggestionsFor(allSuggestions, input.category));
+  /** True when `saved` exists only because the user attached a file, never because they saved. */
+  let autoDraft = $state(false);
 
   const lastCounter = $derived(object?.stats.current_counter ?? null);
   const counterWarn = $derived(
@@ -30,6 +34,7 @@
 
   onMount(async () => {
     object = await api<MemObject>('GET', `/objects/${oid}`);
+    allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
     if (aid) {
       const a = await api<Activity>('GET', `/activities/${aid}`);
       saved = a;
@@ -49,6 +54,7 @@
     const bad = validateActivity(body);
     if (bad) throw new Error($t(bad));
     saved = await api<Activity>('POST', `/objects/${oid}/activities`, body);
+    autoDraft = true;
     return saved;
   }
 
@@ -61,6 +67,13 @@
     };
   }
 
+  /** Prefill from a past entry. The user still reviews and saves; nothing is written here. */
+  function repeat(s: TitleSuggestion) {
+    input.title = s.title;
+    input.category = s.category;
+    if (s.last_cost_cents !== null) costText = centsToInput(s.last_cost_cents);
+  }
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     const body = buildInput();
@@ -70,8 +83,18 @@
     try {
       if (saved) await api('PATCH', `/activities/${saved.id}`, body);
       else await api('POST', `/objects/${oid}/activities`, body);
+      autoDraft = false;
       go(`/objects/${oid}`, true);
     } catch (err) { error = (err as Error).message; } finally { busy = false; }
+  }
+
+  /** Cancel throws the auto-created draft away; keeping it would leave a stray timeline entry. */
+  async function cancel() {
+    if (autoDraft && saved) {
+      if (attachments.length > 0 && !confirm($t('activity.discard-draft'))) return;
+      try { await api('DELETE', `/activities/${saved.id}`); } catch { /* leaving it is better than blocking the exit */ }
+    }
+    back(`/objects/${oid}`);
   }
 
   async function remove() {
@@ -96,7 +119,20 @@
     {#if photoDate && photoDate !== input.date}
       <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $locale) })}</button>
     {/if}
-    <div class="field"><label for="ti">{$t('activity.title')}</label><input id="ti" bind:value={input.title} required /></div>
+    {#if !editing && suggestions.length > 0}
+      <div class="chips">
+        {#each suggestions.slice(0, 3) as s (s.title + s.category)}
+          <button type="button" class="chip" onclick={() => repeat(s)}>{$t('activity.repeat')}: {s.title}</button>
+        {/each}
+      </div>
+    {/if}
+    <div class="field">
+      <label for="ti">{$t('activity.title')}</label>
+      <input id="ti" list="titles" bind:value={input.title} required />
+      <datalist id="titles">
+        {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
+      </datalist>
+    </div>
     <div class="row">
       {#if object?.counter_unit}
         <div class="field">
@@ -127,7 +163,7 @@
 
     {#if error}<p class="error">{error}</p>{/if}
     <div class="row actions">
-      <button type="button" class="ghost" onclick={() => back(`/objects/${oid}`)}>{$t('nav.cancel')}</button>
+      <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>
   </form>

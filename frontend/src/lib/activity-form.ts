@@ -1,5 +1,5 @@
 import { todayIso } from './format';
-import type { Activity, ActivityInput } from './types';
+import type { Activity, ActivityInput, Category, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
   return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null };
@@ -32,4 +32,16 @@ export function groupByYear(list: Activity[]): Array<[string, Activity[]]> {
 
 export function exifDate(a: { taken_at: string | null }): string | null {
   return a.taken_at ? a.taken_at.slice(0, 10) : null;
+}
+
+/** Suggestions for the chosen category (all of them when none is chosen), one per title. */
+export function suggestionsFor(all: TitleSuggestion[], category: Category | null): TitleSuggestion[] {
+  const seen = new Set<string>();
+  return all
+    .filter((s) => category === null || s.category === category)
+    .filter((s) => {
+      if (seen.has(s.title)) return false;
+      seen.add(s.title);
+      return true;
+    });
 }

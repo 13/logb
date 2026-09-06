@@ -28,6 +28,11 @@ export interface Activity {
 }
 export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null }
 
+export interface TitleSuggestion {
+  title: string; category: Category; last_date: string;
+  last_cost_cents: number | null; last_counter: number | null;
+}
+
 export interface Reminder {
   id: number; object_id: number; title: string; notes: string; due_date: string | null; due_counter: number | null;
   repeat_months: number | null; repeat_counter: number | null; done_at: string | null; done_activity_id: number | null;
