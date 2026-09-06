@@ -387,3 +387,93 @@ async fn blank_client_op_id_is_treated_as_absent_for_uploads() {
     let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
     assert_eq!(list.len(), 2, "two blank-id uploads must produce two distinct rows, not one");
 }
+
+/// Counts the `files` rows the instance holds, across every user.
+async fn file_row_count(app: &common::TestApp) -> i64 {
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM files")
+        .fetch_one(&app.state.db).await.unwrap();
+    n
+}
+
+/// The unique-violation recovery arms in `upload` were previously proven only by code trace and
+/// by a raw INSERT against the index itself -- nothing drove two genuinely concurrent requests
+/// through them. These two tests do, by firing a batch of uploads at the running server at once:
+/// every one of them drains its body and runs its pre-check before any of them reaches the
+/// INSERT, so the losers arrive at a row that was not there when they looked.
+#[tokio::test]
+async fn concurrent_uploads_of_identical_bytes_share_one_file_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    // A document, not an image: an image upload hops through `spawn_blocking` to build its
+    // thumbnail, and that hop is long enough that the losers' `files` SELECT lands after the
+    // winner's INSERT has already committed -- they take the dedup path and the race never
+    // happens. With no image processing in the way, the SELECT-then-INSERT window is the whole
+    // window, and the losers do collide.
+    let bytes = b"%PDF-1.4 concurrent".to_vec();
+    let mut tasks = Vec::new();
+    for i in 0..8 {
+        let (client, base, bytes) = (app.client.clone(), base.clone(), bytes.clone());
+        tasks.push(tokio::spawn(async move {
+            client.post(&base).multipart(form(bytes, &format!("manual{i}.pdf"), "application/pdf")).send().await.unwrap()
+        }));
+    }
+
+    let mut file_ids = Vec::new();
+    let mut attachment_ids = Vec::new();
+    for t in tasks {
+        let res = t.await.unwrap();
+        assert_eq!(res.status(), 201);
+        let a: serde_json::Value = res.json().await.unwrap();
+        file_ids.push(a["file_id"].as_i64().unwrap());
+        attachment_ids.push(a["id"].as_i64().unwrap());
+    }
+    // Identical bytes, so every attachment must point at the one file row the winner created --
+    // the losers' INSERTs trip UNIQUE(user_id, sha256) and adopt it.
+    assert!(file_ids.windows(2).all(|w| w[0] == w[1]), "one file row expected, got {file_ids:?}");
+    attachment_ids.sort_unstable();
+    attachment_ids.dedup();
+    assert_eq!(attachment_ids.len(), 8, "each upload is its own attachment");
+    assert_eq!(file_row_count(&app).await, 1);
+    assert_eq!(app.client.get(app.url(&format!("/files/{}", file_ids[0]))).send().await.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn concurrent_uploads_sharing_one_op_id_resolve_to_one_attachment_and_leave_no_orphan() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    // DIFFERENT bytes per request, which is the contract-violating case: each upload hashes to
+    // its own sha, so a loser has already written its own blob and `files` row by the time its
+    // attachment INSERT trips the op-id index. Whatever it wrote is referenced by nothing.
+    let mut tasks = Vec::new();
+    for i in 0..6 {
+        let (client, base) = (app.client.clone(), base.clone());
+        let bytes = png(800 + i, 600);
+        tasks.push(tokio::spawn(async move {
+            client.post(&base)
+                .multipart(form(bytes, &format!("shot{i}.png"), "image/png").text("client_op_id", "op-shared"))
+                .send().await.unwrap()
+        }));
+    }
+
+    let mut attachment_ids = Vec::new();
+    for t in tasks {
+        let res = t.await.unwrap();
+        assert!(res.status() == 200 || res.status() == 201, "{}", res.status());
+        let a: serde_json::Value = res.json().await.unwrap();
+        attachment_ids.push(a["id"].as_i64().unwrap());
+    }
+    assert!(attachment_ids.windows(2).all(|w| w[0] == w[1]), "one op id, one attachment: {attachment_ids:?}");
+
+    let list: serde_json::Value = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    // The winner's file row is the only one that may survive: every loser's is unreferenced.
+    assert_eq!(file_row_count(&app).await, 1, "a losing upload left its file row behind");
+}

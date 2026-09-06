@@ -308,3 +308,43 @@ async fn the_partial_unique_index_rejects_a_duplicate_non_null_op_id() {
     let db_err = err.as_database_error().expect("a constraint violation carries a database error");
     assert!(db_err.is_unique_violation(), "{db_err}");
 }
+
+/// The pre-check in `create` is SELECT-then-INSERT, so concurrent requests carrying one op id
+/// all miss it and race the INSERT; the losers land on the partial unique index and must adopt
+/// the winner's row rather than 500. Proven here by genuinely concurrent requests, where the
+/// tests above only ever exercise the sequential path that the pre-check itself handles.
+#[tokio::test]
+async fn concurrent_creates_sharing_one_op_id_resolve_to_one_activity() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    let mut tasks = Vec::new();
+    for i in 0..6 {
+        let (client, base) = (app.client.clone(), base.clone());
+        tasks.push(tokio::spawn(async move {
+            client.post(&base).json(&serde_json::json!({
+                "date": "2026-03-05",
+                "category": "maintenance",
+                // Deliberately different bodies: whichever wins, every caller must be told about
+                // the one row that exists, not about the body it happened to send.
+                "title": format!("Oil change {i}"),
+                "client_op_id": "op-shared",
+            })).send().await.unwrap()
+        }));
+    }
+
+    let mut ids = Vec::new();
+    for t in tasks {
+        let res = t.await.unwrap();
+        assert!(res.status() == 200 || res.status() == 201, "{}", res.status());
+        let a: serde_json::Value = res.json().await.unwrap();
+        ids.push(a["id"].as_i64().unwrap());
+    }
+    assert!(ids.windows(2).all(|w| w[0] == w[1]), "one op id, one activity: {ids:?}");
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1);
+}

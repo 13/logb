@@ -275,6 +275,13 @@ async fn upload(
             let (winner_id,): (i64,) = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
                 .bind(op)
                 .fetch_one(&state.db).await?;
+            // This request's own bytes are now referenced by nothing: the winner's attachment
+            // points at the winner's file. Identical bytes dedup onto that same row, so the
+            // orphan only exists when one op id was reused with DIFFERENT bytes -- a violation
+            // of the op-id contract, but one that otherwise leaks a `files` row and a blob per
+            // loser, permanently and invisibly. `purge_orphan_files` re-checks the reference
+            // before deleting, so the dedup case (file_id shared with the winner) is a no-op.
+            purge_orphan_files(&state, &[file_id]).await?;
             return op_id_attachment_response(&state, user.id, winner_id, object_id).await;
         }
         Err(e) => return Err(e.into()),
