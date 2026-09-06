@@ -101,6 +101,7 @@ export default {
   'activity.take-photo': 'Foto aufnehmen',
   'activity.discard-draft': 'Eintrag und hochgeladene Dateien verwerfen?',
   'activity.save-lost': 'Änderungen konnten nicht gespeichert werden — Seite neu laden und erneut versuchen.',
+  'activity.not-loaded': 'Dieser Eintrag konnte nicht geladen werden und lässt sich daher nicht speichern. Sobald du wieder online bist, öffne ihn erneut.',
 
   'cat.maintenance': 'Wartung',
   'cat.repair': 'Reparatur',

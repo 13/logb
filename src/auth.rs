@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 pub const COOKIE: &str = "memto_session";
 const SESSION_DAYS: i64 = 30;
-const LOGIN_MAX_ATTEMPTS: u32 = 10;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -150,7 +149,7 @@ pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
         .unwrap_or(peer.ip())
 }
 
-/// Returns Err(TooManyRequests) once an IP exceeds LOGIN_MAX_ATTEMPTS inside LOGIN_WINDOW.
+/// Returns Err(TooManyRequests) once an IP exceeds `login_max_attempts` inside LOGIN_WINDOW.
 ///
 /// Every call first drops entries whose window has already elapsed, so the map only ever
 /// holds IPs that attempted a login within the last `LOGIN_WINDOW`. Without that sweep the
@@ -165,7 +164,7 @@ pub fn check_login_rate(state: &App, ip: IpAddr) -> Result<(), AppError> {
         *entry = (0, now);
     }
     entry.0 += 1;
-    if entry.0 > LOGIN_MAX_ATTEMPTS { Err(AppError::TooManyRequests) } else { Ok(()) }
+    if entry.0 > state.config.login_max_attempts { Err(AppError::TooManyRequests) } else { Ok(()) }
 }
 
 pub fn token_from_parts(parts: &Parts) -> Option<String> {
@@ -232,6 +231,7 @@ mod tests {
             secure_cookie: "false".into(),
             log: "warn".into(),
             trust_proxy,
+            login_max_attempts: 10,
         };
         Arc::new(AppState { db, storage, config, login_attempts: Mutex::new(HashMap::new()) })
     }

@@ -49,6 +49,11 @@ pub struct Config {
     /// proxy that overwrites the header; otherwise clients can spoof it.
     #[arg(long, env = "MEMTO_TRUST_PROXY", default_value_t = false)]
     pub trust_proxy: bool,
+    /// Failed-or-successful login attempts allowed from one IP per minute, before further
+    /// attempts are refused with 429. Every household behind one NAT shares a single address
+    /// here, so raise it where many people sign in from the same place.
+    #[arg(long, env = "MEMTO_LOGIN_MAX_ATTEMPTS", default_value_t = 10)]
+    pub login_max_attempts: u32,
 }
 
 impl Config {

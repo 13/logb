@@ -53,17 +53,30 @@
       if (cached) object = cached;
       else error = (e as Error).message;
     }
-    allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
+    try {
+      allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
+    } catch {
+      // Repeat chips are a convenience, and this form exists to be usable in a garage with no
+      // signal. Letting this reject would abandon the whole of onMount below it -- including,
+      // when editing, the load of the very row being edited.
+    }
     if (aid) {
-      const a = await api<Activity>('GET', `/activities/${aid}`);
-      saved = a;
-      autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
-      input = toActivityInput(a);
-      costText = centsToInput(a.cost_cents);
-      counterText = a.counter_value === null ? '' : String(a.counter_value);
-      quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
-      attachments = a.attachments;
-      ready = true;
+      try {
+        const a = await api<Activity>('GET', `/activities/${aid}`);
+        saved = a;
+        autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
+        input = toActivityInput(a);
+        costText = centsToInput(a.cost_cents);
+        counterText = a.counter_value === null ? '' : String(a.counter_value);
+        quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
+        attachments = a.attachments;
+        ready = true;
+      } catch (e) {
+        // The row could not be loaded, so the form is showing empty defaults on an EDIT url.
+        // Say so: `submit` refuses to save in this state, and silently rendering a blank form
+        // is what let an offline edit become a brand-new second activity.
+        error = $t((e as Error).message);
+      }
     } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
@@ -149,6 +162,13 @@
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    if (editing && !saved) {
+      // On an edit url with no loaded row: `onMount`'s GET failed (offline, a 5xx). Falling
+      // through would take the `else` branch below and CREATE a second activity -- the user
+      // asked to change one entry and would silently get two, with their edit on the copy.
+      error = $t('activity.not-loaded');
+      return;
+    }
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) { error = $t(bad); return; }

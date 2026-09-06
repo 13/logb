@@ -101,6 +101,7 @@ export default {
   'activity.take-photo': 'Take photo',
   'activity.discard-draft': 'Discard this entry and its uploads?',
   'activity.save-lost': 'Could not save your changes — reload the page and try again.',
+  'activity.not-loaded': "This entry could not be loaded, so it can't be saved. Open it again once you're back online.",
 
   'cat.maintenance': 'Maintenance',
   'cat.repair': 'Repair',

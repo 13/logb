@@ -49,6 +49,7 @@ with the JSON and every file, importable into any instance.
 | `MEMTO_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `MEMTO_LOG`           | `info`    | tracing filter                                                                                                               |
 | `MEMTO_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
+| `MEMTO_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address |
 
 Put memto behind a reverse proxy with HTTPS when exposing it beyond your LAN.
 

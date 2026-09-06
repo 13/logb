@@ -25,6 +25,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> memto::config::Config {
         secure_cookie: "false".into(),
         log: "warn".into(),
         trust_proxy: false,
+        login_max_attempts: 10,
     }
 }
 
