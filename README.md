@@ -121,6 +121,15 @@ the request goes out, so an endpoint that is down costs one failed request a
 day rather than one a minute. Reminders lost to a failure stay due and appear
 in the next day's digest.
 
+## Languages and currency
+
+The interface is English and German; each user picks their own under Settings.
+
+Currency is one instance-wide setting, not a per-user one, and deliberately so:
+costs are stored as integer cents of a single currency, so showing one user
+`$249.90` and another `€249.90` for the same activity would be a relabelling,
+not a conversion. Amounts are formatted in each user's own locale.
+
 ## Search
 
 `GET /api/search?q=...` returns the caller's own objects and activities whose
