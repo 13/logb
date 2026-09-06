@@ -95,6 +95,46 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   }
 }
 
+/**
+ * Upload that survives a dead connection: the `attachment.upload` counterpart to `createQueued`
+ * above. Sends multipart form data instead of JSON, and follows `createQueued` exactly
+ * otherwise -- the `client_op_id` is minted once here and reused for the immediate attempt and
+ * every later replay, and only a genuine server rejection (`isRejection`) is rethrown rather
+ * than queued.
+ *
+ * `activityId` may be a real id or a negative temp id -- offline, the parent activity may
+ * itself still be sitting in the outbox with no real id yet (see `tempId` in `./outbox.ts`).
+ * A temp id means the server has never heard of that activity, so there is nothing to "try
+ * first": sending now would 404 rather than queue, so that case skips straight to enqueuing.
+ * `replay` rewrites the temp id in the stored op to the real one once (or after) the parent
+ * `activity.create` lands.
+ */
+export async function uploadQueued<T>(path: string, file: Blob, filename: string, activityId?: number): Promise<T | null> {
+  const id = newOpId();
+  const body: Record<string, unknown> = activityId === undefined ? {} : { activity_id: activityId };
+  const activityIsReal = activityId === undefined || activityId >= 0;
+  if (activityIsReal) {
+    try {
+      const form = new FormData();
+      form.append('file', file, filename);
+      form.append('client_op_id', id);
+      if (activityId !== undefined) form.append('activity_id', String(activityId));
+      return await upload<T>(path, form);
+    } catch (e) {
+      if (isRejection(e)) throw e;
+      // Fall through to queue, same as createQueued.
+    }
+  }
+  try {
+    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0 });
+  } catch {
+    // See the matching comment in createQueued: neither the server nor the local queue has
+    // this write, so the caller must be told rather than treating the file as saved.
+    throw new Error('outbox.queue-failed');
+  }
+  return null;
+}
+
 /** Notified after each `flushOutbox()` pass completes, so a mounted view can drop a synthetic
  *  pending entry the instant its real row lands instead of showing it until the next remount. */
 const flushListeners = new Set<() => void>();
@@ -106,16 +146,31 @@ export function onOutboxFlushed(fn: () => void): () => void {
 async function doFlushOutbox(): Promise<void> {
   try {
     await replay(store, async (op: QueuedOp) => {
-      if (op.kind !== 'activity.create') {
-        // Only 'activity.create' is ever queued today (see createQueued above) and it is the
-        // only kind this function knows how to resend as JSON. An 'attachment.upload' op
-        // carries a Blob, which JSON.stringify silently turns into `{}` -- refuse loudly
-        // instead of corrupting the upload, so wiring up queued uploads later requires giving
-        // this a real multipart path rather than tripping over a silent data-loss bug.
-        throw new Error(`flushOutbox: op kind "${op.kind}" has no send path yet`);
+      if (op.kind === 'attachment.upload') {
+        if (!op.blob) {
+          // Nothing to send and never will be -- this op can never succeed no matter how many
+          // times it's retried. Treat it exactly like a permanent server rejection so it's
+          // parked dead and the pass moves on, rather than being retried forever or, worse,
+          // stopping every healthy op behind it.
+          throw new ApiError(422, 'outbox_missing_file', 'queued upload has no file');
+        }
+        const form = new FormData();
+        form.append('file', op.blob, op.filename ?? 'upload');
+        form.append('client_op_id', op.id);
+        const activityId = op.body.activity_id;
+        if (typeof activityId === 'number') form.append('activity_id', String(activityId));
+        const out = await upload<{ id: number }>(op.path, form);
+        return out ?? null;
       }
-      const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
-      return out ?? null;
+      if (op.kind === 'activity.create') {
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
+        return out ?? null;
+      }
+      // A kind this function has no send path for at all (e.g. a queued 'reminder.done',
+      // reserved for later) can never succeed no matter how many times it's retried -- treat
+      // it exactly like a permanent server rejection: park it dead and let the pass continue,
+      // rather than head-of-line-blocking every op behind it (see `replay` in ./outbox.ts).
+      throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
     });
   } finally {
     for (const fn of flushListeners) fn();

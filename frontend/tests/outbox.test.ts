@@ -25,6 +25,40 @@ describe('outbox', () => {
     expect(sent[1]).toEqual({ activity_id: 42 });
   });
 
+  it('a later pass still sends the real id, not the temp one, when the create resolved in an earlier pass that stopped before the dependent upload was sent', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1 }));
+    await enqueue(store, op('blocker'));
+    await enqueue(store, op('upload', { kind: 'attachment.upload', path: '/objects/1/attachments', body: { activity_id: -1 } }));
+
+    // Pass 1: the create resolves -1 -> 42, but 'blocker' then fails on a non-4xx error, so
+    // `replay` stops right there -- 'upload' is never even attempted in this pass, and pass
+    // 1's in-memory `resolved` map is discarded the moment `replay` returns.
+    await replay(store, async (o) => {
+      if (o.id === 'create') return { id: 42 };
+      if (o.id === 'blocker') throw new Error('offline');
+      throw new Error('must not reach "upload" in pass 1 -- "blocker" should have stopped the pass first');
+    });
+
+    const afterPass1 = await store.all();
+    expect(afterPass1.find((r) => r.id === 'create')).toBeUndefined(); // the create is done
+    expect(afterPass1.find((r) => r.id === 'upload')?.body.activity_id).toBe(42); // persisted already
+
+    // Pass 2: a brand-new call, so a brand-new, empty `resolved` map -- the real id can only
+    // reach the request if it was written into the STORED op, which is exactly what this test
+    // pins down.
+    const sent: unknown[] = [];
+    await replay(store, async (o) => {
+      sent.push({ id: o.id, body: structuredClone(o.body) });
+      if (o.id === 'blocker') return { id: 1 };
+      return { id: 1 };
+    });
+
+    const uploadSent = sent.find((s) => (s as { id: string }).id === 'upload');
+    expect(uploadSent).toEqual({ id: 'upload', body: { activity_id: 42 } });
+    expect(await pendingCount(store)).toBe(0);
+  });
+
   it('keeps an op queued when the send fails', async () => {
     const store = memoryStore();
     await enqueue(store, op('a'));
