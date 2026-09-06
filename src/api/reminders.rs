@@ -18,7 +18,7 @@ pub fn router() -> Router<App> {
         .route("/reminders/due", get(due_list))
         .route("/reminders/{id}", get(read).patch(update).delete(delete))
         .route("/reminders/{id}/done", post(done))
-        .route("/reminders/{id}/snooze", post(snooze))
+        .route("/reminders/{id}/snooze", post(snooze).delete(unsnooze))
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -287,6 +287,28 @@ async fn snooze(
     let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
     sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
         .bind(until.to_string())
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(load_owned(&state, user.id, id).await?.into()))
+}
+
+/// Undo a snooze: clears `snoozed_until` so the reminder's normal due-ness (by date, by
+/// counter, or both) applies again immediately.
+///
+/// Clearing a reminder that is not currently snoozed succeeds and changes nothing -- the
+/// caller asked for "not snoozed", and that is already the state, so there is nothing to
+/// reject. Treating it as an error would force every client to first check `snoozed_until`
+/// before it could safely call this, for no benefit: the end state is identical either way.
+///
+/// A done reminder is *not* rejected here, unlike `snooze`: `snooze` rejects because there is
+/// no due-ness left to suppress and creating a fresh snooze on a closed reminder would be
+/// meaningless, but clearing `snoozed_until` on a done reminder is just tidying up stale state
+/// on the way to that same no-op-success end state -- it cannot make a done reminder due again
+/// (`done_at.is_some()` always wins in `ReminderOut::from`), so there is nothing to guard.
+async fn unsnooze(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ReminderOut>, AppError> {
+    load_owned(&state, user.id, id).await?;
+    sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await?;

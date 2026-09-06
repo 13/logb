@@ -144,6 +144,7 @@ export default {
   'reminder.snooze': 'Eine Woche später',
   'reminder.snoozed': 'Zurückgestellt',
   'reminder.snoozed-until': 'Zurückgestellt bis {date}',
+  'reminder.unsnooze': 'Zurückstellung aufheben',
 
   'settings.title': 'Einstellungen',
   'settings.language': 'Sprache',

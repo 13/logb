@@ -144,6 +144,7 @@ export default {
   'reminder.snooze': 'Snooze a week',
   'reminder.snoozed': 'Snoozed',
   'reminder.snoozed-until': 'Snoozed until {date}',
+  'reminder.unsnooze': 'Unsnooze',
 
   'settings.title': 'Settings',
   'settings.language': 'Language',
