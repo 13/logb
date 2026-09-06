@@ -218,6 +218,72 @@ async fn import_rejects_an_oversized_archive_body() {
     assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
 }
 
+/// `snoozed_until` is wired through the export archive and the import INSERT, but nothing
+/// exercised it end to end: it must survive a real export/import round trip alongside the
+/// reminder it suppresses.
+#[tokio::test]
+async fn export_round_trips_a_snoozed_reminder() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-01-01", "category": "maintenance", "title": "service", "counter_value": 60_000 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Service", "due_counter": 60_000 }))
+        .send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let snoozed: serde_json::Value = res.json().await.unwrap();
+    let expected = snoozed["snoozed_until"].as_str().unwrap().to_string();
+
+    let zip_bytes = app.client.get(app.url("/export")).send().await.unwrap().bytes().await.unwrap().to_vec();
+
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let nid = objs[0]["id"].as_i64().unwrap();
+    let rems: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{nid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    let imported = rems.iter().find(|r| r["title"] == "Service").unwrap();
+    assert_eq!(imported["snoozed_until"], expected, "snoozed_until must survive export and import");
+    assert_eq!(imported["due"], false, "the imported reminder must still be suppressed");
+}
+
+/// `snoozed_until` was added after version-1 archives already existed in the wild --
+/// `#[serde(default)]` on `ReminderExport::snoozed_until` is what lets those older archives
+/// (which never wrote the field at all) still import.
+#[tokio::test]
+async fn import_succeeds_without_a_snoozed_until_field() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["reminders"] = json!([{
+        "title": "Oil", "notes": "", "due_date": "2020-01-01", "due_counter": null,
+        "repeat_months": null, "repeat_counter": null, "done_at": null,
+        "done_activity_index": null, "created_at": "2024-01-01T00:00:00Z"
+        // no "snoozed_until" key at all -- exactly what a pre-snooze archive looked like.
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let id = objs[0]["id"].as_i64().unwrap();
+    let rems: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/reminders"))).send().await.unwrap().json().await.unwrap();
+    assert!(rems[0]["snoozed_until"].is_null(), "a missing field must default to not-snoozed");
+    assert_eq!(rems[0]["due"], true, "and the reminder must behave as never snoozed");
+}
+
 /// A column the archive does not carry is a column a restore silently erases -- fuel
 /// quantity and fuel unit must round-trip through export and import like every other field.
 #[tokio::test]

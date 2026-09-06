@@ -147,7 +147,8 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
            COALESCE((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id), 0) AS total_cost_cents, \
            (SELECT COUNT(*) FROM activities WHERE object_id = o.id) AS activity_count, \
            (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id) AS current_counter, \
-           (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND ( \
+           (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL \
+              AND (r.snoozed_until IS NULL OR r.snoozed_until <= ?2) AND ( \
               (r.due_date IS NOT NULL AND r.due_date <= ?2) OR \
               (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id)) \
            )) AS due_reminder_count, \
