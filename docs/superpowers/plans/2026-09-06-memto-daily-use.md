@@ -35,7 +35,7 @@
 | `src/api/reminders.rs` | + `within_days` on `due_list`, + `snooze` handler |
 | `src/domain/reminder.rs` | + `days_until`, `counter_until`, `snoozed_date` |
 | `migrations/0003_fuel_quantity.sql` (new) | `quantity_milli`, `fuel_unit` |
-| `migrations/0004_client_op_id.sql` (new) | idempotency columns and partial unique indexes |
+| `migrations/0005_client_op_id.sql` (new) | idempotency columns and partial unique indexes |
 | `frontend/src/lib/activity-form.ts` | + `suggestionsFor` pure helper |
 | `frontend/src/lib/outbox.ts` (new) | offline queue: pure logic + storage adapter |
 | `frontend/src/lib/idb.ts` (new) | IndexedDB implementation of the outbox storage adapter |
@@ -1650,7 +1650,7 @@ the distance in days or counter units."
 ### Task 7: Idempotent creates
 
 **Files:**
-- Create: `migrations/0004_client_op_id.sql`
+- Create: `migrations/0005_client_op_id.sql`
 - Modify: `src/api/activities.rs`, `src/api/attachments.rs`
 - Test: `tests/activities.rs`, `tests/attachments.rs`
 
@@ -1714,7 +1714,7 @@ Expected: FAIL — the second POST returns 201 and the list has two entries.
 
 - [ ] **Step 3: Write the migration**
 
-`migrations/0004_client_op_id.sql`:
+`migrations/0005_client_op_id.sql`:
 
 ```sql
 -- An id the client generates before it sends, so a create it retried after a lost response
