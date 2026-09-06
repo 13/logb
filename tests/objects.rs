@@ -243,3 +243,35 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
          reminders: {reminders:#?}"
     );
 }
+
+/// PATCH on an object is a full replace for every field but the cover, so a field the client
+/// leaves out is written as NULL rather than kept. That is the contract every read-modify-write
+/// caller depends on -- `Documents.svelte`'s "set as cover" used to hand-list the fields and
+/// omit `fuel_unit`, quietly moving an e-bike's insights from kWh back to litres. Pinning it
+/// here so the semantics can't drift silently under the clients that rely on them.
+#[tokio::test]
+async fn a_patch_that_omits_a_field_clears_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "E-bike", "category": "vehicle", "counter_unit": "km", "fuel_unit": "kwh"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let o: serde_json::Value = res.json().await.unwrap();
+    let id = o["id"].as_i64().unwrap();
+    assert_eq!(o["fuel_unit"], "kwh");
+
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "E-bike", "category": "vehicle", "counter_unit": "km" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert!(out["fuel_unit"].is_null(), "an omitted field is cleared, not preserved");
+
+    // The whole object round-trips unchanged when the client does send it back whole.
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "E-bike", "category": "vehicle", "counter_unit": "km", "fuel_unit": "kwh" }))
+        .send().await.unwrap();
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(out["fuel_unit"], "kwh");
+}

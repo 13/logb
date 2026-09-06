@@ -3,7 +3,8 @@
   import { api, fileUrl } from './api';
   import FilePicker from './FilePicker.svelte';
   import { t } from '../i18n';
-  import type { Attachment } from './types';
+  import { toInput } from './object-form';
+  import type { Attachment, MemObject, ObjectInput } from './types';
 
   let { objectId, coverAttachmentId, onchanged }:
     { objectId: number; coverAttachmentId: number | null; onchanged?: () => void } = $props();
@@ -19,14 +20,19 @@
     onchanged?.();
   }
 
-  /** `null` clears the cover; the API tells "omitted" (keep) from an explicit null (clear). */
+  /** `null` clears the cover; the API tells "omitted" (keep) from an explicit null (clear).
+   *
+   *  PATCH on an object is a full replace for every field except the cover, so this
+   *  read-modify-write has to send the object back whole: any field left out is deserialized
+   *  as `None` and written as NULL. It builds the body through `toInput` -- the same helper
+   *  ObjectForm uses -- and types it as `ObjectInput`, so a column added to the object in
+   *  future is a COMPILE error here rather than a field this function silently wipes.
+   *  Hand-listing the fields inline is how setting a cover photo came to clear `fuel_unit`,
+   *  quietly moving an e-bike's insights back from kWh to litres. */
   async function setCover(cover: number | null) {
-    const o = await api<{ name: string; category: string; counter_unit: string | null; description: string; purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null }>('GET', `/objects/${objectId}`);
-    await api('PATCH', `/objects/${objectId}`, {
-      name: o.name, category: o.category, counter_unit: o.counter_unit, description: o.description,
-      purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
-      archived: o.archived_at !== null, cover_attachment_id: cover,
-    });
+    const o = await api<MemObject>('GET', `/objects/${objectId}`);
+    const body: ObjectInput = { ...toInput(o), cover_attachment_id: cover };
+    await api('PATCH', `/objects/${objectId}`, body);
     onchanged?.();
   }
 </script>
