@@ -17,6 +17,7 @@
   let input = $state<ActivityInput>(emptyActivity());
   let costText = $state('');
   let counterText = $state('');
+  let quantityText = $state('');
   let attachments = $state<Attachment[]>([]);
   let saved = $state<Activity | null>(null);
   let error = $state('');
@@ -45,6 +46,7 @@
       input = toActivityInput(a);
       costText = centsToInput(a.cost_cents);
       counterText = a.counter_value === null ? '' : String(a.counter_value);
+      quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
       attachments = a.attachments;
       ready = true;
     } else if (object.stats.current_counter !== null) {
@@ -70,6 +72,9 @@
       cost_cents: parseMoney(costText),
       // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
       counter_value: String(counterText).trim() === '' ? null : Number(counterText),
+      // Empty stays null; a non-numeric entry becomes NaN, same as parseMoney, and is
+      // caught by validateActivity below rather than silently serializing to null.
+      quantity_milli: String(quantityText).trim() === '' ? null : Math.round(Number(quantityText) * 1000),
     };
   }
 
@@ -149,6 +154,12 @@
       {/if}
       <div class="field"><label for="co">{$t('activity.cost')}</label><input id="co" type="text" inputmode="decimal" bind:value={costText} /></div>
     </div>
+    {#if input.category === 'fuel' && object?.counter_unit}
+      <div class="field">
+        <label for="qt">{$t('activity.quantity')} ({object.fuel_unit ?? (object.counter_unit === 'mi' ? 'gal' : 'l')})</label>
+        <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
+      </div>
+    {/if}
     <div class="field"><label for="no">{$t('activity.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
 
     <h2>{$t('activity.photos')}</h2>

@@ -33,3 +33,16 @@ export function parseMoney(s: string): number | null {
 export function centsToInput(cents: number | null): string {
   return cents === null ? '' : (cents / 100).toFixed(2);
 }
+
+/** Currency-per-unit, scaled by 1000 (like `quantity_milli`), rendered as money. */
+export function perCounter(milli: number | null | undefined, currency: string, locale: string): string {
+  if (milli === null || milli === undefined) return '';
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 1000);
+}
+
+/** A milli-scaled amount with its unit: 41_300 -> "41.3 l". */
+export function quantity(milli: number | null | undefined, unit: string, locale: string): string {
+  if (milli === null || milli === undefined) return '';
+  const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
+  return `${n} ${unit}`;
+}

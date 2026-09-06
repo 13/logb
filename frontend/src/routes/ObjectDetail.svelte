@@ -3,6 +3,7 @@
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
+  import Insights from '../lib/Insights.svelte';
   import { api, apiPage, fileUrl } from '../lib/api';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
@@ -96,6 +97,8 @@
       <p class="muted">{object.category}</p>
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
+      <h3>{$t('insights.title')}</h3>
+      <Insights objectId={oid} unit={object.counter_unit} />
       <div class="list info-actions">
         <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
         <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>

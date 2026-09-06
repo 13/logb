@@ -48,3 +48,11 @@ export interface ActivityHit {
   notes: string; counter_value: number | null; cost_cents: number | null;
 }
 export interface SearchResults { objects: MemObject[]; activities: ActivityHit[] }
+
+export interface Bucket { bucket: string; cost_cents: number; count: number }
+export interface Insights {
+  by_year: Bucket[]; by_category: Bucket[];
+  counter_span: { from: number; to: number } | null;
+  cost_per_counter_milli: number | null;
+  fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null } | null;
+}

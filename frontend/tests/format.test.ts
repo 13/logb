@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { money, fmtDate, counter, todayIso } from '../src/lib/format';
+import { money, fmtDate, counter, todayIso, perCounter, quantity } from '../src/lib/format';
 
 describe('format', () => {
   it('formats cents as currency', () => {
@@ -20,5 +20,23 @@ describe('format', () => {
   });
   it('todayIso is YYYY-MM-DD', () => {
     expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('perCounter', () => {
+  it('renders milli-cents per unit as money with two decimals', () => {
+    expect(perCounter(47_777, 'EUR', 'en')).toBe('€47.78');
+  });
+  it('renders nothing when there is no value', () => {
+    expect(perCounter(null, 'EUR', 'en')).toBe('');
+  });
+});
+
+describe('quantity', () => {
+  it('renders milli-units with one decimal and the unit', () => {
+    expect(quantity(41_300, 'l', 'en')).toBe('41.3 l');
+  });
+  it('renders nothing when there is no value', () => {
+    expect(quantity(null, 'l', 'en')).toBe('');
   });
 });

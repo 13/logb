@@ -15,6 +15,7 @@ export function validateActivity(input: ActivityInput): string | null {
   if (!input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
   if (input.counter_value !== null && Number.isNaN(input.counter_value)) return 'activity.counter';
+  if (input.quantity_milli !== null && Number.isNaN(input.quantity_milli)) return 'activity.quantity';
   return null;
 }
 
