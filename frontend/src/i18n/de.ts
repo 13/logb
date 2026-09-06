@@ -29,6 +29,7 @@ export default {
   'dash.due': '{n} Erinnerungen fällig',
   'dash.due-one': '1 Erinnerung fällig',
   'dash.upcoming': 'Demnächst',
+  'dash.in-day': 'in 1 Tag',
   'dash.in-days': 'in {n} Tagen',
   'dash.in-counter': 'in {n} {unit}',
   'dash.archived': 'Archiviert',
@@ -72,6 +73,7 @@ export default {
   'insights.by-category': 'Pro Kategorie',
   'insights.per-counter': 'Kosten pro {unit}',
   'insights.consumption': 'Verbrauch',
+  'insights.fuel-per-counter': 'Spritkosten pro {unit}',
   'insights.fuel-total': 'Getankt',
   'insights.none': 'Noch zu wenig Daten.',
 
@@ -140,6 +142,8 @@ export default {
   'reminder.at': 'bei {counter}',
   'reminder.on': 'am {date}',
   'reminder.snooze': 'Eine Woche später',
+  'reminder.snoozed': 'Zurückgestellt',
+  'reminder.snoozed-until': 'Zurückgestellt bis {date}',
 
   'settings.title': 'Einstellungen',
   'settings.language': 'Sprache',
@@ -166,6 +170,7 @@ export default {
   'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen importiert',
   'settings.version': 'Version',
   'outbox.pending': '{n} noch zu senden',
+  'outbox.dead-chip': '{n} konnten nicht gesendet werden',
   'outbox.failed': 'Nicht gesendet',
   'outbox.retry': 'Erneut versuchen',
   'outbox.queue-failed': 'Konnte nicht offline gespeichert werden – der Gerätespeicher ist evtl. voll oder nicht verfügbar.',

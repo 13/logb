@@ -56,6 +56,7 @@ button:disabled { opacity: .5; cursor: default; }
 .chip.active { background: var(--accent); color: var(--accent-text); }
 .chip.due { background: var(--danger); color: #fff; }
 .chip.pending { background: var(--warn); color: #fff; flex: none; white-space: nowrap; }
+.chip.dead { background: var(--danger); color: #fff; flex: none; white-space: nowrap; }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
 .chips button { min-height: 32px; padding: 4px 12px; white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; background: var(--bg); padding: 8px 0; }

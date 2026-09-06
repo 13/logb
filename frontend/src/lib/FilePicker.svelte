@@ -17,6 +17,21 @@
         const form = new FormData();
         form.append('file', f, f.name);
         if (activityId !== null) form.append('activity_id', String(activityId));
+        // Each file gets its own id, so a multi-file selection can't collide on the server's
+        // idempotency key (see `client_op_id` handling in src/api/attachments.rs) -- without
+        // this the whole attachment half of that idempotency work is unreachable from any
+        // client, and a response lost after the server has already stored the file produces a
+        // genuine duplicate attachment on the retry a user does by hand.
+        //
+        // This id does NOT survive a retry: a failed upload here just sets `error` and clears
+        // the <input> (see `el.value = ''` below), so retrying means re-picking the file, which
+        // hands back an unrelated File object with nothing reliable to recognise it as "the
+        // same" upload as before (name/size/lastModified are the closest proxy, but two
+        // legitimately different files can share all three). Reusing the id across a retry
+        // would need this component restructured into a queue that keeps the original File
+        // (and its id) around until the upload is confirmed, rather than firing and forgetting
+        // per pick as it does today. So each retry attempt gets a fresh id per file instead.
+        form.append('client_op_id', crypto.randomUUID());
         onuploaded(await upload<Attachment>(`/objects/${objectId}/attachments`, form));
       }
     } catch (e) { error = (e as Error).message; } finally { busy = false; el.value = ''; cam.value = ''; }

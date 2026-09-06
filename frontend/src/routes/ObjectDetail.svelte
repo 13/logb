@@ -78,7 +78,12 @@
   /// to a fresh (non-append) load, since it will not appear in any page the server sends back
   /// until the outbox has replayed it.
   async function loadActivities(append = false) {
-    const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? activities.length : 0) });
+    // The offset must count only rows the server itself sent back. A prepended pending entry
+    // (see `pendingActivities` above) has no server-side page position at all -- counting it in
+    // `activities.length` would shift every subsequent "load more" request back by one real
+    // activity per pending op, silently skipping it.
+    const loaded = activities.filter((a) => !a.pending).length;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? loaded : 0) });
     if (category) params.set('category', category);
     let items: Activity[] = [];
     let total = 0;

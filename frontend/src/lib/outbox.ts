@@ -53,6 +53,24 @@ export function newOpId(): string {
   return globalThis.crypto.randomUUID();
 }
 
+/**
+ * Wraps an async function so overlapping calls share one in-flight run instead of each
+ * starting a fresh one. `flushOutbox` (`./api.ts`) is called at startup, on `online`, on
+ * `visibilitychange`, and after a manual retry -- several of which can fire within the same
+ * tick. Without this, two overlapping passes over one outbox snapshot can race: if pass 1
+ * finishes and removes an op while pass 2 is still mid-flight (having read that op before pass
+ * 1 removed it), pass 2 goes on to write it back with `attempts: 1`, resurrecting a completed
+ * op as a phantom pending row. Once the wrapped call settles, the next call starts a genuinely
+ * new run rather than replaying a stale result.
+ */
+export function serialize<T>(fn: () => Promise<T>): () => Promise<T> {
+  let inFlight: Promise<T> | null = null;
+  return () => {
+    if (!inFlight) inFlight = fn().finally(() => { inFlight = null; });
+    return inFlight;
+  };
+}
+
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
   await store.put(op);
 }

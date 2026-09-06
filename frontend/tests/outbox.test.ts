@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { memoryStore, enqueue, replay, pendingCount, type QueuedOp } from '../src/lib/outbox';
+import { describe, expect, it, vi } from 'vitest';
+import { memoryStore, enqueue, replay, pendingCount, serialize, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -89,5 +89,58 @@ describe('outbox', () => {
     const all = await store.all();
     expect(all).toHaveLength(2);
     expect(all.find((r) => r.id === 'a')?.dead).toBeFalsy();
+  });
+});
+
+// `flushOutbox` (./api.ts) wraps `doFlushOutbox` in this so overlapping triggers -- startup,
+// `online`, `visibilitychange`, a manual retry -- can't run two concurrent passes over the same
+// outbox snapshot. That race is what resurrects a just-completed op as a phantom pending row
+// (see the comment on `serialize`), so the guard itself gets its own coverage independent of
+// any particular caller.
+describe('serialize', () => {
+  it('shares one in-flight run across calls that overlap it', async () => {
+    let calls = 0;
+    let release!: () => void;
+    const wrapped = serialize(() => new Promise<void>((resolve) => {
+      calls++;
+      release = resolve;
+    }));
+
+    const first = wrapped();
+    const second = wrapped();
+
+    expect(calls).toBe(1); // the second call did not start a fresh run
+    expect(second).toBe(first); // both callers are handed the exact same promise
+
+    release();
+    await Promise.all([first, second]);
+  });
+
+  it('starts a genuinely new run once the previous one has settled', async () => {
+    const fn = vi.fn(async () => {});
+    const wrapped = serialize(fn);
+
+    await wrapped();
+    await wrapped();
+
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the next call start a new run even after the previous one rejected', async () => {
+    const fn = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(undefined);
+    const wrapped = serialize(fn);
+
+    await expect(wrapped()).rejects.toThrow('boom');
+    await expect(wrapped()).resolves.toBeUndefined();
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves every caller of a shared run to the same value', async () => {
+    const wrapped = serialize(async () => 42);
+    const [a, b] = await Promise.all([wrapped(), wrapped()]);
+    expect(a).toBe(42);
+    expect(b).toBe(42);
   });
 });

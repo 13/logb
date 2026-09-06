@@ -12,6 +12,12 @@
 
   $effect(() => {
     objectId;
+    // Reset before the fetch, not just on success: without this, switching to another object
+    // shows the previous one's cost breakdown under the new object's name for however long the
+    // request takes -- and indefinitely if it fails, since neither `data` nor `error` was ever
+    // touched for the new id.
+    data = null;
+    error = '';
     api<Insights>('GET', `/objects/${objectId}/insights`)
       .then((d) => (data = d))
       .catch((e) => (error = (e as Error).message));
@@ -56,6 +62,13 @@
       <p class="muted">{$t('insights.fuel-total')}: <b>{quantity(data.fuel.quantity_milli, data.fuel.unit, $locale)}</b></p>
       {#if data.fuel.per_100_milli !== null && unit}
         <p class="muted">{$t('insights.consumption')}: <b>{quantity(data.fuel.per_100_milli, data.fuel.unit, $locale)}/100 {unit}</b></p>
+        <!-- `cost_per_counter_milli` is null under exactly the same condition as `per_100_milli`
+             (both need >= 2 fills spanning a positive counter distance -- see
+             `fuel_cost_per_counter_milli` / `consumption_per_100_milli` in
+             src/domain/insights.rs), so this guard covers both. Same scale as the overall
+             per-counter figure above (milli-cents per unit), hence the same `perCounter`
+             formatter. -->
+        <p class="muted">{$t('insights.fuel-per-counter', { unit })}: <b>{perCounter(data.fuel.cost_per_counter_milli, $currency, $locale)}</b></p>
       {/if}
     {/if}
   {/if}

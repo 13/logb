@@ -2,7 +2,8 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
-  import { api, createQueued, fileUrl } from '../lib/api';
+  import { api, createQueued, fileUrl, isRejection } from '../lib/api';
+  import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
@@ -37,7 +38,20 @@
   const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
 
   onMount(async () => {
-    object = await api<MemObject>('GET', `/objects/${oid}`);
+    try {
+      object = await api<MemObject>('GET', `/objects/${oid}`);
+      setCachedObject(oid, object);
+    } catch (e) {
+      // Offline (or a dead/slow connection): fall back to the last object this session saw,
+      // the same way ObjectDetail's loadObject() does -- without this, `object` stays null and
+      // the odometer / fuel-quantity fields below (gated on `object?.counter_unit`) silently
+      // vanish, even though this form exists precisely to log things like a garage fill-up
+      // while offline. Never on a genuine rejection (`isRejection`): a 401/403/404 is the
+      // server answering, possibly about an object that belongs to someone else entirely.
+      const cached = isRejection(e) ? undefined : getCachedObject(oid);
+      if (cached) object = cached;
+      else error = (e as Error).message;
+    }
     allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
     if (aid) {
       const a = await api<Activity>('GET', `/activities/${aid}`);
@@ -49,7 +63,7 @@
       quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
       attachments = a.attachments;
       ready = true;
-    } else if (object.stats.current_counter !== null) {
+    } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
   });
@@ -72,8 +86,11 @@
       cost_cents: parseMoney(costText),
       // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
       counter_value: String(counterText).trim() === '' ? null : Number(counterText),
+      // The quantity field only exists in the form for the fuel category (see the template
+      // below) -- send it only then, so switching category away from fuel after typing an
+      // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
       // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
-      quantity_milli: parseQuantity(quantityText),
+      quantity_milli: input.category === 'fuel' ? parseQuantity(quantityText) : null,
     };
   }
 

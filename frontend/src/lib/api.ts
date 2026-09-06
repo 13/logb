@@ -1,4 +1,4 @@
-import { enqueue, newOpId, pendingCount, replay, type OutboxStore, type QueuedOp } from './outbox';
+import { enqueue, newOpId, pendingCount, replay, serialize, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection } from './api-error';
 
@@ -93,7 +93,7 @@ export function onOutboxFlushed(fn: () => void): () => void {
   return () => flushListeners.delete(fn);
 }
 
-export async function flushOutbox(): Promise<void> {
+async function doFlushOutbox(): Promise<void> {
   try {
     await replay(store, async (op: QueuedOp) => {
       if (op.kind !== 'activity.create') {
@@ -112,7 +112,20 @@ export async function flushOutbox(): Promise<void> {
   }
 }
 
+/** Send every queued write. Called at startup, on `online`, on `visibilitychange`, and after a
+ *  manual retry -- several of which can land in the same tick, so this is `serialize`d (see
+ *  `./outbox.ts`) rather than left to run overlapping passes over the same snapshot. */
+export const flushOutbox = serialize(doFlushOutbox);
+
 globalThis.addEventListener?.('online', () => { void flushOutbox(); });
+// The common real outage -- a captive portal, weak signal, a 502 from a reverse proxy, the
+// server restarting -- queues a write and then never fires `online` at all, so without this a
+// queued op would sit until the user force-reloads the PWA. Reconnecting or backgrounding and
+// returning to the tab is the moment a user actually finds out whether they're back online, so
+// it doubles as a good trigger to retry.
+globalThis.addEventListener?.('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void flushOutbox();
+});
 
 export function outboxPending(): Promise<number> {
   return pendingCount(store);
@@ -120,6 +133,14 @@ export function outboxPending(): Promise<number> {
 
 export async function deadOps(): Promise<QueuedOp[]> {
   return (await store.all()).filter((o) => o.dead);
+}
+
+/** How many ops are parked dead — a write the server has permanently refused and will never
+ *  see again. Deliberately separate from `outboxPending`/`pendingCount`, which counts only ops
+ *  still waiting to be sent: a dead op must not silently drop out of view just because it no
+ *  longer counts as "pending", so callers show both rather than folding one into the other. */
+export async function outboxDeadCount(): Promise<number> {
+  return (await deadOps()).length;
 }
 
 /**
