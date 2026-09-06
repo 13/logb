@@ -19,6 +19,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> memto::config::Config {
         notify_url: None,
         notify_hour: 8,
         notify_format: "json".into(),
+        timezone: chrono_tz::Tz::UTC,
         secure_cookie: "false".into(),
         log: "warn".into(),
         trust_proxy: false,

@@ -29,8 +29,9 @@ content-addressed), `thumbs/`. Back up by stopping the container and copying
 | `MEMTO_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
 | `MEMTO_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
 | `MEMTO_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
-| `MEMTO_NOTIFY_HOUR`   | `8`       | UTC hour the digest goes out                                                                                                 |
+| `MEMTO_NOTIFY_HOUR`   | `8`       | hour (in `MEMTO_TIMEZONE`) the digest goes out                                                                                |
 | `MEMTO_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
+| `MEMTO_TIMEZONE`      | `UTC`     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against                                                  |
 | `MEMTO_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `MEMTO_LOG`           | `info`    | tracing filter                                                                                                               |
 | `MEMTO_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
@@ -78,6 +79,14 @@ types (JPEG, PNG, GIF, WebP, AVIF, BMP, PDF) may render in place. Everything
 else downloads — an SVG is an image by MIME type and a scriptable document in
 practice. The app itself is served under a policy that permits no off-origin
 resource at all.
+
+## Time
+
+Set `MEMTO_TIMEZONE` to the household's own zone. Reminder due dates are
+compared against today *there*: left at `UTC`, a household in UTC+13 sees a
+reminder come due most of a day late and one in UTC−8 sees it a day early. It
+also decides when `MEMTO_NOTIFY_HOUR` fires. Stored timestamps stay UTC and are
+rendered in the reader's locale.
 
 ## Reminder notifications
 

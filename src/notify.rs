@@ -14,8 +14,6 @@ use std::time::Duration;
 /// Key in the `settings` table holding the date (`YYYY-MM-DD`) of the last digest attempt.
 const LAST_SENT_KEY: &str = "notify_last_sent";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-/// How often the scheduler wakes to ask whether today's digest is due yet.
-const TICK: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct DueItem {
@@ -125,21 +123,4 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
     Ok(Some(digest))
 }
 
-/// Starts the daily digest scheduler. A no-op when no notify URL is configured.
-pub fn spawn(state: App) {
-    if state.config.notify_url.is_none() {
-        return;
-    }
-    tracing::info!(hour = state.config.notify_hour, "reminder digest enabled");
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(TICK).await;
-            let hour = chrono::Utc::now().format("%H").to_string().parse().unwrap_or(0);
-            match tick(&state, hour).await {
-                Ok(Some(d)) => tracing::info!(reminders = d.reminders.len(), "sent reminder digest"),
-                Ok(None) => {}
-                Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
-            }
-        }
-    });
-}
+

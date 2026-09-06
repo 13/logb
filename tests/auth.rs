@@ -126,3 +126,21 @@ async fn logout_all_ends_every_session() {
     // Signing in again still works.
     assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
 }
+
+/// Expired sessions are swept on a timer, not only when someone happens to sign in.
+#[tokio::test]
+async fn expired_sessions_are_pruned() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+        .bind("stale-token").bind(1).bind("2020-01-01T00:00:00Z")
+        .execute(&app.state.db).await.unwrap();
+    let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(before, 2);
+
+    assert_eq!(memto::tasks::prune_sessions(&app.state).await.unwrap(), 1);
+    let (after,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(after, 1, "the live session survives");
+    // The live session still works.
+    assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+}

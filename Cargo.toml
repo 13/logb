@@ -29,6 +29,7 @@ clap = { version = "4", features = ["derive", "env"] }
 mime_guess = "2"
 time = "0.3"
 reqwest = { version = "0.13", features = ["json"] }
+chrono-tz = "0.10.4"
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }

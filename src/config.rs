@@ -25,13 +25,17 @@ pub struct Config {
     /// Where to POST the daily digest of due reminders. Unset disables notifications.
     #[arg(long, env = "MEMTO_NOTIFY_URL")]
     pub notify_url: Option<String>,
-    /// UTC hour (0-23) at which the daily digest goes out.
+    /// Hour (0-23), in `MEMTO_TIMEZONE`, at which the daily digest goes out.
     #[arg(long, env = "MEMTO_NOTIFY_HOUR", default_value_t = 8)]
     pub notify_hour: u32,
     /// `json` posts a structured body; `text` posts the plain digest, which is what
     /// ntfy-style services render.
     #[arg(long, env = "MEMTO_NOTIFY_FORMAT", default_value = "json")]
     pub notify_format: String,
+    /// IANA timezone name (`Europe/Berlin`, `UTC`, ...). Decides which day a reminder's
+    /// due date is compared against, and when the daily digest goes out.
+    #[arg(long, env = "MEMTO_TIMEZONE", default_value = "UTC")]
+    pub timezone: chrono_tz::Tz,
     /// Trust `X-Forwarded-For` for the client IP. Enable only behind a reverse
     /// proxy that overwrites the header; otherwise clients can spoof it.
     #[arg(long, env = "MEMTO_TRUST_PROXY", default_value_t = false)]
