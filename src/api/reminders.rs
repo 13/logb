@@ -2,7 +2,7 @@ use super::activities::load_owned_activity;
 use super::objects::{load_owned_object, stats, validate_date};
 use crate::auth::AuthUser;
 use crate::db;
-use crate::domain::reminder::{counter_until, days_until, is_due, next_due, snoozed_date, Repeat};
+use crate::domain::reminder::{counter_until, days_until, is_due, is_upcoming, next_due, snoozed_date, Repeat};
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Path, Query, State};
@@ -34,6 +34,9 @@ pub struct ReminderRow {
     pub done_at: Option<String>,
     pub done_activity_id: Option<i64>,
     pub created_at: String,
+    /// Hides the reminder from `due` until this date, without touching `due_date` or
+    /// `due_counter` -- see `domain::reminder::is_due`.
+    pub snoozed_until: Option<String>,
     // joined
     pub object_name: String,
     pub counter_unit: Option<String>,
@@ -66,7 +69,8 @@ impl From<ReminderRow> for ReminderOut {
     fn from(row: ReminderRow) -> Self {
         let today = today();
         let date = row.due_date.as_deref().and_then(parse_date);
-        let due = row.done_at.is_none() && is_due(today, row.current_counter, date, row.due_counter);
+        let snoozed_until = row.snoozed_until.as_deref().and_then(parse_date);
+        let due = row.done_at.is_none() && is_due(today, row.current_counter, date, row.due_counter, snoozed_until);
         let days_until = days_until(today, date);
         let counter_until = counter_until(row.current_counter, row.due_counter);
         ReminderOut { row, due, days_until, counter_until }
@@ -76,7 +80,7 @@ impl From<ReminderRow> for ReminderOut {
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<ReminderRow, AppError> {
     sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
+         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.id = ? AND o.user_id = ?",
     )
@@ -133,7 +137,7 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     load_owned_object(&state, user.id, object_id).await?;
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
+         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? \
          ORDER BY r.done_at IS NOT NULL, r.due_date IS NULL, r.due_date, r.due_counter, r.id",
@@ -147,7 +151,7 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
 pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result<Vec<ReminderOut>, AppError> {
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
+         r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
          WHERE o.user_id = ? AND r.done_at IS NULL AND o.archived_at IS NULL \
@@ -158,7 +162,7 @@ pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result
         .into_iter()
         .map(ReminderOut::from)
         .filter(|r| r.row.done_at.is_none())
-        .filter(|r| r.due || matches!(r.days_until, Some(d) if d > 0 && d <= within_days))
+        .filter(|r| is_upcoming(r.due, r.days_until, within_days))
         .collect())
 }
 
@@ -261,8 +265,12 @@ pub struct SnoozeInput {
     pub days: i64,
 }
 
-/// Push a reminder out by `days`. Snoozing means "not now, in a week", so an overdue
+/// Hide a reminder from `due` for `days`. Snoozing means "not now, in a week", so an overdue
 /// reminder is measured from today rather than from the date it blew past.
+///
+/// This writes `snoozed_until`, never `due_date` or `due_counter`: the reminder keeps its real
+/// due date and counter target, so `days_until`/`counter_until` stay truthful and a
+/// counter-based reminder can actually be suppressed (rewriting `due_date` never touched it).
 async fn snooze(
     user: AuthUser,
     State(state): State<App>,
@@ -276,9 +284,9 @@ async fn snooze(
     if r.done_at.is_some() {
         return Err(AppError::Conflict("reminder already done".into()));
     }
-    let next = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
-    sqlx::query("UPDATE reminders SET due_date = ? WHERE id = ?")
-        .bind(next.to_string())
+    let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
+    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
+        .bind(until.to_string())
         .bind(id)
         .execute(&state.db)
         .await?;
@@ -295,6 +303,7 @@ mod tests {
             id: 1, object_id: 1, title: "Oil change".into(), notes: "".into(),
             due_date: None, due_counter: None, repeat_months: None, repeat_counter: None,
             done_at: None, done_activity_id: None, created_at: "2024-01-01T00:00:00Z".into(),
+            snoozed_until: None,
             object_name: "Golf".into(), counter_unit: None, current_counter: None,
         }
     }

@@ -62,6 +62,10 @@ struct ReminderExport {
     done_at: Option<String>,
     done_activity_index: Option<usize>,
     created_at: String,
+    // Added after version 1 archives already existed in the wild; `#[serde(default)]` lets
+    // those older archives import as reminders that simply were never snoozed.
+    #[serde(default)]
+    snoozed_until: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,7 +142,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(
             "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-             r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
+             r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
              NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? ORDER BY r.id")
             .bind(o.id).fetch_all(&state.db).await?;
         for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
@@ -161,7 +165,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
                 title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(), due_counter: r.due_counter,
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter, done_at: r.done_at.clone(),
                 done_activity_index: r.done_activity_id.and_then(|id| index_of.get(&id).copied()),
-                created_at: r.created_at.clone(),
+                created_at: r.created_at.clone(), snoozed_until: r.snoozed_until.clone(),
             }).collect(),
         });
     }
@@ -318,10 +322,11 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
             sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
+                .bind(&r.snoozed_until)
                 .execute(&mut *tx).await?;
             counts.reminders += 1;
         }

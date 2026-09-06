@@ -86,6 +86,8 @@
   .toggle { margin-top: 18px; color: var(--muted); font-size: .9rem; }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .banner ul { margin: 6px 0 0 18px; }
-  .banner.soon { border-color: var(--border); }
+  /* Upcoming is not overdue: a calm surface card, not the alarming red used for `due`. */
+  .banner.soon { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .banner.soon a { color: var(--text); }
   .snooze { font-size: .8rem; padding: 2px 6px; }
 </style>

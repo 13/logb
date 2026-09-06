@@ -37,7 +37,7 @@ export interface TitleSuggestion {
 export interface Reminder {
   id: number; object_id: number; title: string; notes: string; due_date: string | null; due_counter: number | null;
   repeat_months: number | null; repeat_counter: number | null; done_at: string | null; done_activity_id: number | null;
-  created_at: string; object_name: string; counter_unit: CounterUnit; current_counter: number | null; due: boolean;
+  created_at: string; snoozed_until: string | null; object_name: string; counter_unit: CounterUnit; current_counter: number | null; due: boolean;
   days_until: number | null; counter_until: number | null;
 }
 export interface ReminderInput { title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null }

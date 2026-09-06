@@ -6,14 +6,34 @@ pub struct Repeat {
     pub counter: Option<i64>,
 }
 
-/// Due when the date has arrived or the counter has been reached (whichever is set).
-pub fn is_due(today: NaiveDate, current_counter: Option<i64>, due_date: Option<NaiveDate>, due_counter: Option<i64>) -> bool {
+/// Due when the date has arrived or the counter has been reached (whichever is set), unless a
+/// snooze is still in effect. A snooze suppresses -- it never rewrites `due_date` or
+/// `due_counter` -- so it can hide a counter-based reminder too, which moving the date never
+/// could. `snoozed_until` strictly after `today` wins over both conditions; on or before today
+/// the snooze has lapsed and normal rules resume.
+pub fn is_due(
+    today: NaiveDate,
+    current_counter: Option<i64>,
+    due_date: Option<NaiveDate>,
+    due_counter: Option<i64>,
+    snoozed_until: Option<NaiveDate>,
+) -> bool {
+    if snoozed_until.is_some_and(|s| s > today) {
+        return false;
+    }
     let by_date = due_date.map(|d| d <= today).unwrap_or(false);
     let by_counter = match (due_counter, current_counter) {
         (Some(due), Some(cur)) => cur >= due,
         _ => false,
     };
     by_date || by_counter
+}
+
+/// Whether a reminder belongs in a due-or-upcoming lookahead: already due, or coming due
+/// within `within_days` (strictly in the future -- a reminder due today or in the past is
+/// reported through `due`, not through the lookahead window).
+pub fn is_upcoming(due: bool, days_until: Option<i64>, within_days: i64) -> bool {
+    due || matches!(days_until, Some(d) if d > 0 && d <= within_days)
 }
 
 /// The (due_date, due_counter) of the follow-up reminder, or None when nothing repeats.
@@ -50,22 +70,41 @@ mod tests {
 
     #[test]
     fn due_by_date() {
-        assert!(is_due(d("2026-09-04"), None, Some(d("2026-09-04")), None));
-        assert!(is_due(d("2026-09-04"), None, Some(d("2026-01-01")), None));
-        assert!(!is_due(d("2026-09-04"), None, Some(d("2026-09-05")), None));
+        assert!(is_due(d("2026-09-04"), None, Some(d("2026-09-04")), None, None));
+        assert!(is_due(d("2026-09-04"), None, Some(d("2026-01-01")), None, None));
+        assert!(!is_due(d("2026-09-04"), None, Some(d("2026-09-05")), None, None));
     }
 
     #[test]
     fn due_by_counter_needs_a_reading() {
-        assert!(is_due(d("2026-09-04"), Some(10_000), None, Some(10_000)));
-        assert!(!is_due(d("2026-09-04"), Some(9_999), None, Some(10_000)));
-        assert!(!is_due(d("2026-09-04"), None, None, Some(10_000)));
+        assert!(is_due(d("2026-09-04"), Some(10_000), None, Some(10_000), None));
+        assert!(!is_due(d("2026-09-04"), Some(9_999), None, Some(10_000), None));
+        assert!(!is_due(d("2026-09-04"), None, None, Some(10_000), None));
     }
 
     #[test]
     fn either_condition_suffices() {
-        assert!(is_due(d("2026-09-04"), Some(0), Some(d("2020-01-01")), Some(10_000)));
-        assert!(is_due(d("2020-01-01"), Some(20_000), Some(d("2030-01-01")), Some(10_000)));
+        assert!(is_due(d("2026-09-04"), Some(0), Some(d("2020-01-01")), Some(10_000), None));
+        assert!(is_due(d("2020-01-01"), Some(20_000), Some(d("2030-01-01")), Some(10_000), None));
+    }
+
+    #[test]
+    fn a_future_snooze_suppresses_a_date_due_reminder() {
+        assert!(!is_due(d("2026-09-06"), None, Some(d("2020-01-01")), None, Some(d("2026-09-13"))));
+    }
+
+    #[test]
+    fn a_future_snooze_suppresses_a_counter_due_reminder() {
+        // This is exactly the case a rewritten due_date could never suppress.
+        assert!(!is_due(d("2026-09-06"), Some(10_000), None, Some(10_000), Some(d("2026-09-13"))));
+    }
+
+    #[test]
+    fn a_lapsed_snooze_suppresses_nothing() {
+        // "Today" and "in the past" both count as lapsed.
+        assert!(is_due(d("2026-09-06"), Some(10_000), None, Some(10_000), Some(d("2026-09-06"))));
+        assert!(is_due(d("2026-09-06"), Some(10_000), None, Some(10_000), Some(d("2020-01-01"))));
+        assert!(is_due(d("2026-09-06"), None, Some(d("2020-01-01")), None, Some(d("2026-09-06"))));
     }
 
     #[test]
@@ -101,5 +140,51 @@ mod tests {
     #[test]
     fn snoozing_a_counter_only_reminder_gives_it_a_date() {
         assert_eq!(snoozed_date(d("2026-09-06"), None, 7), d("2026-09-13"));
+    }
+
+    #[test]
+    fn days_until_has_no_value_without_a_due_date() {
+        // The dashboard renders `Some(0)` as "due today" -- a counter-only reminder must not
+        // get that label just because it has no date at all.
+        assert_eq!(days_until(d("2026-09-06"), None), None);
+    }
+
+    #[test]
+    fn days_until_counts_forward_and_backward() {
+        assert_eq!(days_until(d("2026-09-06"), Some(d("2026-09-06"))), Some(0));
+        assert_eq!(days_until(d("2026-09-06"), Some(d("2026-09-16"))), Some(10));
+        assert_eq!(days_until(d("2026-09-06"), Some(d("2026-08-27"))), Some(-10));
+    }
+
+    #[test]
+    fn counter_until_needs_both_readings() {
+        assert_eq!(counter_until(None, Some(10_000)), None);
+        assert_eq!(counter_until(Some(9_000), None), None);
+        assert_eq!(counter_until(None, None), None);
+    }
+
+    #[test]
+    fn counter_until_counts_forward_and_backward() {
+        assert_eq!(counter_until(Some(9_000), Some(10_000)), Some(1_000));
+        assert_eq!(counter_until(Some(10_500), Some(10_000)), Some(-500));
+    }
+
+    #[test]
+    fn is_upcoming_includes_the_due_flag_regardless_of_days() {
+        assert!(is_upcoming(true, None, 30));
+        assert!(is_upcoming(true, Some(-5), 30));
+    }
+
+    #[test]
+    fn is_upcoming_boundary_is_inclusive_of_within_days() {
+        assert!(is_upcoming(false, Some(30), 30), "exactly within_days away is included");
+        assert!(!is_upcoming(false, Some(31), 30), "one day beyond the window is not");
+    }
+
+    #[test]
+    fn is_upcoming_excludes_the_past_and_today() {
+        assert!(!is_upcoming(false, Some(0), 30), "due today is reported via `due`, not lookahead");
+        assert!(!is_upcoming(false, Some(-1), 30), "a past date is not upcoming");
+        assert!(!is_upcoming(false, None, 30));
     }
 }
