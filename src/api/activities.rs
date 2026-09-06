@@ -214,6 +214,9 @@ async fn recent_titles(
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Response, AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
     body.validate(&object)?;
+    // A blank (or all-whitespace) client_op_id means no idempotency was requested, not a
+    // real, indexable id -- see `super::normalize_op_id` for why that distinction matters.
+    body.client_op_id = super::normalize_op_id(body.client_op_id.take());
     // A retry after a lost response must resolve to the row the first attempt made.
     if let Some(op) = body.client_op_id.as_deref() {
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
@@ -225,22 +228,49 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         .fetch_optional(&state.db)
         .await?
         {
-            if existing.object_id != object_id {
-                return Err(AppError::Conflict("client_op_id already used for another object".into()));
-            }
-            return Ok((StatusCode::OK, Json(one_out(&state, existing).await?)).into_response());
+            return op_id_row_response(&state, existing, object_id).await;
         }
     }
     let now = db::now();
-    let row = sqlx::query_as::<_, ActivityRow>(
+    let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
-    .fetch_one(&state.db).await?;
+    .fetch_one(&state.db).await;
+    let row = match inserted {
+        Ok(row) => row,
+        // Two concurrent requests carrying the same client_op_id -- e.g. several browser tabs
+        // sharing one offline outbox, all flushing on reconnect -- can both pass the pre-check
+        // above before either has inserted. The loser's INSERT then trips the partial unique
+        // index instead of the pre-check catching it; treat that exactly like the pre-check
+        // would have, by adopting the winner's row rather than failing the request.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            let op = body.client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
+            let winner = sqlx::query_as::<_, ActivityRow>(
+                "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
+                 quantity_milli, client_op_id, created_at, updated_at \
+                 FROM activities WHERE client_op_id = ?",
+            )
+            .bind(op)
+            .fetch_one(&state.db).await?;
+            return op_id_row_response(&state, winner, object_id).await;
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)).into_response())
+}
+
+/// The row a client_op_id lookup found -- whether from the pre-check or after losing an
+/// insert race -- may belong to a different object than the one being posted to; that's a
+/// 409, not this object's row.
+async fn op_id_row_response(state: &App, existing: ActivityRow, object_id: i64) -> Result<Response, AppError> {
+    if existing.object_id != object_id {
+        return Err(AppError::Conflict("client_op_id already used for another object".into()));
+    }
+    Ok((StatusCode::OK, Json(one_out(state, existing).await?)).into_response())
 }
 
 async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ActivityOut>, AppError> {

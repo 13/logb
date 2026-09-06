@@ -32,3 +32,17 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
+
+/// A blank (after trimming) `client_op_id` means the same thing as an absent one: no
+/// idempotency was requested for this create. Both the JSON (`activities::create`) and
+/// multipart (`attachments::upload`) paths must funnel their input through this before it can
+/// reach the partial unique index, because a client that always populates the field --
+/// `FormData.append("client_op_id", id ?? "")`, or a JSON serializer that never omits an
+/// optional -- would otherwise send the literal string `""` for two genuinely different
+/// creates on the same object. Treating `""` as a real id would collide those two creates on
+/// the index and resolve the second to the first row: a lost write, which is exactly the
+/// failure this whole mechanism exists to prevent. A blank is naive, not hostile, so it is
+/// normalised rather than rejected -- the write still lands, just without idempotency.
+pub(crate) fn normalize_op_id(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}

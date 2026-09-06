@@ -305,6 +305,7 @@ async fn a_replayed_upload_returns_the_first_attachment() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
 
     let send = || async {
         let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
@@ -320,4 +321,69 @@ async fn a_replayed_upload_returns_the_first_attachment() {
     assert_eq!(again.status(), 200);
     let again: serde_json::Value = again.json().await.unwrap();
     assert_eq!(again["id"], first["id"]);
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1, "a replayed upload must leave exactly one attachment row on the object");
+}
+
+/// The upload equivalent of `many_activities_with_no_client_op_id_do_not_conflict`: the
+/// partial unique index only guards non-null values, so every ordinary (non-outbox) upload,
+/// which sends no client_op_id at all, must coexist freely.
+#[tokio::test]
+async fn many_uploads_with_no_client_op_id_do_not_conflict() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    for i in 0..5 {
+        let part = Part::bytes(png(10, 10)).file_name(format!("a{i}.png")).mime_str("image/png").unwrap();
+        let res = app.client.post(&base).multipart(Form::new().part("file", part)).send().await.unwrap();
+        assert_eq!(res.status(), 201, "an absent client_op_id must never collide");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 5);
+}
+
+/// The upload equivalent of `one_client_op_id_cannot_be_reused_across_objects`.
+#[tokio::test]
+async fn one_client_op_id_cannot_be_reused_across_objects_for_uploads() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", Some("km")).await;
+    let b = app.create_object(&app.client, "Bike", Some("km")).await;
+    let (aid, bid) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    let upload = |object_id: i64| {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", "up-dup");
+        app.client.post(app.url(&format!("/objects/{object_id}/attachments"))).multipart(form).send()
+    };
+
+    assert_eq!(upload(aid).await.unwrap().status(), 201);
+    let res = upload(bid).await.unwrap();
+    assert_eq!(res.status(), 409, "the id is the client's promise that this is the same op");
+}
+
+/// As `blank_client_op_id_is_treated_as_absent` for the JSON path: a blank multipart field
+/// must not be treated as a real idempotency key either.
+#[tokio::test]
+async fn blank_client_op_id_is_treated_as_absent_for_uploads() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    for op_id in ["", "   "] {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", op_id);
+        let res = app.client.post(&base).multipart(form).send().await.unwrap();
+        assert_eq!(res.status(), 201, "a blank (or whitespace-only) client_op_id must not block a real upload");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 2, "two blank-id uploads must produce two distinct rows, not one");
 }

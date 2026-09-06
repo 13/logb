@@ -167,7 +167,10 @@ async fn upload(
             "caption" => caption = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?,
             "client_op_id" => {
                 let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
-                client_op_id = Some(t.trim().to_string());
+                // As in the JSON create path: a blank op id means no idempotency was
+                // requested, not a literal id that would collide every naive client's
+                // blanks together (see `super::normalize_op_id`).
+                client_op_id = super::normalize_op_id(Some(t));
             }
             _ => {}
         }
@@ -185,18 +188,17 @@ async fn upload(
     }
 
     // A retried upload must resolve to the attachment the first attempt made, rather than
-    // hanging a second row off the same file.
+    // hanging a second row off the same file. This check runs after the multipart loop above
+    // has already drained the whole request body -- file bytes included -- so a replay does
+    // not skip the upload itself; what it skips is the hash computation and the blob and
+    // thumbnail writes below.
     if let Some(op) = client_op_id.as_deref() {
         let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
             .bind(op)
             .fetch_optional(&state.db)
             .await?;
         if let Some((id,)) = existing {
-            let out = load_owned(&state, user.id, id).await?;
-            if out.object_id != object_id {
-                return Err(AppError::Conflict("client_op_id already used for another object".into()));
-            }
-            return Ok((StatusCode::OK, Json(out)));
+            return op_id_attachment_response(&state, user.id, id, object_id).await;
         }
     }
 
@@ -253,14 +255,47 @@ async fn upload(
         }
     };
 
-    let (id,): (i64,) = sqlx::query_as(
+    let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
     .bind(&client_op_id).bind(db::now())
-    .fetch_one(&state.db).await?;
+    .fetch_one(&state.db).await;
+    let id = match inserted {
+        Ok((id,)) => id,
+        // Two concurrent uploads carrying the same client_op_id (several tabs sharing one
+        // offline outbox, flushing on reconnect): the loser's INSERT trips the partial unique
+        // index on attachments -- the same shape of race as the files-table dedup above.
+        // Adopt the winner's row instead of failing the request. The winner may belong to a
+        // different object than this upload targeted, so apply the same object check the
+        // pre-check above does, rather than handing back another object's attachment.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
+            let (winner_id,): (i64,) = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+                .bind(op)
+                .fetch_one(&state.db).await?;
+            return op_id_attachment_response(&state, user.id, winner_id, object_id).await;
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok((StatusCode::CREATED, Json(load_owned(&state, user.id, id).await?)))
+}
+
+/// The attachment a client_op_id lookup found -- whether from the pre-check or after losing
+/// an insert race -- may belong to a different object than the one being uploaded to; that's
+/// a 409, not this object's attachment.
+async fn op_id_attachment_response(
+    state: &App,
+    user_id: i64,
+    id: i64,
+    object_id: i64,
+) -> Result<(StatusCode, Json<AttachmentOut>), AppError> {
+    let out = load_owned(state, user_id, id).await?;
+    if out.object_id != object_id {
+        return Err(AppError::Conflict("client_op_id already used for another object".into()));
+    }
+    Ok((StatusCode::OK, Json(out)))
 }
 
 #[derive(Deserialize)]

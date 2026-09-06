@@ -258,3 +258,53 @@ async fn many_activities_with_no_client_op_id_do_not_conflict() {
     let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
     assert_eq!(list.len(), 5);
 }
+
+/// A blank client_op_id must not be treated as a real idempotency key -- a client library
+/// that always populates the field (rather than omitting it) would otherwise collapse every
+/// blank-id create on an object onto the first one, silently losing the rest.
+#[tokio::test]
+async fn blank_client_op_id_is_treated_as_absent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    for (i, op_id) in ["", "   "].into_iter().enumerate() {
+        let body = json!({
+            "date": "2026-03-05", "category": "other", "title": format!("Blank op id {i}"),
+            "client_op_id": op_id
+        });
+        let res = app.client.post(&base).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "a blank (or whitespace-only) client_op_id must not block a real create");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 2, "two blank-id creates on one object must produce two distinct rows, not one");
+}
+
+/// Regression test for the migration itself, not just the application-level pre-check: every
+/// other test in this file only ever reaches `create`'s SELECT-then-INSERT dance. This goes
+/// through the pool directly, so a future migration that dropped or weakened the partial
+/// unique index would fail this test even though the pre-check alone would still look fine.
+#[tokio::test]
+async fn the_partial_unique_index_rejects_a_duplicate_non_null_op_id() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let insert = || {
+        sqlx::query(
+            "INSERT INTO activities (object_id, date, category, title, notes, client_op_id, created_at, updated_at) \
+             VALUES (?, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
+        )
+        .bind(id)
+        .execute(&app.state.db)
+    };
+
+    insert().await.unwrap();
+    let err = insert().await.unwrap_err();
+    let db_err = err.as_database_error().expect("a constraint violation carries a database error");
+    assert!(db_err.is_unique_violation(), "{db_err}");
+}
