@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { uploadQueued } from './api';
   import { t } from '../i18n';
   import type { Attachment, Kind } from './types';
@@ -8,6 +9,11 @@
   let error = $state('');
   let el: HTMLInputElement;
   let cam: HTMLInputElement;
+  /** Object URLs handed out as `previewUrl` below, kept only so they can be revoked when this
+   *  picker goes away -- `URL.createObjectURL` pins the underlying blob in memory until
+   *  explicitly revoked, and nothing else in the app ever calls `revokeObjectURL` for these. */
+  const objectUrls: string[] = [];
+  onDestroy(() => { for (const u of objectUrls) URL.revokeObjectURL(u); });
 
   /** A negative placeholder id for an attachment that only reached the outbox, so it can sit
    *  in an `Attachment[]`-keyed list without colliding with a real (always positive) one --
@@ -37,15 +43,20 @@
           // failure this feature exists to prevent. There is no server `file_id` yet, so the
           // preview renders straight from the picked File; `pending` tells the caller's list
           // to dim it and tag it, exactly like a queued activity in Timeline.svelte.
+          let previewUrl: string | undefined;
+          if (kind === 'photo') {
+            previewUrl = URL.createObjectURL(f);
+            objectUrls.push(previewUrl);
+          }
           onuploaded({
             id: pendingAttachmentId(), object_id: objectId, activity_id: activityId ?? null,
             file_id: 0, kind, caption: '', created_at: new Date().toISOString(),
             original_name: f.name, mime: f.type, size: f.size, width: null, height: null, taken_at: null,
-            pending: true, previewUrl: kind === 'photo' ? URL.createObjectURL(f) : undefined,
+            pending: true, previewUrl,
           });
         }
       }
-    } catch (e) { error = (e as Error).message; } finally { busy = false; el.value = ''; cam.value = ''; }
+    } catch (e) { error = $t((e as Error).message); } finally { busy = false; el.value = ''; cam.value = ''; }
   }
 </script>
 

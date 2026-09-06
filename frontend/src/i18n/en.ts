@@ -100,6 +100,7 @@ export default {
   'activity.repeat': 'Repeat',
   'activity.take-photo': 'Take photo',
   'activity.discard-draft': 'Discard this entry and its uploads?',
+  'activity.save-lost': 'Could not save your changes — reload the page and try again.',
 
   'cat.maintenance': 'Maintenance',
   'cat.repair': 'Repair',
@@ -174,5 +175,6 @@ export default {
   'outbox.dead-chip': '{n} could not be sent',
   'outbox.failed': 'Could not be sent',
   'outbox.retry': 'Try again',
+  'outbox.discard': 'Discard',
   'outbox.queue-failed': 'Could not save this offline — your device storage may be full or unavailable.',
 } as Record<string, string>;

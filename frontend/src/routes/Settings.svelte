@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
-  import { api, deadOps, retryDead, uploadRaw } from '../lib/api';
+  import { api, deadOps, discardDeadOp, retryDead, uploadRaw } from '../lib/api';
   import { t } from '../i18n';
   import { LANG_NAMES, SUPPORTED } from '../i18n/detect';
   import { settings } from '../stores/settings';
@@ -30,6 +30,16 @@
 
   async function retryOutbox() {
     await retryDead();
+    dead = await deadOps();
+  }
+
+  /** A permanently-rejected op (e.g. an upload naming an activity that will never exist) can
+   *  never succeed no matter how many times "Try again" is pressed -- this is the only way to
+   *  make it leave IndexedDB (and, for an upload, release its file bytes) short of the user
+   *  clearing site data entirely. */
+  async function discardOp(id: string) {
+    if (!confirm($t('nav.confirm-delete'))) return;
+    await discardDeadOp(id);
     dead = await deadOps();
   }
 
@@ -89,9 +99,12 @@
     <h2>{$t('outbox.failed')}</h2>
     <div class="list">
       {#each dead as op (op.id)}
-        <div class="card">
-          <b>{String(op.body.title ?? op.kind)}</b>
-          <span class="muted">{op.path}</span>
+        <div class="card row">
+          <span>
+            <b>{String(op.body.title ?? op.kind)}</b>
+            <span class="muted">{op.path}</span>
+          </span>
+          <button class="ghost danger-text" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</button>
         </div>
       {/each}
     </div>

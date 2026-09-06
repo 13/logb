@@ -212,9 +212,24 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
     let res = app.client.post(app.url(&format!("/reminders/{done}/done"))).json(&json!({})).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
+    // Boundary rows: every other row above lands its date safely inside 2020 or 2999, so a
+    // `<=` in either half of the SQL subquery mutated to `<` would still pass -- these two pin
+    // down the "today" edge itself. `due_date <= today` and a lapsed `snoozed_until <= today`
+    // must both still count as due when the boundary date IS today, not just when it is
+    // safely in the past.
+    let today_str = chrono::Utc::now().date_naive().to_string();
+    let _due_exactly_today = add_reminder(&app, id, json!({ "title": "Due exactly today", "due_date": today_str })).await;
+    let snooze_lapses_exactly_today = add_reminder(&app, id, json!({ "title": "Snooze lapses exactly today", "due_date": "2020-01-01" })).await;
+    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
+        .bind(&today_str)
+        .bind(snooze_lapses_exactly_today)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
     let reminders: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{id}/reminders")))
         .send().await.unwrap().json().await.unwrap();
-    assert_eq!(reminders.len(), 7, "every seeded row must still be present");
+    assert_eq!(reminders.len(), 9, "every seeded row must still be present");
 
     let expected_due = reminders.iter().filter(|r| r["due"].as_bool().unwrap()).count() as i64;
     // A matrix where everything happens to land on the same side of "due" would let the two

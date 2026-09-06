@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createQueued, flushOutbox, setOutboxStoreForTesting, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { createQueued, flushOutbox, onOutboxFlushed, setOutboxStoreForTesting, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -135,6 +135,88 @@ describe('uploadQueued + flushOutbox', () => {
     globalThis.fetch = vi.fn(async () => jsonResponse(422, { error: 'invalid', message: 'bad file' })) as unknown as typeof fetch;
     const file = new File(['abc'], 'photo.exe', { type: 'application/octet-stream' });
     await expect(uploadQueued('/objects/1/attachments', file, 'photo.exe', 1)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+/**
+ * A negative `activity_id` reaching the network at all means a guaranteed 404 -- the id is a
+ * placeholder for a create the server has never heard of. `flushOutbox`'s multipart branch is
+ * the last line of defense against that (IMPORTANT 3): it never forwards `body.activity_id`
+ * verbatim without checking it first.
+ */
+describe('flushOutbox and a still-negative queued activity id', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('parks an orphaned upload dead instead of sending a guaranteed 404, when no live create will ever resolve its temp id', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, {
+      id: 'orphan', kind: 'attachment.upload', path: '/objects/1/attachments',
+      body: { activity_id: -5 }, blob: new Blob(['x']), filename: 'photo.jpg', attempts: 0,
+    });
+    globalThis.fetch = vi.fn(async () => { throw new Error('must never be called'); }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(globalThis.fetch).not.toHaveBeenCalled(); // never even attempted -- would only 404
+    expect(await outboxDeadCount()).toBe(1);
+  });
+
+  it('keeps a negative-activity-id upload queued, not dead, while a live create for its temp id still exists', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    // Enqueued out of the usual create-then-upload order on purpose: the safety net has to
+    // consult the store's actual live ops, not assume its own dependent create already ran.
+    await enqueue(store, {
+      id: 'upload', kind: 'attachment.upload', path: '/objects/1/attachments',
+      body: { activity_id: -7 }, blob: new Blob(['x']), filename: 'photo.jpg', attempts: 0,
+    });
+    await enqueue(store, { id: 'create', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'x' }, tempId: -7, attempts: 0 });
+    globalThis.fetch = vi.fn(async () => { throw new Error('must never be called'); }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(await outboxDeadCount()).toBe(0);
+    const upload = (await store.all()).find((o) => o.id === 'upload');
+    expect(upload?.dead).toBeFalsy();
+    expect(upload?.attempts).toBe(1);
+  });
+});
+
+/**
+ * `onOutboxFlushed` listeners now receive this pass's temp-id -> real-id resolutions (see
+ * `replay` in ../src/lib/outbox.ts), so a view that minted its own temp id (`ActivityForm.svelte`)
+ * can learn its draft resolved without re-deriving it from the store.
+ */
+describe('onOutboxFlushed carries this pass\'s resolved ids', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('notifies listeners with the tempId -> realId map resolved during the pass', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'create', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'x' }, tempId: -3, attempts: 0 });
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 55 })) as unknown as typeof fetch;
+
+    const seen: Array<Map<number, number>> = [];
+    const unsubscribe = onOutboxFlushed((resolved) => seen.push(resolved));
+    await flushOutbox();
+    unsubscribe();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].get(-3)).toBe(55);
+  });
+
+  it('notifies with an empty map when the pass resolved nothing', async () => {
+    const seen: Array<Map<number, number>> = [];
+    const unsubscribe = onOutboxFlushed((resolved) => seen.push(resolved));
+    await flushOutbox();
+    unsubscribe();
+    expect(seen).toEqual([new Map()]);
   });
 });
 

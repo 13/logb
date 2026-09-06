@@ -21,11 +21,23 @@ function open(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
+/**
+ * Resolves on the transaction's `oncomplete`, not the request's `onsuccess`: a request can
+ * report success and then have its transaction abort anyway at commit time (e.g. a quota
+ * failure) -- `onsuccess` alone would report the write as done while IndexedDB then discards
+ * it, which the outbox would never learn about. This matters more now that queued ops can
+ * carry megabyte blobs, making a quota abort at commit far more likely than it used to be.
+ * `onerror` (the request failing outright) also aborts the transaction, so `onabort` alone is
+ * enough to catch both.
+ */
 function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return open().then((db) => new Promise<T>((resolve, reject) => {
-    const req = fn(db.transaction(STORE, mode).objectStore(STORE));
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    const tx = db.transaction(STORE, mode);
+    const req = fn(tx.objectStore(STORE));
+    let result: T;
+    req.onsuccess = () => { result = req.result; };
+    tx.oncomplete = () => resolve(result);
+    tx.onabort = () => reject(tx.error ?? req.error);
   }));
 }
 

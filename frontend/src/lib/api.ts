@@ -136,16 +136,20 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
 }
 
 /** Notified after each `flushOutbox()` pass completes, so a mounted view can drop a synthetic
- *  pending entry the instant its real row lands instead of showing it until the next remount. */
-const flushListeners = new Set<() => void>();
-export function onOutboxFlushed(fn: () => void): () => void {
+ *  pending entry the instant its real row lands instead of showing it until the next remount.
+ *  Carries this pass's temp-id -> real-id resolutions (see `replay` in ./outbox.ts) so a view
+ *  that minted a temp id itself (`ActivityForm.svelte`) can learn its own draft resolved
+ *  without re-deriving it from the store -- an empty map on a pass that resolved nothing. */
+const flushListeners = new Set<(resolved: Map<number, number>) => void>();
+export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): () => void {
   flushListeners.add(fn);
   return () => flushListeners.delete(fn);
 }
 
 async function doFlushOutbox(): Promise<void> {
+  let resolved = new Map<number, number>();
   try {
-    await replay(store, async (op: QueuedOp) => {
+    resolved = await replay(store, async (op: QueuedOp) => {
       if (op.kind === 'attachment.upload') {
         if (!op.blob) {
           // Nothing to send and never will be -- this op can never succeed no matter how many
@@ -154,10 +158,28 @@ async function doFlushOutbox(): Promise<void> {
           // stopping every healthy op behind it.
           throw new ApiError(422, 'outbox_missing_file', 'queued upload has no file');
         }
+        const activityId = op.body.activity_id;
+        if (typeof activityId === 'number' && activityId < 0) {
+          // A negative id is a placeholder for an `activity.create` that has never reached the
+          // server -- sending it verbatim is a guaranteed 404. `replay` processes ops in queue
+          // order and rewrites this field the instant the matching create resolves (see
+          // `persistResolvedId`), so by the time this send is attempted the create ahead of it
+          // has always already succeeded (and been rewritten) or gone permanently dead; a live
+          // create still naming this same temp id existing at this exact moment is not
+          // expected, but is what would make this "still waiting", not "orphaned".
+          const stillPending = (await store.all())
+            .some((o) => !o.dead && o.kind === 'activity.create' && o.tempId === activityId);
+          if (stillPending) {
+            throw new Error('outbox: upload is waiting on its parent activity.create');
+          }
+          // No live create will ever resolve this id: the parent was never created (or already
+          // failed permanently) before this upload was queued. Park it dead with a legible
+          // reason instead of burning an attempt on a send that can only ever 404.
+          throw new ApiError(422, 'outbox_orphaned_activity', 'queued upload references an activity that was never created');
+        }
         const form = new FormData();
         form.append('file', op.blob, op.filename ?? 'upload');
         form.append('client_op_id', op.id);
-        const activityId = op.body.activity_id;
         if (typeof activityId === 'number') form.append('activity_id', String(activityId));
         const out = await upload<{ id: number }>(op.path, form);
         return out ?? null;
@@ -173,7 +195,7 @@ async function doFlushOutbox(): Promise<void> {
       throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
     });
   } finally {
-    for (const fn of flushListeners) fn();
+    for (const fn of flushListeners) fn(resolved);
   }
 }
 
@@ -222,18 +244,22 @@ export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
  * Removes that queued create and any upload still hanging off its temp id (see
  * `removeQueuedActivity` in `./outbox.ts`), so the cancel leaves nothing behind to replay
  * later. No component reaches into the store directly.
+ *
+ * `tempId` may also be a real activity id -- see `removeQueuedActivity` -- so this doubles as
+ * "drop any queued upload for this activity" when cancelling an already-synced row. Returns
+ * whether anything was actually removed.
  */
-export async function cancelQueuedActivity(tempId: number): Promise<void> {
-  await removeQueuedActivity(store, tempId);
+export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
+  return removeQueuedActivity(store, tempId);
 }
 
 /**
  * Folds a further edit into a draft's still-queued `activity.create` (identified by its temp
  * id) instead of sending a PATCH the server has no row for yet. See `updateQueuedActivityBody`
- * in `./outbox.ts`.
+ * in `./outbox.ts`. Returns whether a live op was actually found and rewritten.
  */
-export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<void> {
-  await updateQueuedActivityBody(store, tempId, body);
+export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<boolean> {
+  return updateQueuedActivityBody(store, tempId, body);
 }
 
 /** Revive every parked op and try again — the user's "I fixed the wifi" button. */
@@ -242,4 +268,14 @@ export async function retryDead(): Promise<void> {
     if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
   }
   await flushOutbox();
+}
+
+/**
+ * Permanently discards one dead op -- the user's "give up on this" button. Unlike `retryDead`,
+ * this never attempts to resend it: a permanently-rejected `attachment.upload` holds its file
+ * bytes (`QueuedOp.blob`) in IndexedDB, and until now Settings offered only "retry", so a dead
+ * photo had no way to leave local storage short of the user clearing site data entirely.
+ */
+export async function discardDeadOp(id: string): Promise<void> {
+  await store.remove(id);
 }

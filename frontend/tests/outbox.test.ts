@@ -59,6 +59,43 @@ describe('outbox', () => {
     expect(await pendingCount(store)).toBe(0);
   });
 
+  it('keeps the id resolved earlier in the SAME pass when the dependent upload itself then fails retryably', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1 }));
+    await enqueue(store, op('upload', { kind: 'attachment.upload', path: '/objects/1/attachments', body: { activity_id: -1 } }));
+
+    // Pass 1: the create succeeds, so `persistResolvedId` writes `activity_id: 42` into
+    // 'upload's stored body -- but the upload's OWN send then throws a non-4xx (a dropped
+    // connection mid-multipart, by far the likeliest op to fail, being the megabyte one).
+    // Before the fix, the catch wrote back `{ ...op, attempts }` from the top-of-pass snapshot
+    // taken before the create even ran -- i.e. `activity_id: -1` -- discarding the 42 that had
+    // just been persisted moments earlier in this exact pass.
+    await replay(store, async (o) => {
+      if (o.id === 'create') return { id: 42 };
+      if (o.id === 'upload') throw new Error('dropped mid-multipart');
+      throw new Error(`unexpected op ${o.id}`);
+    });
+
+    const afterPass1 = await store.all();
+    expect(afterPass1.find((r) => r.id === 'create')).toBeUndefined(); // the create is done
+    const upload = afterPass1.find((r) => r.id === 'upload');
+    expect(upload?.body.activity_id).toBe(42); // the resolved id must survive the retryable failure
+    expect(upload?.dead).toBeFalsy();
+    expect(upload?.attempts).toBe(1);
+
+    // Pass 2: a brand-new call, so a brand-new, empty `resolved` map -- the real id can only
+    // reach this request if pass 1 preserved it in the STORE, which is exactly what this pins
+    // down. Before the fix this sent -1, which the server would 404 (no such activity),
+    // parking the op dead forever with no way for the photo to ever be sent.
+    const sent: unknown[] = [];
+    await replay(store, async (o) => {
+      sent.push({ id: o.id, body: structuredClone(o.body) });
+      return { id: 1 };
+    });
+    expect(sent).toEqual([{ id: 'upload', body: { activity_id: 42 } }]);
+    expect(await pendingCount(store)).toBe(0);
+  });
+
   it('keeps an op queued when the send fails', async () => {
     const store = memoryStore();
     await enqueue(store, op('a'));

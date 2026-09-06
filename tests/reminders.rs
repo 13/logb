@@ -332,6 +332,39 @@ async fn unsnoozing_makes_the_object_count_it_as_due_again() {
     assert_eq!(obj["stats"]["due_reminder_count"], 1, "un-snoozing must make it count as due again");
 }
 
+/// `unsnooze`'s handler comment argues that clearing `snoozed_until` on an already-done
+/// reminder is harmless -- `done_at.is_some()` always wins in `ReminderOut::from`, so there is
+/// nothing left to guard against -- but, unlike `snooze` (see `a_done_reminder_cannot_be_snoozed`
+/// below), that claim had no test at all. This pins both halves of it down: the call succeeds
+/// (no 409, unlike snooze) rather than being rejected, and the reminder stays not-due
+/// afterwards precisely because it is done, not because of anything unsnooze itself does.
+#[tokio::test]
+async fn unsnoozing_a_done_reminder_succeeds_and_it_stays_not_due() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    // Snooze it, then mark it done while still snoozed -- `done` does not check `snoozed_until`
+    // -- so the row unsnooze sees below carries both `done_at` and a live `snoozed_until`.
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({})).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "unsnoozing a done reminder must succeed, not 409 like snooze does: {}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert!(out["snoozed_until"].is_null(), "snoozed_until is still cleared for a done reminder");
+    assert!(out["done_at"].is_string());
+    assert_eq!(out["due"], false, "a done reminder must stay not-due even after unsnoozing it");
+}
+
 #[tokio::test]
 async fn a_done_reminder_cannot_be_snoozed() {
     let app = common::spawn().await;
