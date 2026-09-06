@@ -1,4 +1,4 @@
-import { isRejection } from './api-error';
+import { isRejection, isUnauthenticated } from './api-error';
 
 /**
  * The queue of writes made while offline.
@@ -169,6 +169,41 @@ export function createLock(
   return { run };
 }
 
+/**
+ * Hands out strictly increasing `seq` values, seeding the counter once from `readMax` (what is
+ * already in the store) and counting up from there without reading again.
+ *
+ * Concurrent callers -- attaching several files in one go -- chain onto the same promise, so
+ * each reserves a distinct value instead of two racing to read the same "current max".
+ *
+ * A failed seeding read must not be permanent. The chain is a promise, so one rejected seed
+ * would otherwise be inherited by every later reservation forever: after a single transient
+ * IndexedDB error (a connection closed by `versionchange`, a quota hiccup) every subsequent
+ * `put` rejects and the user is told each offline write was lost for the rest of the tab's
+ * life. On a rejection the seed is therefore dropped so the next caller reads afresh -- the
+ * same recovery `open()` already does with its cached connection.
+ */
+export function createSeqReserver(readMax: () => Promise<number>): () => Promise<number> {
+  let next: Promise<number> | null = null;
+  return () => {
+    if (!next) {
+      next = readMax().then((max) => max + 1);
+    }
+    const reserved = next;
+    const advanced = reserved.then((n) => n + 1);
+    next = advanced;
+    reserved.catch(() => {
+      // Drop the poisoned chain so the next caller seeds afresh -- but only if nobody has
+      // chained onto it since, in which case THAT reservation's own catch clears it instead.
+      if (next === advanced) next = null;
+      // `advanced` rejects with the same error and, now unreachable, would surface as an
+      // unhandled rejection. The caller still sees the failure through `reserved`.
+      advanced.catch(() => {});
+    });
+    return reserved;
+  };
+}
+
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
   await store.put(op);
 }
@@ -226,6 +261,19 @@ export async function replay(
         // Untouched on purpose -- see the class comment. The pass moves on to the next op
         // instead of stopping here, since nothing behind this one depends on it.
         continue;
+      }
+      if (isUnauthenticated(e)) {
+        // Not this op's fault and not permanent: the session expired (or a password change
+        // ended it), so every op behind this one would 401 too, and all of them succeed
+        // unchanged once the user logs back in. Stop the pass and leave the op exactly as it
+        // is -- no attempt burned, nothing parked dead. `main.ts` flushes at load, before the
+        // session is known to be valid at all, so treating this as a rejection used to kill an
+        // entire offline queue before the login screen had even rendered.
+        //
+        // Nothing needs writing back here: any temp id this op still carried was already
+        // substituted in the STORE by `persistResolvedId` when the create ahead of it
+        // resolved, earlier in this same pass.
+        return resolved;
       }
       if (isRejection(e)) {
         await store.put({ ...op, body, dead: true });

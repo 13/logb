@@ -398,3 +398,64 @@ describe('MINOR 4(a): retryDead must not silently join a pass that started befor
     expect((await store.all()).find((o) => o.id === 'dead')).toBeUndefined();
   });
 });
+
+/**
+ * `main.ts` fires a flush at module load, before anything knows whether the session is still
+ * valid, and `visibilitychange` fires one every time the tab comes back. An expired cookie --
+ * or a password change, which now ends every other session -- therefore meets the queue with a
+ * 401 on every op. A 401 is an `ApiError` in the 4xx range, so `isRejection` used to be true
+ * for it and every queued write was parked permanently dead before the user had even seen the
+ * login screen; logging back in replayed nothing, and the writes survived only as rows in
+ * Settings' failed list for the user to notice and retry by hand.
+ *
+ * Being logged out is the one 4xx that is not about the request at all: it is fixed by logging
+ * back in, after which the very same op succeeds.
+ */
+describe('flushOutbox against an expired session', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('leaves the queue intact on a 401 and replays it after the user logs back in', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'first', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'a' }, attempts: 0 });
+    await enqueue(store, { id: 'second', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'b' }, attempts: 0 });
+
+    let loggedIn = false;
+    const sent: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (!loggedIn) return jsonResponse(401, { code: 'unauthorized', message: 'log in' });
+      sent.push(JSON.parse(init?.body as string).title);
+      return jsonResponse(201, { id: sent.length });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(sent).toEqual([]);
+    expect(await outboxDeadCount()).toBe(0);
+    const parked = await store.all();
+    expect(parked).toHaveLength(2);
+    // No attempt burned either: a 401 says nothing about the op, so it must not count against
+    // the retry budget that eventually parks an op dead for good.
+    expect(parked.map((o) => o.attempts)).toEqual([0, 0]);
+
+    loggedIn = true;
+    await flushOutbox();
+
+    expect(sent).toEqual(['a', 'b']);
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('still parks a genuine 4xx rejection dead', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'bad', kind: 'activity.create', path: '/objects/1/activities', body: { title: '' }, attempts: 0 });
+
+    globalThis.fetch = vi.fn(async () => jsonResponse(400, { code: 'bad_request', message: 'title required' })) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(await outboxDeadCount()).toBe(1);
+  });
+});

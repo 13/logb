@@ -35,3 +35,20 @@ export class ApiError extends Error {
 export function isRejection(e: unknown): boolean {
   return e instanceof ApiError && e.status >= 400 && e.status < 500;
 }
+
+/**
+ * True for the one 4xx that says nothing about the request itself: the caller is not
+ * authenticated. Unlike every other rejection it is not permanent — logging back in makes the
+ * very same request succeed — so a queued write must survive it rather than being parked dead
+ * (see `replay` in `./outbox.ts`).
+ *
+ * 401 only, deliberately not 403: a 403 means the server knows who is asking and still refuses,
+ * which no amount of retrying will change, so it stays an ordinary permanent rejection.
+ *
+ * This is NOT folded into `isRejection`, which several read paths use to decide whether they
+ * may fall back to a session cache: there, a 401 or 403 is precisely the answer that must NOT
+ * be served from cache (see the `onMount` catch in `../routes/ActivityForm.svelte`).
+ */
+export function isUnauthenticated(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
