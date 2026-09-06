@@ -100,6 +100,7 @@ export default {
   'activity.repeat': 'Wiederholen',
   'activity.take-photo': 'Foto aufnehmen',
   'activity.discard-draft': 'Eintrag und hochgeladene Dateien verwerfen?',
+  'activity.save-lost': 'Änderungen konnten nicht gespeichert werden — Seite neu laden und erneut versuchen.',
 
   'cat.maintenance': 'Wartung',
   'cat.repair': 'Reparatur',
@@ -144,6 +145,7 @@ export default {
   'reminder.snooze': 'Eine Woche später',
   'reminder.snoozed': 'Zurückgestellt',
   'reminder.snoozed-until': 'Zurückgestellt bis {date}',
+  'reminder.unsnooze': 'Zurückstellung aufheben',
 
   'settings.title': 'Einstellungen',
   'settings.language': 'Sprache',
@@ -173,5 +175,6 @@ export default {
   'outbox.dead-chip': '{n} konnten nicht gesendet werden',
   'outbox.failed': 'Nicht gesendet',
   'outbox.retry': 'Erneut versuchen',
+  'outbox.discard': 'Verwerfen',
   'outbox.queue-failed': 'Konnte nicht offline gespeichert werden – der Gerätespeicher ist evtl. voll oder nicht verfügbar.',
 } as Record<string, string>;

@@ -21,6 +21,13 @@ export interface ObjectInput {
 export interface Attachment {
   id: number; object_id: number; activity_id: number | null; file_id: number; kind: Kind; caption: string; created_at: string;
   original_name: string; mime: string; size: number; width: number | null; height: number | null; taken_at: string | null;
+  /** Set client-side only, for a synthetic entry built from a still-queued outbox op -- the
+   *  server never sends this field. See `FilePicker.svelte`. */
+  pending?: boolean;
+  /** Client-side-only preview for a `pending` attachment: there is no `file_id` yet (the
+   *  server has never seen this file), so this is an object URL made straight from the picked
+   *  File instead of a `fileUrl(file_id)` call. */
+  previewUrl?: string;
 }
 
 export interface Activity {

@@ -142,6 +142,11 @@ struct DerivedRow {
 /// The list endpoint used to call `stats` and then a cover lookup once per object, so showing
 /// N objects cost 2N + 1 queries.
 async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result<HashMap<i64, DerivedRow>, AppError> {
+    // INVARIANT: this due_reminder_count subquery is a second, hand-written encoding of
+    // `domain::reminder::is_due` -- it exists only so N objects' counts can be computed in one
+    // statement instead of loading every reminder and folding `is_due` over them in memory. The
+    // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
+    // in tests/objects.rs is what catches them drifting apart.
     let rows = sqlx::query_as::<_, DerivedRow>(
         "SELECT o.id AS object_id, \
            COALESCE((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id), 0) AS total_cost_cents, \

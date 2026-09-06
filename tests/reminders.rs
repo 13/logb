@@ -234,6 +234,137 @@ async fn a_snoozed_reminder_is_absent_from_the_lookahead() {
     assert!(due.iter().all(|x| x["id"] != rid), "a snoozed reminder must not appear, even in the lookahead");
 }
 
+/// Un-snoozing makes a suppressed reminder due again immediately, without touching the real
+/// `due_date` -- clearing `snoozed_until` is the only thing this route does.
+#[tokio::test]
+async fn unsnoozing_makes_a_suppressed_reminder_due_again() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let snoozed: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(snoozed["due"], false, "snooze must have suppressed it first");
+
+    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert!(out["snoozed_until"].is_null(), "un-snoozing clears snoozed_until");
+    assert_eq!(out["due"], true, "clearing the snooze must make it due again immediately");
+    assert_eq!(out["due_date"], "2020-01-01", "un-snoozing must not touch the real due_date");
+
+    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(due.iter().any(|x| x["id"] == rid), "the reminder must be counted as due again");
+}
+
+/// Un-snoozing a reminder that was never snoozed is a no-op success: the caller asked for
+/// "not snoozed", and that state already holds, so there is nothing to reject.
+#[tokio::test]
+async fn unsnoozing_a_never_snoozed_reminder_changes_nothing() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+    assert!(r["snoozed_until"].is_null());
+
+    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert!(out["snoozed_until"].is_null());
+    assert_eq!(out["due"], true);
+    assert_eq!(out["due_date"], "2020-01-01");
+}
+
+/// Another user's reminder is a 404, same as every other reminder route.
+#[tokio::test]
+async fn unsnoozing_another_users_reminder_is_not_found() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let res = anna.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
+
+/// The dashboard's `stats.due_reminder_count` has its own hand-written SQL encoding of
+/// dueness (see src/api/objects.rs), so un-snoozing must be checked against it explicitly
+/// rather than assumed to agree with `is_due`.
+#[tokio::test]
+async fn unsnoozing_makes_the_object_count_it_as_due_again() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(obj["stats"]["due_reminder_count"], 1, "a past due_date counts as due");
+
+    app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(obj["stats"]["due_reminder_count"], 0, "a snoozed reminder must not count as due");
+
+    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(obj["stats"]["due_reminder_count"], 1, "un-snoozing must make it count as due again");
+}
+
+/// `unsnooze`'s handler comment argues that clearing `snoozed_until` on an already-done
+/// reminder is harmless -- `done_at.is_some()` always wins in `ReminderOut::from`, so there is
+/// nothing left to guard against -- but, unlike `snooze` (see `a_done_reminder_cannot_be_snoozed`
+/// below), that claim had no test at all. This pins both halves of it down: the call succeeds
+/// (no 409, unlike snooze) rather than being rejected, and the reminder stays not-due
+/// afterwards precisely because it is done, not because of anything unsnooze itself does.
+#[tokio::test]
+async fn unsnoozing_a_done_reminder_succeeds_and_it_stays_not_due() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    // Snooze it, then mark it done while still snoozed -- `done` does not check `snoozed_until`
+    // -- so the row unsnooze sees below carries both `done_at` and a live `snoozed_until`.
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({})).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "unsnoozing a done reminder must succeed, not 409 like snooze does: {}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert!(out["snoozed_until"].is_null(), "snoozed_until is still cleared for a done reminder");
+    assert!(out["done_at"].is_string());
+    assert_eq!(out["due"], false, "a done reminder must stay not-due even after unsnoozing it");
+}
+
 #[tokio::test]
 async fn a_done_reminder_cannot_be_snoozed() {
     let app = common::spawn().await;

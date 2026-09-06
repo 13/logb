@@ -16,6 +16,12 @@ export interface QueuedOp {
   path: string;
   body: Record<string, unknown>;
   blob?: Blob;
+  /** Original filename for `blob`, as its own field rather than read off `blob.name`: a plain
+   *  `Blob` has no `.name` at all (only a `File` does), so a send path that needs a filename
+   *  for every queued upload -- not just ones that happened to be picked as a `File` -- needs
+   *  it recorded explicitly. (A `File`'s own `.name` does survive IndexedDB's structured-clone
+   *  storage, so this is about typing/uniformity, not working around data loss.) */
+  filename?: string;
   /** Negative placeholder id this op's created row is known by until the server answers. */
   tempId?: number;
   attempts: number;
@@ -23,6 +29,13 @@ export interface QueuedOp {
   /** IndexedDB insertion order marker. The memory store does not need this because arrays
    *  already keep insertion order; the IndexedDB store stamps it itself on `put`. */
   queued_at?: number;
+  /** Monotonic total-order marker, assigned once at enqueue by `idbStore`'s `put` (see
+   *  `./idb.ts`) and preserved on every later rewrite of the same op. `queued_at` alone cannot
+   *  break a tie between two ops enqueued in the same millisecond -- `IDBObjectStore.getAll()`
+   *  returns key (UUID) order, which carries no relation to enqueue order at all -- so `seq` is
+   *  the field `compareQueueOrder` actually sorts on; `queued_at` is only the fallback for a
+   *  record written before this field existed. */
+  seq?: number;
 }
 
 export interface OutboxStore {
@@ -54,6 +67,31 @@ export function newOpId(): string {
 }
 
 /**
+ * Total order for the queue. `seq` (see `QueuedOp`) is a monotonic counter assigned once at
+ * enqueue, so it gives two ops a real, deterministic relative order even when they were queued
+ * in the same millisecond -- `queued_at` alone cannot do that, and is kept only as the fallback
+ * for a record written before `seq` existed. `idbStore` (`./idb.ts`) seeds its counter past
+ * every existing `queued_at` it finds, so a legacy record always sorts correctly against a
+ * freshly-`seq`'d one without needing to be rewritten itself.
+ */
+export function compareQueueOrder(a: QueuedOp, b: QueuedOp): number {
+  return (a.seq ?? a.queued_at ?? 0) - (b.seq ?? b.queued_at ?? 0);
+}
+
+/**
+ * A skipped op is left EXACTLY as it was: still queued, `attempts` untouched, not dead. Thrown
+ * by a `send` callback (see `replay` below) for an op that is not wrong, just not sendable yet
+ * for a reason the next pass may resolve on its own -- e.g. an `attachment.upload` still
+ * waiting on its parent `activity.create`, which is itself live and simply hasn't been attempted
+ * yet (see `doFlushOutbox` in `./api.ts`). Unlike every other failure `replay` handles, this one
+ * must neither burn an attempt (the op did nothing wrong) nor stop the pass (nothing behind it
+ * in the queue depends on THIS op the way it depends on its own parent) -- see MINOR 2: treating
+ * it as an ordinary retryable failure let three flushes park a perfectly healthy op dead while
+ * the create it was waiting on was still live and had never even been attempted once.
+ */
+export class SkipOp extends Error {}
+
+/**
  * Wraps an async function so overlapping calls share one in-flight run instead of each
  * starting a fresh one. `flushOutbox` (`./api.ts`) is called at startup, on `online`, on
  * `visibilitychange`, and after a manual retry -- several of which can fire within the same
@@ -69,6 +107,38 @@ export function serialize<T>(fn: () => Promise<T>): () => Promise<T> {
     if (!inFlight) inFlight = fn().finally(() => { inFlight = null; });
     return inFlight;
   };
+}
+
+/**
+ * A FIFO async mutex, distinct from `serialize` above: `serialize` shares one in-flight run of
+ * a SINGLE function across overlapping callers; `createLock` gives mutual exclusion between
+ * DIFFERENT operations that must never interleave, however many of them there are.
+ *
+ * This closes IMPORTANT 1: `flushOutbox`'s replay pass reads an op, awaits a `send()`, and only
+ * then writes the result back -- and while that `send()` is in flight, `ActivityForm.svelte`'s
+ * Save and Cancel call `updateQueuedActivityBody` / `removeQueuedActivity` directly against the
+ * SAME stored op. `serialize` only guards a pass against another pass; it does nothing to stop
+ * a UI write from running mid-pass, reading the same op the pass is about to write back over
+ * (a lost edit on Save, a resurrected op on Cancel -- see the comments on `doFlushOutbox`,
+ * `updateQueuedActivity` and `cancelQueuedActivity` in `./api.ts`). Routing the replay pass AND
+ * both UI writes through one shared lock makes that interleaving impossible: whichever one is
+ * running has exclusive use of the store's read-act-write sequence, and everyone else queues.
+ *
+ * FIFO matters as much as exclusivity here: each `run()` call is chained onto the current tail
+ * synchronously, in the order `run()` was CALLED, not the order its callback happens to start
+ * doing work -- so a UI write that starts waiting while a pass is in flight is guaranteed to go
+ * next, even if further passes keep getting triggered (`online`, `visibilitychange`, ...) in
+ * the meantime: those later passes call `run()` only after the UI write already has its place
+ * in line, so they queue behind it rather than ahead of it. A UI write can never be starved.
+ */
+export function createLock(): { run: <T>(fn: () => Promise<T>) => Promise<T> } {
+  let tail: Promise<void> = Promise.resolve();
+  function run<T>(fn: () => Promise<T>): Promise<T> {
+    const started = tail.then(fn, fn);
+    tail = started.then(() => undefined, () => undefined);
+    return started;
+  }
+  return { run };
 }
 
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
@@ -90,11 +160,26 @@ export async function pendingCount(store: OutboxStore): Promise<number> {
  * Any other failure (network drop, 5xx, ...) means we don't know whether the server saw this
  * op at all, so it stays queued and the pass stops right there: ops further back may depend on
  * this one (see the `activity_id` rewrite below) and must not be sent out of order ahead of it.
+ *
+ * On EITHER failure branch, the op is written back with `body` -- the id-substituted body this
+ * attempt actually sent -- rather than the original `op` from the top-of-pass snapshot. `body`
+ * is what the caller's own dependent ops may have just been resolved onto (`persistResolvedId`
+ * below writes the real id into the store the moment a create succeeds, but this op's own,
+ * separately-held `op.body` is stale the instant that happens); writing back the stale
+ * snapshot on failure would silently undo that resolution -- exactly the bug where a create
+ * succeeds, its real id is persisted into a dependent upload, and then that upload itself fails
+ * to send (a dropped connection mid-multipart, the single likeliest op to fail, being the
+ * megabyte one): the catch used to overwrite the just-resolved real id with the pass's stale
+ * temp id, parking the op to retry a request that can now only ever 404.
+ *
+ * Returns the temp-id -> real-id resolutions made during this pass, so a caller that minted a
+ * temp id (e.g. `ActivityForm.svelte`, via `mintTempId`) can learn its own draft resolved
+ * without polling the store -- see `onOutboxFlushed` in `./api.ts`.
  */
 export async function replay(
   store: OutboxStore,
   send: (op: QueuedOp) => Promise<{ id: number } | null>,
-): Promise<void> {
+): Promise<Map<number, number>> {
   const resolved = new Map<number, number>();
   for (const op of await store.all()) {
     if (op.dead) continue;
@@ -103,16 +188,91 @@ export async function replay(
     if (typeof ref === 'number' && resolved.has(ref)) body.activity_id = resolved.get(ref);
     try {
       const out = await send({ ...op, body });
-      if (op.tempId !== undefined && out) resolved.set(op.tempId, out.id);
+      if (op.tempId !== undefined && out) {
+        resolved.set(op.tempId, out.id);
+        await persistResolvedId(store, op.tempId, out.id);
+      }
       await store.remove(op.id);
     } catch (e) {
+      if (e instanceof SkipOp) {
+        // Untouched on purpose -- see the class comment. The pass moves on to the next op
+        // instead of stopping here, since nothing behind this one depends on it.
+        continue;
+      }
       if (isRejection(e)) {
-        await store.put({ ...op, dead: true });
+        await store.put({ ...op, body, dead: true });
         continue;
       }
       const attempts = op.attempts + 1;
-      await store.put({ ...op, attempts, dead: attempts >= MAX_ATTEMPTS });
-      return;
+      await store.put({ ...op, body, attempts, dead: attempts >= MAX_ATTEMPTS });
+      return resolved;
     }
   }
+  return resolved;
+}
+
+/**
+ * Once a create's temp id resolves to a real one, write the real id into every OTHER live
+ * stored op that still names the temp id -- not only into this call's in-memory `resolved`
+ * map, which dies with the function.
+ *
+ * Why this has to reach the store and not just the map: a pass that resolves a create and
+ * then stops (a later, unrelated op fails and `replay` returns before reaching the dependent
+ * op) leaves that dependent op -- e.g. an `attachment.upload` queued behind the create -- still
+ * holding the temp id, but only in memory that is about to be discarded. The next call to
+ * `replay` starts a brand-new, empty `resolved` map and reads the dependent op straight back
+ * out of the store; if the store still says `activity_id: <temp id>`, that negative placeholder
+ * -- an id no row will ever actually have -- goes out on the wire verbatim. Writing the real id
+ * into the store the moment it's known means a later pass never needs the map to see it: the
+ * stored op already names the real activity, so there is nothing left to resolve and nothing
+ * that can regress to sending the temp id.
+ */
+async function persistResolvedId(store: OutboxStore, tempId: number, realId: number): Promise<void> {
+  for (const other of await store.all()) {
+    if (other.dead || other.body.activity_id !== tempId) continue;
+    await store.put({ ...other, body: { ...other.body, activity_id: realId } });
+  }
+}
+
+/**
+ * Removes a still-queued 'activity.create' op (identified by its `tempId`) and every other
+ * live op that depends on it -- an 'attachment.upload' whose body still names that tempId as
+ * its `activity_id`. Used when a queued draft is cancelled: unlike a real row there is no
+ * server DELETE to send for it, and leaving either op behind would replay it later, creating
+ * exactly the stray entry the cancel was meant to prevent.
+ *
+ * `tempId` may also be a real (positive) activity id: matching is purely on `body.activity_id`
+ * / `tempId`, so this doubles as "drop any upload still queued against this activity" for an
+ * already-synced row too (see `ActivityForm.svelte`'s `cancel()`).
+ *
+ * Returns whether anything was actually removed, so a caller can tell a genuine cleanup from a
+ * no-op (e.g. the draft had already been replayed by a background flush).
+ */
+export async function removeQueuedActivity(store: OutboxStore, tempId: number): Promise<boolean> {
+  let removed = false;
+  for (const op of await store.all()) {
+    if (op.tempId === tempId || op.body.activity_id === tempId) {
+      await store.remove(op.id);
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Overwrites the body of a still-queued 'activity.create' op (identified by its `tempId`) with
+ * a newer one. The outbox has no "edit" op kind (see `OpKind` above) -- an edit made to a draft
+ * after it was already queued (e.g. attaching a file, which requires the create to be queued
+ * immediately so the upload has a parent id, then changing another field before Save) has to be
+ * folded into the one queued create instead of attempted as a PATCH against a server row that
+ * does not exist yet. A no-op if no live op has this `tempId` (already replayed, or dead) --
+ * the return value says which, so a caller (e.g. `ActivityForm.svelte`'s `submit()`) can tell
+ * "your edit was folded in" from "there was nothing left to fold it into" instead of assuming
+ * success and navigating away with the edit silently discarded.
+ */
+export async function updateQueuedActivityBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
+  const op = (await store.all()).find((o) => !o.dead && o.tempId === tempId);
+  if (!op) return false;
+  await store.put({ ...op, body });
+  return true;
 }

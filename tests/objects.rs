@@ -157,3 +157,89 @@ async fn due_reminder_count_respects_snooze_for_a_counter_due_reminder() {
         .unwrap();
     assert_eq!(due_reminder_count(&app, id).await, 1, "a lapsed snooze must resume counting as due");
 }
+
+/// Dueness is encoded twice: `domain::reminder::is_due` (used to compute each reminder's `due`
+/// flag) and the hand-written SQL subquery behind `due_reminder_count` in `derived()`. They were
+/// made to agree during development, but nothing pins them against EACH OTHER, so a future edit
+/// to either one can silently diverge from the other -- the visible symptom being a "due" badge
+/// on an object card that contradicts the reminders list underneath it.
+///
+/// This seeds one object with a reminder in every state the two encodings must agree on, then
+/// checks the object's `due_reminder_count` against a count computed FROM the reminders
+/// endpoint's own `due` flags -- not a hardcoded number -- so the test keeps checking that the
+/// two copies agree rather than checking either one against a snapshot.
+#[tokio::test]
+async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    // One activity gives the object a current counter reading of 60_000, which every
+    // counter-based row below is checked against.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-01-01", "category": "maintenance", "title": "service", "counter_value": 60_000 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    async fn add_reminder(app: &common::TestApp, id: i64, body: serde_json::Value) -> i64 {
+        let res = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{} -- {}", body, res.text().await.unwrap());
+        let r: serde_json::Value = res.json().await.unwrap();
+        r["id"].as_i64().unwrap()
+    }
+
+    let _date_only = add_reminder(&app, id, json!({ "title": "Date only", "due_date": "2020-01-01" })).await;
+    let _counter_only = add_reminder(&app, id, json!({ "title": "Counter only", "due_counter": 60_000 })).await;
+    let _both = add_reminder(&app, id, json!({ "title": "Both", "due_date": "2020-01-01", "due_counter": 60_000 })).await;
+    let _neither = add_reminder(&app, id, json!({ "title": "Neither", "due_date": "2999-01-01", "due_counter": 999_999 })).await;
+
+    let snoozed_future = add_reminder(&app, id, json!({ "title": "Snoozed into the future", "due_date": "2020-01-01" })).await;
+    let res = app.client.post(app.url(&format!("/reminders/{snoozed_future}/snooze")))
+        .json(&json!({ "days": 30 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let snoozed_lapsed = add_reminder(&app, id, json!({ "title": "Lapsed snooze", "due_date": "2020-01-01" })).await;
+    // Write an already-past snoozed_until directly through the pool, the same way
+    // tests/reminders.rs lapses a snooze -- there is no time-travel helper in this harness.
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+        .bind(snoozed_lapsed)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let done = add_reminder(&app, id, json!({ "title": "Already done", "due_date": "2010-01-01" })).await;
+    let res = app.client.post(app.url(&format!("/reminders/{done}/done"))).json(&json!({})).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    // Boundary rows: every other row above lands its date safely inside 2020 or 2999, so a
+    // `<=` in either half of the SQL subquery mutated to `<` would still pass -- these two pin
+    // down the "today" edge itself. `due_date <= today` and a lapsed `snoozed_until <= today`
+    // must both still count as due when the boundary date IS today, not just when it is
+    // safely in the past.
+    let today_str = chrono::Utc::now().date_naive().to_string();
+    let _due_exactly_today = add_reminder(&app, id, json!({ "title": "Due exactly today", "due_date": today_str })).await;
+    let snooze_lapses_exactly_today = add_reminder(&app, id, json!({ "title": "Snooze lapses exactly today", "due_date": "2020-01-01" })).await;
+    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
+        .bind(&today_str)
+        .bind(snooze_lapses_exactly_today)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let reminders: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{id}/reminders")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(reminders.len(), 9, "every seeded row must still be present");
+
+    let expected_due = reminders.iter().filter(|r| r["due"].as_bool().unwrap()).count() as i64;
+    // A matrix where everything happens to land on the same side of "due" would let the two
+    // encodings disagree on individual rows while still matching on the total by coincidence.
+    assert!(expected_due > 0 && expected_due < reminders.len() as i64, "the matrix must mix due and not-due rows, got {expected_due} due out of {}", reminders.len());
+
+    let stats_due = due_reminder_count(&app, id).await;
+    assert_eq!(
+        stats_due, expected_due,
+        "object stats.due_reminder_count ({stats_due}) must agree with the reminders list's own `due` flags ({expected_due}); \
+         reminders: {reminders:#?}"
+    );
+}

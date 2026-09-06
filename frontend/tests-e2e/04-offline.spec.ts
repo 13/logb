@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { signIn } from './helpers';
+import { pngPayload, signIn } from './helpers';
 
 test('an activity logged offline is replayed to the server exactly once', async ({ page, context, browser }) => {
   await signIn(page);
@@ -49,6 +49,79 @@ test('an activity logged offline is replayed to the server exactly once', async 
     await signIn(otherPage);
     await otherPage.goto(`/objects/${objectId}`);
     await expect(otherPage.getByText('Fuel', { exact: true })).toHaveCount(1);
+  } finally {
+    await otherContext.close();
+  }
+});
+
+test('an activity logged offline with an attachment replays both exactly once', async ({ page, context, browser }) => {
+  await signIn(page);
+
+  // create the object
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Generator');
+  await page.getByLabel('Category').fill('generator');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Generator' })).toBeVisible();
+  const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
+  expect(objectId).toBeTruthy();
+
+  await page.getByRole('button', { name: /Log/ }).first().click();
+
+  await context.setOffline(true);
+  await page.getByLabel('Title').fill('Fuel');
+
+  // A file needs a parent activity row to hang on. Offline, `ensureSaved()` cannot get one
+  // from the server -- there is no server to ask -- so it mints a temp id and queues the
+  // create itself (see ActivityForm.svelte). This first click drives that: the button visible
+  // before that resolves is the form's own placeholder ("+ Add photos or files"); once `saved`
+  // is set, the same-labelled button belongs to FilePicker instead, which is what actually
+  // opens the file input `setInputFiles` below drives.
+  await page.getByRole('button', { name: /Add photos or files/ }).click();
+  await page.setInputFiles('input[type=file]', pngPayload());
+  // Visible immediately even though the upload never reached the server: a photo that vanishes
+  // because there was no signal at the fuel pump is the exact failure this feature exists to
+  // prevent. Dimmed-plus-a-chip is the same "still queued" treatment Timeline gives a pending
+  // activity.
+  await expect(page.locator('.thumb-strip .thumb.pending')).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Save' }).click();
+  // Visible immediately from the local outbox queue -- before either write has ever reached
+  // the server. This alone proves nothing about replay: a build with flushOutbox removed
+  // entirely would still show this.
+  await expect(page.getByText('Fuel', { exact: true })).toBeVisible();
+
+  await context.setOffline(false);
+  // The reconnect fires the outbox's 'online' listener; give the flush a moment to land, then
+  // the UI should still show exactly one entry (merging a queued op with its own replayed row
+  // would be a duplicate-visible-entry bug).
+  await expect(page.getByText('Fuel', { exact: true })).toHaveCount(1);
+
+  // Server truth: ask the backend directly, through a path no local/queued state can satisfy.
+  // `page.request` shares this browser context's cookies, so it is genuinely authenticated,
+  // but it never touches the page's own IndexedDB or in-memory state -- if the multipart
+  // replay path were broken, or the temp id were never rewritten to the real one, this is what
+  // would catch it: either no attachment at all, or one still pointing at a temp activity id
+  // the server never issued and so 404'd (and was parked dead) instead of landing.
+  await expect(async () => {
+    const res = await page.request.get(`/api/objects/${objectId}/activities`);
+    expect(res.ok()).toBe(true);
+    const activities = (await res.json()) as Array<{ title: string; attachments: unknown[] }>;
+    const fuel = activities.filter((a) => a.title === 'Fuel');
+    expect(fuel).toHaveLength(1);
+    expect(fuel[0].attachments).toHaveLength(1);
+  }).toPass();
+
+  // Belt and braces: a second browser context has its own empty IndexedDB and cookie jar, so
+  // anything it shows for this object came only from the server, not from replaying local
+  // outbox state a second time.
+  const otherContext = await browser.newContext();
+  const otherPage = await otherContext.newPage();
+  try {
+    await signIn(otherPage);
+    await otherPage.goto(`/objects/${objectId}`);
+    await expect(otherPage.getByText('Fuel', { exact: true })).toHaveCount(1);
+    await expect(otherPage.locator('.thumb-strip img')).toHaveCount(1);
   } finally {
     await otherContext.close();
   }

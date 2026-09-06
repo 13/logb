@@ -2,7 +2,8 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
-  import { api, createQueued, fileUrl, isRejection } from '../lib/api';
+  import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueuedActivity } from '../lib/api';
+  import { serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
@@ -68,17 +69,62 @@
     }
   });
 
-  /** Files need an activity row to hang on, so save the draft first. */
-  async function ensureSaved(): Promise<Activity> {
+  // `saved.id` is the temp id ActivityForm minted for its own draft (see `mintTempId` below)
+  // for as long as `saved.pending` holds. Nothing else refreshes it once a BACKGROUND flush --
+  // not this form's own await, e.g. the ordinary mobile path where returning from the camera
+  // fires `visibilitychange`, which triggers a flush -- lands the create: without this, `saved`
+  // keeps naming an id no row will ever have, so a second attached photo queues against a
+  // temp id whose create is already gone (never resolves, 404s, dies), Save takes the
+  // `pending` branch against a queued op that no longer exists (silently discarding whatever
+  // was typed), and Cancel finds nothing to remove. Rewriting `saved` here -- which flows
+  // straight through to `FilePicker`'s `activityId` prop, since that reads `saved.id` -- is
+  // what makes the resolution visible to every one of those call sites at once.
+  $effect(() => onOutboxFlushed((resolved) => {
+    if (saved?.pending && resolved.has(saved.id)) {
+      saved = { ...saved, id: resolved.get(saved.id)!, pending: false };
+    }
+  }));
+
+  /** A negative id for the draft being created underground, so a file upload has a parent id
+   *  to attach to before the server has assigned a real one. Negative so it can never collide
+   *  with a real (always positive) activity id -- same scheme as `pendingId` in
+   *  ObjectDetail.svelte, though that one hashes an existing op id rather than minting a fresh
+   *  one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
+   *  id the outbox stores and later rewrites (see `persistResolvedId` in ../lib/outbox.ts). */
+  function mintTempId(): number {
+    const s = crypto.randomUUID();
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return -(Math.abs(h) || 1);
+  }
+
+  /** Files need an activity row to hang on, so save the draft first.
+   *
+   *  Wrapped in `serialize` (../lib/outbox.ts) so two fast taps on "+ Add files" -- both
+   *  reading `saved === null` before either await settles -- share one in-flight save instead
+   *  of each minting its own temp id and queuing its own `activity.create`; offline that would
+   *  otherwise leave two drafts behind for what the user experienced as one tap. */
+  const ensureSaved = serialize(async (): Promise<Activity> => {
     if (saved) return saved;
     if (!ready) throw new Error('not loaded yet');
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) throw new Error($t(bad));
-    saved = await api<Activity>('POST', `/objects/${oid}/activities`, body);
+    const tempId = mintTempId();
+    // `createQueued` returns null when the write only reached the outbox (offline). Passing
+    // the SAME tempId as its `tempId` argument means the outbox stores it on the queued op, so
+    // an upload queued below against this id gets rewritten to the real one once the create
+    // lands (see `persistResolvedId` in ../lib/outbox.ts) -- not a second, unrelated numbering
+    // scheme invented here.
+    const result = await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>, tempId);
+    saved = result ?? {
+      id: tempId, object_id: oid, ...body,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      attachments: [], pending: true,
+    };
     autoDraft = true;
     return saved;
-  }
+  });
 
   function buildInput(): ActivityInput {
     return {
@@ -108,7 +154,21 @@
     if (bad) { error = $t(bad); return; }
     busy = true; error = '';
     try {
-      if (saved) {
+      if (saved?.pending) {
+        // The draft's create is still only queued -- there is no server row to PATCH, and the
+        // outbox has no "edit" op kind (see OpKind in ../lib/outbox.ts). Fold whatever changed
+        // since "+ Add files" queued it into that same op, instead of attempting a PATCH that
+        // would just fail offline and strand the user on this form.
+        //
+        // `saved.id` can go stale: a background flush (see the `onOutboxFlushed` subscription
+        // above) may have already landed this exact create and rewritten `saved`, in the
+        // ordinary case, before this ever runs -- but a fold that still lands on no live op
+        // (a race the subscription didn't win) must not be treated as success. Silently doing
+        // nothing here and navigating away regardless is exactly how everything typed after
+        // "+ Add files" used to get discarded with no error at all.
+        const folded = await updateQueuedActivity(saved.id, body as unknown as Record<string, unknown>);
+        if (!folded) throw new Error('activity.save-lost');
+      } else if (saved) {
         await api('PATCH', `/activities/${saved.id}`, body);
       } else {
         // null means "queued, not sent": the row exists locally and will be replayed.
@@ -129,14 +189,42 @@
   async function cancel() {
     if (autoDraft && saved) {
       if (attachments.length > 0 && !confirm($t('activity.discard-draft'))) return;
-      try { await api('DELETE', `/activities/${saved.id}`); } catch { /* leaving it is better than blocking the exit */ }
+      if (saved.pending) {
+        // Only the outbox has this draft -- there is no server row to DELETE (that would
+        // 404), and leaving the queued create (or an upload still naming its temp id) behind
+        // would replay it later, creating exactly the stray entry this cancel exists to avoid.
+        try { await cancelQueuedActivity(saved.id); } catch { /* leaving it is better than blocking the exit */ }
+      } else {
+        // The create already reached the server (`saved.id` is a real id), so the row exists
+        // and must be DELETEd -- but the network can still have died since, e.g. between the
+        // save and attaching another photo, which would then have queued against this REAL
+        // id. Silently swallowing a failed DELETE used to navigate away as though the row were
+        // gone while it (and now a queued upload naming it) both survived; a queued upload for
+        // it would then replay later and land on an activity the user was told was cancelled.
+        // So: only drop the queued upload -- and only leave the form -- once the DELETE is
+        // actually confirmed, and surface a real error otherwise instead of pretending success.
+        try {
+          await api('DELETE', `/activities/${saved.id}`);
+        } catch (e) {
+          error = $t((e as Error).message);
+          return;
+        }
+        try { await cancelQueuedActivity(saved.id); } catch { /* best-effort cleanup; the row is already gone server-side */ }
+      }
     }
     back(`/objects/${oid}`);
   }
 
   async function remove() {
     if (!saved || !confirm($t('nav.confirm-delete'))) return;
-    await api('DELETE', `/activities/${saved.id}`);
+    // Sibling of the same fix already made in cancel(): a failed DELETE used to throw with
+    // nothing surfaced, silently stranding the user with no idea the delete never happened.
+    try {
+      await api('DELETE', `/activities/${saved.id}`);
+    } catch (e) {
+      error = $t((e as Error).message);
+      return;
+    }
     go(`/objects/${oid}`, true);
   }
 </script>
@@ -192,7 +280,14 @@
     {#if attachments.length > 0}
       <div class="thumb-strip">
         {#each attachments as a (a.id)}
-          {#if a.kind === 'photo'}<img src={fileUrl(a.file_id, true)} alt="" />{:else}<span class="doc-chip">📄</span>{/if}
+          <div class="thumb" class:pending={a.pending}>
+            {#if a.kind === 'photo'}
+              <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" />
+            {:else}
+              <span class="doc-chip">📄</span>
+            {/if}
+            {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
+          </div>
         {/each}
       </div>
     {/if}
@@ -220,4 +315,7 @@
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
   .actions { margin-top: 8px; }
+  .thumb { position: relative; flex: none; }
+  .thumb.pending { opacity: .55; }
+  .thumb .pending-chip { position: absolute; left: 2px; right: 2px; bottom: 2px; text-align: center; font-size: .6rem; padding: 1px 2px; line-height: 1.2; }
 </style>
