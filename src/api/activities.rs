@@ -17,6 +17,7 @@ pub const CATEGORIES: [&str; 7] =
 pub fn router() -> Router<App> {
     Router::new()
         .route("/objects/{id}/activities", get(list).post(create))
+        .route("/objects/{id}/recent-titles", get(recent_titles))
         .route("/activities/{id}", get(read).patch(update).delete(delete))
 }
 
@@ -152,6 +153,49 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
         [(axum::http::header::HeaderName::from_static("x-total-count"), total.to_string())],
         Json(out),
     ).into_response())
+}
+
+/// One row per distinct (title, category) an object has seen, newest first, with the
+/// values of the most recent occurrence.
+///
+/// A dedicated endpoint rather than reusing `list`: that one joins every attachment of
+/// the object, which is payload a phone does not need in order to fill a datalist.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct TitleSuggestion {
+    pub title: String,
+    pub category: String,
+    pub last_date: String,
+    pub last_cost_cents: Option<i64>,
+    pub last_counter: Option<i64>,
+}
+
+const SUGGESTION_LIMIT: i64 = 20;
+
+async fn recent_titles(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(object_id): Path<i64>,
+) -> Result<Json<Vec<TitleSuggestion>>, AppError> {
+    load_owned_object(&state, user.id, object_id).await?;
+    // The correlated subqueries pick the newest occurrence explicitly. SQLite would also
+    // hand back a bare column from the MAX() row, but that behaviour is a quirk to rely on,
+    // not a contract.
+    let rows = sqlx::query_as::<_, TitleSuggestion>(
+        "SELECT a.title, a.category, MAX(a.date) AS last_date, \
+           (SELECT x.cost_cents FROM activities x WHERE x.object_id = a.object_id \
+              AND x.title = a.title AND x.category = a.category \
+              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_cost_cents, \
+           (SELECT x.counter_value FROM activities x WHERE x.object_id = a.object_id \
+              AND x.title = a.title AND x.category = a.category \
+              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter \
+         FROM activities a WHERE a.object_id = ?1 \
+         GROUP BY a.title, a.category ORDER BY last_date DESC LIMIT ?2",
+    )
+    .bind(object_id)
+    .bind(SUGGESTION_LIMIT)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
 }
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<(StatusCode, Json<ActivityOut>), AppError> {

@@ -120,3 +120,45 @@ async fn the_activity_list_is_paged() {
     let all: serde_json::Value = res.json().await.unwrap();
     assert_eq!(all.as_array().unwrap().len(), 7);
 }
+
+#[tokio::test]
+async fn recent_titles_are_distinct_and_newest_first() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    for (date, title, cost, counter) in [
+        ("2026-01-05", "Fuel", 5000, 10_000),
+        ("2026-02-05", "Oil change", 9000, 11_000),
+        ("2026-03-05", "Fuel", 6210, 12_000),
+    ] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+            "date": date, "category": "fuel", "title": title,
+            "cost_cents": cost, "counter_value": counter
+        })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let out: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects/{id}/recent-titles")))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(out.len(), 2, "one row per distinct (title, category)");
+    assert_eq!(out[0]["title"], "Fuel", "the most recent title comes first");
+    assert_eq!(out[0]["last_date"], "2026-03-05");
+    assert_eq!(out[0]["last_cost_cents"], 6210, "the newest occurrence supplies the cost");
+    assert_eq!(out[0]["last_counter"], 12_000);
+    assert_eq!(out[1]["title"], "Oil change");
+}
+
+#[tokio::test]
+async fn recent_titles_of_another_users_object_are_404() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = anna.get(app.url(&format!("/objects/{id}/recent-titles"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
