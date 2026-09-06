@@ -148,3 +148,31 @@ async function persistResolvedId(store: OutboxStore, tempId: number, realId: num
     await store.put({ ...other, body: { ...other.body, activity_id: realId } });
   }
 }
+
+/**
+ * Removes a still-queued 'activity.create' op (identified by its `tempId`) and every other
+ * live op that depends on it -- an 'attachment.upload' whose body still names that tempId as
+ * its `activity_id`. Used when a queued draft is cancelled: unlike a real row there is no
+ * server DELETE to send for it, and leaving either op behind would replay it later, creating
+ * exactly the stray entry the cancel was meant to prevent.
+ */
+export async function removeQueuedActivity(store: OutboxStore, tempId: number): Promise<void> {
+  for (const op of await store.all()) {
+    if (op.tempId === tempId || op.body.activity_id === tempId) {
+      await store.remove(op.id);
+    }
+  }
+}
+
+/**
+ * Overwrites the body of a still-queued 'activity.create' op (identified by its `tempId`) with
+ * a newer one. The outbox has no "edit" op kind (see `OpKind` above) -- an edit made to a draft
+ * after it was already queued (e.g. attaching a file, which requires the create to be queued
+ * immediately so the upload has a parent id, then changing another field before Save) has to be
+ * folded into the one queued create instead of attempted as a PATCH against a server row that
+ * does not exist yet. A no-op if no live op has this `tempId` (already replayed, or dead).
+ */
+export async function updateQueuedActivityBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<void> {
+  const op = (await store.all()).find((o) => !o.dead && o.tempId === tempId);
+  if (op) await store.put({ ...op, body });
+}

@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
-  import { api, createQueued, fileUrl, isRejection } from '../lib/api';
+  import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, updateQueuedActivity } from '../lib/api';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
@@ -68,6 +68,19 @@
     }
   });
 
+  /** A negative id for the draft being created underground, so a file upload has a parent id
+   *  to attach to before the server has assigned a real one. Negative so it can never collide
+   *  with a real (always positive) activity id -- same scheme as `pendingId` in
+   *  ObjectDetail.svelte, though that one hashes an existing op id rather than minting a fresh
+   *  one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
+   *  id the outbox stores and later rewrites (see `persistResolvedId` in ../lib/outbox.ts). */
+  function mintTempId(): number {
+    const s = crypto.randomUUID();
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return -(Math.abs(h) || 1);
+  }
+
   /** Files need an activity row to hang on, so save the draft first. */
   async function ensureSaved(): Promise<Activity> {
     if (saved) return saved;
@@ -75,7 +88,18 @@
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) throw new Error($t(bad));
-    saved = await api<Activity>('POST', `/objects/${oid}/activities`, body);
+    const tempId = mintTempId();
+    // `createQueued` returns null when the write only reached the outbox (offline). Passing
+    // the SAME tempId as its `tempId` argument means the outbox stores it on the queued op, so
+    // an upload queued below against this id gets rewritten to the real one once the create
+    // lands (see `persistResolvedId` in ../lib/outbox.ts) -- not a second, unrelated numbering
+    // scheme invented here.
+    const result = await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>, tempId);
+    saved = result ?? {
+      id: tempId, object_id: oid, ...body,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      attachments: [], pending: true,
+    };
     autoDraft = true;
     return saved;
   }
@@ -108,7 +132,13 @@
     if (bad) { error = $t(bad); return; }
     busy = true; error = '';
     try {
-      if (saved) {
+      if (saved?.pending) {
+        // The draft's create is still only queued -- there is no server row to PATCH, and the
+        // outbox has no "edit" op kind (see OpKind in ../lib/outbox.ts). Fold whatever changed
+        // since "+ Add files" queued it into that same op, instead of attempting a PATCH that
+        // would just fail offline and strand the user on this form.
+        await updateQueuedActivity(saved.id, body as unknown as Record<string, unknown>);
+      } else if (saved) {
         await api('PATCH', `/activities/${saved.id}`, body);
       } else {
         // null means "queued, not sent": the row exists locally and will be replayed.
@@ -129,7 +159,14 @@
   async function cancel() {
     if (autoDraft && saved) {
       if (attachments.length > 0 && !confirm($t('activity.discard-draft'))) return;
-      try { await api('DELETE', `/activities/${saved.id}`); } catch { /* leaving it is better than blocking the exit */ }
+      if (saved.pending) {
+        // Only the outbox has this draft -- there is no server row to DELETE (that would
+        // 404), and leaving the queued create (or an upload still naming its temp id) behind
+        // would replay it later, creating exactly the stray entry this cancel exists to avoid.
+        try { await cancelQueuedActivity(saved.id); } catch { /* leaving it is better than blocking the exit */ }
+      } else {
+        try { await api('DELETE', `/activities/${saved.id}`); } catch { /* leaving it is better than blocking the exit */ }
+      }
     }
     back(`/objects/${oid}`);
   }
@@ -192,7 +229,14 @@
     {#if attachments.length > 0}
       <div class="thumb-strip">
         {#each attachments as a (a.id)}
-          {#if a.kind === 'photo'}<img src={fileUrl(a.file_id, true)} alt="" />{:else}<span class="doc-chip">📄</span>{/if}
+          <div class="thumb" class:pending={a.pending}>
+            {#if a.kind === 'photo'}
+              <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" />
+            {:else}
+              <span class="doc-chip">📄</span>
+            {/if}
+            {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
+          </div>
         {/each}
       </div>
     {/if}
@@ -220,4 +264,7 @@
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
   .actions { margin-top: 8px; }
+  .thumb { position: relative; flex: none; }
+  .thumb.pending { opacity: .55; }
+  .thumb .pending-chip { position: absolute; left: 2px; right: 2px; bottom: 2px; text-align: center; font-size: .6rem; padding: 1px 2px; line-height: 1.2; }
 </style>

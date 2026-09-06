@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { memoryStore, enqueue, replay, pendingCount, serialize, type QueuedOp } from '../src/lib/outbox';
+import { memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -123,6 +123,80 @@ describe('outbox', () => {
     const all = await store.all();
     expect(all).toHaveLength(2);
     expect(all.find((r) => r.id === 'a')?.dead).toBeFalsy();
+  });
+});
+
+/**
+ * `removeQueuedActivity` is what `cancel()` in ActivityForm.svelte calls instead of DELETE
+ * when the draft it is discarding was never more than a queued `activity.create` -- there is
+ * no server row to delete, and leaving the create (or an upload still naming its temp id)
+ * behind would replay it later, creating exactly the stray entry the cancel was meant to
+ * prevent.
+ */
+describe('removeQueuedActivity', () => {
+  it('removes the queued create identified by its tempId', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1 }));
+    await removeQueuedActivity(store, -1);
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('also removes a dependent upload that still names the tempId', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1 }));
+    await enqueue(store, op('upload', { kind: 'attachment.upload', path: '/objects/1/attachments', body: { activity_id: -1 } }));
+    await removeQueuedActivity(store, -1);
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('leaves ops for a different draft untouched', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1 }));
+    await enqueue(store, op('other-create', { tempId: -2 }));
+    await enqueue(store, op('other-upload', { kind: 'attachment.upload', path: '/objects/1/attachments', body: { activity_id: -2 } }));
+    await removeQueuedActivity(store, -1);
+    const remaining = (await store.all()).map((o) => o.id).sort();
+    expect(remaining).toEqual(['other-create', 'other-upload']);
+  });
+
+  it('is a no-op when nothing matches the tempId', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('unrelated'));
+    await removeQueuedActivity(store, -99);
+    expect(await store.all()).toHaveLength(1);
+  });
+});
+
+/**
+ * `updateQueuedActivityBody` is what a Save made before the queued create it belongs to has
+ * even reached the server folds into that same op, since the outbox has no "edit" op kind and
+ * a PATCH would just fail against a server row that does not exist yet.
+ */
+describe('updateQueuedActivityBody', () => {
+  it('overwrites the body of the queued create identified by its tempId', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1, body: { title: 'first' } }));
+    await updateQueuedActivityBody(store, -1, { title: 'second' });
+    const [row] = await store.all();
+    expect(row.body).toEqual({ title: 'second' });
+    expect(row.id).toBe('create'); // same op, same client_op_id -- not a second create
+  });
+
+  it('leaves a different op untouched', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('create', { tempId: -1, body: { title: 'first' } }));
+    await enqueue(store, op('other', { tempId: -2, body: { title: 'other' } }));
+    await updateQueuedActivityBody(store, -1, { title: 'second' });
+    const other = (await store.all()).find((o) => o.id === 'other');
+    expect(other?.body).toEqual({ title: 'other' });
+  });
+
+  it('is a no-op when no live op has this tempId', async () => {
+    const store = memoryStore();
+    await enqueue(store, op('dead', { tempId: -1, dead: true, body: { title: 'first' } }));
+    await updateQueuedActivityBody(store, -1, { title: 'second' });
+    const [row] = await store.all();
+    expect(row.body).toEqual({ title: 'first' }); // the dead op was not revived or rewritten
   });
 });
 

@@ -1,4 +1,4 @@
-import { enqueue, newOpId, pendingCount, replay, serialize, type OutboxStore, type QueuedOp } from './outbox';
+import { enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection } from './api-error';
 
@@ -215,6 +215,25 @@ export async function outboxDeadCount(): Promise<number> {
  */
 export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
   return (await store.all()).filter((o) => !o.dead && o.path === path);
+}
+
+/**
+ * Cancels a draft whose `activity.create` never reached the server -- only the outbox has it.
+ * Removes that queued create and any upload still hanging off its temp id (see
+ * `removeQueuedActivity` in `./outbox.ts`), so the cancel leaves nothing behind to replay
+ * later. No component reaches into the store directly.
+ */
+export async function cancelQueuedActivity(tempId: number): Promise<void> {
+  await removeQueuedActivity(store, tempId);
+}
+
+/**
+ * Folds a further edit into a draft's still-queued `activity.create` (identified by its temp
+ * id) instead of sending a PATCH the server has no row for yet. See `updateQueuedActivityBody`
+ * in `./outbox.ts`.
+ */
+export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<void> {
+  await updateQueuedActivityBody(store, tempId, body);
 }
 
 /** Revive every parked op and try again — the user's "I fixed the wifi" button. */
