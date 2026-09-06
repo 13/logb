@@ -32,7 +32,23 @@ pub fn is_due(
 /// Whether a reminder belongs in a due-or-upcoming lookahead: already due, or coming due
 /// within `within_days` (strictly in the future -- a reminder due today or in the past is
 /// reported through `due`, not through the lookahead window).
-pub fn is_upcoming(due: bool, days_until: Option<i64>, within_days: i64) -> bool {
+///
+/// A live snooze suppresses the lookahead arm as well. `due` already accounts for the snooze
+/// (see `is_due`), but `days_until` is measured against the REAL due date and stays truthful
+/// about it, so without this check a reminder due next week and snoozed today keeps sitting on
+/// the dashboard under "upcoming" -- the one place the user just asked it not to be. Suppressed
+/// only while the snooze is live; once `snoozed_until` reaches today the normal rules resume,
+/// exactly as in `is_due`.
+pub fn is_upcoming(
+    today: NaiveDate,
+    due: bool,
+    days_until: Option<i64>,
+    within_days: i64,
+    snoozed_until: Option<NaiveDate>,
+) -> bool {
+    if snoozed_until.is_some_and(|s| s > today) {
+        return false;
+    }
     due || matches!(days_until, Some(d) if d > 0 && d <= within_days)
 }
 
@@ -171,20 +187,40 @@ mod tests {
 
     #[test]
     fn is_upcoming_includes_the_due_flag_regardless_of_days() {
-        assert!(is_upcoming(true, None, 30));
-        assert!(is_upcoming(true, Some(-5), 30));
+        assert!(is_upcoming(d("2026-09-06"), true, None, 30, None));
+        assert!(is_upcoming(d("2026-09-06"), true, Some(-5), 30, None));
     }
 
     #[test]
     fn is_upcoming_boundary_is_inclusive_of_within_days() {
-        assert!(is_upcoming(false, Some(30), 30), "exactly within_days away is included");
-        assert!(!is_upcoming(false, Some(31), 30), "one day beyond the window is not");
+        assert!(is_upcoming(d("2026-09-06"), false, Some(30), 30, None), "exactly within_days away is included");
+        assert!(!is_upcoming(d("2026-09-06"), false, Some(31), 30, None), "one day beyond the window is not");
     }
 
     #[test]
     fn is_upcoming_excludes_the_past_and_today() {
-        assert!(!is_upcoming(false, Some(0), 30), "due today is reported via `due`, not lookahead");
-        assert!(!is_upcoming(false, Some(-1), 30), "a past date is not upcoming");
-        assert!(!is_upcoming(false, None, 30));
+        assert!(!is_upcoming(d("2026-09-06"), false, Some(0), 30, None), "due today is reported via `due`, not lookahead");
+        assert!(!is_upcoming(d("2026-09-06"), false, Some(-1), 30, None), "a past date is not upcoming");
+        assert!(!is_upcoming(d("2026-09-06"), false, None, 30, None));
+    }
+
+    /// `days_until` is measured against the real due date and stays truthful about it even
+    /// while the reminder is snoozed, so the lookahead has to consult the snooze itself.
+    #[test]
+    fn a_live_snooze_takes_a_future_reminder_out_of_the_lookahead() {
+        let today = d("2026-09-06");
+        assert!(is_upcoming(today, false, Some(5), 30, None), "not snoozed: in the window");
+        assert!(
+            !is_upcoming(today, false, Some(5), 30, Some(d("2026-09-13"))),
+            "a live snooze suppresses the lookahead arm too",
+        );
+    }
+
+    /// The boundary matches `is_due`: `snoozed_until` ON today has lapsed, not still running.
+    #[test]
+    fn a_lapsed_snooze_suppresses_nothing_in_the_lookahead() {
+        let today = d("2026-09-06");
+        assert!(is_upcoming(today, false, Some(5), 30, Some(today)), "expiring today has lapsed");
+        assert!(is_upcoming(today, false, Some(5), 30, Some(d("2026-09-01"))));
     }
 }

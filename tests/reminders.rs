@@ -381,3 +381,46 @@ async fn a_done_reminder_cannot_be_snoozed() {
         .json(&json!({ "days": 7 })).send().await.unwrap();
     assert_eq!(res.status(), 409);
 }
+
+/// The lookahead sibling of `a_snoozed_reminder_is_absent_from_the_lookahead`, which only ever
+/// exercised a reminder whose due date was already PAST -- such a reminder is excluded by its
+/// negative `days_until` alone, so that test passes even when the snooze is ignored entirely.
+/// A reminder due in the future is the case where the lookahead arm actually runs, and where
+/// snoozing must still take it off the dashboard.
+#[tokio::test]
+async fn snoozing_a_future_reminder_takes_it_out_of_the_lookahead_too() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let due = chrono::Utc::now().date_naive() + chrono::Duration::days(5);
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Inspection", "notes": "", "due_date": due.to_string()
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(listed.iter().any(|x| x["id"] == rid), "it must be in the lookahead before the snooze");
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(out["due"], false);
+    assert!(out["days_until"].as_i64().unwrap() > 0, "the real due date is still ahead");
+
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(
+        listed.iter().all(|x| x["id"] != rid),
+        "a snoozed reminder must leave the lookahead, not just the due list",
+    );
+
+    // ...and come back once the snooze lapses, so this suppresses rather than deletes.
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+        .bind(rid).execute(&app.state.db).await.unwrap();
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(listed.iter().any(|x| x["id"] == rid), "a lapsed snooze suppresses nothing");
+}

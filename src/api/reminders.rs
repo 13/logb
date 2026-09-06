@@ -158,11 +158,15 @@ pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )
     .bind(user_id).fetch_all(&state.db).await?;
+    let today = today();
     Ok(rows
         .into_iter()
         .map(ReminderOut::from)
         .filter(|r| r.row.done_at.is_none())
-        .filter(|r| is_upcoming(r.due, r.days_until, within_days))
+        .filter(|r| {
+            let snoozed = r.row.snoozed_until.as_deref().and_then(parse_date);
+            is_upcoming(today, r.due, r.days_until, within_days, snoozed)
+        })
         .collect())
 }
 
