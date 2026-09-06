@@ -271,8 +271,14 @@ describe('compareQueueOrder', () => {
     expect(compareQueueOrder(b, a)).toBeGreaterThan(0);
   });
 
-  it('treats two ops with neither field as tied', () => {
-    expect(compareQueueOrder(op('a'), op('b'))).toBe(0);
+  /// Two ops carrying no ordering information at all are ordered by id -- not "tied", which
+  /// left them to the stability of whatever array `sort` was handed. For records like these
+  /// (written before `seq` existed, so read back from IndexedDB in UUID key order) id order IS
+  /// that order, so nothing about the queue changes; it is now decided rather than inherited.
+  it('orders two ops with neither field by id, consistently in both directions', () => {
+    expect(compareQueueOrder(op('a'), op('b'))).toBeLessThan(0);
+    expect(compareQueueOrder(op('b'), op('a'))).toBeGreaterThan(0);
+    expect(compareQueueOrder(op('a'), op('a'))).toBe(0);
   });
 });
 
@@ -513,5 +519,24 @@ describe('createSeqReserver', () => {
     expect(b.status).toBe('rejected');
 
     expect(await reserve()).toBe(101);
+  });
+});
+
+/**
+ * `seq` is handed out by a per-tab counter seeded from the store, so two tabs opening the same
+ * empty queue at once can hand out the same value. A tie then used to leave the order to
+ * `getAll()` -- UUID key order -- which is exactly the arbitrariness `seq` was added to remove.
+ */
+describe('compareQueueOrder with a cross-tab seq collision', () => {
+  it('falls back to when the op was queued, then to its id', () => {
+    const earlier = op('zzz', { seq: 7, queued_at: 1_000 });
+    const later = op('aaa', { seq: 7, queued_at: 2_000 });
+    expect([later, earlier].sort(compareQueueOrder).map((o) => o.id)).toEqual(['zzz', 'aaa']);
+
+    // Same millisecond too: no true order exists, but every tab must at least agree on one.
+    const a = op('aaa', { seq: 7, queued_at: 1_000 });
+    const b = op('bbb', { seq: 7, queued_at: 1_000 });
+    expect([b, a].sort(compareQueueOrder).map((o) => o.id)).toEqual(['aaa', 'bbb']);
+    expect([a, b].sort(compareQueueOrder).map((o) => o.id)).toEqual(['aaa', 'bbb']);
   });
 });

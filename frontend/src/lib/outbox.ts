@@ -73,9 +73,22 @@ export function newOpId(): string {
  * for a record written before `seq` existed. `idbStore` (`./idb.ts`) seeds its counter past
  * every existing `queued_at` it finds, so a legacy record always sorts correctly against a
  * freshly-`seq`'d one without needing to be rewritten itself.
+ *
+ * The counter is per tab, seeded from the store in a transaction of its own, so two tabs that
+ * open the same empty queue at once can hand out the SAME `seq` -- and a tie used to leave the
+ * order to `getAll()`, i.e. to UUID key order, which is the very arbitrariness `seq` exists to
+ * remove. `queued_at` breaks such a tie chronologically, and the op id breaks that one, so the
+ * order is at least deterministic and the same in every tab that reads the queue. (Two tabs
+ * genuinely writing in the same millisecond still have no true relative order to recover; only
+ * a counter shared across tabs could give them one. Ops that depend on each other -- a create
+ * and the upload hanging off it -- are always queued by the same tab, so they are unaffected.)
  */
 export function compareQueueOrder(a: QueuedOp, b: QueuedOp): number {
-  return (a.seq ?? a.queued_at ?? 0) - (b.seq ?? b.queued_at ?? 0);
+  const bySeq = (a.seq ?? a.queued_at ?? 0) - (b.seq ?? b.queued_at ?? 0);
+  if (bySeq !== 0) return bySeq;
+  const byTime = (a.queued_at ?? 0) - (b.queued_at ?? 0);
+  if (byTime !== 0) return byTime;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
