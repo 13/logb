@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, retryDead, setOutboxStoreForTesting, setOutboxUser, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { cancelQueuedActivity, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, retryDead, setOutboxStoreForTesting, setOutboxUser, setUnauthorizedHandler, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -596,5 +596,44 @@ describe('an outbox shared by two users of one device', () => {
     await flushOutbox();
 
     expect(sent).toEqual(['Old']);
+  });
+});
+
+/**
+ * The 401 path is exactly where the owner is easiest to lose: `api()` runs the unauthorized
+ * handler on its way out, and that handler clears the signed-in user. Reading the owner in
+ * `createQueued`'s catch therefore attributed the write to nobody -- leaving it untagged in a
+ * queue shared with every other account on the device, for the next person to claim.
+ */
+describe('the owner recorded on a write queued by an expired session', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+    setOutboxUser(null);
+    setUnauthorizedHandler(() => {});
+  });
+
+  it('is whoever was signed in when the write was made, not nobody', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    setOutboxUser(3);
+    // What ../stores/session.ts installs: a 401 ends the session, outbox owner included.
+    setUnauthorizedHandler(() => setOutboxUser(null));
+    globalThis.fetch = vi.fn(async () => jsonResponse(401, { code: 'unauthorized', message: 'log in' })) as unknown as typeof fetch;
+
+    await createQueued('/objects/1/activities', { title: 'Hydraulic oil' });
+
+    expect((await store.all()).map((o) => o.userId)).toEqual([3]);
+  });
+
+  it('is recorded the same way for a queued upload', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    setOutboxUser(3);
+    setUnauthorizedHandler(() => setOutboxUser(null));
+    globalThis.fetch = vi.fn(async () => jsonResponse(401, { code: 'unauthorized', message: 'log in' })) as unknown as typeof fetch;
+
+    await uploadQueued('/objects/1/attachments', new Blob(['x']), 'photo.png');
+
+    expect((await store.all()).map((o) => o.userId)).toEqual([3]);
   });
 });

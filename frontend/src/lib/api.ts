@@ -98,6 +98,12 @@ export function setOutboxStoreForTesting(s: OutboxStore): void {
  */
 export async function createQueued<T>(path: string, body: Record<string, unknown>, tempId?: number): Promise<T | null> {
   const id = newOpId();
+  // Read the owner BEFORE the request, not in the catch below. A 401 runs the unauthorized
+  // handler on its way out, which sets the current user to null (see ../stores/session.ts), so
+  // by the time the catch enqueues there is nobody signed in to attribute the write to -- and
+  // the write would land in the queue untagged, free for the next person on the device to
+  // claim. The op belongs to whoever was signed in when the user made it.
+  const userId = currentUserId ?? undefined;
   try {
     return await api<T>('POST', path, { ...body, client_op_id: id });
   } catch (e) {
@@ -108,7 +114,7 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
     // handler navigates to /login, and the entry existed nowhere else.
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
-      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0, userId: currentUserId ?? undefined });
+      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0, userId });
     } catch {
       // The write reached neither the server nor the local queue: nothing durable remembers
       // it any more, so the caller must be told rather than navigating away as though the
@@ -136,6 +142,8 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
  */
 export async function uploadQueued<T>(path: string, file: Blob, filename: string, activityId?: number): Promise<T | null> {
   const id = newOpId();
+  const userId = currentUserId ?? undefined; // see createQueued: read before the request, not after
+
   const body: Record<string, unknown> = activityId === undefined ? {} : { activity_id: activityId };
   const activityIsReal = activityId === undefined || activityId >= 0;
   if (activityIsReal) {
@@ -151,7 +159,7 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
     }
   }
   try {
-    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0, userId: currentUserId ?? undefined });
+    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0, userId });
   } catch {
     // See the matching comment in createQueued: neither the server nor the local queue has
     // this write, so the caller must be told rather than treating the file as saved.

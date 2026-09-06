@@ -216,3 +216,60 @@ test('a write made with an expired session is kept and sent after logging back i
     expect(activities.filter((a) => a.title === 'Blade sharpening')).toHaveLength(1);
   }).toPass();
 });
+
+/**
+ * Two accounts, one device. The outbox is a single IndexedDB per origin and a queued write
+ * deliberately outlives the session that made it, so the second person to log in must neither
+ * send, see, nor destroy the first person's queued write -- it has to still be there, intact,
+ * when they come back.
+ */
+test('a queued write survives somebody else signing in on the same device', async ({ page, context }) => {
+  await signIn(page);
+
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Tractor');
+  await page.getByLabel('Category').fill('vehicle');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Tractor' })).toBeVisible();
+  const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
+
+  const other = { username: 'zoe', password: 'another correct horse' };
+  const created = await page.request.post('/api/users', {
+    data: { username: other.username, password: other.password, is_admin: false },
+  });
+  expect(created.ok()).toBe(true);
+
+  await page.getByRole('button', { name: /Log/ }).first().click();
+  await page.waitForLoadState('networkidle');
+  await page.getByLabel('Title').fill('Hydraulic oil');
+
+  // The admin's session ends with the entry unsaved, so the write is queued under their id.
+  await context.clearCookies();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  // Somebody else signs in on the same device. Their login flushes the outbox -- which must
+  // walk straight past a write that is not theirs rather than sending it, having it refused on
+  // ownership, and parking it dead.
+  await page.getByLabel(/Username|Benutzername/).fill(other.username);
+  await page.getByLabel(/Password|Passwort/).fill(other.password);
+  await page.getByRole('button', { name: /^Sign in$|^Anmelden$/ }).click();
+  await page.waitForURL('**/');
+  // Not theirs to see, either: no pending or failed write is surfaced to them.
+  await expect(page.getByText(/Waiting to send|Failed/i)).toHaveCount(0);
+  await page.waitForTimeout(500);
+
+  // The owner comes back, and their entry is still there to send.
+  await page.getByRole('button', { name: 'Settings' }).click();
+  // Exact: the account section also offers "Sign out everywhere".
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await signIn(page);
+
+  await expect(async () => {
+    const res = await page.request.get(`/api/objects/${objectId}/activities`);
+    expect(res.ok()).toBe(true);
+    const activities = (await res.json()) as Array<{ title: string }>;
+    expect(activities.filter((a) => a.title === 'Hydraulic oil')).toHaveLength(1);
+  }).toPass();
+});
