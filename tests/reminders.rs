@@ -106,3 +106,76 @@ async fn a_reminder_cannot_be_completed_twice() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "conflict");
 }
+
+#[tokio::test]
+async fn due_list_can_look_ahead() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let soon = (chrono::Utc::now().date_naive() + chrono::Duration::days(10)).to_string();
+    let far = (chrono::Utc::now().date_naive() + chrono::Duration::days(90)).to_string();
+
+    for (title, date) in [("Soon", &soon), ("Far", &far)] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+            "title": title, "notes": "", "due_date": date
+        })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let now: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(now.is_empty(), "nothing is due yet, and the default must not change");
+
+    let ahead: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(ahead.len(), 1, "only the reminder inside the window");
+    assert_eq!(ahead[0]["title"], "Soon");
+    assert_eq!(ahead[0]["due"], false);
+    assert_eq!(ahead[0]["days_until"], 10);
+}
+
+#[tokio::test]
+async fn snooze_pushes_an_overdue_reminder_into_the_future() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap();
+    let r: serde_json::Value = res.json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+    assert_eq!(r["due"], true);
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let out: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(out["due"], false, "a snoozed reminder is no longer due");
+    let expected = (chrono::Utc::now().date_naive() + chrono::Duration::days(7)).to_string();
+    assert_eq!(out["due_date"], expected);
+
+    for bad in [json!({ "days": 0 }), json!({ "days": 400 })] {
+        let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+            .json(&bad).send().await.unwrap();
+        assert_eq!(res.status(), 400, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_done_reminder_cannot_be_snoozed() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
+        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+    })).send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+    assert_eq!(app.client.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({}))
+        .send().await.unwrap().status(), 200);
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 409);
+}

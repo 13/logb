@@ -1,4 +1,4 @@
-use chrono::{Months, NaiveDate};
+use chrono::{Days, Months, NaiveDate};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Repeat {
@@ -21,6 +21,25 @@ pub fn next_due(base_date: NaiveDate, base_counter: Option<i64>, due_counter: Op
     let date = repeat.months.and_then(|m| base_date.checked_add_months(Months::new(m)));
     let counter = repeat.counter.and_then(|step| base_counter.or(due_counter).map(|c| c + step));
     if date.is_none() && counter.is_none() { None } else { Some((date, counter)) }
+}
+
+/// Where a snoozed reminder lands: `days` after the later of today and its current due date.
+pub fn snoozed_date(today: NaiveDate, current: Option<NaiveDate>, days: i64) -> NaiveDate {
+    let base = match current {
+        Some(d) if d > today => d,
+        _ => today,
+    };
+    base.checked_add_days(Days::new(days.max(0) as u64)).unwrap_or(base)
+}
+
+/// Days from today until `due`; negative when it has passed. None when there is no date.
+pub fn days_until(today: NaiveDate, due: Option<NaiveDate>) -> Option<i64> {
+    due.map(|d| (d - today).num_days())
+}
+
+/// Counter units still to go before `due`; negative when passed. None without both readings.
+pub fn counter_until(current: Option<i64>, due: Option<i64>) -> Option<i64> {
+    current.zip(due).map(|(c, d)| d - c)
 }
 
 #[cfg(test)]
@@ -63,5 +82,24 @@ mod tests {
     fn no_repeat_means_no_follow_up() {
         assert_eq!(next_due(d("2026-09-04"), Some(1), Some(1), Repeat::default()), None);
         assert_eq!(next_due(d("2026-09-04"), None, None, Repeat { months: None, counter: Some(10) }), None);
+    }
+
+    #[test]
+    fn snooze_runs_from_today_when_the_reminder_is_overdue() {
+        // Three months overdue plus seven days would still be in the past, which is not
+        // what pressing snooze means.
+        let overdue = Some(d("2026-06-01"));
+        assert_eq!(snoozed_date(d("2026-09-06"), overdue, 7), d("2026-09-13"));
+    }
+
+    #[test]
+    fn snooze_runs_from_the_due_date_when_it_is_still_ahead() {
+        let future = Some(d("2026-10-01"));
+        assert_eq!(snoozed_date(d("2026-09-06"), future, 7), d("2026-10-08"));
+    }
+
+    #[test]
+    fn snoozing_a_counter_only_reminder_gives_it_a_date() {
+        assert_eq!(snoozed_date(d("2026-09-06"), None, 7), d("2026-09-13"));
     }
 }

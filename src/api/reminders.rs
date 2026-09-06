@@ -2,10 +2,10 @@ use super::activities::load_owned_activity;
 use super::objects::{load_owned_object, stats, validate_date};
 use crate::auth::AuthUser;
 use crate::db;
-use crate::domain::reminder::{is_due, next_due, Repeat};
+use crate::domain::reminder::{counter_until, days_until, is_due, next_due, snoozed_date, Repeat};
 use crate::error::AppError;
 use crate::state::App;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -18,6 +18,7 @@ pub fn router() -> Router<App> {
         .route("/reminders/due", get(due_list))
         .route("/reminders/{id}", get(read).patch(update).delete(delete))
         .route("/reminders/{id}/done", post(done))
+        .route("/reminders/{id}/snooze", post(snooze))
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -44,6 +45,10 @@ pub struct ReminderOut {
     #[serde(flatten)]
     pub row: ReminderRow,
     pub due: bool,
+    /// Days from today until the due date; negative when it has passed.
+    pub days_until: Option<i64>,
+    /// Counter units still to go; negative when passed.
+    pub counter_until: Option<i64>,
 }
 
 /// Parses a stored `YYYY-MM-DD` date. Returns `None` on malformed input instead of
@@ -59,9 +64,12 @@ fn today() -> NaiveDate {
 
 impl From<ReminderRow> for ReminderOut {
     fn from(row: ReminderRow) -> Self {
-        let due = row.done_at.is_none()
-            && is_due(today(), row.current_counter, row.due_date.as_deref().and_then(parse_date), row.due_counter);
-        ReminderOut { row, due }
+        let today = today();
+        let date = row.due_date.as_deref().and_then(parse_date);
+        let due = row.done_at.is_none() && is_due(today, row.current_counter, date, row.due_counter);
+        let days_until = days_until(today, date);
+        let counter_until = counter_until(row.current_counter, row.due_counter);
+        ReminderOut { row, due, days_until, counter_until }
     }
 }
 
@@ -134,10 +142,9 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
-/// Every reminder of `user_id` that is due right now, in the order the dashboard shows them.
-/// Shared with the notifier so a digest and the due banner can never disagree about what
-/// "due" means.
-pub async fn due_for_user(state: &App, user_id: i64) -> Result<Vec<ReminderOut>, AppError> {
+/// Reminders that are due, plus those coming due within `within_days`. `0` -- the default --
+/// reproduces the old behaviour exactly, which is what the daily digest wants.
+pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result<Vec<ReminderOut>, AppError> {
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
@@ -147,11 +154,22 @@ pub async fn due_for_user(state: &App, user_id: i64) -> Result<Vec<ReminderOut>,
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )
     .bind(user_id).fetch_all(&state.db).await?;
-    Ok(rows.into_iter().map(ReminderOut::from).filter(|r| r.due).collect())
+    Ok(rows
+        .into_iter()
+        .map(ReminderOut::from)
+        .filter(|r| r.row.done_at.is_none())
+        .filter(|r| r.due || matches!(r.days_until, Some(d) if d > 0 && d <= within_days))
+        .collect())
 }
 
-async fn due_list(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ReminderOut>>, AppError> {
-    Ok(Json(due_for_user(&state, user.id).await?))
+#[derive(Deserialize)]
+pub struct DueQuery {
+    #[serde(default)]
+    pub within_days: i64,
+}
+
+async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQuery>) -> Result<Json<Vec<ReminderOut>>, AppError> {
+    Ok(Json(due_for_user(&state, user.id, q.within_days.clamp(0, 365)).await?))
 }
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<(StatusCode, Json<ReminderOut>), AppError> {
@@ -236,6 +254,35 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         None => None,
     };
     Ok(Json(DoneOut { done: load_owned(&state, user.id, id).await?.into(), next }))
+}
+
+#[derive(Deserialize)]
+pub struct SnoozeInput {
+    pub days: i64,
+}
+
+/// Push a reminder out by `days`. Snoozing means "not now, in a week", so an overdue
+/// reminder is measured from today rather than from the date it blew past.
+async fn snooze(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(id): Path<i64>,
+    Json(body): Json<SnoozeInput>,
+) -> Result<Json<ReminderOut>, AppError> {
+    if !(1..=365).contains(&body.days) {
+        return Err(AppError::BadRequest("days must be between 1 and 365".into()));
+    }
+    let r = load_owned(&state, user.id, id).await?;
+    if r.done_at.is_some() {
+        return Err(AppError::Conflict("reminder already done".into()));
+    }
+    let next = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
+    sqlx::query("UPDATE reminders SET due_date = ? WHERE id = ?")
+        .bind(next.to_string())
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(load_owned(&state, user.id, id).await?.into()))
 }
 
 #[cfg(test)]

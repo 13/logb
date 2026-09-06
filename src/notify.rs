@@ -43,7 +43,7 @@ pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
         .fetch_all(&state.db).await?;
     let mut items = Vec::new();
     for (user_id, username) in users {
-        for r in due_for_user(state, user_id).await? {
+        for r in due_for_user(state, user_id, 0).await? {
             items.push(DueItem {
                 username: username.clone(),
                 object_id: r.row.object_id,
