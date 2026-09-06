@@ -28,6 +28,9 @@ export default {
   'dash.show-archived': 'Archivierte anzeigen',
   'dash.due': '{n} Erinnerungen fällig',
   'dash.due-one': '1 Erinnerung fällig',
+  'dash.upcoming': 'Demnächst',
+  'dash.in-days': 'in {n} Tagen',
+  'dash.in-counter': 'in {n} {unit}',
   'dash.archived': 'Archiviert',
   'dash.log': 'Erfassen',
 
@@ -135,6 +138,7 @@ export default {
   'reminder.history': 'Erledigte Erinnerungen',
   'reminder.at': 'bei {counter}',
   'reminder.on': 'am {date}',
+  'reminder.snooze': 'Eine Woche später',
 
   'settings.title': 'Einstellungen',
   'settings.language': 'Sprache',

@@ -6,7 +6,8 @@ function r(id: number, over: Partial<Reminder> = {}): Reminder {
   return {
     id, object_id: 1, title: `r${id}`, notes: '', due_date: '2030-01-01', due_counter: null,
     repeat_months: null, repeat_counter: null, done_at: null, done_activity_id: null, created_at: '',
-    object_name: 'Golf', counter_unit: 'km', current_counter: null, due: false, ...over,
+    object_name: 'Golf', counter_unit: 'km', current_counter: null, due: false,
+    days_until: null, counter_until: null, ...over,
   };
 }
 

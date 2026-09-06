@@ -28,6 +28,9 @@ export default {
   'dash.show-archived': 'Show archived',
   'dash.due': '{n} reminders due',
   'dash.due-one': '1 reminder due',
+  'dash.upcoming': 'Coming up',
+  'dash.in-days': 'in {n} days',
+  'dash.in-counter': 'in {n} {unit}',
   'dash.archived': 'Archived',
   'dash.log': 'Log',
 
@@ -135,6 +138,7 @@ export default {
   'reminder.history': 'Done reminders',
   'reminder.at': 'at {counter}',
   'reminder.on': 'on {date}',
+  'reminder.snooze': 'Snooze a week',
 
   'settings.title': 'Settings',
   'settings.language': 'Language',
