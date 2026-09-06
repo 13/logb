@@ -77,32 +77,6 @@
     return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
   }
 
-  /// Deliberately unfiltered by category, and deliberately including uploads: a queued upload
-  /// landing changes an existing entry's thumbnail strip and the object's stats, which the
-  /// pending-entry list alone says nothing about.
-  async function outboxKey(): Promise<string> {
-    const [creates, uploads] = await Promise.all([
-      pendingOpsFor(`/objects/${oid}/activities`),
-      pendingOpsFor(`/objects/${oid}/attachments`),
-    ]);
-    return [...creates, ...uploads].map((o) => o.id).join(',');
-  }
-
-  /// Which queued ops this view's rendering depends on, as a stable key: the creates it shows
-  /// as pending entries, and the uploads that will change an existing entry's thumbnails. A
-  /// flush pass only matters here if it changed that set -- see the `onOutboxFlushed`
-  /// subscription.
-  ///
-  /// Published the moment a load samples it -- before its fetch, not when it commits -- so it
-  /// always describes the queue as of the page currently being fetched or shown. A flush that
-  /// lands mid-load then compares unequal exactly when it changed something that load's page
-  /// cannot contain, and equal when it changed nothing. Publishing only at commit left this at
-  /// its initial value through the first load, so a pass replaying a create during that load
-  /// compared equal, skipped the reload, and let the load commit a page fetched BEFORE the
-  /// write landed -- the activity then rendered neither as pending nor as real.
-  ///
-  /// `null` until the first load has sampled anything at all, which always reloads.
-  let pendingKey: string | null = null;
   /// Guards against two loads landing out of order: only the newest may commit its result.
   /// Several triggers can overlap (the `oid`/`category` effect, "load more", a flush), and
   /// whichever resolved last used to win regardless of which started last.
@@ -134,22 +108,22 @@
     // rather than asked for in one request that would come back quietly truncated.
     const want = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
     const base = append ? loaded : 0;
-    // Sampled BEFORE the fetch, alongside `loaded`, so both describe the same moment: a flush
-    // landing while the GET is in flight then leaves `pendingKey` describing the queue as it
-    // was, which is what makes the listener below reload rather than compare equal and skip.
-    // Erring toward one extra reload is the safe direction; skipping one is what leaves a
-    // replayed activity rendered neither as pending nor as real.
     const pending = append ? [] : await pendingActivities();
-    if (!append) pendingKey = await outboxKey();
     let items: Activity[] = [];
     let total = 0;
     let fetched = false;
     try {
+      // Rows the SERVER has handed back, which is not `items.length` once duplicates are
+      // dropped below. The offset must advance by this, not by what was kept: a chunk that is
+      // full-length but entirely duplicate would otherwise leave the offset where it was and
+      // re-issue the identical request for ever, with no token check in sight to stop it.
+      let received = 0;
       while (items.length < want) {
         const limit = Math.min(MAX_LIMIT, want - items.length);
-        const params = new URLSearchParams({ limit: String(limit), offset: String(base + items.length) });
+        const params = new URLSearchParams({ limit: String(limit), offset: String(base + received) });
         if (category) params.set('category', category);
         const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+        received += page.items.length;
         // Chunks are separate requests over one ORDER BY, so a row inserted at the top between
         // them shifts everything down and the next chunk repeats a row this one already has.
         // `Timeline`'s {#each} is keyed by id, and a duplicate key throws and blanks the list.
@@ -196,9 +170,8 @@
   // `visibilitychange`. Reloading unconditionally meant that switching away from the tab and
   // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
   // every extra page the user had loaded.
-  $effect(() => onOutboxFlushed(async () => {
-    const key = await outboxKey();
-    if (pendingKey !== null && key === pendingKey) return;
+  $effect(() => onOutboxFlushed((_resolved, changed) => {
+    if (!changed) return;
     loadObject();
     loadActivities('refresh');
   }));

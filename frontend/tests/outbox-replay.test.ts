@@ -701,3 +701,70 @@ describe('retryDead on a device with two users', () => {
     expect((await store.all()).map((o) => [o.id, o.dead])).toEqual([['theirs', true]]);
   });
 });
+
+/**
+ * Views reload off this rather than diffing the queue themselves. A view's own snapshot is only
+ * ever as fresh as its last load, so it misses anything queued while it sat there -- a photo
+ * attached from another tab of the same page, say -- and then skips the reload when that write
+ * finally lands. Whether the PASS changed anything is not subject to that.
+ */
+describe('what a flush pass reports to its listeners', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('reports no change for a pass over an empty queue', async () => {
+    const seen: boolean[] = [];
+    const off = onOutboxFlushed((_resolved, changed) => seen.push(changed));
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    off();
+    expect(seen).toEqual([false]);
+  });
+
+  it('reports a change when an op is sent, and when one is parked dead', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'ok', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0 });
+    await enqueue(store, { id: 'bad', kind: 'reminder.done', path: '/reminders/1/done', body: {}, attempts: 0 });
+
+    const seen: boolean[] = [];
+    const off = onOutboxFlushed((_resolved, changed) => seen.push(changed));
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await flushOutbox(); // sends 'ok', parks 'bad' (no send path for its kind)
+    await flushOutbox(); // nothing left that can change
+    off();
+
+    expect(seen).toEqual([true, false]);
+  });
+
+  it('still reports to listeners on a pass that is skipped for want of a user', async () => {
+    setOutboxUser(null);
+    const seen: boolean[] = [];
+    const off = onOutboxFlushed((_resolved, changed) => seen.push(changed));
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    off();
+    expect(seen).toEqual([false]);
+  });
+});
+
+/** With nobody signed in there is no "our own" to filter to -- `isOurs` widens to everything. */
+describe('retryDead with no signed-in user', () => {
+  it('revives nothing at all', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'theirs', kind: 'activity.create', path: '/objects/9/activities', body: {}, attempts: 3, dead: true, userId: 1 });
+    setOutboxUser(null);
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await retryDead();
+
+    expect((await store.all())[0].dead).toBe(true);
+  });
+});

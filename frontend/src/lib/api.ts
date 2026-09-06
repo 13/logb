@@ -174,11 +174,24 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
  *  pending entry the instant its real row lands instead of showing it until the next remount.
  *  Carries this pass's temp-id -> real-id resolutions (see `replay` in ./outbox.ts) so a view
  *  that minted a temp id itself (`ActivityForm.svelte`) can learn its own draft resolved
- *  without re-deriving it from the store -- an empty map on a pass that resolved nothing. */
-const flushListeners = new Set<(resolved: Map<number, number>) => void>();
-export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): () => void {
+ *  without re-deriving it from the store -- an empty map on a pass that resolved nothing.
+ *
+ *  `changed` says whether the pass altered the queue at all (anything sent and removed, or
+ *  parked dead). Passes run on every `visibilitychange`, overwhelmingly over an empty queue, so
+ *  a view that reloads unconditionally re-fetches for nothing every time the tab regains focus.
+ *  This is deliberately a property of the PASS rather than something each view works out by
+ *  diffing the queue itself: a view's own snapshot is only ever as fresh as its last load, so
+ *  it misses anything queued while it sat there (a photo attached from the Documents tab, say)
+ *  and then skips the reload when that write finally lands. */
+const flushListeners = new Set<(resolved: Map<number, number>, changed: boolean) => void>();
+export function onOutboxFlushed(fn: (resolved: Map<number, number>, changed: boolean) => void): () => void {
   flushListeners.add(fn);
   return () => flushListeners.delete(fn);
+}
+
+/** The queue as one comparable value: which ops exist and whether each is parked. */
+async function queueSnapshot(): Promise<string> {
+  return (await store.all()).map((o) => `${o.id}:${o.dead ? 1 : 0}`).join(',');
 }
 
 /**
@@ -198,18 +211,24 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): ()
 const outboxLock = createLock('memto-outbox');
 
 async function doFlushOutbox(): Promise<void> {
-  // Nobody is signed in, so there is no session to attribute a send to and no way to tell whose
-  // ops these are. `main.ts` flushes at module load -- before `App.svelte`'s onMount has even
-  // called `loadSession`, which itself needs two round trips before it knows the user -- so
-  // without this the boot flush ran unattributed and, on a shared device, replayed one user's
-  // queued writes under whoever's cookie happened to still be valid. The server refuses them on
-  // ownership with a 404, which `replay` reads as permanent and parks them dead: the exact loss
-  // the per-op owner exists to prevent, on the one flush that always runs.
-  //
-  // Nothing is lost by waiting: `loadSession` and `login` both flush once the id is known.
-  if (currentUserId === null) return;
   let resolved = new Map<number, number>();
+  let changed = false;
   try {
+    // Nobody is signed in, so there is no session to attribute a send to and no way to tell
+    // whose ops these are. `main.ts` flushes at module load -- before `App.svelte`'s onMount has
+    // even called `loadSession`, which itself needs two round trips before it knows the user --
+    // so without this the boot flush ran unattributed and, on a shared device, replayed one
+    // user's queued writes under whoever's cookie happened to still be valid. The server
+    // refuses them on ownership with a 404, which `replay` reads as permanent and parks them
+    // dead: the exact loss the per-op owner exists to prevent, on the one flush that always
+    // runs.
+    //
+    // Nothing is lost by waiting: `loadSession` and `login` both flush once the id is known,
+    // and `loadSession` is retried on reconnect if its own first attempt failed. Inside the
+    // `try` so the `finally` still notifies -- a listener that never hears from a skipped pass
+    // is a view left showing whatever it last computed.
+    if (currentUserId === null) return;
+    const before = await queueSnapshot();
     resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
       if (!isOurs(op)) {
         // Someone else's queued write, waiting for them to sign back in on this device. Sending
@@ -266,8 +285,9 @@ async function doFlushOutbox(): Promise<void> {
       // rather than head-of-line-blocking every op behind it (see `replay` in ./outbox.ts).
       throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
     }));
+    changed = (await queueSnapshot()) !== before;
   } finally {
-    for (const fn of flushListeners) fn(resolved);
+    for (const fn of flushListeners) fn(resolved, changed);
   }
 }
 
@@ -374,6 +394,12 @@ export async function retryDead(): Promise<void> {
   // (`deadOps` filters) or send them (`doFlushOutbox` skips), so reviving them would just leave
   // ops live indefinitely and re-park them -- including ones their owner had given up on -- the
   // next time that owner signs in.
+  //
+  // `ourStore()` alone is not enough: `isOurs` widens to EVERY op when no user is known, which
+  // is reachable if the 401 handler ends the session between Settings mounting and this click.
+  // With nobody to revive them for -- and the flushes below no-ops in that state -- there is
+  // nothing this could usefully do anyway.
+  if (currentUserId === null) return;
   for (const op of await ourStore().all()) {
     if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
   }
