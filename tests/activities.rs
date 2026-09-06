@@ -190,3 +190,71 @@ async fn recent_titles_of_another_users_object_are_404() {
     let res = anna.get(app.url(&format!("/objects/{id}/recent-titles"))).send().await.unwrap();
     assert_eq!(res.status(), 404);
 }
+
+#[tokio::test]
+async fn a_replayed_create_returns_the_first_row_instead_of_duplicating_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let body = json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "cost_cents": 6210, "client_op_id": "op-abc-123"
+    });
+
+    let first = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first: serde_json::Value = first.json().await.unwrap();
+
+    let again = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(again.status(), 200, "a replay is not a new creation");
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["id"], first["id"], "the same row comes back");
+
+    let list: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects/{id}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1, "the fill-up was logged once");
+}
+
+#[tokio::test]
+async fn one_client_op_id_cannot_be_reused_across_objects() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", Some("km")).await;
+    let b = app.create_object(&app.client, "Bike", Some("km")).await;
+    let (aid, bid) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+    let body = json!({ "date": "2026-03-05", "category": "other", "title": "X", "client_op_id": "op-dup" });
+
+    assert_eq!(app.client.post(app.url(&format!("/objects/{aid}/activities")))
+        .json(&body).send().await.unwrap().status(), 201);
+    let res = app.client.post(app.url(&format!("/objects/{bid}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 409, "the id is the client's promise that this is the same op");
+}
+
+/// The unique index on client_op_id is partial (`WHERE client_op_id IS NOT NULL`), because
+/// every activity an online client writes leaves the column NULL. If the index treated NULLs
+/// as equal, the second of these creates would trip a uniqueness violation.
+#[tokio::test]
+async fn many_activities_with_no_client_op_id_do_not_conflict() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    for i in 0..5 {
+        let body = json!({
+            "date": "2026-03-05", "category": "other", "title": format!("No op id {i}"),
+            "client_op_id": null
+        });
+        let res = app.client.post(&base).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "explicit null client_op_id must never collide");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 5);
+}

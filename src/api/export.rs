@@ -136,7 +136,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at \
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
              FROM activities WHERE object_id = ? ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
@@ -370,7 +370,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             let mut act_input = ActivityInput {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
-                quantity_milli: a.quantity_milli,
+                quantity_milli: a.quantity_milli, client_op_id: None,
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;

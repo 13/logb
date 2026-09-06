@@ -37,12 +37,13 @@ pub struct AttachmentOut {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub taken_at: Option<String>,
+    pub client_op_id: Option<String>,
 }
 
 pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut>, AppError> {
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? ORDER BY a.created_at DESC, a.id DESC",
     )
     .bind(object_id).fetch_all(&state.db).await?)
@@ -51,7 +52,7 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut, AppError> {
     sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
          WHERE a.id = ? AND o.user_id = ?",
     )
@@ -139,6 +140,7 @@ async fn upload(
     let mut activity_id: Option<i64> = None;
     let mut kind: Option<String> = None;
     let mut caption = String::new();
+    let mut client_op_id: Option<String> = None;
 
     loop {
         let field = match mp.next_field().await {
@@ -163,6 +165,10 @@ async fn upload(
             }
             "kind" => kind = Some(field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?),
             "caption" => caption = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?,
+            "client_op_id" => {
+                let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
+                client_op_id = Some(t.trim().to_string());
+            }
             _ => {}
         }
     }
@@ -176,6 +182,22 @@ async fn upload(
     if let Some(aid) = activity_id {
         let a = load_owned_activity(&state, user.id, aid).await?;
         if a.object_id != object_id { return Err(AppError::NotFound); }
+    }
+
+    // A retried upload must resolve to the attachment the first attempt made, rather than
+    // hanging a second row off the same file.
+    if let Some(op) = client_op_id.as_deref() {
+        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+            .bind(op)
+            .fetch_optional(&state.db)
+            .await?;
+        if let Some((id,)) = existing {
+            let out = load_owned(&state, user.id, id).await?;
+            if out.object_id != object_id {
+                return Err(AppError::Conflict("client_op_id already used for another object".into()));
+            }
+            return Ok((StatusCode::OK, Json(out)));
+        }
     }
 
     let sha = files::sha256_hex(&bytes);
@@ -232,9 +254,11 @@ async fn upload(
     };
 
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
-    .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim()).bind(db::now())
+    .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
+    .bind(&client_op_id).bind(db::now())
     .fetch_one(&state.db).await?;
     Ok((StatusCode::CREATED, Json(load_owned(&state, user.id, id).await?)))
 }

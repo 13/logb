@@ -32,6 +32,7 @@ pub struct ActivityRow {
     pub counter_value: Option<i64>,
     pub cost_cents: Option<i64>,
     pub quantity_milli: Option<i64>,
+    pub client_op_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -49,6 +50,9 @@ pub struct ActivityInput {
     pub cost_cents: Option<i64>,
     #[serde(default)]
     pub quantity_milli: Option<i64>,
+    /// Client-generated id for this creation attempt. Present only from the offline outbox.
+    #[serde(default)]
+    pub client_op_id: Option<String>,
 }
 
 impl ActivityInput {
@@ -101,7 +105,7 @@ async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError>
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
-         a.quantity_milli, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
+         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = ? AND o.user_id = ?",
     )
     .bind(id).bind(user_id)
@@ -144,7 +148,7 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at \
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
          FROM activities WHERE object_id = ?1 \
          AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4) \
          ORDER BY date DESC, id DESC LIMIT ?5 OFFSET ?6",
@@ -207,19 +211,36 @@ async fn recent_titles(
     Ok(Json(rows))
 }
 
-async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<(StatusCode, Json<ActivityOut>), AppError> {
+async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Response, AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
     body.validate(&object)?;
+    // A retry after a lost response must resolve to the row the first attempt made.
+    if let Some(op) = body.client_op_id.as_deref() {
+        if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
+             quantity_milli, client_op_id, created_at, updated_at \
+             FROM activities WHERE client_op_id = ?",
+        )
+        .bind(op)
+        .fetch_optional(&state.db)
+        .await?
+        {
+            if existing.object_id != object_id {
+                return Err(AppError::Conflict("client_op_id already used for another object".into()));
+            }
+            return Ok((StatusCode::OK, Json(one_out(&state, existing).await?)).into_response());
+        }
+    }
     let now = db::now();
     let row = sqlx::query_as::<_, ActivityRow>(
-        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at",
+        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
-    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&now).bind(&now)
+    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
     .fetch_one(&state.db).await?;
-    Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)))
+    Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)).into_response())
 }
 
 async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ActivityOut>, AppError> {

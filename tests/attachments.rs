@@ -298,3 +298,26 @@ async fn photos_and_pdfs_still_render_inline() {
     let res = app.client.get(app.url(&format!("/files/{}", att["file_id"]))).send().await.unwrap();
     assert!(res.headers()["content-disposition"].to_str().unwrap().starts_with("inline;"));
 }
+
+#[tokio::test]
+async fn a_replayed_upload_returns_the_first_attachment() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let send = || async {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", "up-abc-123");
+        app.client.post(app.url(&format!("/objects/{id}/attachments")))
+            .multipart(form).send().await.unwrap()
+    };
+
+    let first = send().await;
+    assert_eq!(first.status(), 201);
+    let first: serde_json::Value = first.json().await.unwrap();
+    let again = send().await;
+    assert_eq!(again.status(), 200);
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["id"], first["id"]);
+}
