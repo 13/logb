@@ -34,10 +34,17 @@ export function centsToInput(cents: number | null): string {
   return cents === null ? '' : (cents / 100).toFixed(2);
 }
 
-/** Currency-per-unit, scaled by 1000 (like `quantity_milli`), rendered as money. */
+/**
+ * Milli-cents per unit, rendered as money.
+ *
+ * The value is `cost_per_counter_milli` from the insights endpoint: cents-per-unit scaled
+ * by 1000 (see `cost_per_counter_milli` in src/domain/insights.rs). Divide by 1000 to get
+ * cents, then by 100 to get currency units -- 100_000 in total. This is a different scale
+ * from `quantity`'s milli-units (divisor 1000): don't unify the two divisors.
+ */
 export function perCounter(milli: number | null | undefined, currency: string, locale: string): string {
   if (milli === null || milli === undefined) return '';
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 1000);
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 100_000);
 }
 
 /** A milli-scaled amount with its unit: 41_300 -> "41.3 l". */

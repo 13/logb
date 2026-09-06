@@ -25,7 +25,15 @@ describe('format', () => {
 
 describe('perCounter', () => {
   it('renders milli-cents per unit as money with two decimals', () => {
-    expect(perCounter(47_777, 'EUR', 'en')).toBe('€47.78');
+    // 47_777 milli-cents/unit = 47.777 cents/unit = €0.47777/unit -> €0.48, NOT €47.78.
+    // (cost_per_counter_milli is cents-per-unit scaled by 1000; /1000 gets cents, /100
+    // more gets currency units, i.e. /100_000 overall.)
+    expect(perCounter(47_777, 'EUR', 'en')).toBe('€0.48');
+  });
+  it('renders a realistic per-kilometre fuel cost end to end', () => {
+    // A car costing 420.00 EUR (42_000 cents) of fuel over an 7_000 km fuel-window span:
+    // cost_per_counter_milli = 42_000 * 1000 / 7_000 = 6_000 milli-cents/km -> €0.06/km.
+    expect(perCounter(6_000, 'EUR', 'en')).toBe('€0.06');
   });
   it('renders nothing when there is no value', () => {
     expect(perCounter(null, 'EUR', 'en')).toBe('');
