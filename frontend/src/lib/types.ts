@@ -26,6 +26,9 @@ export interface Attachment {
 export interface Activity {
   id: number; object_id: number; date: string; category: Category; title: string; notes: string;
   counter_value: number | null; cost_cents: number | null; quantity_milli: number | null; created_at: string; updated_at: string; attachments: Attachment[];
+  /** Set client-side only, for a synthetic entry built from a still-queued outbox op — the
+   *  server never sends this field. See `pendingToActivity` in ObjectDetail.svelte. */
+  pending?: boolean;
 }
 export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null; quantity_milli: number | null }
 

@@ -30,10 +30,16 @@
     <p class="year">{year}</p>
     <div class="list">
       {#each items as a (a.id)}
-        <button class="card entry" onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}>
+        <button
+          class="card entry"
+          class:pending={a.pending}
+          disabled={a.pending}
+          onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
+        >
           <div class="row head">
             <b>{a.title}</b>
             <span class="chip">{$t(`cat.${a.category}`)}</span>
+            {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
           </div>
           <div class="muted">
             {fmtDate(a.date, $locale)}
@@ -61,6 +67,8 @@
 
 <style>
   .entry { display: flex; flex-direction: column; gap: 4px; text-align: left; width: 100%; }
+  .entry.pending { opacity: .55; cursor: default; }
+  .pending-chip { flex: none; }
   .head { justify-content: space-between; }
   .head b { flex: 1; }
   .head .chip { flex: none; }

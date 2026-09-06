@@ -99,7 +99,13 @@
       }
       autoDraft = false;
       go(`/objects/${oid}`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) {
+      // `createQueued` throws an i18n key (rather than a message) when the write reached
+      // neither the server nor the local outbox queue, so the entry is honestly reported as
+      // lost instead of navigating away as though it had been saved. `$t` on any other
+      // (plain-English, server-supplied) message just returns it unchanged.
+      error = $t((err as Error).message);
+    } finally { busy = false; }
   }
 
   /** Cancel throws the auto-created draft away; keeping it would leave a stray timeline entry. */

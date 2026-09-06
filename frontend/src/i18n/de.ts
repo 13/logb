@@ -79,6 +79,7 @@ export default {
   'timeline.empty': 'Noch nichts eingetragen.',
   'timeline.log': 'Aktivität eintragen',
   'timeline.filter-all': 'Alle',
+  'timeline.pending': 'Wird noch gesendet',
 
   'activity.new': 'Aktivität eintragen',
   'activity.edit': 'Aktivität bearbeiten',
@@ -167,4 +168,5 @@ export default {
   'outbox.pending': '{n} noch zu senden',
   'outbox.failed': 'Nicht gesendet',
   'outbox.retry': 'Erneut versuchen',
+  'outbox.queue-failed': 'Konnte nicht offline gespeichert werden – der Gerätespeicher ist evtl. voll oder nicht verfügbar.',
 } as Record<string, string>;

@@ -1,11 +1,8 @@
 import { enqueue, newOpId, pendingCount, replay, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
+import { ApiError, isRejection } from './api-error';
 
-export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
-    super(message);
-  }
-}
+export { ApiError, isRejection } from './api-error';
 
 let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void {
@@ -62,33 +59,57 @@ export function fileUrl(fileId: number, thumb = false): string {
 
 const store: OutboxStore = idbStore();
 
-/** True for "the request never reached the server", false for "the server said no". */
-function isOffline(e: unknown): boolean {
-  return !navigator.onLine || e instanceof TypeError;
-}
-
 /**
- * POST that survives a dead connection: on a network failure the op is queued and replayed
- * later. `tempId` is the placeholder the caller shows in the meantime. The `client_op_id` is
- * generated once here, not per attempt, so every retry of this op — including the one sent
- * later by `replay` — carries the same id and a lost response can never duplicate the row.
+ * POST that survives a dead connection: on anything that isn't a genuine server rejection
+ * (see `isRejection` in `./api-error.ts`) the op is queued and replayed later. `tempId` is the
+ * placeholder the caller shows in the meantime. The `client_op_id` is generated once here, not
+ * per attempt, so every retry of this op — including the one sent later by `replay` — carries
+ * the same id and a lost response can never duplicate the row.
  */
 export async function createQueued<T>(path: string, body: Record<string, unknown>, tempId?: number): Promise<T | null> {
   const id = newOpId();
   try {
     return await api<T>('POST', path, { ...body, client_op_id: id });
   } catch (e) {
-    if (!isOffline(e)) throw e;
-    await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0 });
+    if (isRejection(e)) throw e;
+    try {
+      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0 });
+    } catch {
+      // The write reached neither the server nor the local queue: nothing durable remembers
+      // it any more, so the caller must be told rather than navigating away as though the
+      // entry were saved. This is the one failure mode `isRejection`'s "just queue it, the
+      // client_op_id makes replay safe" reasoning does not cover.
+      throw new Error('outbox.queue-failed');
+    }
     return null;
   }
 }
 
-export function flushOutbox(): Promise<void> {
-  return replay(store, async (op: QueuedOp) => {
-    const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
-    return out ?? null;
-  });
+/** Notified after each `flushOutbox()` pass completes, so a mounted view can drop a synthetic
+ *  pending entry the instant its real row lands instead of showing it until the next remount. */
+const flushListeners = new Set<() => void>();
+export function onOutboxFlushed(fn: () => void): () => void {
+  flushListeners.add(fn);
+  return () => flushListeners.delete(fn);
+}
+
+export async function flushOutbox(): Promise<void> {
+  try {
+    await replay(store, async (op: QueuedOp) => {
+      if (op.kind !== 'activity.create') {
+        // Only 'activity.create' is ever queued today (see createQueued above) and it is the
+        // only kind this function knows how to resend as JSON. An 'attachment.upload' op
+        // carries a Blob, which JSON.stringify silently turns into `{}` -- refuse loudly
+        // instead of corrupting the upload, so wiring up queued uploads later requires giving
+        // this a real multipart path rather than tripping over a silent data-loss bug.
+        throw new Error(`flushOutbox: op kind "${op.kind}" has no send path yet`);
+      }
+      const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
+      return out ?? null;
+    });
+  } finally {
+    for (const fn of flushListeners) fn();
+  }
 }
 
 globalThis.addEventListener?.('online', () => { void flushOutbox(); });

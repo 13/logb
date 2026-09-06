@@ -1,28 +1,16 @@
-<script module lang="ts">
-  import type { Activity, MemObject } from '../lib/types';
-
-  /** The last object and activities page fetched for each id, kept only for the lifetime of
-   *  this tab (module scope, so it survives navigating away and back — a fresh component
-   *  instance would otherwise lose it on every remount). A dead connection can still show the
-   *  object it showed a moment ago, and a queued create on top of that (see `pendingActivities`
-   *  below) is what makes an offline log visible immediately instead of behind a "failed to
-   *  fetch" screen. */
-  const objectCache = new Map<number, MemObject>();
-  const activityCache = new Map<number, { items: Activity[]; total: number }>();
-</script>
-
 <script lang="ts">
   import TopBar from '../lib/TopBar.svelte';
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
-  import { api, apiPage, fileUrl, pendingOpsFor } from '../lib/api';
+  import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
+  import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { ActivityInput, Category } from '../lib/types';
+  import type { Activity, ActivityInput, Category, MemObject } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
 
   let { id }: { id: string } = $props();
@@ -38,13 +26,15 @@
   let error = $state('');
   const PAGE = 100;
 
+  /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
+   *  401/403/404 is the server answering, and this object may simply belong to someone else. */
   async function loadObject() {
     try {
       object = await api<MemObject>('GET', `/objects/${oid}`);
-      objectCache.set(oid, object);
+      setCachedObject(oid, object);
       error = '';
     } catch (e) {
-      const cached = objectCache.get(oid);
+      const cached = isRejection(e) ? undefined : getCachedObject(oid);
       if (cached) object = cached;
       else error = (e as Error).message;
     }
@@ -60,7 +50,8 @@
 
   /** A queued 'activity.create' has no server row yet, so it renders straight from what the
    *  form queued rather than from a GET — otherwise a log made underground would stay invisible
-   *  until the phone gets signal back, which is exactly the failure this task exists to avoid. */
+   *  until the phone gets signal back, which is exactly the failure this task exists to avoid.
+   *  `pending: true` tells `Timeline` to dim it and refuse navigation into its (fake) id. */
   function pendingToActivity(op: QueuedOp): Activity {
     const b = op.body as Partial<ActivityInput>;
     return {
@@ -73,6 +64,7 @@
       cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
       quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
+      pending: true,
     };
   }
 
@@ -94,10 +86,10 @@
       const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
       items = page.items;
       total = page.total;
-      if (!append) activityCache.set(oid, { items, total });
+      if (!append) setCachedActivities(oid, { items, total });
     } catch (e) {
       if (append) throw e;
-      const cached = activityCache.get(oid);
+      const cached = isRejection(e) ? undefined : getCachedActivities(oid);
       items = cached?.items ?? [];
       total = cached?.total ?? 0;
     }
@@ -115,6 +107,9 @@
 
   $effect(() => { oid; loadObject(); });
   $effect(() => { oid; category; loadActivities(); });
+  // A background replay can succeed while this view is mounted; without this the synthetic
+  // pending entry it created keeps rendering next to the now-real row until the next remount.
+  $effect(() => onOutboxFlushed(() => { loadObject(); loadActivities(); }));
   $effect(() => {
     const url = new URL(location.href);
     url.searchParams.set('tab', tab);

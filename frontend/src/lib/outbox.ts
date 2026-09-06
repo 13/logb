@@ -1,3 +1,5 @@
+import { isRejection } from './api-error';
+
 /**
  * The queue of writes made while offline.
  *
@@ -60,8 +62,16 @@ export async function pendingCount(store: OutboxStore): Promise<number> {
 }
 
 /**
- * Send every live op in order, oldest first, stopping at the first failure so ops that
- * depend on an earlier one cannot overtake it.
+ * Send every live op in order, oldest first.
+ *
+ * A 4xx `ApiError` means the server has permanently refused this op — retrying it would only
+ * get the same answer again, and this queue is FIFO, so leaving it at the head would also
+ * head-of-line-block every healthy op behind it. So that case is parked as dead immediately
+ * and the pass continues with the rest of the queue.
+ *
+ * Any other failure (network drop, 5xx, ...) means we don't know whether the server saw this
+ * op at all, so it stays queued and the pass stops right there: ops further back may depend on
+ * this one (see the `activity_id` rewrite below) and must not be sent out of order ahead of it.
  */
 export async function replay(
   store: OutboxStore,
@@ -77,7 +87,11 @@ export async function replay(
       const out = await send({ ...op, body });
       if (op.tempId !== undefined && out) resolved.set(op.tempId, out.id);
       await store.remove(op.id);
-    } catch {
+    } catch (e) {
+      if (isRejection(e)) {
+        await store.put({ ...op, dead: true });
+        continue;
+      }
       const attempts = op.attempts + 1;
       await store.put({ ...op, attempts, dead: attempts >= MAX_ATTEMPTS });
       return;

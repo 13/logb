@@ -6,9 +6,15 @@
 
   let pending = $state(0);
   async function refresh() { pending = await outboxPending(); }
-  $effect(() => { refresh(); });
-  globalThis.addEventListener?.('online', refresh);
-  globalThis.addEventListener?.('offline', refresh);
+  $effect(() => {
+    refresh();
+    globalThis.addEventListener?.('online', refresh);
+    globalThis.addEventListener?.('offline', refresh);
+    return () => {
+      globalThis.removeEventListener?.('online', refresh);
+      globalThis.removeEventListener?.('offline', refresh);
+    };
+  });
 </script>
 
 <header class="topbar">

@@ -3,13 +3,22 @@ import type { OutboxStore, QueuedOp } from './outbox';
 const DB = 'memto-outbox';
 const STORE = 'ops';
 
+/** One connection, opened lazily and reused for the life of the tab — every call used to open
+ *  a fresh `IDBDatabase` and never close it, leaking one connection per TopBar mount and per
+ *  'online' event. If opening ever fails, the cached promise is cleared so the next call gets
+ *  a fresh attempt instead of a permanently rejected connection. */
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 function open(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => { dbPromise = null; reject(req.error); };
+    });
+  }
+  return dbPromise;
 }
 
 function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {

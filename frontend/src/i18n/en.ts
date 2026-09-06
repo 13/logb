@@ -79,6 +79,7 @@ export default {
   'timeline.empty': 'Nothing logged yet.',
   'timeline.log': 'Log activity',
   'timeline.filter-all': 'All',
+  'timeline.pending': 'Waiting to send',
 
   'activity.new': 'Log activity',
   'activity.edit': 'Edit activity',
@@ -167,4 +168,5 @@ export default {
   'outbox.pending': '{n} waiting to send',
   'outbox.failed': 'Could not be sent',
   'outbox.retry': 'Try again',
+  'outbox.queue-failed': 'Could not save this offline — your device storage may be full or unavailable.',
 } as Record<string, string>;
