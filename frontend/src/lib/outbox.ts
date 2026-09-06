@@ -130,13 +130,41 @@ export function serialize<T>(fn: () => Promise<T>): () => Promise<T> {
  * next, even if further passes keep getting triggered (`online`, `visibilitychange`, ...) in
  * the meantime: those later passes call `run()` only after the UI write already has its place
  * in line, so they queue behind it rather than ahead of it. A UI write can never be starved.
+ *
+ * Pass a `name` and the exclusion also spans TABS, via the Web Locks API: the outbox store is
+ * IndexedDB, shared by every same-origin tab, so a second tab running its own replay pass is
+ * the same read-act-write interleaving described above, just with the two halves in different
+ * tabs. The local FIFO chain stays in front of the cross-tab hop, so this tab's own ordering
+ * guarantee (and its no-starvation property) is unchanged; the named lock is then acquired for
+ * the duration of the callback. Where the API is missing -- Safari before 15.4, any non-secure
+ * context -- the name is inert and exclusion is tab-local, exactly as it was before.
  */
-export function createLock(): { run: <T>(fn: () => Promise<T>) => Promise<T> } {
+export type LockManagerLike = { request: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
+
+export function createLock(
+  name?: string,
+  manager: LockManagerLike | undefined = (globalThis.navigator as { locks?: LockManagerLike } | undefined)?.locks,
+): { run: <T>(fn: () => Promise<T>) => Promise<T> } {
   let tail: Promise<void> = Promise.resolve();
   function run<T>(fn: () => Promise<T>): Promise<T> {
-    const started = tail.then(fn, fn);
+    const started = tail.then(() => guarded(fn), () => guarded(fn));
     tail = started.then(() => undefined, () => undefined);
     return started;
+  }
+  async function guarded<T>(fn: () => Promise<T>): Promise<T> {
+    if (!name || !manager) return fn();
+    let entered = false;
+    try {
+      return await manager.request(name, () => { entered = true; return fn(); });
+    } catch (e) {
+      // Distinguishing the two failures matters: once `fn` has been entered, the send it wraps
+      // has already been attempted, so re-running it here would replay a write the server may
+      // well hold -- that failure belongs to the caller and is rethrown untouched. Only a
+      // manager that failed BEFORE running anything (an exception from `request` itself) falls
+      // through to running unguarded, which is no worse than a browser without the API.
+      if (entered) throw e;
+      return fn();
+    }
   }
   return { run };
 }

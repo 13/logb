@@ -370,3 +370,90 @@ describe('serialize', () => {
     expect(b).toBe(42);
   });
 });
+
+/**
+ * The mutex above only excludes callers inside ONE tab. The outbox store it guards is
+ * IndexedDB, which every same-origin tab shares, so a second tab running its own replay pass
+ * is exactly the interleaving IMPORTANT 1 closed within a tab -- one tab's pass reading an op,
+ * awaiting its `send()`, and writing the result back over what the other tab did in between.
+ * A cross-tab lock (the Web Locks API in the browser, a fake here) is what makes the exclusion
+ * hold across tabs; these tests drive two separate lock instances, standing in for two tabs,
+ * against one shared manager.
+ */
+function fakeLockManager() {
+  const tails = new Map<string, Promise<void>>();
+  const held: string[] = [];
+  return {
+    held,
+    request: <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      const started = (tails.get(name) ?? Promise.resolve()).then(fn, fn);
+      tails.set(name, started.then(() => undefined, () => undefined));
+      return started;
+    },
+  };
+}
+
+describe('createLock across tabs', () => {
+  it('never lets two tabs sharing one lock name run at the same time', async () => {
+    const manager = fakeLockManager();
+    const tabA = createLock('memto-outbox', manager);
+    const tabB = createLock('memto-outbox', manager);
+    const order: string[] = [];
+    let releaseA!: () => void;
+
+    const a = tabA.run(() => new Promise<void>((resolve) => {
+      order.push('A-start');
+      releaseA = () => { order.push('A-end'); resolve(); };
+    }));
+    const b = tabB.run(async () => { order.push('B'); });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['A-start']); // the other tab must not have started yet
+
+    releaseA();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['A-start', 'A-end', 'B']);
+  });
+
+  it('runs the callback anyway on a browser with no Web Locks', async () => {
+    // Safari before 15.4, and any non-secure context. Losing cross-tab exclusion there is the
+    // status quo; losing the replay pass entirely would not be.
+    const lock = createLock('memto-outbox', undefined);
+    await expect(lock.run(async () => 42)).resolves.toBe(42);
+  });
+
+  it('runs the callback anyway when acquiring the cross-tab lock itself fails', async () => {
+    let calls = 0;
+    const lock = createLock('memto-outbox', {
+      request: async () => { throw new Error('lock manager unavailable'); },
+    });
+    await expect(lock.run(async () => { calls++; return 42; })).resolves.toBe(42);
+    expect(calls).toBe(1);
+  });
+
+  it('does not retry the callback when the callback is what failed', async () => {
+    // The fallback above must key on the lock manager failing, not on any rejection: a send
+    // that threw has already been attempted, and running it a second time would replay it.
+    const manager = fakeLockManager();
+    const lock = createLock('memto-outbox', manager);
+    let calls = 0;
+    await expect(lock.run(async () => { calls++; throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(calls).toBe(1);
+  });
+
+  it('keeps its own FIFO order across the cross-tab hop', async () => {
+    const manager = fakeLockManager();
+    const lock = createLock('memto-outbox', manager);
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    lock.run(() => new Promise<void>((resolve) => { releaseFirst = resolve; }));
+
+    const waiting = lock.run(async () => { order.push('waiting'); });
+    lock.run(async () => { order.push('late'); });
+
+    await new Promise((r) => setTimeout(r, 0));
+    releaseFirst();
+    await waiting;
+    expect(order[0]).toBe('waiting');
+  });
+});

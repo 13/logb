@@ -154,8 +154,13 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): ()
  * fired while a pass's `send()` is in flight raced the pass's own eventual write-back and lost
  * -- the pass, snapshotting the op before the UI write happened, would win by writing back
  * exactly what the user had just changed or removed, moments after telling them it worked.
+ *
+ * Named, so the lock spans TABS as well as callers: the store it guards is IndexedDB, which
+ * every same-origin tab shares, so a second tab replaying the same queue reproduces the same
+ * interleaving between tabs that this lock closes within one. On a browser with no Web Locks
+ * API the name is inert and the exclusion stays tab-local, as it was before (see `createLock`).
  */
-const outboxLock = createLock();
+const outboxLock = createLock('memto-outbox');
 
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
