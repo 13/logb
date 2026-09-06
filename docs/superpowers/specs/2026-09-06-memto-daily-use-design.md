@@ -129,6 +129,17 @@ quantity. Consumption uses the standard tank method: sum the quantities of every
 *except the first*, divide by the counter span from the first fill to the last. The
 first fill establishes the starting point and its fuel was burned before the window.
 
+The whole `fuel` block describes that one window. `fuel.cost_per_counter_milli` is
+therefore the cost of the same fills, the earliest one excluded exactly as its quantity
+is, divided by the same fuel span — not by the object's overall counter span, and not
+over fuel rows that lack a counter or a quantity. A fill with no recorded cost counts as
+a fill and contributes nothing to the numerator. When consumption is unmeasurable, the
+cost figure is null too: the two live or die together.
+
+This was settled during implementation. Dividing fuel-only cost by the whole-object span
+put two different windows in one JSON object — an object whose last activity was a
+repair measured its consumption over one distance and its fuel cost over another.
+
 All of this arithmetic lives in `src/domain/insights.rs` as pure functions over plain
 inputs, unit-tested there; the handler does SQL and assembly only. This mirrors the
 existing split with `src/domain/reminder.rs`.
