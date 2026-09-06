@@ -188,41 +188,6 @@ export function createLock(
   return { run };
 }
 
-/**
- * Hands out strictly increasing `seq` values, seeding the counter once from `readMax` (what is
- * already in the store) and counting up from there without reading again.
- *
- * Concurrent callers -- attaching several files in one go -- chain onto the same promise, so
- * each reserves a distinct value instead of two racing to read the same "current max".
- *
- * A failed seeding read must not be permanent. The chain is a promise, so one rejected seed
- * would otherwise be inherited by every later reservation forever: after a single transient
- * IndexedDB error (a connection closed by `versionchange`, a quota hiccup) every subsequent
- * `put` rejects and the user is told each offline write was lost for the rest of the tab's
- * life. On a rejection the seed is therefore dropped so the next caller reads afresh -- the
- * same recovery `open()` already does with its cached connection.
- */
-export function createSeqReserver(readMax: () => Promise<number>): () => Promise<number> {
-  let next: Promise<number> | null = null;
-  return () => {
-    if (!next) {
-      next = readMax().then((max) => max + 1);
-    }
-    const reserved = next;
-    const advanced = reserved.then((n) => n + 1);
-    next = advanced;
-    reserved.catch(() => {
-      // Drop the poisoned chain so the next caller seeds afresh -- but only if nobody has
-      // chained onto it since, in which case THAT reservation's own catch clears it instead.
-      if (next === advanced) next = null;
-      // `advanced` rejects with the same error and, now unreachable, would surface as an
-      // unhandled rejection. The caller still sees the failure through `reserved`.
-      advanced.catch(() => {});
-    });
-    return reserved;
-  };
-}
-
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
   await store.put(op);
 }

@@ -1,7 +1,8 @@
-import { compareQueueOrder, createSeqReserver, type OutboxStore, type QueuedOp } from './outbox';
+import { compareQueueOrder, type OutboxStore, type QueuedOp } from './outbox';
 
 const DB = 'memto-outbox';
 const STORE = 'ops';
+const SEQ = 'seq';
 
 /** One connection, opened lazily and reused for the life of the tab — every call used to open
  *  a fresh `IDBDatabase` and never close it, leaking one connection per TopBar mount and per
@@ -12,8 +13,30 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+      const req = indexedDB.open(DB, 2);
+      req.onupgradeneeded = (e) => {
+        const db = req.result;
+        const tx = req.transaction!;
+        const s = db.objectStoreNames.contains(STORE)
+          ? tx.objectStore(STORE)
+          : db.createObjectStore(STORE, { keyPath: 'id' });
+        if (!s.indexNames.contains(SEQ)) s.createIndex(SEQ, SEQ);
+        // v1 -> v2: give every record written before the index existed a `seq`, so the index
+        // covers the whole store (IndexedDB leaves a record out of an index entirely when the
+        // indexed field is missing). `queued_at` is epoch milliseconds and was already what
+        // `compareQueueOrder` fell back to for these, so copying it preserves their order
+        // against each other and against everything queued since.
+        if (e.oldVersion >= 1) {
+          const cur = s.openCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (!c) return;
+            const row = c.value as QueuedOp;
+            if (row.seq === undefined) c.update({ ...row, seq: row.queued_at ?? 0 });
+            c.continue();
+          };
+        }
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => { dbPromise = null; reject(req.error); };
     });
@@ -42,33 +65,48 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
 }
 
 /**
- * The next `seq` to hand out (MINOR 3), lazily seeded from what's already in the store so a
- * freshly opened store never hands out a value smaller than one already written -- whether by
- * an earlier tab, an earlier page load, or (for a record written before `seq` existed) that
- * record's `queued_at`. Seeding past `queued_at` too, not just past existing `seq` values, is
- * what lets a legacy record compare correctly against a freshly-`seq`'d one in
- * `compareQueueOrder` without ever needing to be rewritten itself: `queued_at` is already an
- * epoch-millisecond timestamp, so seeding here starts the counter at roughly "now" and counts
- * up from there, strictly past every legacy value.
+ * Writes one op, assigning `seq` when it does not have one yet -- reading the current maximum
+ * and writing the new record in ONE readwrite transaction.
  *
- * The chaining that lets concurrent `put`s -- e.g. attaching several files in one go -- each
- * reserve a distinct value, and the recovery from a failed seeding read, both live in
- * `createSeqReserver` (./outbox.ts), where they are unit-testable without an IndexedDB. This
- * supplies only the read.
+ * That is what makes `seq` unique across tabs. IndexedDB serialises readwrite transactions over
+ * the same object store, so two tabs cannot interleave a read-max with each other's write. The
+ * counter this replaces was per tab, seeded once from its own separate transaction, so two tabs
+ * opening the same queue at once handed out the SAME value -- and the queue's order then fell
+ * back to whatever `getAll()` returned, which is the arbitrariness `seq` exists to remove.
+ *
+ * `Date.now()` is a floor, not just a seed: `queued_at` is epoch milliseconds and legacy records
+ * are ordered by it, so starting past "now" keeps a freshly assigned `seq` strictly after every
+ * such record even if the v2 backfill above never ran (a store that failed to upgrade, a record
+ * written by something older). Two ops in the same millisecond still get distinct values,
+ * because the second reads the first's `seq` back out of the index.
  */
-const reserveSeq = createSeqReserver(async () => {
-  const rows = await run<QueuedOp[]>('readonly', (s) => s.getAll() as IDBRequest<QueuedOp[]>);
-  return rows.reduce((max, r) => Math.max(max, r.seq ?? r.queued_at ?? 0), 0);
-});
+function putWithSeq(op: QueuedOp): Promise<void> {
+  return open().then((db) => new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const s = tx.objectStore(STORE);
+    const row: QueuedOp = { queued_at: Date.now(), ...op };
+    if (row.seq === undefined) {
+      const cur = s.index(SEQ).openCursor(null, 'prev');
+      cur.onsuccess = () => {
+        const highest = (cur.result?.value as QueuedOp | undefined)?.seq ?? 0;
+        s.put({ ...row, seq: Math.max(highest, Date.now()) + 1 });
+      };
+    } else {
+      s.put(row);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error);
+  }));
+}
 
 /**
  * Insertion order is preserved: keys are UUIDs, so `getAll()` returns them in key order, which
  * carries no relation to enqueue order -- and two ops enqueued in the same millisecond would
  * otherwise tie on `queued_at` too, leaving their relative order to that same meaningless key
- * order (MINOR 3). `seq`, assigned once per op in `put` below and preserved on every later
- * rewrite of the same op (`op.seq ?? await reserveSeq()`; see `QueuedOp.seq`), is what actually
- * breaks that tie deterministically; `compareQueueOrder` falls back to `queued_at` only for a
- * record written before this field existed.
+ * order (MINOR 3). `seq`, assigned once per op by `putWithSeq` above and preserved on every
+ * later rewrite of the same op (see `QueuedOp.seq`), is what actually breaks that tie
+ * deterministically; `compareQueueOrder` falls back to `queued_at` only for a record written
+ * before this field existed and never given one by the v2 backfill.
  */
 export function idbStore(): OutboxStore {
   return {
@@ -76,10 +114,7 @@ export function idbStore(): OutboxStore {
       const rows = await run<QueuedOp[]>('readonly', (s) => s.getAll() as IDBRequest<QueuedOp[]>);
       return rows.sort(compareQueueOrder);
     },
-    async put(op) {
-      const seq = op.seq ?? await reserveSeq();
-      await run('readwrite', (s) => s.put({ queued_at: Date.now(), ...op, seq }));
-    },
+    put: putWithSeq,
     async remove(id) { await run('readwrite', (s) => s.delete(id)); },
   };
 }
