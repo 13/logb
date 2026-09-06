@@ -110,3 +110,19 @@ async fn logout_cookie_matches_session_cookie_attributes() {
     assert!(cookie.contains("SameSite=Lax"), "{cookie}");
     assert!(cookie.contains("Path=/"), "{cookie}");
 }
+
+/// `logout-all` ends every session of the caller, including the one making the request.
+#[tokio::test]
+async fn logout_all_ends_every_session() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let second = common::new_client();
+    assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
+    assert_eq!(second.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+
+    assert_eq!(app.client.post(app.url("/auth/logout-all")).send().await.unwrap().status(), 204);
+    assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    assert_eq!(second.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    // Signing in again still works.
+    assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
+}

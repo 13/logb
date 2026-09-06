@@ -260,3 +260,41 @@ async fn download_keeps_a_non_ascii_filename() {
     assert!(cd.starts_with("attachment;"), "{cd}");
     assert!(cd.contains("filename*=UTF-8''Anh%C3%A4ngerkupplung"), "{cd}");
 }
+
+/// An SVG is an image by MIME type and a scriptable document in practice. Serving one inline
+/// from this origin would let it run against the uploader's own session, so it downloads --
+/// and every file response carries nosniff and a sandbox policy.
+#[tokio::test]
+async fn an_uploaded_svg_cannot_run_in_the_apps_origin() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#.to_vec();
+    let att: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(svg, "x.svg", "image/svg+xml"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = att["file_id"].as_i64().unwrap();
+
+    let res = app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let h = res.headers();
+    let disposition = h["content-disposition"].to_str().unwrap();
+    assert!(disposition.starts_with("attachment;"), "an SVG must download, not render: {disposition}");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    assert!(h["content-security-policy"].to_str().unwrap().contains("sandbox"), "{:?}", h["content-security-policy"]);
+}
+
+/// Photos still render in place -- the allow-list must not have broken the common case.
+#[tokio::test]
+async fn photos_and_pdfs_still_render_inline() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let att: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let res = app.client.get(app.url(&format!("/files/{}", att["file_id"]))).send().await.unwrap();
+    assert!(res.headers()["content-disposition"].to_str().unwrap().starts_with("inline;"));
+}

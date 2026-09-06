@@ -81,3 +81,105 @@ async fn settings_currency() {
     let s: serde_json::Value = app.client.put(app.url("/settings")).json(&json!({ "currency": "CHF" })).send().await.unwrap().json().await.unwrap();
     assert_eq!(s["currency"], "CHF");
 }
+
+/// Regression: `DELETE FROM users` alone hits `attachments.file_id ON DELETE RESTRICT` on the
+/// way through the cascade, so deleting anyone who had ever uploaded a file returned a 500.
+#[tokio::test]
+async fn deleting_a_user_takes_their_objects_files_and_blobs() {
+    use reqwest::multipart::{Form, Part};
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let eve = app.create_user_client("eve", "password123").await;
+
+    let obj = app.create_object(&eve, "Bike", None).await;
+    let oid = obj["id"].as_i64().unwrap();
+    let png = {
+        let img = image::DynamicImage::new_rgb8(20, 20);
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let att: serde_json::Value = eve.post(app.url(&format!("/objects/{oid}/attachments")))
+        .multipart(Form::new().part("file", Part::bytes(png).file_name("p.png").mime_str("image/png").unwrap()))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = att["file_id"].as_i64().unwrap();
+
+    let users: serde_json::Value = app.client.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
+    let eve_id = users.as_array().unwrap().iter().find(|u| u["username"] == "eve").unwrap()["id"].as_i64().unwrap();
+
+    let res = app.client.delete(app.url(&format!("/users/{eve_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    // The account is gone, and so is everything hanging off it.
+    let users: serde_json::Value = app.client.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(users.as_array().unwrap().len(), 1, "{users}");
+    for (table, n) in [("objects", 0), ("activities", 0), ("attachments", 0), ("files", 0), ("sessions", 1)] {
+        let (count,): (i64,) = match table {
+            "objects" => sqlx::query_as("SELECT COUNT(*) FROM objects"),
+            "activities" => sqlx::query_as("SELECT COUNT(*) FROM activities"),
+            "attachments" => sqlx::query_as("SELECT COUNT(*) FROM attachments"),
+            "files" => sqlx::query_as("SELECT COUNT(*) FROM files"),
+            _ => sqlx::query_as("SELECT COUNT(*) FROM sessions"),
+        }.fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(count, n, "{table} rows left");
+    }
+    // The blob and its thumbnail left the disk with the rows.
+    assert!(!app.state.storage.thumb_path(fid).exists(), "thumbnail survived the user");
+    // `blob_path` shards on the first two hex characters, so its grandparent is `data/files`.
+    let files_dir = app.state.storage.blob_path(&"0".repeat(64)).parent().unwrap().parent().unwrap().to_path_buf();
+    let remaining: Vec<_> = walkdir(&files_dir);
+    assert!(remaining.is_empty(), "blobs left behind: {remaining:?}");
+
+    // Eve's session died with her account.
+    assert_eq!(eve.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+}
+
+fn walkdir(p: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![];
+    if let Ok(entries) = std::fs::read_dir(p) {
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() { out.extend(walkdir(&path)); } else { out.push(path); }
+        }
+    }
+    out
+}
+
+/// A password change has to end the sessions opened with the old password.
+#[tokio::test]
+async fn changing_a_password_invalidates_other_sessions() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let eve = app.create_user_client("eve", "password123").await;
+    let eve_other_browser = common::new_client();
+    assert_eq!(app.login(&eve_other_browser, "eve", "password123").await.status(), 200);
+    let users: serde_json::Value = app.client.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
+    let eve_id = users.as_array().unwrap().iter().find(|u| u["username"] == "eve").unwrap()["id"].as_i64().unwrap();
+
+    let res = eve.patch(app.url(&format!("/users/{eve_id}")))
+        .json(&serde_json::json!({ "password": "a better password" })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    // The browser that made the change stays signed in, on a new session.
+    assert_eq!(eve.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+    // The other one does not.
+    assert_eq!(eve_other_browser.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    // And the old password no longer works.
+    assert_eq!(app.login(&common::new_client(), "eve", "password123").await.status(), 401);
+}
+
+/// An admin resetting someone's password locks that someone out of every open session.
+#[tokio::test]
+async fn an_admin_reset_ends_the_users_sessions() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let eve = app.create_user_client("eve", "password123").await;
+    let users: serde_json::Value = app.client.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
+    let eve_id = users.as_array().unwrap().iter().find(|u| u["username"] == "eve").unwrap()["id"].as_i64().unwrap();
+
+    assert_eq!(app.client.patch(app.url(&format!("/users/{eve_id}")))
+        .json(&serde_json::json!({ "password": "reset by the admin" })).send().await.unwrap().status(), 200);
+    assert_eq!(eve.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    // The admin's own session is untouched.
+    assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+}

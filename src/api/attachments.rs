@@ -94,13 +94,21 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
     }
     for (id, sha) in orphans {
         sqlx::query("DELETE FROM files WHERE id = ?").bind(id).execute(&state.db).await?;
-        let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
-            .bind(&sha).fetch_optional(&state.db).await?;
-        if still_used.is_none() {
-            state.storage.remove(&sha, id).await;
-        } else {
-            let _ = tokio::fs::remove_file(state.storage.thumb_path(id)).await;
-        }
+        discard_blob(state, id, &sha).await?;
+    }
+    Ok(())
+}
+
+/// Drops the on-disk artefacts of a `files` row that has already been deleted: the thumbnail
+/// always, and the blob only once no other row still points at that content hash (two users
+/// uploading the same photo share one blob, and each has their own `files` row).
+pub async fn discard_blob(state: &App, file_id: i64, sha: &str) -> Result<(), AppError> {
+    let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
+        .bind(sha).fetch_optional(&state.db).await?;
+    if still_used.is_none() {
+        state.storage.remove(sha, file_id).await;
+    } else {
+        let _ = tokio::fs::remove_file(state.storage.thumb_path(file_id)).await;
     }
     Ok(())
 }
@@ -266,15 +274,31 @@ async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, 
         .ok_or(AppError::NotFound)
 }
 
+/// User-supplied bytes are served from the same origin as the app, so anything the browser
+/// might execute here runs with access to the session. `nosniff` stops it from ignoring the
+/// declared type and guessing something scriptable, and the sandbox CSP strips scripts,
+/// plugins and same-origin privileges from whatever does get rendered.
 fn file_response(bytes: Vec<u8>, mime: &str, disposition: String) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
             (header::CONTENT_DISPOSITION, HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline"))),
             (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable")),
+            (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+            (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")),
         ],
         Body::from(bytes),
     ).into_response()
+}
+
+/// Types a browser may render in place. Everything else downloads.
+///
+/// An allow-list, not `image/*`: SVG is an image by MIME type and a scriptable document in
+/// practice, so serving one inline from this origin -- which the documents tab links straight
+/// to -- would let an uploaded file run script against the uploader's own session. PDFs stay
+/// inline because browsers render them in a sandboxed viewer, and the CSP above holds anyway.
+fn may_render_inline(mime: &str) -> bool {
+    matches!(mime, "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "image/bmp" | "application/pdf")
 }
 
 /// Percent-encodes `name` for the `filename*` parameter of RFC 6266 / RFC 5987. Everything
@@ -311,7 +335,7 @@ fn content_disposition(inline: bool, original_name: &str) -> String {
 async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
-    let inline = f.mime.starts_with("image/") || f.mime == "application/pdf";
+    let inline = may_render_inline(&f.mime);
     Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name)))
 }
 

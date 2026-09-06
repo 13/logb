@@ -5,7 +5,7 @@
   import { t } from '../i18n';
   import { LANG_NAMES, SUPPORTED } from '../i18n/detect';
   import { settings } from '../stores/settings';
-  import { currency, user, logout } from '../stores/session';
+  import { currency, user, logout, logoutEverywhere } from '../stores/session';
   import type { ImportCounts, User } from '../lib/types';
 
   let users = $state<User[]>([]);
@@ -48,6 +48,11 @@
   async function removeUser(u: User) {
     if (!confirm($t('nav.confirm-delete'))) return;
     try { await api('DELETE', `/users/${u.id}`); await loadUsers(); } catch (e) { error = (e as Error).message; }
+  }
+
+  async function signOutEverywhere() {
+    if (!confirm($t('settings.logout-all-confirm'))) return;
+    try { await logoutEverywhere(); } catch (e) { error = (e as Error).message; }
   }
 
   async function changeOwnPassword() {
@@ -96,6 +101,8 @@
     <button onclick={changeOwnPassword} disabled={ownPass.length < 8}>{$t('nav.save')}</button>
   </div>
   <button class="ghost" onclick={logout}>{$t('login.logout')}</button>
+  <button class="ghost" onclick={signOutEverywhere}>{$t('settings.logout-all')}</button>
+  <p class="muted hint">{$t('settings.logout-all-hint')}</p>
 
   {#if isAdmin}
     <h2>{$t('settings.currency')}</h2>

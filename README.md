@@ -65,6 +65,20 @@ scratch data directory (`.e2e-data`, wiped on each run):
 cd frontend && npm run e2e
 ```
 
+## Security
+
+Sessions are 30-day cookies, `HttpOnly` and `SameSite=Lax`, `Secure` behind an
+https proxy. Changing a password ends every session of that account (the
+browser making the change is re-issued one); Settings → Sign out everywhere
+ends them all, this browser included.
+
+Uploaded files are served from the app's own origin, so they go out with
+`nosniff` and a sandbox `Content-Security-Policy`, and only a short list of
+types (JPEG, PNG, GIF, WebP, AVIF, BMP, PDF) may render in place. Everything
+else downloads — an SVG is an image by MIME type and a scriptable document in
+practice. The app itself is served under a policy that permits no off-origin
+resource at all.
+
 ## Reminder notifications
 
 memto sends no mail of its own. Point `MEMTO_NOTIFY_URL` at a webhook you

@@ -17,6 +17,7 @@ pub fn router() -> Router<App> {
         .route("/auth/setup", post(setup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route("/auth/logout-all", post(logout_all))
         .route("/auth/me", get(me))
 }
 
@@ -100,6 +101,19 @@ async fn logout(
     if let Some(c) = jar.get(auth::COOKIE) {
         auth::delete_session(&state, c.value()).await?;
     }
+    let secure = auth::wants_secure(&state, &headers);
+    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
+}
+
+/// Ends every session of the caller, this browser's included -- the "signed in somewhere I
+/// don't recognise" button.
+async fn logout_all(
+    user: AuthUser,
+    State(state): State<App>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<(StatusCode, CookieJar), AppError> {
+    auth::delete_sessions_for_user(&state, user.id).await?;
     let secure = auth::wants_secure(&state, &headers);
     Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
 }

@@ -57,3 +57,20 @@ async fn double_slash_api_path_is_json_404() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "not_found");
 }
+
+/// Baseline hardening headers reach both the SPA and the API.
+#[tokio::test]
+async fn security_headers_are_set_on_every_response() {
+    let app = common::spawn().await;
+    for path in ["/api/health", "/", "/objects/1"] {
+        let res = reqwest::get(format!("{}{path}", app.base.trim_end_matches("/api"))).await.unwrap();
+        let h = res.headers();
+        assert_eq!(h["x-content-type-options"], "nosniff", "{path}");
+        assert_eq!(h["referrer-policy"], "no-referrer", "{path}");
+        assert_eq!(h["x-frame-options"], "DENY", "{path}");
+        let csp = h["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"), "{path}: {csp}");
+        assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"), "scripts must not be inline-exempt: {csp}");
+    }
+}

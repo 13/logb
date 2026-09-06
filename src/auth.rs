@@ -83,6 +83,16 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     Ok(token)
 }
 
+/// Drops every session belonging to `user_id`.
+///
+/// Called whenever a password changes: without it, a password reset -- the one action taken
+/// precisely because an account may be compromised -- leaves any existing session valid for
+/// the rest of its 30 days.
+pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
+    Ok(())
+}
+
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE token = ?").bind(token).execute(&state.db).await?;
     Ok(())

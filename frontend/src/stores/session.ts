@@ -39,3 +39,10 @@ export async function logout(): Promise<void> {
   user.set(null);
   go('/login', true);
 }
+
+/** Ends every session of this account, on every device, this browser included. */
+export async function logoutEverywhere(): Promise<void> {
+  await api('POST', '/auth/logout-all');
+  user.set(null);
+  go('/login', true);
+}
