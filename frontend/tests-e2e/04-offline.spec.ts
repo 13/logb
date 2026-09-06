@@ -175,3 +175,44 @@ test('an activity edited offline never turns into a second activity', async ({ p
   const after = await page.request.get(`/api/objects/${objectId}/activities`);
   expect((await after.json()) as unknown[]).toHaveLength(1);
 });
+
+/**
+ * The session lapsing is not the same as being offline: the request reaches the server and is
+ * refused. A 401 is still a refusal the user can undo by logging back in, so the write is
+ * queued rather than discarded -- and logging in flushes the queue, which none of the outbox's
+ * own triggers (load, `online`, `visibilitychange`) do on an SPA login.
+ */
+test('a write made with an expired session is kept and sent after logging back in', async ({ page, context }) => {
+  await signIn(page);
+
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Mower');
+  await page.getByLabel('Category').fill('garden');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Mower' })).toBeVisible();
+  const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
+
+  await page.getByRole('button', { name: /Log/ }).first().click();
+  // Let the form finish loading before the session is pulled out from under it: its onMount
+  // fetches the object and then the title suggestions, and a 401 on one of those would send the
+  // user to /login before they ever pressed Save -- a different (and already covered) path.
+  await page.waitForLoadState('networkidle');
+  await page.getByLabel('Title').fill('Blade sharpening');
+
+  // The session ends between opening the form and saving it -- an expiry, or a password change
+  // elsewhere, which ends every other session. The network is fine throughout.
+  await context.clearCookies();
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  // The unauthorized handler sends the user to the login screen; the entry must not have gone
+  // with it.
+  await expect(page).toHaveURL(/\/login/);
+  await signIn(page);
+
+  await expect(async () => {
+    const res = await page.request.get(`/api/objects/${objectId}/activities`);
+    expect(res.ok()).toBe(true);
+    const activities = (await res.json()) as Array<{ title: string }>;
+    expect(activities.filter((a) => a.title === 'Blade sharpening')).toHaveLength(1);
+  }).toPass();
+});

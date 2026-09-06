@@ -459,3 +459,53 @@ describe('flushOutbox against an expired session', () => {
     expect(await outboxDeadCount()).toBe(1);
   });
 });
+
+/**
+ * The other half of "an expired session must not cost the user their writes": `replay` keeps
+ * what is already queued (above), and these keep what has not been queued yet. A session that
+ * lapses while a form is open used to throw the 401 straight back at the caller -- the
+ * unauthorized handler navigates to /login, and whatever was typed existed nowhere else.
+ */
+describe('queuing a write that meets an expired session', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('queues a create on a 401 and sends it once the user is back, with the same op id', async () => {
+    let loggedIn = false;
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      bodies.push(body);
+      if (!loggedIn) return jsonResponse(401, { code: 'unauthorized', message: 'log in' });
+      return jsonResponse(201, { id: 7 });
+    }) as unknown as typeof fetch;
+
+    const result = await createQueued('/objects/1/activities', { title: 'Fuel' });
+    expect(result).toBeNull(); // queued rather than lost
+    expect(await outboxDeadCount()).toBe(0);
+
+    loggedIn = true;
+    await flushOutbox();
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].title).toBe('Fuel');
+    // The idempotency guarantee still holds across the login: same op id, so if the server had
+    // in fact applied the first attempt, the replay resolves to that row instead of a second one.
+    expect(bodies[1].client_op_id).toBe(bodies[0].client_op_id);
+  });
+
+  it('queues an upload on a 401 too', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse(401, { code: 'unauthorized', message: 'log in' })) as unknown as typeof fetch;
+
+    const result = await uploadQueued('/objects/1/attachments', new Blob(['x']), 'photo.png', 5);
+    expect(result).toBeNull();
+    expect(await outboxDeadCount()).toBe(0);
+  });
+
+  it('still throws a genuine rejection back at the caller rather than queuing it', async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse(400, { code: 'bad_request', message: 'title required' })) as unknown as typeof fetch;
+
+    await expect(createQueued('/objects/1/activities', { title: '' })).rejects.toThrow();
+  });
+});

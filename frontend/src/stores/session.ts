@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { api, setUnauthorizedHandler } from '../lib/api';
+import { api, flushOutbox, setUnauthorizedHandler } from '../lib/api';
 import { clearObjectCache } from '../lib/object-cache';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
@@ -37,6 +37,11 @@ export async function login(username: string, password: string): Promise<void> {
   user.set(me);
   const s = await api<Settings>('GET', '/settings');
   currency.set(s.currency);
+  // Anything queued while the session was expired has been waiting for exactly this. The
+  // outbox's own triggers -- load, `online`, `visibilitychange` -- none of them fire on a
+  // login, which is an SPA navigation, so without this the writes sit until the user happens
+  // to switch away from the tab and back.
+  void flushOutbox();
 }
 
 export async function logout(): Promise<void> {

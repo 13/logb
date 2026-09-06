@@ -1,8 +1,8 @@
 import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
-import { ApiError, isRejection } from './api-error';
+import { ApiError, isRejection, isUnauthenticated } from './api-error';
 
-export { ApiError, isRejection } from './api-error';
+export { ApiError, isRejection, isUnauthenticated } from './api-error';
 
 let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void {
@@ -81,7 +81,12 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   try {
     return await api<T>('POST', path, { ...body, client_op_id: id });
   } catch (e) {
-    if (isRejection(e)) throw e;
+    // A 401 is a rejection the user can undo by logging back in, so the write is queued rather
+    // than thrown away -- the same reasoning `replay` applies to an op that meets an expired
+    // session mid-pass (see `isUnauthenticated` in ./api-error.ts). Without this, a session
+    // that lapsed while the form was open discarded everything typed into it: the unauthorized
+    // handler navigates to /login, and the entry existed nowhere else.
+    if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
       await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0 });
     } catch {
@@ -121,8 +126,8 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
       if (activityId !== undefined) form.append('activity_id', String(activityId));
       return await upload<T>(path, form);
     } catch (e) {
-      if (isRejection(e)) throw e;
-      // Fall through to queue, same as createQueued.
+      if (isRejection(e) && !isUnauthenticated(e)) throw e;
+      // Fall through to queue, same as createQueued -- including on a 401, for the same reason.
     }
   }
   try {
