@@ -8,7 +8,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::files;
 use crate::state::App;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
@@ -166,36 +166,51 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
 
     blobs.sort();
     blobs.dedup();
-    let mut blob_bytes = Vec::with_capacity(blobs.len());
-    for sha in &blobs {
-        if let Ok(b) = tokio::fs::read(state.storage.blob_path(sha)).await {
-            blob_bytes.push((sha.clone(), b));
+
+    // The archive is built into a scratch file and streamed back from it, so peak memory is
+    // one blob rather than the whole library: a few gigabytes of photos used to be held once
+    // as the read blobs and again as the finished zip before a single byte was sent.
+    let scratch = state.storage.scratch_path("export");
+    let storage = state.storage.clone();
+    let path = scratch.clone();
+    let build = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        let file = std::fs::File::create(&path)?;
+        let mut w = zip::ZipWriter::new(std::io::BufWriter::new(file));
+        let deflate = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
+        w.write_all(&json)?;
+        for sha in &blobs {
+            // A blob missing from disk is storage corruption, not a reason to fail the whole
+            // export; the entry is simply absent from the archive, as it was before.
+            let Ok(mut src) = std::fs::File::open(storage.blob_path(sha)) else { continue };
+            w.start_file(format!("files/{sha}"), stored).map_err(|e| AppError::Internal(e.to_string()))?;
+            std::io::copy(&mut src, &mut w)?;
         }
+        w.finish().map_err(|e| AppError::Internal(e.to_string()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Err(e) = build {
+        let _ = tokio::fs::remove_file(&scratch).await;
+        return Err(e);
     }
-    let zip_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
-        let mut cursor = Cursor::new(Vec::new());
-        {
-            let mut w = zip::ZipWriter::new(&mut cursor);
-            let deflate = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-            w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
-            w.write_all(&json)?;
-            for (sha, b) in blob_bytes {
-                w.start_file(format!("files/{sha}"), stored).map_err(|e| AppError::Internal(e.to_string()))?;
-                w.write_all(&b)?;
-            }
-            w.finish().map_err(|e| AppError::Internal(e.to_string()))?;
-        }
-        Ok(cursor.into_inner())
-    }).await.map_err(|e| AppError::Internal(e.to_string()))??;
+
+    let file = tokio::fs::File::open(&scratch).await?;
+    let len = file.metadata().await?.len();
+    // Unlink now: the open handle keeps the data readable for as long as this response takes,
+    // and the file cannot outlive the request even if the client disconnects mid-download.
+    let _ = tokio::fs::remove_file(&scratch).await;
 
     let name = format!("attachment; filename=\"memto-export-{}.zip\"", db::today());
     Ok((
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/zip")),
             (header::CONTENT_DISPOSITION, HeaderValue::from_str(&name).unwrap()),
+            (header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap()),
         ],
-        zip_bytes,
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
     ).into_response())
 }
 

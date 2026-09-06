@@ -84,3 +84,39 @@ async fn isolation() {
     assert_eq!(anna.patch(app.url(&format!("/activities/{}", a["id"]))).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
     assert_eq!(anna.delete(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
 }
+
+/// A long timeline comes back a page at a time, with the unpaged total in a header so the
+/// client knows whether to offer "show older".
+#[tokio::test]
+async fn the_activity_list_is_paged() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    for i in 0..7 {
+        app.client.post(app.url(&format!("/objects/{id}/activities")))
+            .json(&json!({ "date": format!("2024-01-{:02}", i + 1), "category": "fuel", "title": format!("Fill {i}") }))
+            .send().await.unwrap();
+    }
+
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=3"))).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "7", "the header counts everything, not the page");
+    let page1: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(page1.as_array().unwrap().len(), 3);
+    assert_eq!(page1[0]["title"], "Fill 6", "newest first");
+
+    let page3: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}/activities?limit=3&offset=6")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(page3.as_array().unwrap().len(), 1);
+    assert_eq!(page3[0]["title"], "Fill 0", "the last page holds the oldest entry");
+
+    // The total tracks the filter, not the table.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?category=repair"))).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "0");
+
+    // Absurd limits are clamped rather than rejected.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=99999"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let all: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 7);
+}

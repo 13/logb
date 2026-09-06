@@ -3,7 +3,7 @@
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
-  import { api, fileUrl } from '../lib/api';
+  import { api, apiPage, fileUrl } from '../lib/api';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
   import { currency } from '../stores/session';
@@ -16,16 +16,32 @@
   let tab = $state<Tab>((new URLSearchParams(location.search).get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
   let activities = $state<Activity[]>([]);
+  /// How many activities match the current filter in total, page window aside.
+  let activityTotal = $state(0);
+  let loadingMore = $state(false);
   let category = $state<Category | ''>('');
   let error = $state('');
+  const PAGE = 100;
 
   async function loadObject() {
     try { object = await api<MemObject>('GET', `/objects/${oid}`); }
     catch (e) { error = (e as Error).message; }
   }
-  async function loadActivities() {
-    const q = category ? `?category=${category}` : '';
-    activities = await api<Activity[]>('GET', `/objects/${oid}/activities${q}`);
+  /// `append` fetches the next page and adds to what is on screen; otherwise it starts over,
+  /// which is what a filter change wants.
+  async function loadActivities(append = false) {
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? activities.length : 0) });
+    if (category) params.set('category', category);
+    const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+    activities = append ? [...activities, ...page.items] : page.items;
+    activityTotal = page.total;
+  }
+
+  async function loadMore() {
+    loadingMore = true;
+    try { await loadActivities(true); }
+    catch (e) { error = (e as Error).message; }
+    finally { loadingMore = false; }
   }
 
   $effect(() => { oid; loadObject(); });
@@ -69,7 +85,7 @@
     </nav>
 
     {#if tab === 'timeline'}
-      <Timeline objectId={oid} {activities} unit={object.counter_unit} bind:category />
+      <Timeline objectId={oid} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
       <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />

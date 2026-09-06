@@ -30,6 +30,7 @@ mime_guess = "2"
 time = "0.3"
 reqwest = { version = "0.13", features = ["json"] }
 chrono-tz = "0.10.4"
+tokio-util = { version = "0.7.19", features = ["io"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }

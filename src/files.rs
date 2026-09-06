@@ -59,6 +59,15 @@ impl Storage {
         }
     }
 
+    /// A unique path in the data directory for a temporary working file (a whole export
+    /// archive, say). Sits next to the blobs so it lands on the same filesystem, and is the
+    /// caller's to delete.
+    pub fn scratch_path(&self, prefix: &str) -> PathBuf {
+        let mut token = [0u8; 16];
+        rand::rng().fill(&mut token);
+        self.root.join("files").join(format!(".{prefix}-{}.tmp", hex::encode(token)))
+    }
+
     pub async fn write_thumb(&self, file_id: i64, jpeg: &[u8]) -> std::io::Result<()> {
         tokio::fs::write(self.thumb_path(file_id), jpeg).await
     }

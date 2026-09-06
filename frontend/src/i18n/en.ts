@@ -62,6 +62,7 @@ export default {
   'tab.reminders': 'Reminders',
   'tab.info': 'Info',
 
+  'timeline.more': 'Show {n} older',
   'timeline.empty': 'Nothing logged yet.',
   'timeline.log': 'Log activity',
   'timeline.filter-all': 'All',

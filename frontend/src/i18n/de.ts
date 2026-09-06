@@ -62,6 +62,7 @@ export default {
   'tab.reminders': 'Erinnerungen',
   'tab.info': 'Info',
 
+  'timeline.more': '{n} ältere anzeigen',
   'timeline.empty': 'Noch nichts eingetragen.',
   'timeline.log': 'Aktivität eintragen',
   'timeline.filter-all': 'Alle',

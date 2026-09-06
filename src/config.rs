@@ -36,6 +36,15 @@ pub struct Config {
     /// due date is compared against, and when the daily digest goes out.
     #[arg(long, env = "MEMTO_TIMEZONE", default_value = "UTC")]
     pub timezone: chrono_tz::Tz,
+    /// Write a consistent copy of the database to this path and exit, without stopping the
+    /// server. Blobs under `files/` are content-addressed and never rewritten, so a plain
+    /// copy of that directory pairs with it.
+    #[arg(long, value_name = "PATH")]
+    pub backup: Option<PathBuf>,
+    /// Probe a running instance's `/api/health` on the configured port and exit 0 or 1.
+    /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
+    #[arg(long)]
+    pub healthcheck: bool,
     /// Trust `X-Forwarded-For` for the client IP. Enable only behind a reverse
     /// proxy that overwrites the header; otherwise clients can spoof it.
     #[arg(long, env = "MEMTO_TRUST_PROXY", default_value_t = false)]

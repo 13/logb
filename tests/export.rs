@@ -217,3 +217,35 @@ async fn import_rejects_an_oversized_archive_body() {
     let res = app.client.post(app.url("/import")).body(big).send().await.unwrap();
     assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
 }
+
+/// The archive is built into a scratch file and streamed back; the scratch file must not
+/// survive the request, and the response must still be a complete, readable zip.
+#[tokio::test]
+async fn export_streams_and_leaves_no_scratch_file_behind() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(Form::new().part("file", Part::bytes(png()).file_name("a.png").mime_str("image/png").unwrap()))
+        .send().await.unwrap();
+
+    let res = app.client.get(app.url("/export")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let declared: u64 = res.headers()["content-length"].to_str().unwrap().parse().unwrap();
+    let bytes = res.bytes().await.unwrap().to_vec();
+    assert_eq!(bytes.len() as u64, declared, "Content-Length must match what was streamed");
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    assert!(z.by_name("data.json").is_ok());
+    assert!(z.len() >= 2, "the photo blob rides along: {} entries", z.len());
+
+    // `data/files` holds only sharded blob directories -- no leftover scratch archive.
+    let files_dir = app.state.storage.blob_path(&"0".repeat(64)).parent().unwrap().parent().unwrap().to_path_buf();
+    let leftovers: Vec<_> = std::fs::read_dir(&files_dir).unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with('.') || n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "scratch files left behind: {leftovers:?}");
+}

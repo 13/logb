@@ -227,6 +227,8 @@ mod tests {
         notify_hour: 8,
         notify_format: "json".into(),
         timezone: chrono_tz::Tz::UTC,
+        backup: None,
+        healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),
             trust_proxy,

@@ -24,6 +24,35 @@ pub async fn connect(data_dir: &Path) -> Result<SqlitePool, BoxError> {
     Ok(pool)
 }
 
+/// Opens an existing database without running migrations, for read-only side commands such
+/// as `--backup` that must not touch the schema of a running instance.
+pub async fn connect_existing(data_dir: &Path) -> Result<SqlitePool, BoxError> {
+    let path = data_dir.join("memto.db");
+    if !path.exists() {
+        return Err(format!("no database at {}", path.display()).into());
+    }
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(30));
+    Ok(SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?)
+}
+
+/// Writes a consistent snapshot of the database to `dest`.
+///
+/// `VACUUM INTO` is the reason this exists: copying `memto.db` out from under a running
+/// instance can catch it mid-write and miss the WAL entirely, while this runs inside a read
+/// transaction and produces a compacted, self-consistent file.
+pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> Result<(), BoxError> {
+    if dest.exists() {
+        return Err(format!("{} already exists", dest.display()).into());
+    }
+    let dest = dest.to_str().ok_or("backup path must be valid UTF-8")?;
+    sqlx::query("VACUUM INTO ?").bind(dest).execute(pool).await?;
+    Ok(())
+}
+
 /// The instance's wall-clock timezone, set once from `MEMTO_TIMEZONE` at startup.
 ///
 /// A process-wide value rather than a parameter because `today()` is called from places with

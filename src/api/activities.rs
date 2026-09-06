@@ -6,6 +6,7 @@ use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -98,30 +99,59 @@ pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<A
     .ok_or(AppError::NotFound)
 }
 
+/// A page of a long timeline. Kept generous because the common object has tens of
+/// activities, not thousands; the cap only exists so a decade-old car cannot make the
+/// dashboard ship megabytes to a phone in one response.
+const DEFAULT_LIMIT: i64 = 100;
+const MAX_LIMIT: i64 = 500;
+
 #[derive(Deserialize)]
 pub struct ListQuery {
     pub category: Option<String>,
     pub from: Option<String>,
     pub to: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+/// How many activities match the filters, ignoring the page window -- the client needs it to
+/// know whether a "load more" button belongs on screen.
+pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM activities WHERE object_id = ?1 \
+         AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4)",
+    )
+    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+    .fetch_one(&state.db).await?;
+    Ok(n)
 }
 
 pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<Vec<ActivityRow>, AppError> {
     if let Some(d) = &q.from { validate_date(d)?; }
     if let Some(d) = &q.to { validate_date(d)?; }
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at \
          FROM activities WHERE object_id = ?1 \
          AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4) \
-         ORDER BY date DESC, id DESC",
+         ORDER BY date DESC, id DESC LIMIT ?5 OFFSET ?6",
     )
-    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(limit).bind(offset)
     .fetch_all(&state.db).await?)
 }
 
-async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ActivityOut>>, AppError> {
+async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Query(q): Query<ListQuery>) -> Result<Response, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
     let rows = list_for_object(&state, object_id, &q).await?;
-    Ok(Json(with_attachments(&state, rows).await?))
+    let total = count_for_object(&state, object_id, &q).await?;
+    let out = with_attachments(&state, rows).await?;
+    Ok((
+        [(axum::http::header::HeaderName::from_static("x-total-count"), total.to_string())],
+        Json(out),
+    ).into_response())
 }
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<(StatusCode, Json<ActivityOut>), AppError> {

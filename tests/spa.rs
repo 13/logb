@@ -74,3 +74,31 @@ async fn security_headers_are_set_on_every_response() {
         assert!(!csp.contains("script-src 'self' 'unsafe-inline'"), "scripts must not be inline-exempt: {csp}");
     }
 }
+
+/// Every response carries a request id, and one supplied by a front proxy is preserved so the
+/// two sets of logs line up.
+#[tokio::test]
+async fn responses_carry_a_request_id() {
+    let app = common::spawn().await;
+    let base = app.base.trim_end_matches("/api").to_string();
+
+    let res = reqwest::get(format!("{base}/api/health")).await.unwrap();
+    let generated = res.headers()["x-request-id"].to_str().unwrap().to_string();
+    assert!(!generated.is_empty());
+
+    let second = reqwest::get(format!("{base}/api/health")).await.unwrap();
+    assert_ne!(second.headers()["x-request-id"].to_str().unwrap(), generated, "ids must differ per request");
+
+    let echoed = reqwest::Client::new()
+        .get(format!("{base}/api/health"))
+        .header("x-request-id", "trace-abc123")
+        .send().await.unwrap();
+    assert_eq!(echoed.headers()["x-request-id"], "trace-abc123");
+
+    // A hostile value is replaced rather than reflected.
+    let hostile = reqwest::Client::new()
+        .get(format!("{base}/api/health"))
+        .header("x-request-id", "a b c; drop")
+        .send().await.unwrap();
+    assert_ne!(hostile.headers()["x-request-id"], "a b c; drop");
+}

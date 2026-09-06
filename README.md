@@ -15,9 +15,23 @@ docker compose up -d --build
 Open http://localhost:8080, create the first (admin) user, add users under
 Settings.
 
+The container runs as uid 65532. A named volume inherits that ownership; chown
+a host directory to 65532 before bind-mounting one.
+
 Everything lives in `./data`: `memto.db` (SQLite), `files/` (originals,
-content-addressed), `thumbs/`. Back up by stopping the container and copying
-`data/`, or use Settings → Export (zip with JSON + files).
+content-addressed), `thumbs/`.
+
+## Backup
+
+```bash
+docker compose exec memto /memto --backup /data/snapshot.db
+```
+
+`--backup` runs SQLite's `VACUUM INTO`, so it is safe while the server is
+running — copying `memto.db` out from under a live instance can catch it
+mid-write and miss the WAL. Blobs under `files/` are content-addressed and never
+rewritten, so `rsync` covers them. Settings → Export is the other route: one zip
+with the JSON and every file, importable into any instance.
 
 ## Configuration
 

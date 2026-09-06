@@ -30,6 +30,19 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   return handle<T>(res, path);
 }
 
+/**
+ * A GET whose response is a page of a longer list. `total` comes from `X-Total-Count` and
+ * counts everything matching the filters, not just this page, so the caller knows whether
+ * there is more to fetch.
+ */
+export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; total: number }> {
+  const res = await fetch(`/api${path}`, { method: 'GET', credentials: 'same-origin' });
+  const items = await handle<T[]>(res, path);
+  const header = res.headers.get('x-total-count');
+  const total = header === null ? items.length : Number(header);
+  return { items, total: Number.isFinite(total) ? total : items.length };
+}
+
 export async function upload<T = unknown>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', body: form });
   return handle<T>(res, path);
