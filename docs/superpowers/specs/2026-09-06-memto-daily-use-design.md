@@ -186,7 +186,7 @@ existing `money()` / `counter()` formatters do the labels.
 
 ### B1. Idempotency
 
-Migration `0004`:
+Migration `0005`:
 
 ```sql
 ALTER TABLE activities ADD COLUMN client_op_id TEXT;

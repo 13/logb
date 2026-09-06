@@ -1499,6 +1499,12 @@ async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQ
 
 - [ ] **Step 7: Implement snooze**
 
+> **Superseded during implementation.** Snooze ships as a *suppression* — a `snoozed_until`
+> column (migration `0004`) gates `is_due` — not as a rewrite of `due_date`. Rewriting the date
+> cannot suppress a reminder that is due by counter, so the button did nothing in exactly the
+> case you would press it. The step below, and the `due_date` assertion in its test, describe
+> the abandoned design; see the spec's C3 section for what shipped.
+
 Add the route to `router()`:
 
 ```rust

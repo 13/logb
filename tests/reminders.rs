@@ -136,7 +136,7 @@ async fn due_list_can_look_ahead() {
 }
 
 #[tokio::test]
-async fn snooze_pushes_an_overdue_reminder_into_the_future() {
+async fn snooze_suppresses_an_overdue_reminder_without_rewriting_its_due_date() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
