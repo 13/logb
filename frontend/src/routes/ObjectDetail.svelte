@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
@@ -73,17 +74,38 @@
     return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
   }
 
-  /// `append` fetches the next page and adds to what is on screen; otherwise it starts over,
-  /// which is what a filter change wants. A pending queued create for this object is prepended
-  /// to a fresh (non-append) load, since it will not appear in any page the server sends back
-  /// until the outbox has replayed it.
-  async function loadActivities(append = false) {
+  /// Which of the queued creates this view is currently rendering, as a stable key. A flush
+  /// pass only matters here if it changed that set -- see the `onOutboxFlushed` subscription.
+  let pendingKey = '';
+  /// Guards against two loads landing out of order: only the newest may commit its result.
+  /// Several triggers can overlap (the `oid`/`category` effect, "load more", a flush), and
+  /// whichever resolved last used to win regardless of which started last.
+  let loadSeq = 0;
+
+  /// - `reset` starts over from page one: what a filter or object change wants.
+  /// - `append` fetches the next page and adds it to what is on screen.
+  /// - `refresh` re-reads everything already on screen without shrinking it back to one page.
+  ///
+  /// A pending queued create for this object is prepended to any load that is not an append,
+  /// since it will not appear in any page the server sends back until the outbox has replayed it.
+  async function loadActivities(mode: 'reset' | 'append' | 'refresh' = 'reset') {
+    const append = mode === 'append';
+    const token = ++loadSeq;
     // The offset must count only rows the server itself sent back. A prepended pending entry
     // (see `pendingActivities` above) has no server-side page position at all -- counting it in
     // `activities.length` would shift every subsequent "load more" request back by one real
     // activity per pending op, silently skipping it.
-    const loaded = activities.filter((a) => !a.pending).length;
-    const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? loaded : 0) });
+    // `untrack`: this runs synchronously inside the `oid`/`category` $effect below, so reading
+    // `activities` here made that effect depend on the very list it goes on to assign. The
+    // effect then re-ran on its own result and started over from page one -- which is why
+    // "Show N older" appeared to do nothing at all: the appended page was fetched, rendered,
+    // and immediately replaced by a fresh page-one load.
+    const loaded = untrack(() => activities.filter((a) => !a.pending).length);
+    // A refresh must ask for every page the user has already pulled in. Requesting PAGE would
+    // silently throw away every "load more" they did, which is what a flush -- fired on every
+    // `visibilitychange`, so on merely switching away from the tab and back -- used to do.
+    const limit = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
+    const params = new URLSearchParams({ limit: String(limit), offset: String(append ? loaded : 0) });
     if (category) params.set('category', category);
     let items: Activity[] = [];
     let total = 0;
@@ -99,22 +121,35 @@
       total = cached?.total ?? 0;
     }
     const pending = append ? [] : await pendingActivities();
+    if (token !== loadSeq) return; // a newer load started while this one was in flight
+    if (!append) pendingKey = pending.map((a) => a.id).join(',');
     activities = append ? [...activities, ...items] : [...pending, ...items];
     activityTotal = total + pending.length;
   }
 
   async function loadMore() {
     loadingMore = true;
-    try { await loadActivities(true); }
+    try { await loadActivities('append'); }
     catch (e) { error = (e as Error).message; }
     finally { loadingMore = false; }
   }
 
   $effect(() => { oid; loadObject(); });
-  $effect(() => { oid; category; loadActivities(); });
+  $effect(() => { oid; category; loadActivities('reset'); });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
-  $effect(() => onOutboxFlushed(() => { loadObject(); loadActivities(); }));
+  //
+  // Only when the pass actually changed the queued creates this view renders, though: the
+  // listeners fire after EVERY pass, empty queue included, and a flush runs on every
+  // `visibilitychange`. Reloading unconditionally meant that switching away from the tab and
+  // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
+  // every extra page the user had loaded.
+  $effect(() => onOutboxFlushed(async () => {
+    const key = (await pendingActivities()).map((a) => a.id).join(',');
+    if (key === pendingKey) return;
+    loadObject();
+    loadActivities('refresh');
+  }));
   $effect(() => {
     const url = new URL(location.href);
     url.searchParams.set('tab', tab);
@@ -159,7 +194,7 @@
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}
-      <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities(); }} />
+      <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
       <p class="muted">{object.category}</p>
