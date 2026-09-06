@@ -768,3 +768,51 @@ describe('retryDead with no signed-in user', () => {
     expect((await store.all())[0].dead).toBe(true);
   });
 });
+
+/**
+ * A pass that cannot say what it did must not claim it did nothing: a view told "no change"
+ * skips its reload, so a write that really did reach the server is left rendered as a dimmed
+ * pending row that never becomes real.
+ */
+describe('what a flush pass reports when it does not finish cleanly', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('reports a change when the op was sent but could not be removed', async () => {
+    const inner = memoryStore();
+    await enqueue(inner, { id: 'x', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0 });
+    // The send succeeds and the server holds the write; only the local cleanup fails.
+    setOutboxStoreForTesting({ ...inner, remove: async () => { throw new Error('IndexedDB went away'); } });
+
+    const seen: boolean[] = [];
+    const off = onOutboxFlushed((_r, changed) => seen.push(changed));
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await flushOutbox();
+    off();
+
+    expect(seen).toEqual([true]);
+  });
+
+  /**
+   * The queue looks untouched afterwards -- the send failed and the write-back that would have
+   * recorded the attempt failed too -- so a snapshot comparison alone says "no change". Only
+   * the fact that the pass did not finish tells the truth: it cannot account for what it did.
+   */
+  it('reports a change when the pass throws and leaves the queue looking untouched', async () => {
+    const inner = memoryStore();
+    await enqueue(inner, { id: 'x', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0 });
+    setOutboxStoreForTesting({ ...inner, put: async () => { throw new Error('IndexedDB went away'); } });
+
+    const seen: boolean[] = [];
+    const off = onOutboxFlushed((_r, changed) => seen.push(changed));
+    // A dropped connection, so `replay` takes the retry path -- whose write-back is what throws.
+    globalThis.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch;
+
+    await flushOutbox().catch(() => {});
+    off();
+
+    expect(seen).toEqual([true]);
+  });
+});

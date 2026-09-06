@@ -15,6 +15,7 @@ export default {
   'setup.title': 'Welcome to memto',
   'setup.intro': 'Create the first user. It becomes the administrator.',
   'setup.submit': 'Create admin',
+  'setup.not-reachable': 'The account was created, but the server could not be reached to sign you in. Check your connection and reload.',
   'login.title': 'Sign in',
   'login.username': 'Username',
   'login.password': 'Password',

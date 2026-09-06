@@ -13,7 +13,12 @@
     busy = true; error = '';
     try {
       await api('POST', '/auth/setup', { username, password });
-      await loadSession();
+      // The admin exists now, but the app has to be able to SAY who is signed in before it can
+      // show anything: navigating with the session still unreachable lands on a permanent
+      // "Loading…" with no error and no way forward. `loadSession` swallows a failed
+      // /auth/status on purpose -- it must not claim the user is signed out when it simply
+      // cannot tell -- so the answer comes back as a value instead of a throw.
+      if (!(await loadSession())) throw new Error($t('setup.not-reachable'));
       go('/', true);
     } catch (err) {
       error = (err as Error).message;

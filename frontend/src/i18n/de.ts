@@ -15,6 +15,7 @@ export default {
   'setup.title': 'Willkommen bei memto',
   'setup.intro': 'Lege den ersten Benutzer an. Er wird Administrator.',
   'setup.submit': 'Admin anlegen',
+  'setup.not-reachable': 'Das Konto wurde angelegt, aber der Server war nicht erreichbar, um dich anzumelden. Prüfe deine Verbindung und lade die Seite neu.',
   'login.title': 'Anmelden',
   'login.username': 'Benutzername',
   'login.password': 'Passwort',

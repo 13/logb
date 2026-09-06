@@ -37,8 +37,27 @@ function open(): Promise<IDBDatabase> {
           };
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // Another tab wants to upgrade and cannot while this connection is open. The module
+        // deliberately keeps one connection for the life of the tab, so without this an old tab
+        // blocks every new one indefinitely. Closing costs nothing: `open()` reconnects on the
+        // next call, by which time the upgrade has run.
+        db.onversionchange = () => { db.close(); dbPromise = null; };
+        resolve(db);
+      };
       req.onerror = () => { dbPromise = null; reject(req.error); };
+      // The other half of the same problem, seen from the new tab: a still-open v1 connection
+      // elsewhere fires `blocked` and then NEITHER `onsuccess` NOR `onerror`, so this promise
+      // would never settle and every outbox call -- `all`, `putWithSeq`, `remove` -- would hang
+      // for ever. An offline Save would hang inside `enqueue` too, so `createQueued` could not
+      // even report the write as lost: the user gets a spinner and nothing else. With the
+      // service worker on `autoUpdate`, a tab running the previous bundle is the expected state
+      // for a while after every deploy, so this is the ordinary case, not a corner.
+      req.onblocked = () => {
+        dbPromise = null;
+        reject(new Error('outbox: database upgrade blocked by another tab'));
+      };
     });
   }
   return dbPromise;

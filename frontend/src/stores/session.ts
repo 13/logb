@@ -37,23 +37,36 @@ let sessionKnown = false;
  *  at all, and coming back to the tab is the moment a user actually finds out they have a
  *  connection again. Cheap to repeat: it only runs while the session is still unknown. */
 const retrySession = () => { if (!sessionKnown) void loadSession(); };
+/** One attempt at a time. `sessionKnown` only flips after two awaited round trips, so behind a
+ *  slow or hanging `/auth/status` every tab switch would otherwise start another complete
+ *  `loadSession` -- stacking auth round trips without bound on exactly the flaky connection the
+ *  retry exists for, and firing `setOutboxUser`/`flushOutbox` once per attempt that finishes. */
+let inFlight: Promise<boolean> | null = null;
 globalThis.addEventListener?.('online', retrySession);
 globalThis.addEventListener?.('visibilitychange', () => {
   if (globalThis.document?.visibilityState === 'visible') retrySession();
 });
 
-export async function loadSession(): Promise<void> {
+/** Resolves to whether the session is now KNOWN -- signed in or signed out, as opposed to
+ *  still unreachable. Callers that have to show something either way (`Setup`) need to tell
+ *  those apart; the retry listeners above only care that it eventually becomes true. */
+export function loadSession(): Promise<boolean> {
+  if (!inFlight) inFlight = doLoadSession().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function doLoadSession(): Promise<boolean> {
   let status: { setup_required: boolean };
   try {
     status = await api<{ setup_required: boolean }>('GET', '/auth/status');
   } catch {
     // Offline or a flaky boot. Nothing is known yet, so nothing is asserted -- least of all
     // that the user is signed out, which would be a lie the outbox then acts on. The `online`
-    // listener above tries again.
-    return;
+    // and `visibilitychange` listeners above try again.
+    return false;
   }
   setupRequired.set(status.setup_required);
-  if (status.setup_required) { user.set(null); sessionKnown = true; return; }
+  if (status.setup_required) { user.set(null); sessionKnown = true; return true; }
   try {
     const me = await api<User>('GET', '/auth/me');
     user.set(me);
@@ -69,6 +82,7 @@ export async function loadSession(): Promise<void> {
     // that we still do not know, so it must not be recorded as an answer.
     if (isRejection(e)) { user.set(null); sessionKnown = true; }
   }
+  return sessionKnown;
 }
 
 export async function login(username: string, password: string): Promise<void> {

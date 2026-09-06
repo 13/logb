@@ -189,9 +189,12 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>, changed: boo
   return () => flushListeners.delete(fn);
 }
 
-/** The queue as one comparable value: which ops exist and whether each is parked. */
+/** The queue as one comparable value: which ops exist, whether each is parked, and how many
+ *  attempts it has behind it. `attempts` is in there because a pass can SEND an op and then
+ *  fail to remove it (an IndexedDB error in the write-back): the op survives, un-parked, so
+ *  ids and dead flags alone look untouched even though the server now holds the write. */
 async function queueSnapshot(): Promise<string> {
-  return (await store.all()).map((o) => `${o.id}:${o.dead ? 1 : 0}`).join(',');
+  return (await store.all()).map((o) => `${o.id}:${o.dead ? 1 : 0}:${o.attempts}`).join(',');
 }
 
 /**
@@ -212,7 +215,9 @@ const outboxLock = createLock('memto-outbox');
 
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
-  let changed = false;
+  let before: string | null = null;
+  let completed = false;
+  let changed = true; // until a completed pass proves otherwise -- see the `finally` below
   try {
     // Nobody is signed in, so there is no session to attribute a send to and no way to tell
     // whose ops these are. `main.ts` flushes at module load -- before `App.svelte`'s onMount has
@@ -227,8 +232,8 @@ async function doFlushOutbox(): Promise<void> {
     // and `loadSession` is retried on reconnect if its own first attempt failed. Inside the
     // `try` so the `finally` still notifies -- a listener that never hears from a skipped pass
     // is a view left showing whatever it last computed.
-    if (currentUserId === null) return;
-    const before = await queueSnapshot();
+    if (currentUserId === null) { completed = true; changed = false; return; }
+    before = await queueSnapshot();
     resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
       if (!isOurs(op)) {
         // Someone else's queued write, waiting for them to sign back in on this device. Sending
@@ -285,8 +290,22 @@ async function doFlushOutbox(): Promise<void> {
       // rather than head-of-line-blocking every op behind it (see `replay` in ./outbox.ts).
       throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
     }));
-    changed = (await queueSnapshot()) !== before;
+    completed = true;
   } finally {
+    // Computed here, not after `replay` returns: a pass can throw AFTER it has already sent and
+    // removed ops (an IndexedDB failure in the write-back), and reporting "nothing changed"
+    // then leaves a view showing a synthetic pending row for a write that really did land --
+    // neither pending any more nor ever refetched. A pass whose outcome cannot be established
+    // says `changed`, which costs one refetch and never loses a row.
+    try {
+      // A pass that did not complete cannot say what it did, so it says "changed": one wasted
+      // refetch, versus a view left showing a pending row for a write that already landed. A
+      // pass skipped for want of a user completed and touched nothing, so `before` stays null
+      // and it correctly reports no change.
+      changed = !completed || (before !== null && (await queueSnapshot()) !== before);
+    } catch {
+      changed = true;
+    }
     for (const fn of flushListeners) fn(resolved, changed);
   }
 }

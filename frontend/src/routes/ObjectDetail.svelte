@@ -170,8 +170,21 @@
   // `visibilitychange`. Reloading unconditionally meant that switching away from the tab and
   // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
   // every extra page the user had loaded.
-  $effect(() => onOutboxFlushed((_resolved, changed) => {
-    if (!changed) return;
+  $effect(() => onOutboxFlushed(async (_resolved, changed) => {
+    // Two conditions, because neither covers the other.
+    //
+    // `changed` is what THIS pass did, which is the only thing that sees a queued upload land
+    // (an upload changes an existing entry's thumbnails and the object's stats, and never
+    // appears as a row of its own).
+    //
+    // It says nothing about a pass another TAB ran, though: that tab sends and removes the op,
+    // and this tab's next flush then sees an empty queue before and after and reports no
+    // change -- leaving the dimmed pending row on screen for a write that landed minutes ago.
+    // So also compare what is rendered against what the queue says should be: read fresh here
+    // rather than sampled at load time, so it cannot go stale the way the key this replaces did.
+    const rendered = activities.filter((a) => a.pending).map((a) => a.id).sort().join(',');
+    const queued = (await pendingActivities()).map((a) => a.id).sort().join(',');
+    if (!changed && rendered === queued) return;
     loadObject();
     loadActivities('refresh');
   }));
