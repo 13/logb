@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
   import { api, fileUrl } from '../lib/api';
@@ -25,6 +25,9 @@
   const suggestions = $derived(suggestionsFor(allSuggestions, input.category));
   /** True when `saved` exists only because the user attached a file, never because they saved. */
   let autoDraft = $state(false);
+  /** False only while editing an existing activity whose GET hasn't resolved yet — blocks the
+   *  "add files" affordance so it can't spuriously POST a new row before we know one already exists. */
+  let ready = $state(untrack(() => aid === undefined));
 
   const lastCounter = $derived(object?.stats.current_counter ?? null);
   const counterWarn = $derived(
@@ -38,10 +41,12 @@
     if (aid) {
       const a = await api<Activity>('GET', `/activities/${aid}`);
       saved = a;
+      autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
       input = toActivityInput(a);
       costText = centsToInput(a.cost_cents);
       counterText = a.counter_value === null ? '' : String(a.counter_value);
       attachments = a.attachments;
+      ready = true;
     } else if (object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
@@ -50,6 +55,7 @@
   /** Files need an activity row to hang on, so save the draft first. */
   async function ensureSaved(): Promise<Activity> {
     if (saved) return saved;
+    if (!ready) throw new Error('not loaded yet');
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) throw new Error($t(bad));
@@ -155,7 +161,7 @@
     {/if}
     {#if saved}
       <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
-    {:else}
+    {:else if ready}
       <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); } catch (e) { error = (e as Error).message; } }}>
         + {$t('activity.add-files')}
       </button>
