@@ -217,7 +217,14 @@
 
   async function remove() {
     if (!saved || !confirm($t('nav.confirm-delete'))) return;
-    await api('DELETE', `/activities/${saved.id}`);
+    // Sibling of the same fix already made in cancel(): a failed DELETE used to throw with
+    // nothing surfaced, silently stranding the user with no idea the delete never happened.
+    try {
+      await api('DELETE', `/activities/${saved.id}`);
+    } catch (e) {
+      error = $t((e as Error).message);
+      return;
+    }
     go(`/objects/${oid}`, true);
   }
 </script>

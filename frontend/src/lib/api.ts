@@ -1,4 +1,4 @@
-import { enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
+import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection } from './api-error';
 
@@ -146,10 +146,21 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): ()
   return () => flushListeners.delete(fn);
 }
 
+/**
+ * Shared with `updateQueuedActivity` and `cancelQueuedActivity` below (see `createLock` in
+ * `./outbox.ts`) so a replay pass and a UI write against the SAME queued op can never
+ * interleave: whichever gets there first runs to completion -- read, act, write back -- before
+ * the other is allowed to touch the store at all. IMPORTANT 1: without this, a Save or Cancel
+ * fired while a pass's `send()` is in flight raced the pass's own eventual write-back and lost
+ * -- the pass, snapshotting the op before the UI write happened, would win by writing back
+ * exactly what the user had just changed or removed, moments after telling them it worked.
+ */
+const outboxLock = createLock();
+
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
   try {
-    resolved = await replay(store, async (op: QueuedOp) => {
+    resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
       if (op.kind === 'attachment.upload') {
         if (!op.blob) {
           // Nothing to send and never will be -- this op can never succeed no matter how many
@@ -170,7 +181,11 @@ async function doFlushOutbox(): Promise<void> {
           const stillPending = (await store.all())
             .some((o) => !o.dead && o.kind === 'activity.create' && o.tempId === activityId);
           if (stillPending) {
-            throw new Error('outbox: upload is waiting on its parent activity.create');
+            // MINOR 2: this is not a failure of THIS op -- it did nothing wrong and has nothing
+            // to retry yet -- so it must not burn an attempt or stop the pass the way an
+            // ordinary thrown Error would (see `SkipOp` in `./outbox.ts`). The live create
+            // ahead of it will get its own turn later in this very pass, or the next one.
+            throw new SkipOp('outbox: upload is waiting on its parent activity.create');
           }
           // No live create will ever resolve this id: the parent was never created (or already
           // failed permanently) before this upload was queued. Park it dead with a legible
@@ -193,7 +208,7 @@ async function doFlushOutbox(): Promise<void> {
       // it exactly like a permanent server rejection: park it dead and let the pass continue,
       // rather than head-of-line-blocking every op behind it (see `replay` in ./outbox.ts).
       throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
-    });
+    }));
   } finally {
     for (const fn of flushListeners) fn(resolved);
   }
@@ -248,25 +263,54 @@ export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
  * `tempId` may also be a real activity id -- see `removeQueuedActivity` -- so this doubles as
  * "drop any queued upload for this activity" when cancelling an already-synced row. Returns
  * whether anything was actually removed.
+ *
+ * Runs under `outboxLock` (IMPORTANT 1), the same lock `doFlushOutbox` holds for the whole of
+ * its replay pass: without it, Cancel racing an in-flight `send()` could report the op removed
+ * and then have the pass's own retry write-back, moments later, RESURRECT it -- the exact stray
+ * entry this function exists to prevent. Waiting for the pass to finish before this ever reads
+ * the store means it always removes whatever the pass actually left behind, never something the
+ * pass is about to overwrite.
  */
 export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
-  return removeQueuedActivity(store, tempId);
+  return outboxLock.run(() => removeQueuedActivity(store, tempId));
 }
 
 /**
  * Folds a further edit into a draft's still-queued `activity.create` (identified by its temp
  * id) instead of sending a PATCH the server has no row for yet. See `updateQueuedActivityBody`
  * in `./outbox.ts`. Returns whether a live op was actually found and rewritten.
+ *
+ * Runs under `outboxLock` (IMPORTANT 1), the same lock `doFlushOutbox` holds for the whole of
+ * its replay pass: without it, Save racing an in-flight `send()` could report the edit folded
+ * in and navigate away, and then have the pass's own retry write-back, moments later, overwrite
+ * that edit with the stale body the in-flight request was actually sent with -- reverting a
+ * save the user was just told succeeded. Waiting for the pass to finish before this ever writes
+ * means it always lands on top of whatever the pass actually did, never underneath it.
  */
 export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  return updateQueuedActivityBody(store, tempId, body);
+  return outboxLock.run(() => updateQueuedActivityBody(store, tempId, body));
 }
 
-/** Revive every parked op and try again — the user's "I fixed the wifi" button. */
+/**
+ * Revive every parked op and try again — the user's "I fixed the wifi" button.
+ *
+ * MINOR 4(a): the loop above writes `dead: false` directly to the store, bypassing the lock --
+ * so if a replay pass is already in flight when it runs, that pass's snapshot (taken from
+ * `store.all()` before the revival) still marks the just-revived ops dead, and `flushOutbox`
+ * below simply joins that already-running pass (`serialize` shares one in-flight run) instead
+ * of starting a fresh one that would see them live. The user pressed "try again" and, silently,
+ * nothing happened until some later, unrelated trigger fired. Awaiting `flushOutbox` once and
+ * then calling it again guarantees the second call is a genuinely new pass (`serialize` only
+ * dedupes calls that overlap an ALREADY-in-flight run; once the first call's promise settles,
+ * `inFlight` is cleared) that reads the store as it stands right now, revived ops included --
+ * whether the first call joined a stale pass or, the common case, was already a fresh one that
+ * needed no help.
+ */
 export async function retryDead(): Promise<void> {
   for (const op of await store.all()) {
     if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
   }
+  await flushOutbox();
   await flushOutbox();
 }
 

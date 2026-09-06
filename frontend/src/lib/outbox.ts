@@ -29,6 +29,13 @@ export interface QueuedOp {
   /** IndexedDB insertion order marker. The memory store does not need this because arrays
    *  already keep insertion order; the IndexedDB store stamps it itself on `put`. */
   queued_at?: number;
+  /** Monotonic total-order marker, assigned once at enqueue by `idbStore`'s `put` (see
+   *  `./idb.ts`) and preserved on every later rewrite of the same op. `queued_at` alone cannot
+   *  break a tie between two ops enqueued in the same millisecond -- `IDBObjectStore.getAll()`
+   *  returns key (UUID) order, which carries no relation to enqueue order at all -- so `seq` is
+   *  the field `compareQueueOrder` actually sorts on; `queued_at` is only the fallback for a
+   *  record written before this field existed. */
+  seq?: number;
 }
 
 export interface OutboxStore {
@@ -60,6 +67,31 @@ export function newOpId(): string {
 }
 
 /**
+ * Total order for the queue. `seq` (see `QueuedOp`) is a monotonic counter assigned once at
+ * enqueue, so it gives two ops a real, deterministic relative order even when they were queued
+ * in the same millisecond -- `queued_at` alone cannot do that, and is kept only as the fallback
+ * for a record written before `seq` existed. `idbStore` (`./idb.ts`) seeds its counter past
+ * every existing `queued_at` it finds, so a legacy record always sorts correctly against a
+ * freshly-`seq`'d one without needing to be rewritten itself.
+ */
+export function compareQueueOrder(a: QueuedOp, b: QueuedOp): number {
+  return (a.seq ?? a.queued_at ?? 0) - (b.seq ?? b.queued_at ?? 0);
+}
+
+/**
+ * A skipped op is left EXACTLY as it was: still queued, `attempts` untouched, not dead. Thrown
+ * by a `send` callback (see `replay` below) for an op that is not wrong, just not sendable yet
+ * for a reason the next pass may resolve on its own -- e.g. an `attachment.upload` still
+ * waiting on its parent `activity.create`, which is itself live and simply hasn't been attempted
+ * yet (see `doFlushOutbox` in `./api.ts`). Unlike every other failure `replay` handles, this one
+ * must neither burn an attempt (the op did nothing wrong) nor stop the pass (nothing behind it
+ * in the queue depends on THIS op the way it depends on its own parent) -- see MINOR 2: treating
+ * it as an ordinary retryable failure let three flushes park a perfectly healthy op dead while
+ * the create it was waiting on was still live and had never even been attempted once.
+ */
+export class SkipOp extends Error {}
+
+/**
  * Wraps an async function so overlapping calls share one in-flight run instead of each
  * starting a fresh one. `flushOutbox` (`./api.ts`) is called at startup, on `online`, on
  * `visibilitychange`, and after a manual retry -- several of which can fire within the same
@@ -75,6 +107,38 @@ export function serialize<T>(fn: () => Promise<T>): () => Promise<T> {
     if (!inFlight) inFlight = fn().finally(() => { inFlight = null; });
     return inFlight;
   };
+}
+
+/**
+ * A FIFO async mutex, distinct from `serialize` above: `serialize` shares one in-flight run of
+ * a SINGLE function across overlapping callers; `createLock` gives mutual exclusion between
+ * DIFFERENT operations that must never interleave, however many of them there are.
+ *
+ * This closes IMPORTANT 1: `flushOutbox`'s replay pass reads an op, awaits a `send()`, and only
+ * then writes the result back -- and while that `send()` is in flight, `ActivityForm.svelte`'s
+ * Save and Cancel call `updateQueuedActivityBody` / `removeQueuedActivity` directly against the
+ * SAME stored op. `serialize` only guards a pass against another pass; it does nothing to stop
+ * a UI write from running mid-pass, reading the same op the pass is about to write back over
+ * (a lost edit on Save, a resurrected op on Cancel -- see the comments on `doFlushOutbox`,
+ * `updateQueuedActivity` and `cancelQueuedActivity` in `./api.ts`). Routing the replay pass AND
+ * both UI writes through one shared lock makes that interleaving impossible: whichever one is
+ * running has exclusive use of the store's read-act-write sequence, and everyone else queues.
+ *
+ * FIFO matters as much as exclusivity here: each `run()` call is chained onto the current tail
+ * synchronously, in the order `run()` was CALLED, not the order its callback happens to start
+ * doing work -- so a UI write that starts waiting while a pass is in flight is guaranteed to go
+ * next, even if further passes keep getting triggered (`online`, `visibilitychange`, ...) in
+ * the meantime: those later passes call `run()` only after the UI write already has its place
+ * in line, so they queue behind it rather than ahead of it. A UI write can never be starved.
+ */
+export function createLock(): { run: <T>(fn: () => Promise<T>) => Promise<T> } {
+  let tail: Promise<void> = Promise.resolve();
+  function run<T>(fn: () => Promise<T>): Promise<T> {
+    const started = tail.then(fn, fn);
+    tail = started.then(() => undefined, () => undefined);
+    return started;
+  }
+  return { run };
 }
 
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
@@ -130,6 +194,11 @@ export async function replay(
       }
       await store.remove(op.id);
     } catch (e) {
+      if (e instanceof SkipOp) {
+        // Untouched on purpose -- see the class comment. The pass moves on to the next op
+        // instead of stopping here, since nothing behind this one depends on it.
+        continue;
+      }
       if (isRejection(e)) {
         await store.put({ ...op, body, dead: true });
         continue;

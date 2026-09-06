@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
+import { compareQueueOrder, createLock, memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -242,6 +242,87 @@ describe('updateQueuedActivityBody', () => {
 // outbox snapshot. That race is what resurrects a just-completed op as a phantom pending row
 // (see the comment on `serialize`), so the guard itself gets its own coverage independent of
 // any particular caller.
+/**
+ * MINOR 3: `idbStore.all()` (`./idb.ts`) sorted on `queued_at ?? 0` alone, and two ops
+ * enqueued in the same millisecond tie on that -- leaving their relative order to fall out of
+ * `IDBObjectStore.getAll()`'s key (UUID) order, which carries no relation to enqueue order at
+ * all. `seq` breaks that tie deterministically; `compareQueueOrder` is the ordering `idbStore`
+ * actually sorts by.
+ */
+describe('compareQueueOrder', () => {
+  it('orders by seq when both ops have one', () => {
+    const a = op('a', { seq: 5 });
+    const b = op('b', { seq: 2 });
+    expect(compareQueueOrder(a, b)).toBeGreaterThan(0);
+    expect(compareQueueOrder(b, a)).toBeLessThan(0);
+  });
+
+  it('falls back to queued_at for a record written before seq existed', () => {
+    const a = op('a', { queued_at: 200 });
+    const b = op('b', { queued_at: 100 });
+    expect(compareQueueOrder(a, b)).toBeGreaterThan(0);
+    expect(compareQueueOrder(b, a)).toBeLessThan(0);
+  });
+
+  it('breaks a tie that queued_at alone cannot: two ops enqueued in the same millisecond', () => {
+    const a = op('a', { queued_at: 1000, seq: 1 });
+    const b = op('b', { queued_at: 1000, seq: 2 });
+    expect(compareQueueOrder(a, b)).toBeLessThan(0);
+    expect(compareQueueOrder(b, a)).toBeGreaterThan(0);
+  });
+
+  it('treats two ops with neither field as tied', () => {
+    expect(compareQueueOrder(op('a'), op('b'))).toBe(0);
+  });
+});
+
+/**
+ * IMPORTANT 1 relies on this mutex to keep a replay pass and a UI write (`updateQueuedActivity`
+ * / `cancelQueuedActivity` in `./api.ts`) from ever touching the outbox store at the same time.
+ */
+describe('createLock', () => {
+  it('runs callers one at a time, in the order run() was called -- not the order their work finishes', async () => {
+    const lock = createLock();
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const first = lock.run(() => new Promise<void>((resolve) => {
+      order.push('first-start');
+      releaseFirst = () => { order.push('first-end'); resolve(); };
+    }));
+    const second = lock.run(async () => { order.push('second'); });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['first-start']); // second must not have started yet
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first-start', 'first-end', 'second']);
+  });
+
+  it('still runs a later caller after an earlier one throws', async () => {
+    const lock = createLock();
+    await expect(lock.run(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    await expect(lock.run(async () => 42)).resolves.toBe(42);
+  });
+
+  it('serves a caller already waiting before one requested later, however many arrive in between', async () => {
+    // This is what stops a UI write from being starved by back-to-back flush passes: once it
+    // has started waiting for the lock, no later-requested run can cut in front of it.
+    const lock = createLock();
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    lock.run(() => new Promise<void>((resolve) => { releaseFirst = resolve; }));
+
+    const waiting = lock.run(async () => { order.push('waiting'); });
+    lock.run(async () => { order.push('late'); });
+
+    await new Promise((r) => setTimeout(r, 0)); // let run()'s executor actually assign releaseFirst
+    releaseFirst();
+    await waiting;
+    expect(order[0]).toBe('waiting');
+  });
+});
+
 describe('serialize', () => {
   it('shares one in-flight run across calls that overlap it', async () => {
     let calls = 0;

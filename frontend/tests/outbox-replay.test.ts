@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createQueued, flushOutbox, onOutboxFlushed, setOutboxStoreForTesting, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { cancelQueuedActivity, createQueued, flushOutbox, onOutboxFlushed, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -164,7 +164,15 @@ describe('flushOutbox and a still-negative queued activity id', () => {
     expect(await outboxDeadCount()).toBe(1);
   });
 
-  it('keeps a negative-activity-id upload queued, not dead, while a live create for its temp id still exists', async () => {
+  /**
+   * MINOR 2: this branch used to `throw new Error(...)`, an ordinary retryable failure --
+   * which both burned an attempt on 'upload' (an op that did nothing wrong) AND stopped the
+   * pass, so 'create', queued right behind it, was never even attempted. Three flushes parked
+   * 'upload' dead while the create it was waiting on was still live and had never once been
+   * sent. The fix (`SkipOp`, `./outbox.ts`) must leave 'upload' completely untouched and let
+   * the pass carry on to 'create' in the very same pass.
+   */
+  it('leaves an upload waiting on its live parent create untouched, and still sends a later op in the same pass', async () => {
     const store = memoryStore();
     setOutboxStoreForTesting(store);
     // Enqueued out of the usual create-then-upload order on purpose: the safety net has to
@@ -174,15 +182,25 @@ describe('flushOutbox and a still-negative queued activity id', () => {
       body: { activity_id: -7 }, blob: new Blob(['x']), filename: 'photo.jpg', attempts: 0,
     });
     await enqueue(store, { id: 'create', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'x' }, tempId: -7, attempts: 0 });
-    globalThis.fetch = vi.fn(async () => { throw new Error('must never be called'); }) as unknown as typeof fetch;
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      urls.push(url);
+      return jsonResponse(201, { id: 77 });
+    }) as unknown as typeof fetch;
 
     await flushOutbox();
 
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    // 'upload' is skipped, never attempted -- fetch is only ever called for 'create'.
+    expect(urls).toEqual(['/api/objects/1/activities']);
     expect(await outboxDeadCount()).toBe(0);
     const upload = (await store.all()).find((o) => o.id === 'upload');
+    // Left exactly alone: no attempt burned, not dead -- the guard must not kill the op it
+    // exists to protect.
+    expect(upload?.attempts).toBe(0);
     expect(upload?.dead).toBeFalsy();
-    expect(upload?.attempts).toBe(1);
+    // 'create' having actually been sent this pass resolves the temp id into the still-queued
+    // upload's body, even though the upload itself wasn't sent.
+    expect(upload?.body.activity_id).toBe(77);
   });
 });
 
@@ -247,5 +265,136 @@ describe('flushOutbox and an unsupported op kind', () => {
 
     expect(urls).toEqual(['/api/objects/1/activities']); // the healthy op behind it still sent
     expect(await outboxDeadCount()).toBe(1);
+  });
+});
+
+/**
+ * IMPORTANT 1: `serialize` (`./outbox.ts`) only guards `flushOutbox` against ANOTHER call to
+ * `flushOutbox` -- it does nothing to stop `ActivityForm.svelte`'s Save/Cancel from writing to
+ * the very op a pass has already read and is mid-`send()` for. Both races were reproduced
+ * directly against the pre-fix code: a pass's retry write-back (using the body/id it captured
+ * at the TOP of the pass, before the UI write happened) landed AFTER the UI write and clobbered
+ * it -- reverting an edited title back to the original on Save, and resurrecting an op Cancel
+ * had already removed. `outboxLock` (`./outbox.ts`'s `createLock`, held by `doFlushOutbox` for
+ * the whole pass and by `updateQueuedActivity`/`cancelQueuedActivity`) makes the two mutually
+ * exclusive: a UI write can only run either fully before or fully after the pass, never interleaved.
+ */
+describe('IMPORTANT 1: a UI write must not interleave with an in-flight replay pass', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('a Save mid-send is not reverted by the pass\'s own failure write-back', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, {
+      id: 'create', kind: 'activity.create', path: '/objects/1/activities',
+      tempId: -1, body: { title: 'old' }, attempts: 0,
+    });
+
+    const calls: Array<Record<string, unknown>> = [];
+    let rejectSend!: (e: unknown) => void;
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push(JSON.parse(init?.body as string));
+      // The send this pass makes for 'create' never settles until the test says so -- this is
+      // the window in which the user hits Save.
+      return new Promise<Response>((_resolve, reject) => { rejectSend = reject; });
+    }) as unknown as typeof fetch;
+
+    const flushPromise = flushOutbox();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].title).toBe('old'); // the pass is genuinely mid-send, with the OLD body
+
+    // Save fires while that request is still in flight.
+    const savePromise = updateQueuedActivity(-1, { title: 'new' });
+
+    // The in-flight request then fails retryably (a dropped connection) -- pre-fix, the pass's
+    // catch would write back `{ ...op, body: { title: 'old' }, attempts: 1 }` right on top of
+    // whatever Save had just written, reverting the edit.
+    rejectSend(new TypeError('Failed to fetch'));
+    const [folded] = await Promise.all([savePromise, flushPromise]);
+
+    expect(folded).toBe(true);
+    const [row] = await store.all();
+    expect(row.body.title).toBe('new'); // never reverted to 'old'
+    expect(row.dead).toBeFalsy();
+  });
+
+  it('a Cancel mid-send is not resurrected by the pass\'s own failure write-back', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, {
+      id: 'create', kind: 'activity.create', path: '/objects/1/activities',
+      tempId: -1, body: { title: 'x' }, attempts: 0,
+    });
+
+    let rejectSend!: (e: unknown) => void;
+    globalThis.fetch = vi.fn(async () => {
+      return new Promise<Response>((_resolve, reject) => { rejectSend = reject; });
+    }) as unknown as typeof fetch;
+
+    const flushPromise = flushOutbox();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // the pass is genuinely mid-send
+
+    // Cancel fires while that request is still in flight.
+    const cancelPromise = cancelQueuedActivity(-1);
+
+    // The in-flight request then fails retryably -- pre-fix, the pass's catch would write the
+    // op straight back (`dead: false`, `attempts: 1`), resurrecting exactly what Cancel had
+    // just removed.
+    rejectSend(new TypeError('Failed to fetch'));
+    const [removed] = await Promise.all([cancelPromise, flushPromise]);
+
+    expect(removed).toBe(true);
+    expect(await store.all()).toHaveLength(0); // must not come back
+  });
+});
+
+/**
+ * MINOR 4(a): `retryDead` used to call `flushOutbox()` exactly once. If a pass was already
+ * running when the dead ops were revived, that call just joined the ALREADY in-flight pass
+ * (`serialize` shares one in-flight run) -- whose snapshot was taken before the revival and so
+ * still shows those ops dead. The user's "try again" silently did nothing until some later,
+ * unrelated trigger happened to flush again.
+ */
+describe('MINOR 4(a): retryDead must not silently join a pass that started before the revival', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+  });
+
+  it('actually resends a revived op even when a pass was already in flight at the moment of revival', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'blocker', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0 });
+    await enqueue(store, { id: 'dead', kind: 'activity.create', path: '/objects/2/activities', body: {}, attempts: 3, dead: true });
+
+    let releaseBlocker!: (v: Response) => void;
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === '/api/objects/1/activities') {
+        return new Promise<Response>((resolve) => { releaseBlocker = resolve; });
+      }
+      return jsonResponse(201, { id: 1 });
+    }) as unknown as typeof fetch;
+
+    // A pass starts and gets stuck mid-send on 'blocker' -- exactly the window in which the
+    // user presses "try again".
+    const stalePass = flushOutbox();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toEqual(['/api/objects/1/activities']);
+
+    const retryPromise = retryDead();
+
+    // Let the stale pass's blocked send finally settle so both promises can resolve.
+    releaseBlocker(jsonResponse(201, { id: 99 }));
+    await Promise.all([stalePass, retryPromise]);
+
+    // The revived op must actually have been resent, not silently left behind because
+    // `retryDead` only joined the pass that predated its own revival.
+    expect(calls).toContain('/api/objects/2/activities');
+    expect((await store.all()).find((o) => o.id === 'dead')).toBeUndefined();
   });
 });
