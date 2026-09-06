@@ -164,4 +164,7 @@ export default {
   'settings.import': 'Zip importieren',
   'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen importiert',
   'settings.version': 'Version',
+  'outbox.pending': '{n} noch zu senden',
+  'outbox.failed': 'Nicht gesendet',
+  'outbox.retry': 'Erneut versuchen',
 } as Record<string, string>;

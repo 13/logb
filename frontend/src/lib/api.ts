@@ -1,3 +1,6 @@
+import { enqueue, newOpId, pendingCount, replay, type OutboxStore, type QueuedOp } from './outbox';
+import { idbStore } from './idb';
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
@@ -55,4 +58,62 @@ export async function uploadRaw<T = unknown>(path: string, blob: Blob, contentTy
 
 export function fileUrl(fileId: number, thumb = false): string {
   return `/api/files/${fileId}${thumb ? '/thumb' : ''}`;
+}
+
+const store: OutboxStore = idbStore();
+
+/** True for "the request never reached the server", false for "the server said no". */
+function isOffline(e: unknown): boolean {
+  return !navigator.onLine || e instanceof TypeError;
+}
+
+/**
+ * POST that survives a dead connection: on a network failure the op is queued and replayed
+ * later. `tempId` is the placeholder the caller shows in the meantime. The `client_op_id` is
+ * generated once here, not per attempt, so every retry of this op — including the one sent
+ * later by `replay` — carries the same id and a lost response can never duplicate the row.
+ */
+export async function createQueued<T>(path: string, body: Record<string, unknown>, tempId?: number): Promise<T | null> {
+  const id = newOpId();
+  try {
+    return await api<T>('POST', path, { ...body, client_op_id: id });
+  } catch (e) {
+    if (!isOffline(e)) throw e;
+    await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0 });
+    return null;
+  }
+}
+
+export function flushOutbox(): Promise<void> {
+  return replay(store, async (op: QueuedOp) => {
+    const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
+    return out ?? null;
+  });
+}
+
+globalThis.addEventListener?.('online', () => { void flushOutbox(); });
+
+export function outboxPending(): Promise<number> {
+  return pendingCount(store);
+}
+
+export async function deadOps(): Promise<QueuedOp[]> {
+  return (await store.all()).filter((o) => o.dead);
+}
+
+/**
+ * Ops still waiting to be sent (never the dead ones) whose target is `path` — used to show a
+ * write made offline in the place it would otherwise appear once the server has it, so it is
+ * never invisible in the meantime. No component reaches into the store directly.
+ */
+export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
+  return (await store.all()).filter((o) => !o.dead && o.path === path);
+}
+
+/** Revive every parked op and try again — the user's "I fixed the wifi" button. */
+export async function retryDead(): Promise<void> {
+  for (const op of await store.all()) {
+    if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
+  }
+  await flushOutbox();
 }

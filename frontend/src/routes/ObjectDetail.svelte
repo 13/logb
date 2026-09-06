@@ -1,15 +1,29 @@
+<script module lang="ts">
+  import type { Activity, MemObject } from '../lib/types';
+
+  /** The last object and activities page fetched for each id, kept only for the lifetime of
+   *  this tab (module scope, so it survives navigating away and back — a fresh component
+   *  instance would otherwise lose it on every remount). A dead connection can still show the
+   *  object it showed a moment ago, and a queued create on top of that (see `pendingActivities`
+   *  below) is what makes an offline log visible immediately instead of behind a "failed to
+   *  fetch" screen. */
+  const objectCache = new Map<number, MemObject>();
+  const activityCache = new Map<number, { items: Activity[]; total: number }>();
+</script>
+
 <script lang="ts">
   import TopBar from '../lib/TopBar.svelte';
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
-  import { api, apiPage, fileUrl } from '../lib/api';
+  import { api, apiPage, fileUrl, pendingOpsFor } from '../lib/api';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, Category, MemObject } from '../lib/types';
+  import type { ActivityInput, Category } from '../lib/types';
+  import type { QueuedOp } from '../lib/outbox';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
@@ -25,17 +39,71 @@
   const PAGE = 100;
 
   async function loadObject() {
-    try { object = await api<MemObject>('GET', `/objects/${oid}`); }
-    catch (e) { error = (e as Error).message; }
+    try {
+      object = await api<MemObject>('GET', `/objects/${oid}`);
+      objectCache.set(oid, object);
+      error = '';
+    } catch (e) {
+      const cached = objectCache.get(oid);
+      if (cached) object = cached;
+      else error = (e as Error).message;
+    }
   }
+
+  /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
+   *  real activities without colliding with one (real ids are always positive). */
+  function pendingId(opId: string): number {
+    let h = 0;
+    for (let i = 0; i < opId.length; i++) h = (h * 31 + opId.charCodeAt(i)) | 0;
+    return -(Math.abs(h) || 1);
+  }
+
+  /** A queued 'activity.create' has no server row yet, so it renders straight from what the
+   *  form queued rather than from a GET — otherwise a log made underground would stay invisible
+   *  until the phone gets signal back, which is exactly the failure this task exists to avoid. */
+  function pendingToActivity(op: QueuedOp): Activity {
+    const b = op.body as Partial<ActivityInput>;
+    return {
+      id: pendingId(op.id), object_id: oid,
+      date: typeof b.date === 'string' ? b.date : new Date().toISOString().slice(0, 10),
+      category: (b.category as Category) ?? 'other',
+      title: typeof b.title === 'string' ? b.title : '',
+      notes: typeof b.notes === 'string' ? b.notes : '',
+      counter_value: typeof b.counter_value === 'number' ? b.counter_value : null,
+      cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
+      quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
+    };
+  }
+
+  async function pendingActivities(): Promise<Activity[]> {
+    const ops = await pendingOpsFor(`/objects/${oid}/activities`);
+    return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
+  }
+
   /// `append` fetches the next page and adds to what is on screen; otherwise it starts over,
-  /// which is what a filter change wants.
+  /// which is what a filter change wants. A pending queued create for this object is prepended
+  /// to a fresh (non-append) load, since it will not appear in any page the server sends back
+  /// until the outbox has replayed it.
   async function loadActivities(append = false) {
     const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? activities.length : 0) });
     if (category) params.set('category', category);
-    const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
-    activities = append ? [...activities, ...page.items] : page.items;
-    activityTotal = page.total;
+    let items: Activity[] = [];
+    let total = 0;
+    try {
+      const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+      items = page.items;
+      total = page.total;
+      if (!append) activityCache.set(oid, { items, total });
+    } catch (e) {
+      if (append) throw e;
+      const cached = activityCache.get(oid);
+      items = cached?.items ?? [];
+      total = cached?.total ?? 0;
+    }
+    const pending = append ? [] : await pendingActivities();
+    activities = append ? [...activities, ...items] : [...pending, ...items];
+    activityTotal = total + pending.length;
   }
 
   async function loadMore() {

@@ -164,4 +164,7 @@ export default {
   'settings.import': 'Import zip',
   'settings.import-done': 'Imported {objects} objects, {activities} activities, {attachments} files, {reminders} reminders',
   'settings.version': 'Version',
+  'outbox.pending': '{n} waiting to send',
+  'outbox.failed': 'Could not be sent',
+  'outbox.retry': 'Try again',
 } as Record<string, string>;

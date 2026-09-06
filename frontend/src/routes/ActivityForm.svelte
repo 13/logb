@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
-  import { api, fileUrl } from '../lib/api';
+  import { api, createQueued, fileUrl } from '../lib/api';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
@@ -91,8 +91,12 @@
     if (bad) { error = $t(bad); return; }
     busy = true; error = '';
     try {
-      if (saved) await api('PATCH', `/activities/${saved.id}`, body);
-      else await api('POST', `/objects/${oid}/activities`, body);
+      if (saved) {
+        await api('PATCH', `/activities/${saved.id}`, body);
+      } else {
+        // null means "queued, not sent": the row exists locally and will be replayed.
+        await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>);
+      }
       autoDraft = false;
       go(`/objects/${oid}`, true);
     } catch (err) { error = (err as Error).message; } finally { busy = false; }

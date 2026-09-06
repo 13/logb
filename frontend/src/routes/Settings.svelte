@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
-  import { api, uploadRaw } from '../lib/api';
+  import { api, deadOps, retryDead, uploadRaw } from '../lib/api';
   import { t } from '../i18n';
   import { LANG_NAMES, SUPPORTED } from '../i18n/detect';
   import { settings } from '../stores/settings';
   import { currency, user, logout, logoutEverywhere } from '../stores/session';
   import type { ImportCounts, User } from '../lib/types';
+  import type { QueuedOp } from '../lib/outbox';
 
+  let dead = $state<QueuedOp[]>([]);
   let users = $state<User[]>([]);
   let newName = $state('');
   let newPass = $state('');
@@ -22,8 +24,14 @@
 
   onMount(async () => {
     currencyText = $currency;
+    dead = await deadOps();
     if (isAdmin) await loadUsers();
   });
+
+  async function retryOutbox() {
+    await retryDead();
+    dead = await deadOps();
+  }
 
   async function loadUsers() {
     try { users = await api<User[]>('GET', '/users'); } catch (e) { error = (e as Error).message; }
@@ -76,6 +84,19 @@
   <TopBar title={$t('settings.title')} backTo="/" />
   {#if error}<p class="error">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
+
+  {#if dead.length > 0}
+    <h2>{$t('outbox.failed')}</h2>
+    <div class="list">
+      {#each dead as op (op.id)}
+        <div class="card">
+          <b>{String(op.body.title ?? op.kind)}</b>
+          <span class="muted">{op.path}</span>
+        </div>
+      {/each}
+    </div>
+    <button onclick={retryOutbox}>{$t('outbox.retry')}</button>
+  {/if}
 
   <h2>{$t('settings.language')}</h2>
   <div class="field">
