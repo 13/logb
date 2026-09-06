@@ -57,7 +57,7 @@
 - Consumes: `load_owned_object` from `src/api/objects.rs`.
 - Produces: `GET /api/objects/{id}/recent-titles` → `[{ title: string, category: string, last_date: string, last_cost_cents: number | null, last_counter: number | null }]`, at most 20, distinct on `(title, category)`, newest first.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/activities.rs`:
 
@@ -105,12 +105,12 @@ async fn recent_titles_of_another_users_object_are_404() {
 }
 ```
 
-- [ ] **Step 2: Run the test and watch it fail**
+- [x] **Step 2: Run the test and watch it fail**
 
 Run: `cargo test --test activities recent_titles`
 Expected: FAIL — the route does not exist, so the response is 404 with an HTML/JSON body and `out.len()` panics on a non-array, or the `assert_eq!(res.status(), 404)` in the second test passes for the wrong reason. Both must be red before proceeding on the first test.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `src/api/activities.rs`, extend `router()`:
 
@@ -123,7 +123,7 @@ pub fn router() -> Router<App> {
 }
 ```
 
-- [ ] **Step 4: Implement the handler**
+- [x] **Step 4: Implement the handler**
 
 Add to `src/api/activities.rs`, below `list`:
 
@@ -172,12 +172,12 @@ async fn recent_titles(
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test --test activities`
 Expected: PASS, both new tests green and the existing ones unchanged.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/api/activities.rs tests/activities.rs
@@ -200,7 +200,7 @@ that one joins every attachment of the object, which a datalist does not need."
 - Consumes: `GET /objects/{id}/recent-titles` from Task 1.
 - Produces: `suggestionsFor(all: TitleSuggestion[], category: Category | null): TitleSuggestion[]` from `frontend/src/lib/activity-form.ts`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `frontend/tests/activity-form.test.ts`:
 
@@ -232,12 +232,12 @@ The file already imports `describe`/`it`/`expect` from vitest and pulls helpers 
 `../src/lib/activity-form` on line 2. Extend those existing import lines with `suggestionsFor`
 and add the `TitleSuggestion` type import — do not add a second `from 'vitest'` import.
 
-- [ ] **Step 2: Run the test and watch it fail**
+- [x] **Step 2: Run the test and watch it fail**
 
 Run: `cd frontend && npx vitest run tests/activity-form.test.ts`
 Expected: FAIL with "No 'suggestionsFor' export is defined".
 
-- [ ] **Step 3: Add the type and the helper**
+- [x] **Step 3: Add the type and the helper**
 
 In `frontend/src/lib/types.ts`, after the `Activity` interfaces:
 
@@ -268,12 +268,12 @@ export function suggestionsFor(all: TitleSuggestion[], category: Category | null
 
 Keep the existing `import type { Activity, ActivityInput } from './types';` line replaced by the one above rather than adding a second import.
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `cd frontend && npx vitest run tests/activity-form.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Add the i18n keys**
+- [x] **Step 5: Add the i18n keys**
 
 In `frontend/src/i18n/en.ts`, in the activity block:
 
@@ -293,7 +293,7 @@ In `frontend/src/i18n/de.ts`, the same keys:
   'dash.log': 'Erfassen',
 ```
 
-- [ ] **Step 6: Wire suggestions into the form**
+- [x] **Step 6: Wire suggestions into the form**
 
 In `frontend/src/routes/ActivityForm.svelte`, add to the imports:
 
@@ -345,7 +345,7 @@ Replace the title field markup with:
     </div>
 ```
 
-- [ ] **Step 7: Delete the abandoned draft on cancel**
+- [x] **Step 7: Delete the abandoned draft on cancel**
 
 `ensureSaved()` inserts a real activity so uploads have a parent. Cancelling afterwards
 currently leaves it in the timeline. In `frontend/src/routes/ActivityForm.svelte`:
@@ -381,7 +381,7 @@ never deletes anything. Point the cancel button at the new function:
       <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
 ```
 
-- [ ] **Step 8: Add the camera input**
+- [x] **Step 8: Add the camera input**
 
 Replace the markup in `frontend/src/lib/FilePicker.svelte` with:
 
@@ -406,7 +406,7 @@ Declare `let cam: HTMLInputElement;` beside `let el: HTMLInputElement;`, extend 
 rule to `.picker input { display: none; }` (already correct — it matches both), and reset
 both inputs in the `finally` block: `el.value = ''; cam.value = '';`.
 
-- [ ] **Step 9: Add the quick-log button to the object card**
+- [x] **Step 9: Add the quick-log button to the object card**
 
 In `frontend/src/lib/ObjectCard.svelte`, the card is itself a `<button>`, so the new
 control cannot nest inside it. Wrap both in a row instead:
@@ -427,12 +427,12 @@ control cannot nest inside it. Wrap both in a row instead:
   .quicklog { flex: none; width: 48px; font-size: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius); }
 ```
 
-- [ ] **Step 10: Verify the whole frontend**
+- [x] **Step 10: Verify the whole frontend**
 
 Run: `cd frontend && npm test && npm run check`
 Expected: all vitest suites PASS, `svelte-check` reports 0 errors.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add frontend/src frontend/tests
@@ -455,7 +455,7 @@ now removes the draft that uploading a file silently created."
 **Interfaces:**
 - Produces: `quantity_milli: number | null` on the activity row and input; `fuel_unit: 'l' | 'gal' | 'kwh' | null` on the object row and input.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/activities.rs`:
 
@@ -510,12 +510,12 @@ async fn fuel_unit_round_trips_and_is_validated() {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `cargo test --test activities fuel_quantity && cargo test --test objects fuel_unit`
 Expected: FAIL — `quantity_milli` and `fuel_unit` are dropped by serde on input and absent from the response, so both `assert_eq!` on the echoed value fail.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `migrations/0003_fuel_quantity.sql`:
 
@@ -528,7 +528,7 @@ ALTER TABLE activities ADD COLUMN quantity_milli INTEGER;
 ALTER TABLE objects ADD COLUMN fuel_unit TEXT CHECK (fuel_unit IN ('l', 'gal', 'kwh'));
 ```
 
-- [ ] **Step 4: Thread `quantity_milli` through the activity API**
+- [x] **Step 4: Thread `quantity_milli` through the activity API**
 
 In `src/api/activities.rs`:
 
@@ -552,7 +552,7 @@ In `src/api/activities.rs`:
   with one more `?` placeholder and `.bind(body.quantity_milli)` in matching position, and
   to the `UPDATE` in `update` as `quantity_milli = ?` with its bind before `updated_at`.
 
-- [ ] **Step 5: Thread `fuel_unit` through the object API**
+- [x] **Step 5: Thread `fuel_unit` through the object API**
 
 In `src/api/objects.rs`:
 
@@ -573,13 +573,13 @@ In `src/api/objects.rs`:
 - Add `fuel_unit` to every `SELECT` column list in the file, to the `INSERT`/`RETURNING`
   clauses, and to the `UPDATE` statement, mirroring how `counter_unit` is handled in each.
 
-- [ ] **Step 6: Run the full backend suite**
+- [x] **Step 6: Run the full backend suite**
 
 Run: `cargo test`
 Expected: PASS. Export/import tests still pass — they select named columns, so a new
 nullable column does not disturb them.
 
-- [ ] **Step 7: Carry both columns through export and import**
+- [x] **Step 7: Carry both columns through export and import**
 
 A column the archive does not carry is a column a restore silently erases. In
 `src/api/export.rs`:
@@ -638,7 +638,7 @@ they differ from `/import` and `file`.
 Run: `cargo test --test export`
 Expected: PASS.
 
-- [ ] **Step 8: Update the frontend types**
+- [x] **Step 8: Update the frontend types**
 
 In `frontend/src/lib/types.ts`, add `quantity_milli: number | null` to both `Activity` and
 `ActivityInput`, and `fuel_unit: 'l' | 'gal' | 'kwh' | null` to `MemObject` and `ObjectInput`.
@@ -648,7 +648,7 @@ In `frontend/src/lib/activity-form.ts`, add `quantity_milli: null` to `emptyActi
 Run: `cd frontend && npm test && npm run check`
 Expected: PASS with 0 errors.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add migrations src frontend/src/lib/types.ts frontend/src/lib/activity-form.ts tests
@@ -676,7 +676,7 @@ for the same reason money is stored in cents."
   - `domain::insights::cost_per_counter_milli(total_cost_cents: i64, span: i64) -> Option<i64>`
   - `GET /api/objects/{id}/insights`
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 Create `src/domain/insights.rs` containing only the tests:
 
@@ -721,7 +721,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register the module and watch it fail**
+- [x] **Step 2: Register the module and watch it fail**
 
 In `src/domain/mod.rs`:
 
@@ -733,7 +733,7 @@ pub mod reminder;
 Run: `cargo test --lib insights`
 Expected: FAIL — `cannot find type 'Fill' in this scope` and the two functions unresolved.
 
-- [ ] **Step 3: Implement the arithmetic**
+- [x] **Step 3: Implement the arithmetic**
 
 Prepend to `src/domain/insights.rs`:
 
@@ -769,12 +769,12 @@ pub fn cost_per_counter_milli(total_cost_cents: i64, span: i64) -> Option<i64> {
 
 `sorted` needs `Vec`, so `fills.to_vec()` requires `Fill: Clone` — the derive above covers it.
 
-- [ ] **Step 4: Run the unit tests**
+- [x] **Step 4: Run the unit tests**
 
 Run: `cargo test --lib insights`
 Expected: PASS, all five tests.
 
-- [ ] **Step 5: Commit the domain layer**
+- [x] **Step 5: Commit the domain layer**
 
 ```bash
 git add src/domain
@@ -785,7 +785,7 @@ marks the start of the window and contributes no fuel to it -- is testable
 without a database."
 ```
 
-- [ ] **Step 6: Write the failing endpoint test**
+- [x] **Step 6: Write the failing endpoint test**
 
 Create `tests/insights.rs`:
 
@@ -865,13 +865,13 @@ async fn insights_of_another_users_object_are_404() {
 }
 ```
 
-- [ ] **Step 7: Run it and watch it fail**
+- [x] **Step 7: Run it and watch it fail**
 
 Run: `cargo test --test insights`
 Expected: FAIL — the route does not exist; the JSON body is the SPA fallback, so indexing
 `out["by_year"]` yields null and `as_array()` panics.
 
-- [ ] **Step 8: Implement the endpoint**
+- [x] **Step 8: Implement the endpoint**
 
 Create `src/api/insights.rs`:
 
@@ -1004,12 +1004,12 @@ async fn read(
 Register it in `src/api/mod.rs`: add `pub mod insights;` to the module list and
 `.merge(insights::router())` to `router()`, after `.merge(objects::router())`.
 
-- [ ] **Step 9: Run the tests**
+- [x] **Step 9: Run the tests**
 
 Run: `cargo test --test insights && cargo test`
 Expected: PASS across the board.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/api tests/insights.rs
@@ -1033,7 +1033,7 @@ timeline into the browser to add it up there."
 - Consumes: `GET /objects/{id}/insights` from Task 4.
 - Produces: `Insights` interface in `types.ts`; `perCounter(milli, currency, locale)` and `quantity(milli, unit, locale)` in `frontend/src/lib/format.ts`.
 
-- [ ] **Step 1: Write the failing formatter tests**
+- [x] **Step 1: Write the failing formatter tests**
 
 Append to `frontend/tests/format.test.ts`:
 
@@ -1062,12 +1062,12 @@ describe('quantity', () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `cd frontend && npx vitest run tests/format.test.ts`
 Expected: FAIL — "No 'perCounter' export is defined".
 
-- [ ] **Step 3: Implement the formatters**
+- [x] **Step 3: Implement the formatters**
 
 Append to `frontend/src/lib/format.ts`:
 
@@ -1089,7 +1089,7 @@ export function quantity(milli: number | null | undefined, unit: string, locale:
 Run: `cd frontend && npx vitest run tests/format.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Add the types and i18n keys**
+- [x] **Step 4: Add the types and i18n keys**
 
 In `frontend/src/lib/types.ts`:
 
@@ -1131,7 +1131,7 @@ In `frontend/src/i18n/de.ts`:
   'object.fuel-unit': 'Tank-Einheit',
 ```
 
-- [ ] **Step 5: Build the Insights component**
+- [x] **Step 5: Build the Insights component**
 
 Create `frontend/src/lib/Insights.svelte`:
 
@@ -1207,7 +1207,7 @@ Create `frontend/src/lib/Insights.svelte`:
 </style>
 ```
 
-- [ ] **Step 6: Mount it in the Info tab**
+- [x] **Step 6: Mount it in the Info tab**
 
 In `frontend/src/routes/ObjectDetail.svelte`, import it (`import Insights from '../lib/Insights.svelte';`)
 and render it in the `{:else}` branch of the tab block, directly above `<div class="list info-actions">`:
@@ -1217,7 +1217,7 @@ and render it in the `{:else}` branch of the tab block, directly above `<div cla
       <Insights objectId={oid} unit={object.counter_unit} />
 ```
 
-- [ ] **Step 7: Add the quantity field to the activity form**
+- [x] **Step 7: Add the quantity field to the activity form**
 
 In `frontend/src/routes/ActivityForm.svelte`, add `let quantityText = $state('');`, set it in
 `onMount` for an edited activity (`quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);`),
@@ -1238,7 +1238,7 @@ and render it next to the cost field, only for fuel:
       {/if}
 ```
 
-- [ ] **Step 8: Add the fuel-unit selector to the object form**
+- [x] **Step 8: Add the fuel-unit selector to the object form**
 
 In `frontend/src/routes/ObjectForm.svelte`, beside the existing counter-unit select, following
 the same markup pattern already used there:
@@ -1258,12 +1258,12 @@ the same markup pattern already used there:
 Add `fuel_unit: null` to whichever helper in that file builds an empty object input, and
 `fuel_unit: o.fuel_unit` where an existing object is loaded into the form.
 
-- [ ] **Step 9: Verify**
+- [x] **Step 9: Verify**
 
 Run: `cd frontend && npm test && npm run check`
 Expected: PASS, 0 errors.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add frontend/src frontend/tests
@@ -1288,7 +1288,7 @@ frontend it is drawn on."
   - `GET /api/reminders/due?within_days=N` with `days_until` and `counter_until` on each item
   - `POST /api/reminders/{id}/snooze { "days": n }`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Append inside the `mod tests` block of `src/domain/reminder.rs`:
 
@@ -1313,12 +1313,12 @@ Append inside the `mod tests` block of `src/domain/reminder.rs`:
     }
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `cargo test --lib reminder::tests::snooze`
 Expected: FAIL — `cannot find function 'snoozed_date' in this scope`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add to `src/domain/reminder.rs`, above the tests:
 
@@ -1348,7 +1348,7 @@ pub fn counter_until(current: Option<i64>, due: Option<i64>) -> Option<i64> {
 Run: `cargo test --lib reminder`
 Expected: PASS.
 
-- [ ] **Step 4: Write the failing endpoint tests**
+- [x] **Step 4: Write the failing endpoint tests**
 
 Append to `tests/reminders.rs`:
 
@@ -1429,13 +1429,13 @@ async fn a_done_reminder_cannot_be_snoozed() {
 
 If `tests/reminders.rs` does not already `use serde_json::json;`, add it at the top.
 
-- [ ] **Step 5: Run and watch them fail**
+- [x] **Step 5: Run and watch them fail**
 
 Run: `cargo test --test reminders`
 Expected: FAIL — `within_days` is ignored (the lookahead list comes back empty) and
 `/snooze` is 404.
 
-- [ ] **Step 6: Implement the lookahead**
+- [x] **Step 6: Implement the lookahead**
 
 In `src/api/reminders.rs`:
 
@@ -1497,7 +1497,7 @@ async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQ
 }
 ```
 
-- [ ] **Step 7: Implement snooze**
+- [x] **Step 7: Implement snooze**
 
 > **Superseded during implementation.** Snooze ships as a *suppression* — a `snoozed_until`
 > column (migration `0004`) gates `is_due` — not as a rewrite of `due_date`. Rewriting the date
@@ -1547,12 +1547,12 @@ async fn snooze(
 A counter-only reminder gains a date here; the table's
 `CHECK (due_date IS NOT NULL OR due_counter IS NOT NULL)` is satisfied either way.
 
-- [ ] **Step 8: Run the backend suite**
+- [x] **Step 8: Run the backend suite**
 
 Run: `cargo test`
 Expected: PASS, including `tests/notify.rs`, which must still see exactly today's due set.
 
-- [ ] **Step 9: Commit the backend**
+- [x] **Step 9: Commit the backend**
 
 ```bash
 git add src tests
@@ -1562,7 +1562,7 @@ Finding out something was due only after it was due is the failure mode of a
 reminder list. within_days defaults to 0 so the daily digest is untouched."
 ```
 
-- [ ] **Step 10: Split the dashboard banner**
+- [x] **Step 10: Split the dashboard banner**
 
 In `frontend/src/lib/types.ts`, add `days_until: number | null; counter_until: number | null` to `Reminder`.
 
@@ -1638,7 +1638,7 @@ Add a snooze button to each overdue row in the first banner:
   .snooze { font-size: .8rem; padding: 2px 6px; }
 ```
 
-- [ ] **Step 11: Verify and commit**
+- [x] **Step 11: Verify and commit**
 
 Run: `cd frontend && npm test && npm run check`
 Expected: PASS, 0 errors.
@@ -1663,7 +1663,7 @@ the distance in days or counter units."
 **Interfaces:**
 - Produces: `client_op_id: string | null` accepted on activity create (JSON field) and attachment upload (multipart field). A repeat create with a known id returns the existing row with **200**, not 201.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/activities.rs`:
 
@@ -1713,12 +1713,12 @@ async fn one_client_op_id_cannot_be_reused_across_objects() {
 }
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `cargo test --test activities replayed`
 Expected: FAIL — the second POST returns 201 and the list has two entries.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `migrations/0005_client_op_id.sql`:
 
@@ -1735,7 +1735,7 @@ CREATE UNIQUE INDEX idx_attachments_client_op
   ON attachments(client_op_id) WHERE client_op_id IS NOT NULL;
 ```
 
-- [ ] **Step 4: Handle it in the activity create**
+- [x] **Step 4: Handle it in the activity create**
 
 In `src/api/activities.rs`, add to `ActivityInput`:
 
@@ -1784,12 +1784,12 @@ async fn create(
 Keep the column order in the `SELECT` above identical to every other `ActivityRow` query in
 the file — sqlx maps by name, but a diverging list is how a column gets forgotten.
 
-- [ ] **Step 5: Run the activity tests**
+- [x] **Step 5: Run the activity tests**
 
 Run: `cargo test --test activities`
 Expected: PASS.
 
-- [ ] **Step 6: Do the same for attachments**
+- [x] **Step 6: Do the same for attachments**
 
 In `src/api/attachments.rs`, add `pub client_op_id: Option<String>,` to `AttachmentOut` and
 `a.client_op_id` to both `SELECT` column lists in `load_owned` and `for_object`.
@@ -1878,12 +1878,12 @@ async fn a_replayed_upload_returns_the_first_attachment() {
 Use whatever fixture bytes `tests/attachments.rs` already defines for a tiny PNG instead of
 `common::PNG_1PX` if the constant is named differently there.
 
-- [ ] **Step 7: Run the whole suite**
+- [x] **Step 7: Run the whole suite**
 
 Run: `cargo test`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add migrations src tests
@@ -1911,7 +1911,7 @@ column is NULL for every write from an online client, so the index stays empty."
   - `enqueue(store, op)`, `replay(store, send)`, `pendingCount(store)`
 - The `send` parameter of `replay` is `(op: QueuedOp) => Promise<{ id: number } | null>`, so the tests can drive it without a network.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `frontend/tests/outbox.test.ts`:
 
@@ -1968,12 +1968,12 @@ describe('outbox', () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `cd frontend && npx vitest run tests/outbox.test.ts`
 Expected: FAIL — "Failed to resolve import '../src/lib/outbox'".
 
-- [ ] **Step 3: Implement the outbox**
+- [x] **Step 3: Implement the outbox**
 
 Create `frontend/src/lib/outbox.ts`:
 
@@ -2063,12 +2063,12 @@ export async function replay(
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd frontend && npx vitest run tests/outbox.test.ts`
 Expected: PASS, all five.
 
-- [ ] **Step 5: Commit the module**
+- [x] **Step 5: Commit the module**
 
 ```bash
 git add frontend/src/lib/outbox.ts frontend/tests/outbox.test.ts
@@ -2079,7 +2079,7 @@ attachment upload that overtook the activity create it hangs on would be sent
 with a temp id the server has never heard of."
 ```
 
-- [ ] **Step 6: Add the IndexedDB store**
+- [x] **Step 6: Add the IndexedDB store**
 
 Create `frontend/src/lib/idb.ts`:
 
@@ -2122,7 +2122,7 @@ export function idbStore(): OutboxStore {
 Add `queued_at?: number` to `QueuedOp` in `outbox.ts` so this compiles, and note in its
 doc comment that the memory store does not need it because arrays already keep order.
 
-- [ ] **Step 7: Wire it into the API client**
+- [x] **Step 7: Wire it into the API client**
 
 In `frontend/src/lib/api.ts`, add a queueing create path used by the activity form and the
 reminder-done dialog. Only a genuine network failure queues — an HTTP 4xx is a rejection,
@@ -2166,7 +2166,7 @@ globalThis.addEventListener?.('online', () => { void flushOutbox(); });
 
 Call `void flushOutbox();` once from `frontend/src/main.ts` at startup.
 
-- [ ] **Step 8: Show the queue in the UI**
+- [x] **Step 8: Show the queue in the UI**
 
 First, three more exports from `frontend/src/lib/api.ts`, so no component reaches into the
 store directly:
@@ -2261,7 +2261,7 @@ and in `frontend/src/i18n/de.ts`:
   'outbox.retry': 'Erneut versuchen',
 ```
 
-- [ ] **Step 9: Write the offline e2e test**
+- [x] **Step 9: Write the offline e2e test**
 
 Create `frontend/tests-e2e/04-offline.spec.ts`. Read `frontend/tests-e2e/02-lifecycle.spec.ts`
 first and reuse its setup verbatim — the suite runs serially against one shared server
@@ -2287,7 +2287,7 @@ test('an activity logged offline appears once after reconnecting', async ({ page
 });
 ```
 
-- [ ] **Step 10: Verify everything**
+- [x] **Step 10: Verify everything**
 
 Run: `cd frontend && npm test && npm run check && npm run e2e`
 Expected: vitest PASS, `svelte-check` 0 errors, Playwright PASS including the new spec.
@@ -2295,7 +2295,7 @@ Expected: vitest PASS, `svelte-check` 0 errors, Playwright PASS including the ne
 Run: `cargo test`
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add frontend
