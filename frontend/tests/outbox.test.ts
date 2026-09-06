@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { compareQueueOrder, createLock, memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
+import { compareQueueOrder, createLock, createSeqReserver, memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -455,5 +455,63 @@ describe('createLock across tabs', () => {
     releaseFirst();
     await waiting;
     expect(order[0]).toBe('waiting');
+  });
+});
+
+/**
+ * `seq` is what gives the queue a deterministic order (see `compareQueueOrder`), and it is
+ * handed out by a counter seeded once from whatever is already in the store.
+ */
+describe('createSeqReserver', () => {
+  it('hands out strictly increasing values and reads the store only once', async () => {
+    let reads = 0;
+    const reserve = createSeqReserver(async () => { reads++; return 41; });
+
+    expect(await Promise.all([reserve(), reserve(), reserve()])).toEqual([42, 43, 44]);
+    expect(await reserve()).toBe(45);
+    expect(reads).toBe(1);
+  });
+
+  it('starts past the highest value already in the store', async () => {
+    const reserve = createSeqReserver(async () => 1_700_000_000_000);
+    expect(await reserve()).toBe(1_700_000_000_001);
+  });
+
+  /**
+   * The regression this exists for: the seed used to be kept as a promise that was never
+   * cleared on failure, so ONE transient read error (a connection closed by `versionchange`, a
+   * quota hiccup) left every later reservation inheriting that same rejection. Every `put`
+   * after it rejected, and `createQueued`/`uploadQueued` told the user each offline write was
+   * lost -- for the rest of the tab's life, with no way back but a reload.
+   */
+  it('recovers from a failed seeding read instead of poisoning every later reservation', async () => {
+    let attempt = 0;
+    const reserve = createSeqReserver(async () => {
+      attempt++;
+      if (attempt === 1) throw new Error('IndexedDB went away');
+      return 10;
+    });
+
+    await expect(reserve()).rejects.toThrow('IndexedDB went away');
+
+    expect(await reserve()).toBe(11);
+    expect(await reserve()).toBe(12);
+    // Re-read exactly once, on the retry -- not on every reservation from then on.
+    expect(attempt).toBe(2);
+  });
+
+  it('fails only the reservations that were already chained onto the failed seed', async () => {
+    let attempt = 0;
+    const reserve = createSeqReserver(async () => {
+      attempt++;
+      if (attempt === 1) throw new Error('nope');
+      return 100;
+    });
+
+    const [a, b] = await Promise.allSettled([reserve(), reserve()]);
+    expect(a.status).toBe('rejected');
+    expect(b.status).toBe('rejected');
+
+    expect(await reserve()).toBe(101);
   });
 });

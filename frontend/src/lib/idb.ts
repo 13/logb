@@ -1,4 +1,4 @@
-import { compareQueueOrder, type OutboxStore, type QueuedOp } from './outbox';
+import { compareQueueOrder, createSeqReserver, type OutboxStore, type QueuedOp } from './outbox';
 
 const DB = 'memto-outbox';
 const STORE = 'ops';
@@ -51,21 +51,15 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
  * epoch-millisecond timestamp, so seeding here starts the counter at roughly "now" and counts
  * up from there, strictly past every legacy value.
  *
- * A module-level promise, not a plain number, so that concurrent `put`s -- e.g. attaching
- * several files in one go -- each reserve a distinct value by chaining onto it, rather than two
- * calls racing to read the same "current max" and handing out the same `seq` twice.
+ * The chaining that lets concurrent `put`s -- e.g. attaching several files in one go -- each
+ * reserve a distinct value, and the recovery from a failed seeding read, both live in
+ * `createSeqReserver` (./outbox.ts), where they are unit-testable without an IndexedDB. This
+ * supplies only the read.
  */
-let nextSeq: Promise<number> | null = null;
-
-function reserveSeq(): Promise<number> {
-  if (!nextSeq) {
-    nextSeq = run<QueuedOp[]>('readonly', (s) => s.getAll() as IDBRequest<QueuedOp[]>)
-      .then((rows) => 1 + rows.reduce((max, r) => Math.max(max, r.seq ?? r.queued_at ?? 0), 0));
-  }
-  const reserved = nextSeq;
-  nextSeq = reserved.then((n) => n + 1);
-  return reserved;
-}
+const reserveSeq = createSeqReserver(async () => {
+  const rows = await run<QueuedOp[]>('readonly', (s) => s.getAll() as IDBRequest<QueuedOp[]>);
+  return rows.reduce((max, r) => Math.max(max, r.seq ?? r.queued_at ?? 0), 0);
+});
 
 /**
  * Insertion order is preserved: keys are UUIDs, so `getAll()` returns them in key order, which
