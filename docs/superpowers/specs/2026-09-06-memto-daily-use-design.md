@@ -153,12 +153,24 @@ the current dashboard call keep their behavior exactly. Each item gains:
 - `days_until: number | null` — negative when overdue
 - `counter_until: number | null` — counter distance remaining
 
-`POST /reminders/{id}/snooze { "days": 7 }` sets `due_date` to `days` after the later of
-today and the current `due_date` — snoozing means "not now, in a week", so a reminder
-three months overdue lands a week out, not three months in the past plus seven days.
-A null `due_date` becomes today + days. Rejects a reminder that is already done (409)
-and `days` outside 1..365 (400). The `CHECK (due_date IS NOT NULL OR due_counter
-IS NOT NULL)` constraint is satisfied either way.
+`POST /reminders/{id}/snooze { "days": 7 }` sets a new `snoozed_until` column to `days`
+after the later of today and the current `due_date` — snoozing means "not now, in a
+week", so a reminder three months overdue lands a week out, not three months in the past
+plus seven days. `is_due` returns false while `snoozed_until` is strictly after today,
+and the snooze lapses on that date. Rejects a reminder that is already done (409) and
+`days` outside 1..365 (400).
+
+Snooze *suppresses*; it does not rewrite `due_date`. This was settled during
+implementation, replacing an earlier design that pushed `due_date` forward. Rewriting the
+date cannot suppress a reminder that is due by counter — `is_due` is `by_date ||
+by_counter`, so the row stayed due and the button visibly did nothing, in exactly the
+case you would reach for it: the odometer is past the service interval and the garage is
+next week. Suppressing also keeps the real due date intact, so `days_until` stays
+truthful while the reminder is hidden.
+
+Every count of what is due shares that gate, including the object's `due_reminder_count`,
+which drives the red badges on the dashboard card and the reminders tab. A snooze that
+worked on one screen and not another would be worse than none.
 
 ### C4. UI
 
