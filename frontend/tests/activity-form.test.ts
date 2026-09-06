@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate } from '../src/lib/activity-form';
-import type { Activity } from '../src/lib/types';
+import { emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
+import type { Activity, TitleSuggestion } from '../src/lib/types';
 
 function a(id: number, date: string): Activity {
-  return { id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, created_at: '', updated_at: '', attachments: [] };
+  return { id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [] };
 }
 
 describe('activity form', () => {
@@ -13,8 +13,8 @@ describe('activity form', () => {
   });
 
   it('maps an activity to input', () => {
-    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12 };
-    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500 });
+    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300 };
+    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300 });
   });
 
   it('validates required fields', () => {
@@ -22,6 +22,8 @@ describe('activity form', () => {
     expect(validateActivity({ ...base, title: '' })).toBe('activity.title');
     expect(validateActivity({ ...base, title: 'x', date: '' })).toBe('activity.date');
     expect(validateActivity({ ...base, title: 'x', cost_cents: NaN })).toBe('activity.cost');
+    expect(validateActivity({ ...base, title: 'x', counter_value: NaN })).toBe('activity.counter');
+    expect(validateActivity({ ...base, title: 'x', quantity_milli: NaN })).toBe('activity.quantity');
     expect(validateActivity({ ...base, title: 'x' })).toBeNull();
   });
 
@@ -33,5 +35,24 @@ describe('activity form', () => {
   it('reads a photo date', () => {
     expect(exifDate({ taken_at: '2024-05-01T12:00:00' })).toBe('2024-05-01');
     expect(exifDate({ taken_at: null })).toBeNull();
+  });
+});
+
+const s = (title: string, category: string): TitleSuggestion =>
+  ({ title, category, last_date: '2026-01-01', last_cost_cents: null, last_counter: null }) as TitleSuggestion;
+
+describe('suggestionsFor', () => {
+  it('narrows to the chosen category', () => {
+    const all = [s('Fuel', 'fuel'), s('Oil change', 'maintenance')];
+    expect(suggestionsFor(all, 'fuel').map((x) => x.title)).toEqual(['Fuel']);
+  });
+
+  it('keeps order and drops repeated titles when no category is chosen', () => {
+    const all = [s('Fuel', 'fuel'), s('Fuel', 'other'), s('Oil change', 'maintenance')];
+    expect(suggestionsFor(all, null).map((x) => x.title)).toEqual(['Fuel', 'Oil change']);
+  });
+
+  it('returns an empty list when nothing matches', () => {
+    expect(suggestionsFor([s('Fuel', 'fuel')], 'repair')).toEqual([]);
   });
 });

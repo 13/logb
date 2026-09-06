@@ -83,6 +83,16 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     Ok(token)
 }
 
+/// Drops every session belonging to `user_id`.
+///
+/// Called whenever a password changes: without it, a password reset -- the one action taken
+/// precisely because an account may be compromised -- leaves any existing session valid for
+/// the rest of its 30 days.
+pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
+    Ok(())
+}
+
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE token = ?").bind(token).execute(&state.db).await?;
     Ok(())
@@ -111,10 +121,16 @@ pub fn session_cookie(token: String, secure: bool) -> Cookie<'static> {
         .build()
 }
 
-pub fn removal_cookie() -> Cookie<'static> {
+/// Mirrors every attribute of `session_cookie` except the value and lifetime. Browsers match
+/// a replacement cookie on name/path/domain, and reject a `Secure`-less overwrite of a
+/// `Secure` cookie on a secure origin, so a deletion cookie that drops those attributes can
+/// leave the live session cookie in place.
+pub fn removal_cookie(secure: bool) -> Cookie<'static> {
     Cookie::build((COOKIE, ""))
         .path("/")
         .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(secure)
         .max_age(time::Duration::ZERO)
         .build()
 }
@@ -135,9 +151,15 @@ pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
 }
 
 /// Returns Err(TooManyRequests) once an IP exceeds LOGIN_MAX_ATTEMPTS inside LOGIN_WINDOW.
+///
+/// Every call first drops entries whose window has already elapsed, so the map only ever
+/// holds IPs that attempted a login within the last `LOGIN_WINDOW`. Without that sweep the
+/// map grows once per distinct source address for the lifetime of the process — unbounded
+/// memory, and remotely driveable when `MEMTO_TRUST_PROXY` makes the key attacker-chosen.
 pub fn check_login_rate(state: &App, ip: IpAddr) -> Result<(), AppError> {
     let mut map = state.login_attempts.lock().unwrap();
     let now = Instant::now();
+    map.retain(|&addr, &mut (_, started)| addr == ip || now.duration_since(started) <= LOGIN_WINDOW);
     let entry = map.entry(ip).or_insert((0, now));
     if now.duration_since(entry.1) > LOGIN_WINDOW {
         *entry = (0, now);
@@ -200,6 +222,13 @@ mod tests {
             bind: "127.0.0.1".into(),
             port: 0,
             max_upload_mb: 2,
+        max_import_mb: 4,
+        notify_url: None,
+        notify_hour: 8,
+        notify_format: "json".into(),
+        timezone: chrono_tz::Tz::UTC,
+        backup: None,
+        healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),
             trust_proxy,
@@ -229,6 +258,30 @@ mod tests {
         let state = test_state(true).await;
         let headers = headers_with_xff("198.51.100.7, 10.0.0.1");
         assert_eq!(client_ip(&state, &headers, peer()), "198.51.100.7".parse::<IpAddr>().unwrap());
+    }
+
+    #[tokio::test]
+    async fn login_rate_map_drops_ips_whose_window_has_elapsed() {
+        let state = test_state(false).await;
+        {
+            let mut map = state.login_attempts.lock().unwrap();
+            let stale = Instant::now() - LOGIN_WINDOW * 3;
+            for i in 0..50u8 {
+                map.insert(IpAddr::from([198, 51, 100, i]), (1, stale));
+            }
+            assert_eq!(map.len(), 50);
+        }
+        check_login_rate(&state, "203.0.113.1".parse().unwrap()).unwrap();
+        let map = state.login_attempts.lock().unwrap();
+        assert_eq!(map.len(), 1, "expired entries must not accumulate");
+    }
+
+    #[tokio::test]
+    async fn login_rate_map_keeps_ips_still_inside_their_window() {
+        let state = test_state(false).await;
+        check_login_rate(&state, "198.51.100.1".parse().unwrap()).unwrap();
+        check_login_rate(&state, "198.51.100.2".parse().unwrap()).unwrap();
+        assert_eq!(state.login_attempts.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

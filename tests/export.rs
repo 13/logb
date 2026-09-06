@@ -176,3 +176,177 @@ async fn import_rejects_invalid_activity_category() {
     let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs.len(), 0, "rejected import must not persist anything");
 }
+
+/// A tiny archive whose entries inflate to far more than the import budget must be refused
+/// before the bytes are buffered, not after. `max_import_mb` is 4 in the test harness, so the
+/// decompression budget is 8 MiB; 32 MiB of zeroes deflates to a few kilobytes.
+#[tokio::test]
+async fn import_rejects_a_zip_bomb() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("data.json", opts).unwrap();
+        std::io::Write::write_all(&mut w, serde_json::to_vec(&export_shell(base_object())).unwrap().as_slice()).unwrap();
+        w.start_file("files/0000000000000000000000000000000000000000000000000000000000000000", opts).unwrap();
+        std::io::Write::write_all(&mut w, &vec![0u8; 32 * 1024 * 1024]).unwrap();
+        w.finish().unwrap();
+    }
+    let bomb = cursor.into_inner();
+    assert!(bomb.len() < 1024 * 1024, "the bomb itself must be small: {} bytes", bomb.len());
+
+    let res = app.client.post(app.url("/import")).body(bomb).send().await.unwrap();
+    assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
+
+    // Nothing was written: the archive never reached the import transaction.
+    let objects: serde_json::Value = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objects.as_array().unwrap().len(), 0, "{objects}");
+}
+
+/// The archive body itself is bounded by `max_import_mb` (4 MiB in tests), independent of how
+/// well it compresses.
+#[tokio::test]
+async fn import_rejects_an_oversized_archive_body() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    // Incompressible random-ish bytes, so the stored archive really is over the body limit.
+    let big: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    let res = app.client.post(app.url("/import")).body(big).send().await.unwrap();
+    assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
+}
+
+/// `snoozed_until` is wired through the export archive and the import INSERT, but nothing
+/// exercised it end to end: it must survive a real export/import round trip alongside the
+/// reminder it suppresses.
+#[tokio::test]
+async fn export_round_trips_a_snoozed_reminder() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-01-01", "category": "maintenance", "title": "service", "counter_value": 60_000 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Service", "due_counter": 60_000 }))
+        .send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let snoozed: serde_json::Value = res.json().await.unwrap();
+    let expected = snoozed["snoozed_until"].as_str().unwrap().to_string();
+
+    let zip_bytes = app.client.get(app.url("/export")).send().await.unwrap().bytes().await.unwrap().to_vec();
+
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let nid = objs[0]["id"].as_i64().unwrap();
+    let rems: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{nid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    let imported = rems.iter().find(|r| r["title"] == "Service").unwrap();
+    assert_eq!(imported["snoozed_until"], expected, "snoozed_until must survive export and import");
+    assert_eq!(imported["due"], false, "the imported reminder must still be suppressed");
+}
+
+/// `snoozed_until` was added after version-1 archives already existed in the wild --
+/// `#[serde(default)]` on `ReminderExport::snoozed_until` is what lets those older archives
+/// (which never wrote the field at all) still import.
+#[tokio::test]
+async fn import_succeeds_without_a_snoozed_until_field() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["reminders"] = json!([{
+        "title": "Oil", "notes": "", "due_date": "2020-01-01", "due_counter": null,
+        "repeat_months": null, "repeat_counter": null, "done_at": null,
+        "done_activity_index": null, "created_at": "2024-01-01T00:00:00Z"
+        // no "snoozed_until" key at all -- exactly what a pre-snooze archive looked like.
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let id = objs[0]["id"].as_i64().unwrap();
+    let rems: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/reminders"))).send().await.unwrap().json().await.unwrap();
+    assert!(rems[0]["snoozed_until"].is_null(), "a missing field must default to not-snoozed");
+    assert_eq!(rems[0]["due"], true, "and the reminder must behave as never snoozed");
+}
+
+/// A column the archive does not carry is a column a restore silently erases -- fuel
+/// quantity and fuel unit must round-trip through export and import like every other field.
+#[tokio::test]
+async fn export_round_trips_fuel_quantity() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Golf", "category": "car", "counter_unit": "km", "fuel_unit": "l"
+    })).send().await.unwrap();
+    let car: serde_json::Value = res.json().await.unwrap();
+    let id = car["id"].as_i64().unwrap();
+    app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "counter_value": 12_000, "quantity_milli": 41_300
+    })).send().await.unwrap();
+
+    let zip = app.client.get(app.url("/export")).send().await.unwrap().bytes().await.unwrap();
+
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    let res = fresh.client.post(fresh.url("/import"))
+        .header("content-type", "application/zip")
+        .body(zip.to_vec())
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objects: Vec<serde_json::Value> = fresh.client.get(fresh.url("/objects"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(objects[0]["fuel_unit"], "l");
+    let nid = objects[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = fresh.client.get(fresh.url(&format!("/objects/{nid}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(acts[0]["quantity_milli"], 41_300, "the archive must not drop the quantity");
+}
+
+/// The archive is built into a scratch file and streamed back; the scratch file must not
+/// survive the request, and the response must still be a complete, readable zip.
+#[tokio::test]
+async fn export_streams_and_leaves_no_scratch_file_behind() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(Form::new().part("file", Part::bytes(png()).file_name("a.png").mime_str("image/png").unwrap()))
+        .send().await.unwrap();
+
+    let res = app.client.get(app.url("/export")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let declared: u64 = res.headers()["content-length"].to_str().unwrap().parse().unwrap();
+    let bytes = res.bytes().await.unwrap().to_vec();
+    assert_eq!(bytes.len() as u64, declared, "Content-Length must match what was streamed");
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    assert!(z.by_name("data.json").is_ok());
+    assert!(z.len() >= 2, "the photo blob rides along: {} entries", z.len());
+
+    // `data/files` holds only sharded blob directories -- no leftover scratch archive.
+    let files_dir = app.state.storage.blob_path(&"0".repeat(64)).parent().unwrap().parent().unwrap().to_path_buf();
+    let leftovers: Vec<_> = std::fs::read_dir(&files_dir).unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with('.') || n.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "scratch files left behind: {leftovers:?}");
+}

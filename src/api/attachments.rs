@@ -37,12 +37,13 @@ pub struct AttachmentOut {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub taken_at: Option<String>,
+    pub client_op_id: Option<String>,
 }
 
 pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut>, AppError> {
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? ORDER BY a.created_at DESC, a.id DESC",
     )
     .bind(object_id).fetch_all(&state.db).await?)
@@ -51,7 +52,7 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut, AppError> {
     sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
          WHERE a.id = ? AND o.user_id = ?",
     )
@@ -60,21 +61,55 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
     .ok_or(AppError::NotFound)
 }
 
-/// Delete `files` rows (and blobs) that no attachment references any more.
-pub async fn purge_orphan_files(state: &App) -> Result<(), AppError> {
-    let orphans: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, sha256 FROM files WHERE id NOT IN (SELECT file_id FROM attachments)",
-    )
-    .fetch_all(&state.db).await?;
+/// The distinct `file_id`s an object's attachments point at, collected *before* those
+/// attachments are deleted so `purge_orphan_files` knows which files to re-check.
+pub async fn files_of_object(state: &App, object_id: i64) -> Result<Vec<i64>, AppError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE object_id = ?")
+        .bind(object_id).fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// As `files_of_object`, for the attachments hanging off a single activity.
+pub async fn files_of_activity(state: &App, activity_id: i64) -> Result<Vec<i64>, AppError> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE activity_id = ?")
+        .bind(activity_id).fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Delete the `files` rows (and blobs) among `candidates` that no attachment references any
+/// more. Callers pass the ids the deletion could plausibly have orphaned; the previous version
+/// re-scanned the whole `files` table on every single delete.
+pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), AppError> {
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let mut orphans: Vec<(i64, String)> = Vec::new();
+    for &file_id in candidates {
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, sha256 FROM files WHERE id = ? AND id NOT IN (SELECT file_id FROM attachments)",
+        )
+        .bind(file_id).fetch_optional(&state.db).await?;
+        if let Some(r) = row {
+            orphans.push(r);
+        }
+    }
     for (id, sha) in orphans {
         sqlx::query("DELETE FROM files WHERE id = ?").bind(id).execute(&state.db).await?;
-        let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
-            .bind(&sha).fetch_optional(&state.db).await?;
-        if still_used.is_none() {
-            state.storage.remove(&sha, id).await;
-        } else {
-            let _ = tokio::fs::remove_file(state.storage.thumb_path(id)).await;
-        }
+        discard_blob(state, id, &sha).await?;
+    }
+    Ok(())
+}
+
+/// Drops the on-disk artefacts of a `files` row that has already been deleted: the thumbnail
+/// always, and the blob only once no other row still points at that content hash (two users
+/// uploading the same photo share one blob, and each has their own `files` row).
+pub async fn discard_blob(state: &App, file_id: i64, sha: &str) -> Result<(), AppError> {
+    let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
+        .bind(sha).fetch_optional(&state.db).await?;
+    if still_used.is_none() {
+        state.storage.remove(sha, file_id).await;
+    } else {
+        let _ = tokio::fs::remove_file(state.storage.thumb_path(file_id)).await;
     }
     Ok(())
 }
@@ -105,6 +140,7 @@ async fn upload(
     let mut activity_id: Option<i64> = None;
     let mut kind: Option<String> = None;
     let mut caption = String::new();
+    let mut client_op_id: Option<String> = None;
 
     loop {
         let field = match mp.next_field().await {
@@ -129,6 +165,13 @@ async fn upload(
             }
             "kind" => kind = Some(field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?),
             "caption" => caption = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?,
+            "client_op_id" => {
+                let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
+                // As in the JSON create path: a blank op id means no idempotency was
+                // requested, not a literal id that would collide every naive client's
+                // blanks together (see `super::normalize_op_id`).
+                client_op_id = super::normalize_op_id(Some(t));
+            }
             _ => {}
         }
     }
@@ -142,6 +185,21 @@ async fn upload(
     if let Some(aid) = activity_id {
         let a = load_owned_activity(&state, user.id, aid).await?;
         if a.object_id != object_id { return Err(AppError::NotFound); }
+    }
+
+    // A retried upload must resolve to the attachment the first attempt made, rather than
+    // hanging a second row off the same file. This check runs after the multipart loop above
+    // has already drained the whole request body -- file bytes included -- so a replay does
+    // not skip the upload itself; what it skips is the hash computation and the blob and
+    // thumbnail writes below.
+    if let Some(op) = client_op_id.as_deref() {
+        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+            .bind(op)
+            .fetch_optional(&state.db)
+            .await?;
+        if let Some((id,)) = existing {
+            return op_id_attachment_response(&state, user.id, id, object_id).await;
+        }
     }
 
     let sha = files::sha256_hex(&bytes);
@@ -161,6 +219,12 @@ async fn upload(
         Some((id,)) => id,
         None => {
             state.storage.write_blob(&sha, &bytes).await?;
+            // The thumbnail is named after the file id, so it can only be written once the
+            // row exists -- but the row must not become visible before the thumbnail does, or
+            // a client that sees the new file can ask for a /thumb that is not on disk yet.
+            // Writing both inside one transaction closes that window: other connections see
+            // the row only at commit, by which point the JPEG is already written.
+            let mut tx = state.db.begin().await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -168,34 +232,70 @@ async fn upload(
             .bind(user.id).bind(&sha).bind(&name).bind(&mime).bind(bytes.len() as i64)
             .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
             .bind(image.as_ref().and_then(|i| i.taken_at.clone())).bind(db::now())
-            .fetch_one(&state.db).await;
-            let id = match inserted {
+            .fetch_one(&mut *tx).await;
+            match inserted {
                 Ok((id,)) => {
                     if let Some(img) = &image {
                         state.storage.write_thumb(id, &img.thumb_jpeg).await?;
                     }
+                    tx.commit().await?;
                     id
                 }
                 // Two concurrent uploads of identical bytes for the same user: the loser's
                 // INSERT trips the UNIQUE(user_id, sha256) constraint. That's a cache hit,
                 // not an error -- reuse the row the winner just created.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+                    tx.rollback().await?;
                     let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
                         .bind(user.id).bind(&sha).fetch_one(&state.db).await?;
                     id
                 }
                 Err(e) => return Err(e.into()),
-            };
-            id
+            }
         }
     };
 
-    let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+    let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
+        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
-    .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim()).bind(db::now())
-    .fetch_one(&state.db).await?;
+    .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
+    .bind(&client_op_id).bind(db::now())
+    .fetch_one(&state.db).await;
+    let id = match inserted {
+        Ok((id,)) => id,
+        // Two concurrent uploads carrying the same client_op_id (several tabs sharing one
+        // offline outbox, flushing on reconnect): the loser's INSERT trips the partial unique
+        // index on attachments -- the same shape of race as the files-table dedup above.
+        // Adopt the winner's row instead of failing the request. The winner may belong to a
+        // different object than this upload targeted, so apply the same object check the
+        // pre-check above does, rather than handing back another object's attachment.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
+            let (winner_id,): (i64,) = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+                .bind(op)
+                .fetch_one(&state.db).await?;
+            return op_id_attachment_response(&state, user.id, winner_id, object_id).await;
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok((StatusCode::CREATED, Json(load_owned(&state, user.id, id).await?)))
+}
+
+/// The attachment a client_op_id lookup found -- whether from the pre-check or after losing
+/// an insert race -- may belong to a different object than the one being uploaded to; that's
+/// a 409, not this object's attachment.
+async fn op_id_attachment_response(
+    state: &App,
+    user_id: i64,
+    id: i64,
+    object_id: i64,
+) -> Result<(StatusCode, Json<AttachmentOut>), AppError> {
+    let out = load_owned(state, user_id, id).await?;
+    if out.object_id != object_id {
+        return Err(AppError::Conflict("client_op_id already used for another object".into()));
+    }
+    Ok((StatusCode::OK, Json(out)))
 }
 
 #[derive(Deserialize)]
@@ -214,7 +314,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     sqlx::query("UPDATE objects SET cover_attachment_id = NULL WHERE id = ? AND cover_attachment_id = ?")
         .bind(a.object_id).bind(id).execute(&state.db).await?;
     sqlx::query("DELETE FROM attachments WHERE id = ?").bind(id).execute(&state.db).await?;
-    purge_orphan_files(&state).await?;
+    purge_orphan_files(&state, &[a.file_id]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -233,28 +333,106 @@ async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, 
         .ok_or(AppError::NotFound)
 }
 
+/// User-supplied bytes are served from the same origin as the app, so anything the browser
+/// might execute here runs with access to the session. `nosniff` stops it from ignoring the
+/// declared type and guessing something scriptable, and the sandbox CSP strips scripts,
+/// plugins and same-origin privileges from whatever does get rendered.
 fn file_response(bytes: Vec<u8>, mime: &str, disposition: String) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
             (header::CONTENT_DISPOSITION, HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline"))),
             (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable")),
+            (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+            (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")),
         ],
         Body::from(bytes),
     ).into_response()
 }
 
+/// Types a browser may render in place. Everything else downloads.
+///
+/// An allow-list, not `image/*`: SVG is an image by MIME type and a scriptable document in
+/// practice, so serving one inline from this origin -- which the documents tab links straight
+/// to -- would let an uploaded file run script against the uploader's own session. PDFs stay
+/// inline because browsers render them in a sandboxed viewer, and the CSP above holds anyway.
+fn may_render_inline(mime: &str) -> bool {
+    matches!(mime, "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "image/bmp" | "application/pdf")
+}
+
+/// Percent-encodes `name` for the `filename*` parameter of RFC 6266 / RFC 5987. Everything
+/// outside that grammar's `attr-char` set is escaped, so the result is always plain ASCII.
+fn encode_ext_value(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// A `Content-Disposition` value that is always a valid header: the plain `filename` is
+/// reduced to printable ASCII for old clients, and the real name -- accents, CJK, emoji --
+/// rides along UTF-8-encoded in `filename*`, which every current browser prefers.
+///
+/// Building it this way matters because a header value that fails to parse used to fall back
+/// to a bare `inline`, silently turning an intended download into an in-page render.
+fn content_disposition(inline: bool, original_name: &str) -> String {
+    let kind = if inline { "inline" } else { "attachment" };
+    let ascii: String = original_name
+        .chars()
+        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' })
+        .map(|c| if matches!(c, '"' | '\\') { '_' } else { c })
+        .collect();
+    let ascii = if ascii.trim().is_empty() { "download".to_string() } else { ascii };
+    format!("{kind}; filename=\"{ascii}\"; filename*=UTF-8\'\'{}", encode_ext_value(original_name))
+}
+
 async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
-    let inline = f.mime.starts_with("image/") || f.mime == "application/pdf";
-    let safe_name = f.original_name.replace(['"', '\\', '\r', '\n'], "_");
-    let disposition = format!("{}; filename=\"{}\"", if inline { "inline" } else { "attachment" }, safe_name);
-    Ok(file_response(bytes, &f.mime, disposition))
+    let inline = may_render_inline(&f.mime);
+    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name)))
 }
 
 async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let bytes = tokio::fs::read(state.storage.thumb_path(f.id)).await.map_err(|_| AppError::NotFound)?;
     Ok(file_response(bytes, "image/jpeg", "inline".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_disposition;
+
+    #[test]
+    fn ascii_names_pass_through_in_both_parameters() {
+        let cd = content_disposition(false, "invoice.pdf");
+        assert_eq!(cd, "attachment; filename=\"invoice.pdf\"; filename*=UTF-8''invoice.pdf");
+    }
+
+    #[test]
+    fn non_ascii_names_survive_in_the_extended_parameter() {
+        let cd = content_disposition(true, "Anhängerkupplung.jpg");
+        assert!(cd.starts_with("inline; filename=\"Anh_ngerkupplung.jpg\""), "{cd}");
+        assert!(cd.ends_with("filename*=UTF-8''Anh%C3%A4ngerkupplung.jpg"), "{cd}");
+        assert!(cd.is_ascii(), "the header value must be sendable as-is: {cd}");
+    }
+
+    #[test]
+    fn quotes_and_control_characters_cannot_break_out_of_the_quoted_string() {
+        let cd = content_disposition(false, "a\"; rm -rf /\r\n.txt");
+        assert!(!cd["attachment; filename=\"".len()..].starts_with('"'));
+        assert_eq!(cd.matches('"').count(), 2, "{cd}");
+        assert!(!cd.contains('\r') && !cd.contains('\n'), "{cd}");
+    }
+
+    #[test]
+    fn a_name_with_nothing_printable_still_yields_a_filename() {
+        let cd = content_disposition(false, "  ");
+        assert!(cd.contains("filename=\"download\""), "{cd}");
+    }
 }

@@ -28,7 +28,36 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [{ urlPattern: /^\/api\//, handler: 'NetworkOnly' }],
+        // Workbox only routes GETs, so writes always go straight to the network.
+        runtimeCaching: [
+          // Session state must never be answered from a cache: a stale /auth/me would show a
+          // signed-out user their old identity.
+          { urlPattern: /^\/api\/auth\//, handler: 'NetworkOnly' },
+          // Exports are large, one-shot downloads.
+          { urlPattern: /^\/api\/(export|import)/, handler: 'NetworkOnly' },
+          // Blobs are content-addressed and never change under a given id.
+          {
+            urlPattern: /^\/api\/files\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'memto-files',
+              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          // Everything else: the network when it answers, the last known response when it
+          // does not, so the dashboard and a timeline stay readable on a dead connection.
+          {
+            urlPattern: /^\/api\//,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'memto-api',
+              networkTimeoutSeconds: 4,
+              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+        ],
       },
     }),
   ],

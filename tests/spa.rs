@@ -57,3 +57,48 @@ async fn double_slash_api_path_is_json_404() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "not_found");
 }
+
+/// Baseline hardening headers reach both the SPA and the API.
+#[tokio::test]
+async fn security_headers_are_set_on_every_response() {
+    let app = common::spawn().await;
+    for path in ["/api/health", "/", "/objects/1"] {
+        let res = reqwest::get(format!("{}{path}", app.base.trim_end_matches("/api"))).await.unwrap();
+        let h = res.headers();
+        assert_eq!(h["x-content-type-options"], "nosniff", "{path}");
+        assert_eq!(h["referrer-policy"], "no-referrer", "{path}");
+        assert_eq!(h["x-frame-options"], "DENY", "{path}");
+        let csp = h["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"), "{path}: {csp}");
+        assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"), "scripts must not be inline-exempt: {csp}");
+    }
+}
+
+/// Every response carries a request id, and one supplied by a front proxy is preserved so the
+/// two sets of logs line up.
+#[tokio::test]
+async fn responses_carry_a_request_id() {
+    let app = common::spawn().await;
+    let base = app.base.trim_end_matches("/api").to_string();
+
+    let res = reqwest::get(format!("{base}/api/health")).await.unwrap();
+    let generated = res.headers()["x-request-id"].to_str().unwrap().to_string();
+    assert!(!generated.is_empty());
+
+    let second = reqwest::get(format!("{base}/api/health")).await.unwrap();
+    assert_ne!(second.headers()["x-request-id"].to_str().unwrap(), generated, "ids must differ per request");
+
+    let echoed = reqwest::Client::new()
+        .get(format!("{base}/api/health"))
+        .header("x-request-id", "trace-abc123")
+        .send().await.unwrap();
+    assert_eq!(echoed.headers()["x-request-id"], "trace-abc123");
+
+    // A hostile value is replaced rather than reflected.
+    let hostile = reqwest::Client::new()
+        .get(format!("{base}/api/health"))
+        .header("x-request-id", "a b c; drop")
+        .send().await.unwrap();
+    assert_ne!(hostile.headers()["x-request-id"], "a b c; drop");
+}

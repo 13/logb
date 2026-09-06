@@ -17,6 +17,7 @@ pub fn router() -> Router<App> {
         .route("/auth/setup", post(setup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route("/auth/logout-all", post(logout_all))
         .route("/auth/me", get(me))
 }
 
@@ -41,18 +42,25 @@ async fn setup(
     jar: CookieJar,
     Json(body): Json<Credentials>,
 ) -> Result<(StatusCode, CookieJar, Json<AuthUser>), AppError> {
+    // Cheap pre-check: rejects the common "setup already done" call before spending an
+    // Argon2 hash on it. The authoritative guard is the conditional INSERT below.
     if user_count(&state).await? > 0 {
         return Err(AppError::Conflict("setup already completed".into()));
     }
     auth::validate_username(&body.username)?;
     auth::validate_password(&body.password)?;
     let hash = auth::hash_password(&body.password)?;
+    // `WHERE NOT EXISTS (SELECT 1 FROM users)` re-checks emptiness inside the same statement
+    // that writes the row, so two concurrent setup calls with different usernames cannot both
+    // pass the check and both become admin — the loser inserts nothing and gets a 409.
     let user = sqlx::query_as::<_, AuthUser>(
-        "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES (?, ?, 1, 'en', ?) \
+        "INSERT INTO users (username, password_hash, is_admin, lang, created_at) \
+         SELECT ?, ?, 1, 'en', ? WHERE NOT EXISTS (SELECT 1 FROM users) \
          RETURNING id, username, is_admin, lang",
     )
     .bind(&body.username).bind(hash).bind(db::now())
-    .fetch_one(&state.db).await?;
+    .fetch_optional(&state.db).await?
+    .ok_or_else(|| AppError::Conflict("setup already completed".into()))?;
     let token = auth::create_session(&state, user.id).await?;
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
     Ok((StatusCode::CREATED, jar, Json(user)))
@@ -85,11 +93,29 @@ async fn login(
     Ok((jar, Json(user)))
 }
 
-async fn logout(State(state): State<App>, jar: CookieJar) -> Result<(StatusCode, CookieJar), AppError> {
+async fn logout(
+    State(state): State<App>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<(StatusCode, CookieJar), AppError> {
     if let Some(c) = jar.get(auth::COOKIE) {
         auth::delete_session(&state, c.value()).await?;
     }
-    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie())))
+    let secure = auth::wants_secure(&state, &headers);
+    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
+}
+
+/// Ends every session of the caller, this browser's included -- the "signed in somewhere I
+/// don't recognise" button.
+async fn logout_all(
+    user: AuthUser,
+    State(state): State<App>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<(StatusCode, CookieJar), AppError> {
+    auth::delete_sessions_for_user(&state, user.id).await?;
+    let secure = auth::wants_secure(&state, &headers);
+    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
 }
 
 async fn me(user: AuthUser) -> Json<AuthUser> {

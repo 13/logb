@@ -9,8 +9,18 @@ async fn main() -> Result<(), memto::db::BoxError> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(config.log.clone()))
         .init();
+    if let Some(dest) = config.backup.clone() {
+        let pool = memto::db::connect_existing(&config.data_dir).await?;
+        memto::db::backup_to(&pool, &dest).await?;
+        println!("database backed up to {}", dest.display());
+        return Ok(());
+    }
+    if config.healthcheck {
+        return healthcheck(config.port).await;
+    }
     let addr = format!("{}:{}", config.bind, config.port);
-    let app = memto::build(config).await?;
+    let (app, state) = memto::build_with_state(config).await?;
+    memto::tasks::spawn(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("memto listening on http://{addr}");
     axum::serve(
@@ -19,4 +29,21 @@ async fn main() -> Result<(), memto::db::BoxError> {
     )
     .await?;
     Ok(())
+}
+
+/// Probes a running instance over loopback. Used as the container HEALTHCHECK, where there is
+/// no shell and no curl to run one with.
+async fn healthcheck(port: u16) -> Result<(), memto::db::BoxError> {
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let res = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?
+        .get(&url)
+        .send()
+        .await?;
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("health check failed: {url} returned {}", res.status()).into())
+    }
 }

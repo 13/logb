@@ -3,9 +3,10 @@ use crate::db;
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
+use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<App> {
@@ -72,8 +73,10 @@ async fn update(
     me: AuthUser,
     State(state): State<App>,
     Path(id): Path<i64>,
+    headers: HeaderMap,
+    jar: CookieJar,
     Json(body): Json<UpdateUser>,
-) -> Result<Json<UserOut>, AppError> {
+) -> Result<(CookieJar, Json<UserOut>), AppError> {
     if !me.is_admin && me.id != id {
         return Err(AppError::Forbidden);
     }
@@ -99,9 +102,18 @@ async fn update(
         }
     }
 
+    let mut jar = jar;
     if let Some(p) = &body.password {
         sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
             .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
+        // The new password only means anything if the sessions opened with the old one stop
+        // working. Someone changing their own password keeps this browser signed in, on a
+        // freshly issued session; every other session for that account is gone either way.
+        auth::delete_sessions_for_user(&state, id).await?;
+        if me.id == id {
+            let token = auth::create_session(&state, id).await?;
+            jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
+        }
     }
     if let Some(a) = body.is_admin {
         sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(a).bind(id).execute(&state.db).await?;
@@ -111,13 +123,39 @@ async fn update(
     }
     let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")
         .bind(id).fetch_one(&state.db).await?;
-    Ok(Json(user))
+    Ok((jar, Json(user)))
 }
 
+/// Deleting a user has to unwind their data in dependency order by hand.
+///
+/// `DELETE FROM users` alone fails outright for anyone who has ever uploaded a file: the
+/// cascade from `users` reaches `files` while `attachments.file_id` is declared
+/// `ON DELETE RESTRICT`, and SQLite aborts the whole statement with a foreign key error. So
+/// attachments go first, then objects (which cascades activities and reminders), then the
+/// user's `files` rows, then the user. Sessions cascade from `users` on their own.
 async fn delete(AdminUser(me): AdminUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     if me.id == id {
         return Err(AppError::BadRequest("cannot delete yourself".into()));
     }
-    let n = sqlx::query("DELETE FROM users WHERE id = ?").bind(id).execute(&state.db).await?.rows_affected();
-    if n == 0 { Err(AppError::NotFound) } else { Ok(StatusCode::NO_CONTENT) }
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+        .bind(id).fetch_optional(&state.db).await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+    // Read the blobs to clean up before the rows that name them are gone.
+    let blobs: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = ?")
+        .bind(id).fetch_all(&state.db).await?;
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM attachments WHERE object_id IN (SELECT id FROM objects WHERE user_id = ?)")
+        .bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM objects WHERE user_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM files WHERE user_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM users WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    for (file_id, sha) in blobs {
+        super::attachments::discard_blob(&state, file_id, &sha).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

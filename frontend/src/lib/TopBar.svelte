@@ -1,7 +1,31 @@
 <script lang="ts">
   import { back, go } from './router';
+  import { onOutboxFlushed, outboxDeadCount, outboxPending } from './api';
   import { t } from '../i18n';
   let { title, backTo = null, showSettings = false, children }: { title: string; backTo?: string | null; showSettings?: boolean; children?: import('svelte').Snippet } = $props();
+
+  let pending = $state(0);
+  let dead = $state(0);
+  async function refresh() {
+    pending = await outboxPending();
+    dead = await outboxDeadCount();
+  }
+  $effect(() => {
+    refresh();
+    globalThis.addEventListener?.('online', refresh);
+    globalThis.addEventListener?.('offline', refresh);
+    // `online`/`offline` alone leave this stale on reconnect: api.ts's own `online` listener
+    // (which actually flushes the queue) is registered before this one ever runs, so `refresh`
+    // above reads the pending count before the flush has removed anything, and nothing then
+    // refreshes it again until the component remounts. Subscribing to the flush itself closes
+    // that gap regardless of which listener fired first.
+    const unsubscribe = onOutboxFlushed(refresh);
+    return () => {
+      globalThis.removeEventListener?.('online', refresh);
+      globalThis.removeEventListener?.('offline', refresh);
+      unsubscribe();
+    };
+  });
 </script>
 
 <header class="topbar">
@@ -9,6 +33,8 @@
     <button class="ghost" aria-label={$t('nav.back')} onclick={() => (backTo ? go(backTo) : back())}>←</button>
   {/if}
   <h1>{title}</h1>
+  {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
+  {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}
   {#if showSettings}
     <button class="ghost" aria-label={$t('nav.settings')} onclick={() => go('/settings')}>⚙</button>

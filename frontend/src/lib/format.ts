@@ -33,3 +33,31 @@ export function parseMoney(s: string): number | null {
 export function centsToInput(cents: number | null): string {
   return cents === null ? '' : (cents / 100).toFixed(2);
 }
+
+/** "41.3" / "41,3" / "41" → milli-units; empty → null; invalid → NaN */
+export function parseQuantity(s: string): number | null {
+  const t = s.trim().replace(/\s/g, '').replace(',', '.');
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 1000) : NaN;
+}
+
+/**
+ * Milli-cents per unit, rendered as money.
+ *
+ * The value is `cost_per_counter_milli` from the insights endpoint: cents-per-unit scaled
+ * by 1000 (see `cost_per_counter_milli` in src/domain/insights.rs). Divide by 1000 to get
+ * cents, then by 100 to get currency units -- 100_000 in total. This is a different scale
+ * from `quantity`'s milli-units (divisor 1000): don't unify the two divisors.
+ */
+export function perCounter(milli: number | null | undefined, currency: string, locale: string): string {
+  if (milli === null || milli === undefined) return '';
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 100_000);
+}
+
+/** A milli-scaled amount with its unit: 41_300 -> "41.3 l". */
+export function quantity(milli: number | null | undefined, unit: string, locale: string): string {
+  if (milli === null || milli === undefined) return '';
+  const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
+  return `${n} ${unit}`;
+}

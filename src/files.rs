@@ -44,6 +44,10 @@ impl Storage {
                 // Another concurrent writer for the same content hash may have won the
                 // race and already produced the destination file. Since the path is
                 // derived from the content hash, that file has identical bytes to ours.
+                //
+                // Unreachable on Linux, where POSIX rename() replaces an existing
+                // destination atomically; this arm is here for platforms whose rename
+                // fails when the destination exists.
                 if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                     let _ = tokio::fs::remove_file(&tmp).await;
                     Ok(())
@@ -53,6 +57,15 @@ impl Storage {
                 }
             }
         }
+    }
+
+    /// A unique path in the data directory for a temporary working file (a whole export
+    /// archive, say). Sits next to the blobs so it lands on the same filesystem, and is the
+    /// caller's to delete.
+    pub fn scratch_path(&self, prefix: &str) -> PathBuf {
+        let mut token = [0u8; 16];
+        rand::rng().fill(&mut token);
+        self.root.join("files").join(format!(".{prefix}-{}.tmp", hex::encode(token)))
     }
 
     pub async fn write_thumb(&self, file_id: i64, jpeg: &[u8]) -> std::io::Result<()> {

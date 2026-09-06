@@ -5,7 +5,8 @@
   import { t } from '../i18n';
   import type { Attachment } from './types';
 
-  let { objectId, onchanged }: { objectId: number; onchanged?: () => void } = $props();
+  let { objectId, coverAttachmentId, onchanged }:
+    { objectId: number; coverAttachmentId: number | null; onchanged?: () => void } = $props();
   let items = $state<Attachment[]>([]);
 
   async function load() { items = await api<Attachment[]>('GET', `/objects/${objectId}/attachments`); }
@@ -18,12 +19,13 @@
     onchanged?.();
   }
 
-  async function setCover(a: Attachment) {
+  /** `null` clears the cover; the API tells "omitted" (keep) from an explicit null (clear). */
+  async function setCover(cover: number | null) {
     const o = await api<{ name: string; category: string; counter_unit: string | null; description: string; purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null }>('GET', `/objects/${objectId}`);
     await api('PATCH', `/objects/${objectId}`, {
       name: o.name, category: o.category, counter_unit: o.counter_unit, description: o.description,
       purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
-      archived: o.archived_at !== null, cover_attachment_id: a.id,
+      archived: o.archived_at !== null, cover_attachment_id: cover,
     });
     onchanged?.();
   }
@@ -45,7 +47,13 @@
         <figcaption>
           <span class="name">{a.caption || a.original_name}</span>
           <span class="row small">
-            {#if a.kind === 'photo'}<button class="ghost" onclick={() => setCover(a)}>{$t('object.set-cover')}</button>{/if}
+            {#if a.kind === 'photo'}
+              {#if a.id === coverAttachmentId}
+                <button class="ghost" onclick={() => setCover(null)}>{$t('object.clear-cover')}</button>
+              {:else}
+                <button class="ghost" onclick={() => setCover(a.id)}>{$t('object.set-cover')}</button>
+              {/if}
+            {/if}
             <button class="ghost danger-text" onclick={() => remove(a)}>{$t('nav.delete')}</button>
           </span>
         </figcaption>

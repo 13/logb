@@ -18,6 +18,11 @@
   let error = $state('');
 
   const groups = $derived(splitReminders(items));
+  // A pending (queued-offline) timeline entry has a synthetic negative id -- the server has
+  // never heard of it. Offering one in this dropdown lets a user "link" a reminder to it,
+  // which POSTs `activity_id: <negative number>` and 404s. Excluded here rather than filtered
+  // by the caller, since every consumer of this dropdown must exclude them the same way.
+  const linkable = $derived(activities.filter((a) => !a.pending));
 
   async function load() {
     try { items = await api<Reminder[]>('GET', `/objects/${objectId}/reminders`); }
@@ -59,9 +64,18 @@
     <div class="card">
       <div class="row head">
         <b>{r.title}</b>
-        <span class="chip" class:due={r.due}>{r.due ? $t('reminder.due') : $t('reminder.open')}</span>
+        <span class="chip" class:due={r.due} class:snoozed={!r.due && r.snoozed_until}>
+          {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
+        </span>
       </div>
       <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · ↻{/if}</div>
+      {#if !r.due && r.snoozed_until}
+        <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so
+             `when(r)` above can still read as overdue while the reminder is suppressed -- this
+             line is what actually says so. There is no backend route to clear a snooze early
+             (see snooze() in src/api/reminders.rs), so this is display-only. -->
+        <div class="muted snoozed-until">{$t('reminder.snoozed-until', { date: fmtDate(r.snoozed_until, $locale) })}</div>
+      {/if}
       {#if r.notes}<p class="notes">{r.notes}</p>{/if}
       <div class="row actions">
         <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/${r.id}`)}>{$t('nav.edit')}</button>
@@ -93,7 +107,7 @@
     <label for="link">{$t('reminder.done-link')}</label>
     <select id="link" bind:value={linkId}>
       <option value="">{$t('reminder.done-none')}</option>
-      {#each activities as a (a.id)}
+      {#each linkable as a (a.id)}
         <option value={String(a.id)}>{fmtDate(a.date, $locale)} — {a.title}</option>
       {/each}
     </select>
@@ -108,6 +122,8 @@
   .head { justify-content: space-between; }
   .head b { flex: 1; }
   .head .chip { flex: none; }
+  .chip.snoozed { background: var(--surface-2); color: var(--muted); }
+  .snoozed-until { margin-top: 2px; }
   .notes { font-size: .9rem; white-space: pre-wrap; margin-top: 4px; }
   .actions { margin-top: 8px; }
   .more { margin-top: 16px; width: 100%; text-align: left; color: var(--muted); }

@@ -3,12 +3,15 @@
   import Timeline from '../lib/Timeline.svelte';
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
-  import { api, fileUrl } from '../lib/api';
+  import Insights from '../lib/Insights.svelte';
+  import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
+  import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, Category, MemObject } from '../lib/types';
+  import type { Activity, ActivityInput, Category, MemObject } from '../lib/types';
+  import type { QueuedOp } from '../lib/outbox';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
@@ -16,20 +19,102 @@
   let tab = $state<Tab>((new URLSearchParams(location.search).get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
   let activities = $state<Activity[]>([]);
+  /// How many activities match the current filter in total, page window aside.
+  let activityTotal = $state(0);
+  let loadingMore = $state(false);
   let category = $state<Category | ''>('');
   let error = $state('');
+  const PAGE = 100;
 
+  /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
+   *  401/403/404 is the server answering, and this object may simply belong to someone else. */
   async function loadObject() {
-    try { object = await api<MemObject>('GET', `/objects/${oid}`); }
-    catch (e) { error = (e as Error).message; }
+    try {
+      object = await api<MemObject>('GET', `/objects/${oid}`);
+      setCachedObject(oid, object);
+      error = '';
+    } catch (e) {
+      const cached = isRejection(e) ? undefined : getCachedObject(oid);
+      if (cached) object = cached;
+      else error = (e as Error).message;
+    }
   }
-  async function loadActivities() {
-    const q = category ? `?category=${category}` : '';
-    activities = await api<Activity[]>('GET', `/objects/${oid}/activities${q}`);
+
+  /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
+   *  real activities without colliding with one (real ids are always positive). */
+  function pendingId(opId: string): number {
+    let h = 0;
+    for (let i = 0; i < opId.length; i++) h = (h * 31 + opId.charCodeAt(i)) | 0;
+    return -(Math.abs(h) || 1);
+  }
+
+  /** A queued 'activity.create' has no server row yet, so it renders straight from what the
+   *  form queued rather than from a GET — otherwise a log made underground would stay invisible
+   *  until the phone gets signal back, which is exactly the failure this task exists to avoid.
+   *  `pending: true` tells `Timeline` to dim it and refuse navigation into its (fake) id. */
+  function pendingToActivity(op: QueuedOp): Activity {
+    const b = op.body as Partial<ActivityInput>;
+    return {
+      id: pendingId(op.id), object_id: oid,
+      date: typeof b.date === 'string' ? b.date : new Date().toISOString().slice(0, 10),
+      category: (b.category as Category) ?? 'other',
+      title: typeof b.title === 'string' ? b.title : '',
+      notes: typeof b.notes === 'string' ? b.notes : '',
+      counter_value: typeof b.counter_value === 'number' ? b.counter_value : null,
+      cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
+      quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
+      pending: true,
+    };
+  }
+
+  async function pendingActivities(): Promise<Activity[]> {
+    const ops = await pendingOpsFor(`/objects/${oid}/activities`);
+    return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
+  }
+
+  /// `append` fetches the next page and adds to what is on screen; otherwise it starts over,
+  /// which is what a filter change wants. A pending queued create for this object is prepended
+  /// to a fresh (non-append) load, since it will not appear in any page the server sends back
+  /// until the outbox has replayed it.
+  async function loadActivities(append = false) {
+    // The offset must count only rows the server itself sent back. A prepended pending entry
+    // (see `pendingActivities` above) has no server-side page position at all -- counting it in
+    // `activities.length` would shift every subsequent "load more" request back by one real
+    // activity per pending op, silently skipping it.
+    const loaded = activities.filter((a) => !a.pending).length;
+    const params = new URLSearchParams({ limit: String(PAGE), offset: String(append ? loaded : 0) });
+    if (category) params.set('category', category);
+    let items: Activity[] = [];
+    let total = 0;
+    try {
+      const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+      items = page.items;
+      total = page.total;
+      if (!append) setCachedActivities(oid, { items, total });
+    } catch (e) {
+      if (append) throw e;
+      const cached = isRejection(e) ? undefined : getCachedActivities(oid);
+      items = cached?.items ?? [];
+      total = cached?.total ?? 0;
+    }
+    const pending = append ? [] : await pendingActivities();
+    activities = append ? [...activities, ...items] : [...pending, ...items];
+    activityTotal = total + pending.length;
+  }
+
+  async function loadMore() {
+    loadingMore = true;
+    try { await loadActivities(true); }
+    catch (e) { error = (e as Error).message; }
+    finally { loadingMore = false; }
   }
 
   $effect(() => { oid; loadObject(); });
   $effect(() => { oid; category; loadActivities(); });
+  // A background replay can succeed while this view is mounted; without this the synthetic
+  // pending entry it created keeps rendering next to the now-real row until the next remount.
+  $effect(() => onOutboxFlushed(() => { loadObject(); loadActivities(); }));
   $effect(() => {
     const url = new URL(location.href);
     url.searchParams.set('tab', tab);
@@ -69,10 +154,10 @@
     </nav>
 
     {#if tab === 'timeline'}
-      <Timeline objectId={oid} {activities} unit={object.counter_unit} bind:category />
+      <Timeline objectId={oid} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
       <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
     {:else if tab === 'documents'}
-      <Documents objectId={oid} onchanged={loadObject} />
+      <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities(); }} />
     {:else}
@@ -80,6 +165,8 @@
       <p class="muted">{object.category}</p>
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
+      <h3>{$t('insights.title')}</h3>
+      <Insights objectId={oid} unit={object.counter_unit} />
       <div class="list info-actions">
         <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
         <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>

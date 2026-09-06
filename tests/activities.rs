@@ -84,3 +84,227 @@ async fn isolation() {
     assert_eq!(anna.patch(app.url(&format!("/activities/{}", a["id"]))).json(&act("2024-01-01", "repair", None, None)).send().await.unwrap().status(), 404);
     assert_eq!(anna.delete(app.url(&format!("/activities/{}", a["id"]))).send().await.unwrap().status(), 404);
 }
+
+/// A long timeline comes back a page at a time, with the unpaged total in a header so the
+/// client knows whether to offer "show older".
+#[tokio::test]
+async fn the_activity_list_is_paged() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    for i in 0..7 {
+        app.client.post(app.url(&format!("/objects/{id}/activities")))
+            .json(&json!({ "date": format!("2024-01-{:02}", i + 1), "category": "fuel", "title": format!("Fill {i}") }))
+            .send().await.unwrap();
+    }
+
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=3"))).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "7", "the header counts everything, not the page");
+    let page1: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(page1.as_array().unwrap().len(), 3);
+    assert_eq!(page1[0]["title"], "Fill 6", "newest first");
+
+    let page3: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}/activities?limit=3&offset=6")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(page3.as_array().unwrap().len(), 1);
+    assert_eq!(page3[0]["title"], "Fill 0", "the last page holds the oldest entry");
+
+    // The total tracks the filter, not the table.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?category=repair"))).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "0");
+
+    // Absurd limits are clamped rather than rejected.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=99999"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let all: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 7);
+}
+
+#[tokio::test]
+async fn recent_titles_are_distinct_and_newest_first() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    for (date, title, cost, counter) in [
+        ("2026-01-05", "Fuel", 5000, 10_000),
+        ("2026-02-05", "Oil change", 9000, 11_000),
+        ("2026-03-05", "Fuel", 6210, 12_000),
+    ] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+            "date": date, "category": "fuel", "title": title,
+            "cost_cents": cost, "counter_value": counter
+        })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let out: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects/{id}/recent-titles")))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(out.len(), 2, "one row per distinct (title, category)");
+    assert_eq!(out[0]["title"], "Fuel", "the most recent title comes first");
+    assert_eq!(out[0]["last_date"], "2026-03-05");
+    assert_eq!(out[0]["last_cost_cents"], 6210, "the newest occurrence supplies the cost");
+    assert_eq!(out[0]["last_counter"], 12_000);
+    assert_eq!(out[1]["title"], "Oil change");
+}
+
+#[tokio::test]
+async fn fuel_quantity_round_trips_and_is_validated() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "counter_value": 12_000, "cost_cents": 6210, "quantity_milli": 41_300
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let a: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(a["quantity_milli"], 41_300);
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-06", "category": "fuel", "title": "Fuel", "quantity_milli": -1
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "a negative quantity is rejected");
+
+    let no_counter = app.create_object(&app.client, "Drill", None).await;
+    let nid = no_counter["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{nid}/activities"))).json(&json!({
+        "date": "2026-03-06", "category": "fuel", "title": "Fuel", "quantity_milli": 1000
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "a quantity without a counter cannot become consumption");
+}
+
+#[tokio::test]
+async fn recent_titles_of_another_users_object_are_404() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = anna.get(app.url(&format!("/objects/{id}/recent-titles"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
+
+#[tokio::test]
+async fn a_replayed_create_returns_the_first_row_instead_of_duplicating_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let body = json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "cost_cents": 6210, "client_op_id": "op-abc-123"
+    });
+
+    let first = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first: serde_json::Value = first.json().await.unwrap();
+
+    let again = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(again.status(), 200, "a replay is not a new creation");
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["id"], first["id"], "the same row comes back");
+
+    let list: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects/{id}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1, "the fill-up was logged once");
+}
+
+#[tokio::test]
+async fn one_client_op_id_cannot_be_reused_across_objects() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", Some("km")).await;
+    let b = app.create_object(&app.client, "Bike", Some("km")).await;
+    let (aid, bid) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+    let body = json!({ "date": "2026-03-05", "category": "other", "title": "X", "client_op_id": "op-dup" });
+
+    assert_eq!(app.client.post(app.url(&format!("/objects/{aid}/activities")))
+        .json(&body).send().await.unwrap().status(), 201);
+    let res = app.client.post(app.url(&format!("/objects/{bid}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 409, "the id is the client's promise that this is the same op");
+}
+
+/// The unique index on client_op_id is partial (`WHERE client_op_id IS NOT NULL`), because
+/// every activity an online client writes leaves the column NULL. If the index treated NULLs
+/// as equal, the second of these creates would trip a uniqueness violation.
+#[tokio::test]
+async fn many_activities_with_no_client_op_id_do_not_conflict() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    for i in 0..5 {
+        let body = json!({
+            "date": "2026-03-05", "category": "other", "title": format!("No op id {i}"),
+            "client_op_id": null
+        });
+        let res = app.client.post(&base).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "explicit null client_op_id must never collide");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 5);
+}
+
+/// A blank client_op_id must not be treated as a real idempotency key -- a client library
+/// that always populates the field (rather than omitting it) would otherwise collapse every
+/// blank-id create on an object onto the first one, silently losing the rest.
+#[tokio::test]
+async fn blank_client_op_id_is_treated_as_absent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+
+    for (i, op_id) in ["", "   "].into_iter().enumerate() {
+        let body = json!({
+            "date": "2026-03-05", "category": "other", "title": format!("Blank op id {i}"),
+            "client_op_id": op_id
+        });
+        let res = app.client.post(&base).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "a blank (or whitespace-only) client_op_id must not block a real create");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 2, "two blank-id creates on one object must produce two distinct rows, not one");
+}
+
+/// Regression test for the migration itself, not just the application-level pre-check: every
+/// other test in this file only ever reaches `create`'s SELECT-then-INSERT dance. This goes
+/// through the pool directly, so a future migration that dropped or weakened the partial
+/// unique index would fail this test even though the pre-check alone would still look fine.
+#[tokio::test]
+async fn the_partial_unique_index_rejects_a_duplicate_non_null_op_id() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let insert = || {
+        sqlx::query(
+            "INSERT INTO activities (object_id, date, category, title, notes, client_op_id, created_at, updated_at) \
+             VALUES (?, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
+        )
+        .bind(id)
+        .execute(&app.state.db)
+    };
+
+    insert().await.unwrap();
+    let err = insert().await.unwrap_err();
+    let db_err = err.as_database_error().expect("a constraint violation carries a database error");
+    assert!(db_err.is_unique_violation(), "{db_err}");
+}

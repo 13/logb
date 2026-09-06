@@ -72,3 +72,75 @@ async fn login_is_rate_limited() {
     }
     assert_eq!(app.login(&c, "ben", "correct horse").await.status(), 429);
 }
+
+/// Two setup calls that race past the "is the database empty?" pre-check must not both
+/// create an admin: the conditional INSERT lets exactly one through.
+#[tokio::test]
+async fn concurrent_setup_creates_exactly_one_admin() {
+    let app = common::spawn().await;
+    let a = common::new_client();
+    let b = common::new_client();
+    let url = app.url("/auth/setup");
+    let (ra, rb) = tokio::join!(
+        a.post(&url).json(&json!({ "username": "ben", "password": "correct horse" })).send(),
+        b.post(&url).json(&json!({ "username": "eve", "password": "password123" })).send(),
+    );
+    let (ra, rb) = (ra.unwrap(), rb.unwrap());
+    let mut codes = [ra.status().as_u16(), rb.status().as_u16()];
+    let winner = if ra.status() == 201 { &a } else { &b };
+    codes.sort_unstable();
+    assert_eq!(codes, [201, 409], "exactly one setup may succeed");
+
+    // Only the winner's account exists, and it is the one holding the admin session.
+    let users: serde_json::Value = winner.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(users.as_array().unwrap().len(), 1, "{users}");
+}
+
+/// The cookie that clears the session must carry the same attributes as the one that set it,
+/// or a browser can decline to overwrite the live session cookie.
+#[tokio::test]
+async fn logout_cookie_matches_session_cookie_attributes() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/auth/logout")).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    assert!(cookie.contains("memto_session="), "{cookie}");
+    assert!(cookie.contains("HttpOnly"), "{cookie}");
+    assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+    assert!(cookie.contains("Path=/"), "{cookie}");
+}
+
+/// `logout-all` ends every session of the caller, including the one making the request.
+#[tokio::test]
+async fn logout_all_ends_every_session() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let second = common::new_client();
+    assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
+    assert_eq!(second.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+
+    assert_eq!(app.client.post(app.url("/auth/logout-all")).send().await.unwrap().status(), 204);
+    assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    assert_eq!(second.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
+    // Signing in again still works.
+    assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
+}
+
+/// Expired sessions are swept on a timer, not only when someone happens to sign in.
+#[tokio::test]
+async fn expired_sessions_are_pruned() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+        .bind("stale-token").bind(1).bind("2020-01-01T00:00:00Z")
+        .execute(&app.state.db).await.unwrap();
+    let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(before, 2);
+
+    assert_eq!(memto::tasks::prune_sessions(&app.state).await.unwrap(), 1);
+    let (after,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(after, 1, "the live session survives");
+    // The live session still works.
+    assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+}

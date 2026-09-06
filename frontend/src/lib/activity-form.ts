@@ -1,12 +1,12 @@
 import { todayIso } from './format';
-import type { Activity, ActivityInput } from './types';
+import type { Activity, ActivityInput, Category, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
-  return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null };
+  return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null };
 }
 
 export function toActivityInput(a: Activity): ActivityInput {
-  return { date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents };
+  return { date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli };
 }
 
 /** Returns the i18n key of the offending field, or null when valid. */
@@ -15,6 +15,7 @@ export function validateActivity(input: ActivityInput): string | null {
   if (!input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
   if (input.counter_value !== null && Number.isNaN(input.counter_value)) return 'activity.counter';
+  if (input.quantity_milli !== null && Number.isNaN(input.quantity_milli)) return 'activity.quantity';
   return null;
 }
 
@@ -32,4 +33,16 @@ export function groupByYear(list: Activity[]): Array<[string, Activity[]]> {
 
 export function exifDate(a: { taken_at: string | null }): string | null {
   return a.taken_at ? a.taken_at.slice(0, 10) : null;
+}
+
+/** Suggestions for the chosen category (all of them when none is chosen), one per title. */
+export function suggestionsFor(all: TitleSuggestion[], category: Category | null): TitleSuggestion[] {
+  const seen = new Set<string>();
+  return all
+    .filter((s) => category === null || s.category === category)
+    .filter((s) => {
+      if (seen.has(s.title)) return false;
+      seen.add(s.title);
+      return true;
+    });
 }

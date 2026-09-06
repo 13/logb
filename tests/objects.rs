@@ -70,3 +70,90 @@ async fn requires_login() {
     let app = common::spawn().await;
     assert_eq!(reqwest::get(app.url("/objects")).await.unwrap().status(), 401);
 }
+
+#[tokio::test]
+async fn fuel_unit_round_trips_and_is_validated() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "E-bike", "category": "bike", "counter_unit": "km", "fuel_unit": "kwh"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let bike: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(bike["fuel_unit"], "kwh");
+
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Car", "category": "car", "fuel_unit": "barrels"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+async fn due_reminder_count(app: &common::TestApp, object_id: i64) -> i64 {
+    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{object_id}")))
+        .send().await.unwrap().json().await.unwrap();
+    obj["stats"]["due_reminder_count"].as_i64().unwrap()
+}
+
+/// The dashboard's "due" chip comes from this same `due_reminder_count`, computed by its own
+/// hand-written subquery rather than `domain::reminder::is_due`. A snooze that suppresses
+/// `due` on the reminder itself but leaves this count untouched reproduces, on another screen,
+/// exactly the "snooze does nothing" bug the snooze rework existed to fix. Covered separately
+/// for a date-due and a counter-due reminder, since the subquery has one independent branch
+/// for each and gating only one would be a silent half-fix.
+#[tokio::test]
+async fn due_reminder_count_respects_snooze_for_a_date_due_reminder() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Oil", "due_date": "2020-01-01" }))
+        .send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+    assert_eq!(due_reminder_count(&app, id).await, 1, "a past due_date counts as due");
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(due_reminder_count(&app, id).await, 0, "a snoozed date-due reminder must not count as due");
+
+    // Lapse the snooze by writing an already-past date directly through the pool, the same
+    // way tests/reminders.rs does it -- there is no time-travel helper in this harness.
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+        .bind(rid)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(due_reminder_count(&app, id).await, 1, "a lapsed snooze must resume counting as due");
+}
+
+#[tokio::test]
+async fn due_reminder_count_respects_snooze_for_a_counter_due_reminder() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-01-01", "category": "maintenance", "title": "service", "counter_value": 60_000 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+
+    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Service", "due_counter": 60_000 }))
+        .send().await.unwrap().json().await.unwrap();
+    let rid = r["id"].as_i64().unwrap();
+    assert_eq!(due_reminder_count(&app, id).await, 1, "the counter has already been reached");
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(due_reminder_count(&app, id).await, 0, "a snoozed counter-due reminder must not count as due");
+
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+        .bind(rid)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(due_reminder_count(&app, id).await, 1, "a lapsed snooze must resume counting as due");
+}

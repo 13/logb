@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
-  import { api, uploadRaw } from '../lib/api';
+  import { api, deadOps, retryDead, uploadRaw } from '../lib/api';
   import { t } from '../i18n';
   import { LANG_NAMES, SUPPORTED } from '../i18n/detect';
   import { settings } from '../stores/settings';
-  import { currency, user, logout } from '../stores/session';
+  import { currency, user, logout, logoutEverywhere } from '../stores/session';
   import type { ImportCounts, User } from '../lib/types';
+  import type { QueuedOp } from '../lib/outbox';
 
+  let dead = $state<QueuedOp[]>([]);
   let users = $state<User[]>([]);
   let newName = $state('');
   let newPass = $state('');
@@ -22,8 +24,14 @@
 
   onMount(async () => {
     currencyText = $currency;
+    dead = await deadOps();
     if (isAdmin) await loadUsers();
   });
+
+  async function retryOutbox() {
+    await retryDead();
+    dead = await deadOps();
+  }
 
   async function loadUsers() {
     try { users = await api<User[]>('GET', '/users'); } catch (e) { error = (e as Error).message; }
@@ -50,6 +58,11 @@
     try { await api('DELETE', `/users/${u.id}`); await loadUsers(); } catch (e) { error = (e as Error).message; }
   }
 
+  async function signOutEverywhere() {
+    if (!confirm($t('settings.logout-all-confirm'))) return;
+    try { await logoutEverywhere(); } catch (e) { error = (e as Error).message; }
+  }
+
   async function changeOwnPassword() {
     if (!$user) return;
     try {
@@ -71,6 +84,19 @@
   <TopBar title={$t('settings.title')} backTo="/" />
   {#if error}<p class="error">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
+
+  {#if dead.length > 0}
+    <h2>{$t('outbox.failed')}</h2>
+    <div class="list">
+      {#each dead as op (op.id)}
+        <div class="card">
+          <b>{String(op.body.title ?? op.kind)}</b>
+          <span class="muted">{op.path}</span>
+        </div>
+      {/each}
+    </div>
+    <button onclick={retryOutbox}>{$t('outbox.retry')}</button>
+  {/if}
 
   <h2>{$t('settings.language')}</h2>
   <div class="field">
@@ -96,6 +122,8 @@
     <button onclick={changeOwnPassword} disabled={ownPass.length < 8}>{$t('nav.save')}</button>
   </div>
   <button class="ghost" onclick={logout}>{$t('login.logout')}</button>
+  <button class="ghost" onclick={signOutEverywhere}>{$t('settings.logout-all')}</button>
+  <p class="muted hint">{$t('settings.logout-all-hint')}</p>
 
   {#if isAdmin}
     <h2>{$t('settings.currency')}</h2>

@@ -155,3 +155,235 @@ async fn rejects_bad_uploads_and_isolates_users() {
     assert_eq!(anna.delete(app.url(&format!("/attachments/{}", a["id"]))).send().await.unwrap().status(), 404);
     assert_eq!(anna.patch(app.url(&format!("/attachments/{}", a["id"]))).json(&json!({ "caption": "x" })).send().await.unwrap().status(), 404);
 }
+
+/// A cover must be a photo of the object being patched: pointing at another object's photo
+/// is a 400, not a silent cross-object reference.
+#[tokio::test]
+async fn cover_must_belong_to_the_patched_object() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", None).await;
+    let b = app.create_object(&app.client, "Bike", None).await;
+    let (a_id, b_id) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{a_id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
+        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": photo["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "another object's photo must not become this object's cover");
+
+    // A document of the right object is refused too -- covers are photos.
+    let doc: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{b_id}/attachments")))
+        .multipart(form(b"manual".to_vec(), "m.txt", "text/plain"))
+        .send().await.unwrap().json().await.unwrap();
+    let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
+        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": doc["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+/// Sending `cover_attachment_id: null` clears the cover; omitting the field keeps it.
+#[tokio::test]
+async fn cover_can_be_set_kept_and_cleared() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+
+    let url = app.url(&format!("/objects/{id}"));
+    let set: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf", "category": "car", "cover_attachment_id": photo["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(set["cover_attachment_id"], photo["id"]);
+    assert_eq!(set["cover_file_id"], photo["file_id"]);
+
+    // Field omitted: the cover survives an unrelated edit.
+    let kept: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf GTI", "category": "car" }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(kept["cover_attachment_id"], photo["id"]);
+
+    // Explicit null: cleared.
+    let cleared: serde_json::Value = app.client.patch(&url)
+        .json(&json!({ "name": "Golf GTI", "category": "car", "cover_attachment_id": null }))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(cleared["cover_attachment_id"].is_null(), "{cleared}");
+    assert!(cleared["cover_file_id"].is_null(), "{cleared}");
+}
+
+/// Deleting an object must take its files with it, not just its attachment rows.
+#[tokio::test]
+async fn deleting_an_object_purges_its_files() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let photo: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = photo["file_id"].as_i64().unwrap();
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap().status(), 200);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 200);
+
+    assert_eq!(app.client.delete(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 204);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap().status(), 404);
+    assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 404);
+}
+
+/// A non-ASCII filename has to survive as `filename*`, and must not knock the response back
+/// to a bare `inline`.
+#[tokio::test]
+async fn download_keeps_a_non_ascii_filename() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let doc: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(b"rechnung".to_vec(), "Anhängerkupplung — Rechnung.txt", "text/plain"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = doc["file_id"].as_i64().unwrap();
+
+    let res = app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let cd = res.headers()["content-disposition"].to_str().unwrap().to_string();
+    assert!(cd.starts_with("attachment;"), "{cd}");
+    assert!(cd.contains("filename*=UTF-8''Anh%C3%A4ngerkupplung"), "{cd}");
+}
+
+/// An SVG is an image by MIME type and a scriptable document in practice. Serving one inline
+/// from this origin would let it run against the uploader's own session, so it downloads --
+/// and every file response carries nosniff and a sandbox policy.
+#[tokio::test]
+async fn an_uploaded_svg_cannot_run_in_the_apps_origin() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#.to_vec();
+    let att: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(svg, "x.svg", "image/svg+xml"))
+        .send().await.unwrap().json().await.unwrap();
+    let fid = att["file_id"].as_i64().unwrap();
+
+    let res = app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let h = res.headers();
+    let disposition = h["content-disposition"].to_str().unwrap();
+    assert!(disposition.starts_with("attachment;"), "an SVG must download, not render: {disposition}");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    assert!(h["content-security-policy"].to_str().unwrap().contains("sandbox"), "{:?}", h["content-security-policy"]);
+}
+
+/// Photos still render in place -- the allow-list must not have broken the common case.
+#[tokio::test]
+async fn photos_and_pdfs_still_render_inline() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", None).await;
+    let id = car["id"].as_i64().unwrap();
+    let att: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(40, 40), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let res = app.client.get(app.url(&format!("/files/{}", att["file_id"]))).send().await.unwrap();
+    assert!(res.headers()["content-disposition"].to_str().unwrap().starts_with("inline;"));
+}
+
+#[tokio::test]
+async fn a_replayed_upload_returns_the_first_attachment() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    let send = || async {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", "up-abc-123");
+        app.client.post(app.url(&format!("/objects/{id}/attachments")))
+            .multipart(form).send().await.unwrap()
+    };
+
+    let first = send().await;
+    assert_eq!(first.status(), 201);
+    let first: serde_json::Value = first.json().await.unwrap();
+    let again = send().await;
+    assert_eq!(again.status(), 200);
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["id"], first["id"]);
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1, "a replayed upload must leave exactly one attachment row on the object");
+}
+
+/// The upload equivalent of `many_activities_with_no_client_op_id_do_not_conflict`: the
+/// partial unique index only guards non-null values, so every ordinary (non-outbox) upload,
+/// which sends no client_op_id at all, must coexist freely.
+#[tokio::test]
+async fn many_uploads_with_no_client_op_id_do_not_conflict() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    for i in 0..5 {
+        let part = Part::bytes(png(10, 10)).file_name(format!("a{i}.png")).mime_str("image/png").unwrap();
+        let res = app.client.post(&base).multipart(Form::new().part("file", part)).send().await.unwrap();
+        assert_eq!(res.status(), 201, "an absent client_op_id must never collide");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 5);
+}
+
+/// The upload equivalent of `one_client_op_id_cannot_be_reused_across_objects`.
+#[tokio::test]
+async fn one_client_op_id_cannot_be_reused_across_objects_for_uploads() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let a = app.create_object(&app.client, "Golf", Some("km")).await;
+    let b = app.create_object(&app.client, "Bike", Some("km")).await;
+    let (aid, bid) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    let upload = |object_id: i64| {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", "up-dup");
+        app.client.post(app.url(&format!("/objects/{object_id}/attachments"))).multipart(form).send()
+    };
+
+    assert_eq!(upload(aid).await.unwrap().status(), 201);
+    let res = upload(bid).await.unwrap();
+    assert_eq!(res.status(), 409, "the id is the client's promise that this is the same op");
+}
+
+/// As `blank_client_op_id_is_treated_as_absent` for the JSON path: a blank multipart field
+/// must not be treated as a real idempotency key either.
+#[tokio::test]
+async fn blank_client_op_id_is_treated_as_absent_for_uploads() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/attachments"));
+
+    for op_id in ["", "   "] {
+        let part = Part::bytes(png(10, 10)).file_name("a.png").mime_str("image/png").unwrap();
+        let form = Form::new().part("file", part).text("client_op_id", op_id);
+        let res = app.client.post(&base).multipart(form).send().await.unwrap();
+        assert_eq!(res.status(), 201, "a blank (or whitespace-only) client_op_id must not block a real upload");
+    }
+
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 2, "two blank-id uploads must produce two distinct rows, not one");
+}

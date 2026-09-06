@@ -63,6 +63,15 @@
         <option value="h">{$t('object.counter-h')}</option>
       </select>
     </div>
+    <div class="field">
+      <label for="fu">{$t('object.fuel-unit')}</label>
+      <select id="fu" bind:value={input.fuel_unit}>
+        <option value={null}>{$t('object.counter-none')}</option>
+        <option value="l">l</option>
+        <option value="gal">gal</option>
+        <option value="kwh">kwh</option>
+      </select>
+    </div>
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>
     <div class="row">
       <div class="field"><label for="pd">{$t('object.purchase-date')}</label><input id="pd" type="date" bind:value={input.purchase_date} /></div>

@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
-  import { api, fileUrl } from '../lib/api';
+  import { api, createQueued, fileUrl, isRejection } from '../lib/api';
+  import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
-  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney } from '../lib/format';
-  import { emptyActivity, exifDate, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
+  import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { locale, t } from '../i18n';
-  import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput } from '../lib/types';
+  import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -17,10 +18,18 @@
   let input = $state<ActivityInput>(emptyActivity());
   let costText = $state('');
   let counterText = $state('');
+  let quantityText = $state('');
   let attachments = $state<Attachment[]>([]);
   let saved = $state<Activity | null>(null);
   let error = $state('');
   let busy = $state(false);
+  let allSuggestions = $state<TitleSuggestion[]>([]);
+  const suggestions = $derived(suggestionsFor(allSuggestions, input.category));
+  /** True when `saved` exists only because the user attached a file, never because they saved. */
+  let autoDraft = $state(false);
+  /** False only while editing an existing activity whose GET hasn't resolved yet — blocks the
+   *  "add files" affordance so it can't spuriously POST a new row before we know one already exists. */
+  let ready = $state(untrack(() => aid === undefined));
 
   const lastCounter = $derived(object?.stats.current_counter ?? null);
   const counterWarn = $derived(
@@ -29,15 +38,32 @@
   const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
 
   onMount(async () => {
-    object = await api<MemObject>('GET', `/objects/${oid}`);
+    try {
+      object = await api<MemObject>('GET', `/objects/${oid}`);
+      setCachedObject(oid, object);
+    } catch (e) {
+      // Offline (or a dead/slow connection): fall back to the last object this session saw,
+      // the same way ObjectDetail's loadObject() does -- without this, `object` stays null and
+      // the odometer / fuel-quantity fields below (gated on `object?.counter_unit`) silently
+      // vanish, even though this form exists precisely to log things like a garage fill-up
+      // while offline. Never on a genuine rejection (`isRejection`): a 401/403/404 is the
+      // server answering, possibly about an object that belongs to someone else entirely.
+      const cached = isRejection(e) ? undefined : getCachedObject(oid);
+      if (cached) object = cached;
+      else error = (e as Error).message;
+    }
+    allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
     if (aid) {
       const a = await api<Activity>('GET', `/activities/${aid}`);
       saved = a;
+      autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
       input = toActivityInput(a);
       costText = centsToInput(a.cost_cents);
       counterText = a.counter_value === null ? '' : String(a.counter_value);
+      quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
       attachments = a.attachments;
-    } else if (object.stats.current_counter !== null) {
+      ready = true;
+    } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
   });
@@ -45,10 +71,12 @@
   /** Files need an activity row to hang on, so save the draft first. */
   async function ensureSaved(): Promise<Activity> {
     if (saved) return saved;
+    if (!ready) throw new Error('not loaded yet');
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) throw new Error($t(bad));
     saved = await api<Activity>('POST', `/objects/${oid}/activities`, body);
+    autoDraft = true;
     return saved;
   }
 
@@ -58,7 +86,19 @@
       cost_cents: parseMoney(costText),
       // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
       counter_value: String(counterText).trim() === '' ? null : Number(counterText),
+      // The quantity field only exists in the form for the fuel category (see the template
+      // below) -- send it only then, so switching category away from fuel after typing an
+      // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
+      // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
+      quantity_milli: input.category === 'fuel' ? parseQuantity(quantityText) : null,
     };
+  }
+
+  /** Prefill from a past entry. The user still reviews and saves; nothing is written here. */
+  function repeat(s: TitleSuggestion) {
+    input.title = s.title;
+    input.category = s.category;
+    if (s.last_cost_cents !== null) costText = centsToInput(s.last_cost_cents);
   }
 
   async function submit(e: SubmitEvent) {
@@ -68,10 +108,30 @@
     if (bad) { error = $t(bad); return; }
     busy = true; error = '';
     try {
-      if (saved) await api('PATCH', `/activities/${saved.id}`, body);
-      else await api('POST', `/objects/${oid}/activities`, body);
+      if (saved) {
+        await api('PATCH', `/activities/${saved.id}`, body);
+      } else {
+        // null means "queued, not sent": the row exists locally and will be replayed.
+        await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>);
+      }
+      autoDraft = false;
       go(`/objects/${oid}`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) {
+      // `createQueued` throws an i18n key (rather than a message) when the write reached
+      // neither the server nor the local outbox queue, so the entry is honestly reported as
+      // lost instead of navigating away as though it had been saved. `$t` on any other
+      // (plain-English, server-supplied) message just returns it unchanged.
+      error = $t((err as Error).message);
+    } finally { busy = false; }
+  }
+
+  /** Cancel throws the auto-created draft away; keeping it would leave a stray timeline entry. */
+  async function cancel() {
+    if (autoDraft && saved) {
+      if (attachments.length > 0 && !confirm($t('activity.discard-draft'))) return;
+      try { await api('DELETE', `/activities/${saved.id}`); } catch { /* leaving it is better than blocking the exit */ }
+    }
+    back(`/objects/${oid}`);
   }
 
   async function remove() {
@@ -96,7 +156,20 @@
     {#if photoDate && photoDate !== input.date}
       <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $locale) })}</button>
     {/if}
-    <div class="field"><label for="ti">{$t('activity.title')}</label><input id="ti" bind:value={input.title} required /></div>
+    {#if !editing && suggestions.length > 0}
+      <div class="chips">
+        {#each suggestions.slice(0, 3) as s (s.title + s.category)}
+          <button type="button" class="chip" onclick={() => repeat(s)}>{$t('activity.repeat')}: {s.title}</button>
+        {/each}
+      </div>
+    {/if}
+    <div class="field">
+      <label for="ti">{$t('activity.title')}</label>
+      <input id="ti" list="titles" bind:value={input.title} required />
+      <datalist id="titles">
+        {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
+      </datalist>
+    </div>
     <div class="row">
       {#if object?.counter_unit}
         <div class="field">
@@ -107,6 +180,12 @@
       {/if}
       <div class="field"><label for="co">{$t('activity.cost')}</label><input id="co" type="text" inputmode="decimal" bind:value={costText} /></div>
     </div>
+    {#if input.category === 'fuel' && object?.counter_unit}
+      <div class="field">
+        <label for="qt">{$t('activity.quantity')} ({object.fuel_unit ?? (object.counter_unit === 'mi' ? 'gal' : 'l')})</label>
+        <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
+      </div>
+    {/if}
     <div class="field"><label for="no">{$t('activity.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
 
     <h2>{$t('activity.photos')}</h2>
@@ -119,7 +198,7 @@
     {/if}
     {#if saved}
       <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
-    {:else}
+    {:else if ready}
       <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); } catch (e) { error = (e as Error).message; } }}>
         + {$t('activity.add-files')}
       </button>
@@ -127,7 +206,7 @@
 
     {#if error}<p class="error">{error}</p>{/if}
     <div class="row actions">
-      <button type="button" class="ghost" onclick={() => back(`/objects/${oid}`)}>{$t('nav.cancel')}</button>
+      <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>
   </form>

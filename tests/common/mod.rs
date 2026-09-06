@@ -4,21 +4,40 @@ use std::net::SocketAddr;
 pub struct TestApp {
     pub base: String,
     pub client: reqwest::Client,
+    /// The same shared state the router holds, for tests that drive background work directly.
+    pub state: memto::state::App,
     _dir: tempfile::TempDir,
 }
 
-pub async fn spawn() -> TestApp {
-    let dir = tempfile::tempdir().unwrap();
-    let config = memto::config::Config {
-        data_dir: dir.path().to_path_buf(),
+pub fn test_config(data_dir: std::path::PathBuf) -> memto::config::Config {
+    memto::config::Config {
+        data_dir,
         bind: "127.0.0.1".into(),
         port: 0,
         max_upload_mb: 2,
+        max_import_mb: 4,
+        notify_url: None,
+        notify_hour: 8,
+        notify_format: "json".into(),
+        timezone: chrono_tz::Tz::UTC,
+        backup: None,
+        healthcheck: false,
         secure_cookie: "false".into(),
         log: "warn".into(),
         trust_proxy: false,
-    };
-    let app = memto::build(config).await.unwrap();
+    }
+}
+
+pub async fn spawn() -> TestApp {
+    spawn_with(|_| {}).await
+}
+
+/// As `spawn`, with a chance to adjust the config before the app is built.
+pub async fn spawn_with(tweak: impl FnOnce(&mut memto::config::Config)) -> TestApp {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path().to_path_buf());
+    tweak(&mut config);
+    let (app, state) = memto::build_with_state(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -29,6 +48,7 @@ pub async fn spawn() -> TestApp {
     TestApp {
         base: format!("http://{addr}/api"),
         client: new_client(),
+        state,
         _dir: dir,
     }
 }

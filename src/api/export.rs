@@ -8,7 +8,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::files;
 use crate::state::App;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
@@ -19,11 +19,11 @@ use sqlx::Sqlite;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-pub fn router() -> Router<App> {
+pub fn router(max_import_bytes: usize) -> Router<App> {
     Router::new()
         .route("/export", get(export))
         .route("/import", post(import))
-        .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(max_import_bytes))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,6 +45,8 @@ struct ActivityExport {
     notes: String,
     counter_value: Option<i64>,
     cost_cents: Option<i64>,
+    #[serde(default)]
+    quantity_milli: Option<i64>,
     created_at: String,
     attachments: Vec<AttachmentExport>,
 }
@@ -60,6 +62,10 @@ struct ReminderExport {
     done_at: Option<String>,
     done_activity_index: Option<usize>,
     created_at: String,
+    // Added after version 1 archives already existed in the wild; `#[serde(default)]` lets
+    // those older archives import as reminders that simply were never snoozed.
+    #[serde(default)]
+    snoozed_until: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -67,6 +73,8 @@ struct ObjectExport {
     name: String,
     category: String,
     counter_unit: Option<String>,
+    #[serde(default)]
+    fuel_unit: Option<String>,
     description: String,
     purchase_date: Option<String>,
     purchase_price_cents: Option<i64>,
@@ -86,16 +94,24 @@ struct Export {
     objects: Vec<ObjectExport>,
 }
 
-fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> AttachmentExport {
-    AttachmentExport {
-        sha256: sha_by_file[&a.file_id].clone(),
+/// The `files` row an attachment points at always belongs to the same user (attachments hang
+/// off that user's objects), so a miss here means the two tables disagree. Report it as an
+/// internal error rather than panicking on a bare `HashMap` index.
+fn sha_of(sha_by_file: &HashMap<i64, String>, file_id: i64) -> Result<String, AppError> {
+    sha_by_file.get(&file_id).cloned()
+        .ok_or_else(|| AppError::Internal(format!("attachment references unknown file {file_id}")))
+}
+
+fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> Result<AttachmentExport, AppError> {
+    Ok(AttachmentExport {
+        sha256: sha_of(sha_by_file, a.file_id)?,
         original_name: a.original_name.clone(),
         mime: a.mime.clone(),
         kind: a.kind.clone(),
         caption: a.caption.clone(),
         taken_at: a.taken_at.clone(),
         created_at: a.created_at.clone(),
-    }
+    })
 }
 
 #[derive(Deserialize)]
@@ -107,7 +123,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
@@ -120,35 +136,36 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at \
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
              FROM activities WHERE object_id = ? ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(
             "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-             r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, o.name AS object_name, o.counter_unit, \
+             r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
              NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? ORDER BY r.id")
             .bind(o.id).fetch_all(&state.db).await?;
-        for a in &atts { blobs.push(sha_by_file[&a.file_id].clone()); }
+        for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
         let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
-        let cover_sha256 = o.cover_attachment_id
-            .and_then(|cid| atts.iter().find(|a| a.id == cid))
-            .map(|a| sha_by_file[&a.file_id].clone());
+        let cover_sha256 = match o.cover_attachment_id.and_then(|cid| atts.iter().find(|a| a.id == cid)) {
+            Some(a) => Some(sha_of(&sha_by_file, a.file_id)?),
+            None => None,
+        };
         out.push(ObjectExport {
-            name: o.name, category: o.category, counter_unit: o.counter_unit, description: o.description,
+            name: o.name, category: o.category, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
-            activities: acts.iter().map(|a| ActivityExport {
+            activities: acts.iter().map(|a| Ok(ActivityExport {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
-                counter_value: a.counter_value, cost_cents: a.cost_cents, created_at: a.created_at.clone(),
-                attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect(),
-            }).collect(),
-            attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect(),
+                counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
+                attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
+            })).collect::<Result<Vec<_>, AppError>>()?,
+            attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             reminders: rems.iter().map(|r| ReminderExport {
                 title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(), due_counter: r.due_counter,
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter, done_at: r.done_at.clone(),
                 done_activity_index: r.done_activity_id.and_then(|id| index_of.get(&id).copied()),
-                created_at: r.created_at.clone(),
+                created_at: r.created_at.clone(), snoozed_until: r.snoozed_until.clone(),
             }).collect(),
         });
     }
@@ -157,36 +174,51 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
 
     blobs.sort();
     blobs.dedup();
-    let mut blob_bytes = Vec::with_capacity(blobs.len());
-    for sha in &blobs {
-        if let Ok(b) = tokio::fs::read(state.storage.blob_path(sha)).await {
-            blob_bytes.push((sha.clone(), b));
+
+    // The archive is built into a scratch file and streamed back from it, so peak memory is
+    // one blob rather than the whole library: a few gigabytes of photos used to be held once
+    // as the read blobs and again as the finished zip before a single byte was sent.
+    let scratch = state.storage.scratch_path("export");
+    let storage = state.storage.clone();
+    let path = scratch.clone();
+    let build = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        let file = std::fs::File::create(&path)?;
+        let mut w = zip::ZipWriter::new(std::io::BufWriter::new(file));
+        let deflate = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
+        w.write_all(&json)?;
+        for sha in &blobs {
+            // A blob missing from disk is storage corruption, not a reason to fail the whole
+            // export; the entry is simply absent from the archive, as it was before.
+            let Ok(mut src) = std::fs::File::open(storage.blob_path(sha)) else { continue };
+            w.start_file(format!("files/{sha}"), stored).map_err(|e| AppError::Internal(e.to_string()))?;
+            std::io::copy(&mut src, &mut w)?;
         }
+        w.finish().map_err(|e| AppError::Internal(e.to_string()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Err(e) = build {
+        let _ = tokio::fs::remove_file(&scratch).await;
+        return Err(e);
     }
-    let zip_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
-        let mut cursor = Cursor::new(Vec::new());
-        {
-            let mut w = zip::ZipWriter::new(&mut cursor);
-            let deflate = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-            w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
-            w.write_all(&json)?;
-            for (sha, b) in blob_bytes {
-                w.start_file(format!("files/{sha}"), stored).map_err(|e| AppError::Internal(e.to_string()))?;
-                w.write_all(&b)?;
-            }
-            w.finish().map_err(|e| AppError::Internal(e.to_string()))?;
-        }
-        Ok(cursor.into_inner())
-    }).await.map_err(|e| AppError::Internal(e.to_string()))??;
+
+    let file = tokio::fs::File::open(&scratch).await?;
+    let len = file.metadata().await?.len();
+    // Unlink now: the open handle keeps the data readable for as long as this response takes,
+    // and the file cannot outlive the request even if the client disconnects mid-download.
+    let _ = tokio::fs::remove_file(&scratch).await;
 
     let name = format!("attachment; filename=\"memto-export-{}.zip\"", db::today());
     Ok((
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/zip")),
             (header::CONTENT_DISPOSITION, HeaderValue::from_str(&name).unwrap()),
+            (header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap()),
         ],
-        zip_bytes,
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
     ).into_response())
 }
 
@@ -198,12 +230,34 @@ pub struct ImportCounts {
     pub reminders: usize,
 }
 
+/// Reads one archive entry into `out`, drawing from a decompression budget shared by the whole
+/// archive and failing with 413 the moment it would be exceeded.
+///
+/// The cap is applied to the bytes actually produced, not to the entry's declared uncompressed
+/// size: that header is written by whoever built the archive, so a "zip bomb" can advertise a
+/// few kilobytes and still inflate to gigabytes. `take(limit + 1)` lets exactly one byte past
+/// the budget through, which is enough to detect the overrun without buffering it.
+fn read_capped<R: Read>(r: &mut R, out: &mut Vec<u8>, remaining: &mut usize) -> Result<(), AppError> {
+    let limit = *remaining;
+    let n = r.take(limit as u64 + 1).read_to_end(out)?;
+    if n > limit {
+        return Err(AppError::TooLarge);
+    }
+    *remaining -= n;
+    Ok(())
+}
+
 async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result<Json<ImportCounts>, AppError> {
+    let budget = state.config.max_import_inflated_bytes();
     let (data, blobs) = tokio::task::spawn_blocking(move || -> Result<(Export, HashMap<String, Vec<u8>>), AppError> {
         let mut z = zip::ZipArchive::new(Cursor::new(body.to_vec()))
             .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
+        let mut remaining = budget;
         let mut json = Vec::new();
-        z.by_name("data.json").map_err(|_| AppError::BadRequest("data.json missing".into()))?.read_to_end(&mut json)?;
+        {
+            let mut f = z.by_name("data.json").map_err(|_| AppError::BadRequest("data.json missing".into()))?;
+            read_capped(&mut f, &mut json, &mut remaining)?;
+        }
         let data: Export = serde_json::from_slice(&json).map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
         if data.version != 1 { return Err(AppError::BadRequest(format!("unsupported export version {}", data.version))); }
         let mut blobs = HashMap::new();
@@ -212,7 +266,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let name = f.name().to_string();
             if let Some(sha) = name.strip_prefix("files/") {
                 let mut b = Vec::new();
-                f.read_to_end(&mut b)?;
+                read_capped(&mut f, &mut b, &mut remaining)?;
                 if files::sha256_hex(&b) == sha { blobs.insert(sha.to_string(), b); }
             }
         }
@@ -226,9 +280,9 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     for o in data.objects {
         let now = db::now();
         let (object_id,): (i64,) = sqlx::query_as(
-            "INSERT INTO objects (user_id, name, category, counter_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
-            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.description)
+            "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
+             archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
+            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
             .fetch_one(&mut *tx).await?;
         counts.objects += 1;
@@ -236,10 +290,10 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let mut activity_ids = Vec::new();
         for a in &o.activities {
             let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
-                .bind(a.counter_value).bind(a.cost_cents).bind(&a.created_at).bind(&now)
+                .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .fetch_one(&mut *tx).await?;
             activity_ids.push(aid);
             counts.activities += 1;
@@ -268,10 +322,11 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
             sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
+                .bind(&r.snoozed_until)
                 .execute(&mut *tx).await?;
             counts.reminders += 1;
         }
@@ -292,6 +347,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             name: o.name.clone(),
             category: o.category.clone(),
             counter_unit: o.counter_unit.clone(),
+            fuel_unit: o.fuel_unit.clone(),
             description: o.description.clone(),
             purchase_date: o.purchase_date.clone(),
             purchase_price_cents: o.purchase_price_cents,
@@ -304,7 +360,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         // stand-in row is never inspected, since the real object doesn't exist yet.
         let object_stub = ObjectRow {
             id: 0, user_id: 0, name: o.name.clone(), category: o.category.clone(),
-            counter_unit: o.counter_unit.clone(), description: o.description.clone(),
+            counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description: o.description.clone(),
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
@@ -314,6 +370,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             let mut act_input = ActivityInput {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
+                quantity_milli: a.quantity_milli, client_op_id: None,
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;
