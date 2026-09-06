@@ -9,6 +9,26 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
+/**
+ * Who the queue currently belongs to. The outbox is one IndexedDB per origin, shared by every
+ * account that signs in on the device, and a queued write deliberately outlives the session
+ * that made it -- so on a shared device the next person to log in would otherwise replay
+ * another user's writes under their own session (the server refuses them on ownership, and
+ * `replay` then parks them permanently dead), and see their titles in the pending and failed
+ * lists. Set from `../stores/session.ts` on every path that establishes or ends a session.
+ */
+let currentUserId: number | null = null;
+export function setOutboxUser(id: number | null): void {
+  currentUserId = id;
+}
+
+/** An op belongs to the session in front of us unless it is demonstrably someone else's. A
+ *  record queued before `userId` existed, or one queued while no user was known, counts as
+ *  ours -- the alternative is stranding a write nobody can ever send. */
+function isOurs(op: QueuedOp): boolean {
+  return op.userId === undefined || currentUserId === null || op.userId === currentUserId;
+}
+
 async function handle<T>(res: Response, path: string): Promise<T> {
   if (res.status === 204) return undefined as T;
   const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
@@ -88,7 +108,7 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
     // handler navigates to /login, and the entry existed nowhere else.
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
-      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0 });
+      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0, userId: currentUserId ?? undefined });
     } catch {
       // The write reached neither the server nor the local queue: nothing durable remembers
       // it any more, so the caller must be told rather than navigating away as though the
@@ -131,7 +151,7 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
     }
   }
   try {
-    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0 });
+    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0, userId: currentUserId ?? undefined });
   } catch {
     // See the matching comment in createQueued: neither the server nor the local queue has
     // this write, so the caller must be told rather than treating the file as saved.
@@ -171,6 +191,13 @@ async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
   try {
     resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
+      if (!isOurs(op)) {
+        // Someone else's queued write, waiting for them to sign back in on this device. Sending
+        // it under the current session would get it refused on ownership and parked dead --
+        // destroying their entry at the moment an unrelated person logged in. `SkipOp` leaves it
+        // exactly as it is and lets the pass continue with our own ops.
+        throw new SkipOp('outbox: op belongs to another user');
+      }
       if (op.kind === 'attachment.upload') {
         if (!op.blob) {
           // Nothing to send and never will be -- this op can never succeed no matter how many
@@ -239,12 +266,18 @@ globalThis.addEventListener?.('visibilitychange', () => {
   if (document.visibilityState === 'visible') void flushOutbox();
 });
 
-export function outboxPending(): Promise<number> {
-  return pendingCount(store);
+export async function outboxPending(): Promise<number> {
+  return pendingCount(ourStore());
 }
 
 export async function deadOps(): Promise<QueuedOp[]> {
-  return (await store.all()).filter((o) => o.dead);
+  return (await ourStore().all()).filter((o) => o.dead);
+}
+
+/** The store as the signed-in user sees it: their own ops only. Reads only -- a write still
+ *  goes to the real store, since an op is addressed by its id and never by this view. */
+function ourStore(): OutboxStore {
+  return { ...store, all: async () => (await store.all()).filter(isOurs) };
 }
 
 /** How many ops are parked dead — a write the server has permanently refused and will never
@@ -261,7 +294,7 @@ export async function outboxDeadCount(): Promise<number> {
  * never invisible in the meantime. No component reaches into the store directly.
  */
 export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
-  return (await store.all()).filter((o) => !o.dead && o.path === path);
+  return (await store.all()).filter((o) => !o.dead && o.path === path && isOurs(o));
 }
 
 /**

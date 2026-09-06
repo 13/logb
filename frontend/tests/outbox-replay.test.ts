@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createQueued, flushOutbox, onOutboxFlushed, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { cancelQueuedActivity, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, retryDead, setOutboxStoreForTesting, setOutboxUser, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -507,5 +507,94 @@ describe('queuing a write that meets an expired session', () => {
     globalThis.fetch = vi.fn(async () => jsonResponse(400, { code: 'bad_request', message: 'title required' })) as unknown as typeof fetch;
 
     await expect(createQueued('/objects/1/activities', { title: '' })).rejects.toThrow();
+  });
+});
+
+/**
+ * The outbox is one IndexedDB per origin, shared by every account that signs in on the device,
+ * and a queued write deliberately outlives the session that made it. Without an owner on each
+ * op, the next person to log in replays someone else's writes under their own session: the
+ * server refuses them on ownership, `replay` parks them permanently dead, and the first user's
+ * entries -- titles and all -- turn up in the second user's pending and failed lists.
+ */
+describe('an outbox shared by two users of one device', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+    setOutboxUser(null);
+  });
+
+  it('never sends, counts or shows a write queued by somebody else', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'theirs', kind: 'activity.create', path: '/objects/9/activities', body: { title: 'Their oil change' }, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'ours', kind: 'activity.create', path: '/objects/3/activities', body: { title: 'Our fuel' }, attempts: 0, userId: 2 });
+
+    setOutboxUser(2);
+    const sent: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(init?.body as string).title);
+      return jsonResponse(201, { id: 1 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(sent).toEqual(['Our fuel']);
+    // Left exactly as it was, for its own user to send when they sign back in.
+    const theirs = (await store.all()).find((o) => o.id === 'theirs');
+    expect(theirs?.dead).toBeFalsy();
+    expect(theirs?.attempts).toBe(0);
+
+    expect(await outboxPending()).toBe(0); // ours sent, theirs is not ours to count
+    expect(await outboxDeadCount()).toBe(0);
+    expect((await deadOps()).map((o) => o.id)).toEqual([]);
+  });
+
+  it('sends it once its own user signs back in', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'theirs', kind: 'activity.create', path: '/objects/9/activities', body: { title: 'Their oil change' }, attempts: 0, userId: 1 });
+
+    const sent: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(init?.body as string).title);
+      return jsonResponse(201, { id: 1 });
+    }) as unknown as typeof fetch;
+
+    setOutboxUser(2);
+    await flushOutbox();
+    expect(sent).toEqual([]);
+
+    setOutboxUser(1);
+    await flushOutbox();
+    expect(sent).toEqual(['Their oil change']);
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('tags what it queues with the user who queued it', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    setOutboxUser(7);
+    globalThis.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch;
+
+    await createQueued('/objects/1/activities', { title: 'x' });
+
+    expect((await store.all())[0].userId).toBe(7);
+  });
+
+  it('treats a record queued before owners existed as the current user\'s', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'legacy', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'Old' }, attempts: 0 });
+
+    setOutboxUser(4);
+    const sent: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(init?.body as string).title);
+      return jsonResponse(201, { id: 1 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(sent).toEqual(['Old']);
   });
 });

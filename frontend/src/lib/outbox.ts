@@ -29,6 +29,12 @@ export interface QueuedOp {
   /** IndexedDB insertion order marker. The memory store does not need this because arrays
    *  already keep insertion order; the IndexedDB store stamps it itself on `put`. */
   queued_at?: number;
+  /** Which signed-in user queued this op. The store is one IndexedDB per ORIGIN, shared by
+   *  every account that uses the device, and a queued write outlives the session that made it
+   *  (that is the whole point of the queue) -- so without this, the next person to log in
+   *  replays, sees, and destroys writes that are not theirs. Absent on a record queued before
+   *  this field existed, which is treated as belonging to whoever is signed in now. */
+  userId?: number;
   /** Monotonic total-order marker, assigned once at enqueue by `idbStore`'s `put` (see
    *  `./idb.ts`) and preserved on every later rewrite of the same op. `queued_at` alone cannot
    *  break a tie between two ops enqueued in the same millisecond -- `IDBObjectStore.getAll()`

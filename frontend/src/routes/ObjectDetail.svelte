@@ -26,6 +26,9 @@
   let category = $state<Category | ''>('');
   let error = $state('');
   const PAGE = 100;
+  /// Must match MAX_LIMIT in src/api/activities.rs: the server clamps a bigger `limit` silently,
+  /// so asking for more than this loses rows with no error to notice.
+  const MAX_LIMIT = 500;
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
    *  401/403/404 is the server answering, and this object may simply belong to someone else. */
@@ -74,9 +77,28 @@
     return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
   }
 
-  /// Which of the queued creates this view is currently rendering, as a stable key. A flush
-  /// pass only matters here if it changed that set -- see the `onOutboxFlushed` subscription.
-  let pendingKey = '';
+  /// Deliberately unfiltered by category, and deliberately including uploads: a queued upload
+  /// landing changes an existing entry's thumbnail strip and the object's stats, which the
+  /// pending-entry list alone says nothing about.
+  async function outboxKey(): Promise<string> {
+    const [creates, uploads] = await Promise.all([
+      pendingOpsFor(`/objects/${oid}/activities`),
+      pendingOpsFor(`/objects/${oid}/attachments`),
+    ]);
+    return [...creates, ...uploads].map((o) => o.id).join(',');
+  }
+
+  /// Which queued ops this view's rendering depends on, as a stable key: the creates it shows
+  /// as pending entries, and the uploads that will change an existing entry's thumbnails. A
+  /// flush pass only matters here if it changed that set -- see the `onOutboxFlushed`
+  /// subscription.
+  ///
+  /// `null` means "not known": no load has committed yet, or one is in flight. A flush landing
+  /// in that window must always reload -- comparing against a stale or not-yet-written key
+  /// would skip the reload while the in-flight load goes on to commit a server page fetched
+  /// BEFORE the replayed write landed, leaving that activity rendered neither as pending nor
+  /// as real until the next remount.
+  let pendingKey: string | null = null;
   /// Guards against two loads landing out of order: only the newest may commit its result.
   /// Several triggers can overlap (the `oid`/`category` effect, "load more", a flush), and
   /// whichever resolved last used to win regardless of which started last.
@@ -101,19 +123,30 @@
     // "Show N older" appeared to do nothing at all: the appended page was fetched, rendered,
     // and immediately replaced by a fresh page-one load.
     const loaded = untrack(() => activities.filter((a) => !a.pending).length);
-    // A refresh must ask for every page the user has already pulled in. Requesting PAGE would
+    // Anything this load is about to replace is no longer what is on screen, so the key stops
+    // describing it the moment the load starts. See the comment on `pendingKey`.
+    if (!append) pendingKey = null;
+    // A refresh must cover every page the user has already pulled in. Requesting one PAGE would
     // silently throw away every "load more" they did, which is what a flush -- fired on every
-    // `visibilitychange`, so on merely switching away from the tab and back -- used to do.
-    const limit = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
-    const params = new URLSearchParams({ limit: String(limit), offset: String(append ? loaded : 0) });
-    if (category) params.set('category', category);
+    // `visibilitychange`, so on merely switching away from the tab and back -- used to do. The
+    // server clamps `limit` to MAX_LIMIT, so a window wider than that is fetched in chunks
+    // rather than asked for in one request that would come back quietly truncated.
+    const want = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
+    const base = append ? loaded : 0;
     let items: Activity[] = [];
     let total = 0;
     try {
-      const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
-      items = page.items;
-      total = page.total;
-      if (!append) setCachedActivities(oid, { items, total });
+      while (items.length < want) {
+        const params = new URLSearchParams({
+          limit: String(Math.min(MAX_LIMIT, want - items.length)),
+          offset: String(base + items.length),
+        });
+        if (category) params.set('category', category);
+        const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+        items = [...items, ...page.items];
+        total = page.total;
+        if (page.items.length === 0) break; // the server has nothing more to give
+      }
     } catch (e) {
       if (append) throw e;
       const cached = isRejection(e) ? undefined : getCachedActivities(oid);
@@ -121,8 +154,13 @@
       total = cached?.total ?? 0;
     }
     const pending = append ? [] : await pendingActivities();
+    const key = append ? null : await outboxKey();
     if (token !== loadSeq) return; // a newer load started while this one was in flight
-    if (!append) pendingKey = pending.map((a) => a.id).join(',');
+    // Below the token check: a superseded load must not leave the offline cache holding a page
+    // the UI has already decided not to show -- e.g. the pre-filter page, after a filter change
+    // resolved first -- since that cache is what the catch above serves when offline.
+    if (!append) setCachedActivities(oid, { items, total });
+    if (!append) pendingKey = key;
     activities = append ? [...activities, ...items] : [...pending, ...items];
     activityTotal = total + pending.length;
   }
@@ -145,8 +183,8 @@
   // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
   // every extra page the user had loaded.
   $effect(() => onOutboxFlushed(async () => {
-    const key = (await pendingActivities()).map((a) => a.id).join(',');
-    if (key === pendingKey) return;
+    const key = await outboxKey();
+    if (pendingKey !== null && key === pendingKey) return;
     loadObject();
     loadActivities('refresh');
   }));
