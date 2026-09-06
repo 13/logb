@@ -259,6 +259,14 @@ test('a queued write survives somebody else signing in on the same device', asyn
   await expect(page.getByText(/Waiting to send|Failed/i)).toHaveCount(0);
   await page.waitForTimeout(500);
 
+  // And a reload while they are signed in, which is the flush `main.ts` fires at module load --
+  // before anything knows who is signed in. That one used to treat an unknown user as "anyone",
+  // so it replayed the admin's write under this session's perfectly valid cookie, had it
+  // refused on ownership, and parked it dead.
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(500);
+
   // The owner comes back, and their entry is still there to send.
   await page.getByRole('button', { name: 'Settings' }).click();
   // Exact: the account section also offers "Sign out everywhere".

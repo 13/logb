@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { cancelQueuedActivity, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, retryDead, setOutboxStoreForTesting, setOutboxUser, setUnauthorizedHandler, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
+// Every flush in this file stands in for one made by a signed-in user: `flushOutbox` sends
+// nothing at all when it does not know who is asking (see `doFlushOutbox` in ../src/lib/api.ts),
+// which is what keeps the boot flush from replaying one user's queue under another's cookie.
+// The few tests that are ABOUT not knowing set the user to null themselves.
+beforeEach(() => setOutboxUser(1));
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -635,5 +641,63 @@ describe('the owner recorded on a write queued by an expired session', () => {
     await uploadQueued('/objects/1/attachments', new Blob(['x']), 'photo.png');
 
     expect((await store.all()).map((o) => o.userId)).toEqual([3]);
+  });
+});
+
+/**
+ * `main.ts` flushes at module load, before `App.svelte`'s onMount has called `loadSession`,
+ * which itself needs two round trips before it knows who is signed in. That boot flush used to
+ * run unattributed and, since an unknown user counted as "ours", replayed whatever was queued
+ * under whatever cookie happened to still be valid -- on a shared device, one user's writes
+ * under another's session, refused on ownership and parked dead.
+ */
+describe('flushing before the session is known', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+    setOutboxUser(null);
+  });
+
+  it('sends nothing at all, and sends normally once the user is known', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'a', kind: 'activity.create', path: '/objects/1/activities', body: { title: 'Theirs' }, attempts: 0, userId: 1 });
+
+    const sent: string[] = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(init?.body as string).title);
+      return jsonResponse(201, { id: 1 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox(); // the boot flush: nobody is signed in yet
+    expect(sent).toEqual([]);
+    expect((await store.all())[0].dead).toBeFalsy();
+
+    setOutboxUser(1);
+    await flushOutbox();
+    expect(sent).toEqual(['Theirs']);
+  });
+});
+
+/** Reviving a parked op is the owner's decision, not whoever happens to be signed in. */
+describe('retryDead on a device with two users', () => {
+  beforeEach(() => {
+    setOutboxStoreForTesting(memoryStore());
+    setOutboxUser(null);
+  });
+
+  it('revives only the signed-in user\'s own dead ops', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'theirs', kind: 'activity.create', path: '/objects/9/activities', body: {}, attempts: 3, dead: true, userId: 1 });
+    await enqueue(store, { id: 'ours', kind: 'activity.create', path: '/objects/3/activities', body: { title: 'Ours' }, attempts: 3, dead: true, userId: 2 });
+
+    setOutboxUser(2);
+    globalThis.fetch = vi.fn(async () => jsonResponse(201, { id: 1 })) as unknown as typeof fetch;
+
+    await retryDead();
+
+    // Ours was revived and sent; theirs was never touched, so it is still parked for its owner
+    // to decide about rather than being retried and re-parked behind their back.
+    expect((await store.all()).map((o) => [o.id, o.dead])).toEqual([['theirs', true]]);
   });
 });

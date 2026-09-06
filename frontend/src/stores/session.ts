@@ -30,6 +30,9 @@ export async function loadSession(): Promise<void> {
     const me = await api<User>('GET', '/auth/me');
     user.set(me);
     setOutboxUser(me.id);
+    // The flush `main.ts` fires at module load happens before this, so it knows no user and
+    // deliberately sends nothing (see `doFlushOutbox`). This is the boot flush that counts.
+    void flushOutbox();
     const s = await api<Settings>('GET', '/settings');
     currency.set(s.currency);
   } catch {
@@ -52,7 +55,10 @@ export async function login(username: string, password: string): Promise<void> {
   // `serialize`d, so a single call made while a pre-login pass is still in flight would just
   // join that pass -- the one that is 401ing everything and knows nothing of this user -- and
   // return having sent nothing. The second call is guaranteed to be a genuinely new pass.
-  void flushOutbox().then(() => flushOutbox());
+  // `.catch` before the chain, not after: `doFlushOutbox` rethrows (an IndexedDB failure in
+  // `store.all()`, say), and a plain `.then` would drop the second pass exactly when it is
+  // needed -- besides leaving the rejection unhandled.
+  void flushOutbox().catch(() => {}).then(() => flushOutbox()).catch(() => {});
 }
 
 export async function logout(): Promise<void> {

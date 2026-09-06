@@ -23,8 +23,10 @@ export function setOutboxUser(id: number | null): void {
 }
 
 /** An op belongs to the session in front of us unless it is demonstrably someone else's. A
- *  record queued before `userId` existed, or one queued while no user was known, counts as
- *  ours -- the alternative is stranding a write nobody can ever send. */
+ *  record queued before `userId` existed, or one read while no user is known, counts as ours --
+ *  the alternative is stranding a write nobody can ever see.
+ *
+ *  For DISPLAY only. Sending is stricter: see the guard at the top of `doFlushOutbox`. */
 function isOurs(op: QueuedOp): boolean {
   return op.userId === undefined || currentUserId === null || op.userId === currentUserId;
 }
@@ -196,6 +198,16 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>) => void): ()
 const outboxLock = createLock('memto-outbox');
 
 async function doFlushOutbox(): Promise<void> {
+  // Nobody is signed in, so there is no session to attribute a send to and no way to tell whose
+  // ops these are. `main.ts` flushes at module load -- before `App.svelte`'s onMount has even
+  // called `loadSession`, which itself needs two round trips before it knows the user -- so
+  // without this the boot flush ran unattributed and, on a shared device, replayed one user's
+  // queued writes under whoever's cookie happened to still be valid. The server refuses them on
+  // ownership with a 404, which `replay` reads as permanent and parks them dead: the exact loss
+  // the per-op owner exists to prevent, on the one flush that always runs.
+  //
+  // Nothing is lost by waiting: `loadSession` and `login` both flush once the id is known.
+  if (currentUserId === null) return;
   let resolved = new Map<number, number>();
   try {
     resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
@@ -358,7 +370,11 @@ export async function updateQueuedActivity(tempId: number, body: Record<string, 
  * needed no help.
  */
 export async function retryDead(): Promise<void> {
-  for (const op of await store.all()) {
+  // Only our own: another user's parked ops are not this user's to revive. They cannot see them
+  // (`deadOps` filters) or send them (`doFlushOutbox` skips), so reviving them would just leave
+  // ops live indefinitely and re-park them -- including ones their owner had given up on -- the
+  // next time that owner signs in.
+  for (const op of await ourStore().all()) {
     if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
   }
   await flushOutbox();

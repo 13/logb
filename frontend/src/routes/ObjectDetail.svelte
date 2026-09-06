@@ -93,11 +93,15 @@
   /// flush pass only matters here if it changed that set -- see the `onOutboxFlushed`
   /// subscription.
   ///
-  /// `null` means "not known": no load has committed yet, or one is in flight. A flush landing
-  /// in that window must always reload -- comparing against a stale or not-yet-written key
-  /// would skip the reload while the in-flight load goes on to commit a server page fetched
-  /// BEFORE the replayed write landed, leaving that activity rendered neither as pending nor
-  /// as real until the next remount.
+  /// Published the moment a load samples it -- before its fetch, not when it commits -- so it
+  /// always describes the queue as of the page currently being fetched or shown. A flush that
+  /// lands mid-load then compares unequal exactly when it changed something that load's page
+  /// cannot contain, and equal when it changed nothing. Publishing only at commit left this at
+  /// its initial value through the first load, so a pass replaying a create during that load
+  /// compared equal, skipped the reload, and let the load commit a page fetched BEFORE the
+  /// write landed -- the activity then rendered neither as pending nor as real.
+  ///
+  /// `null` until the first load has sampled anything at all, which always reloads.
   let pendingKey: string | null = null;
   /// Guards against two loads landing out of order: only the newest may commit its result.
   /// Several triggers can overlap (the `oid`/`category` effect, "load more", a flush), and
@@ -123,9 +127,6 @@
     // "Show N older" appeared to do nothing at all: the appended page was fetched, rendered,
     // and immediately replaced by a fresh page-one load.
     const loaded = untrack(() => activities.filter((a) => !a.pending).length);
-    // Anything this load is about to replace is no longer what is on screen, so the key stops
-    // describing it the moment the load starts. See the comment on `pendingKey`.
-    if (!append) pendingKey = null;
     // A refresh must cover every page the user has already pulled in. Requesting one PAGE would
     // silently throw away every "load more" they did, which is what a flush -- fired on every
     // `visibilitychange`, so on merely switching away from the tab and back -- used to do. The
@@ -133,34 +134,47 @@
     // rather than asked for in one request that would come back quietly truncated.
     const want = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
     const base = append ? loaded : 0;
+    // Sampled BEFORE the fetch, alongside `loaded`, so both describe the same moment: a flush
+    // landing while the GET is in flight then leaves `pendingKey` describing the queue as it
+    // was, which is what makes the listener below reload rather than compare equal and skip.
+    // Erring toward one extra reload is the safe direction; skipping one is what leaves a
+    // replayed activity rendered neither as pending nor as real.
+    const pending = append ? [] : await pendingActivities();
+    if (!append) pendingKey = await outboxKey();
     let items: Activity[] = [];
     let total = 0;
+    let fetched = false;
     try {
       while (items.length < want) {
-        const params = new URLSearchParams({
-          limit: String(Math.min(MAX_LIMIT, want - items.length)),
-          offset: String(base + items.length),
-        });
+        const limit = Math.min(MAX_LIMIT, want - items.length);
+        const params = new URLSearchParams({ limit: String(limit), offset: String(base + items.length) });
         if (category) params.set('category', category);
         const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
-        items = [...items, ...page.items];
+        // Chunks are separate requests over one ORDER BY, so a row inserted at the top between
+        // them shifts everything down and the next chunk repeats a row this one already has.
+        // `Timeline`'s {#each} is keyed by id, and a duplicate key throws and blanks the list.
+        const seen = new Set(items.map((a) => a.id));
+        items = [...items, ...page.items.filter((a) => !seen.has(a.id))];
         total = page.total;
-        if (page.items.length === 0) break; // the server has nothing more to give
+        // A SHORT page, not just an empty one: the server had nothing more to give, and asking
+        // again is a guaranteed-empty round trip -- which, for an object with fewer activities
+        // than a page, is every single load.
+        if (page.items.length < limit) break;
       }
+      fetched = true;
     } catch (e) {
       if (append) throw e;
       const cached = isRejection(e) ? undefined : getCachedActivities(oid);
       items = cached?.items ?? [];
       total = cached?.total ?? 0;
     }
-    const pending = append ? [] : await pendingActivities();
-    const key = append ? null : await outboxKey();
     if (token !== loadSeq) return; // a newer load started while this one was in flight
     // Below the token check: a superseded load must not leave the offline cache holding a page
     // the UI has already decided not to show -- e.g. the pre-filter page, after a filter change
-    // resolved first -- since that cache is what the catch above serves when offline.
-    if (!append) setCachedActivities(oid, { items, total });
-    if (!append) pendingKey = key;
+    // resolved first. Only on success: the catch above produces an EMPTY list for a rejection,
+    // and caching that would replace a good page with nothing, so the next offline load would
+    // show an empty timeline instead of the last one the user actually saw.
+    if (!append && fetched) setCachedActivities(oid, { items, total });
     activities = append ? [...activities, ...items] : [...pending, ...items];
     activityTotal = total + pending.length;
   }
