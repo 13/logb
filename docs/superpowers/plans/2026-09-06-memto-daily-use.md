@@ -228,7 +228,9 @@ describe('suggestionsFor', () => {
 });
 ```
 
-The file already imports `describe`/`it`/`expect` from vitest at the top; do not add a second import.
+The file already imports `describe`/`it`/`expect` from vitest and pulls helpers from
+`../src/lib/activity-form` on line 2. Extend those existing import lines with `suggestionsFor`
+and add the `TitleSuggestion` type import — do not add a second `from 'vitest'` import.
 
 - [ ] **Step 2: Run the test and watch it fail**
 
@@ -1035,8 +1037,10 @@ timeline into the browser to add it up there."
 
 Append to `frontend/tests/format.test.ts`:
 
+Extend the existing `from '../src/lib/format'` import on line 2 with `perCounter` and
+`quantity` rather than adding a second import line, then append:
+
 ```ts
-import { perCounter, quantity } from '../src/lib/format';
 
 describe('perCounter', () => {
   it('renders milli-cents per unit as money with two decimals', () => {
@@ -1888,9 +1892,9 @@ column is NULL for every write from an online client, so the index stays empty."
 ### Task 8: The offline outbox
 
 **Files:**
-- Create: `frontend/src/lib/outbox.ts`, `frontend/src/lib/idb.ts`, `frontend/tests/outbox.test.ts`, `frontend/e2e/offline.spec.ts`
+- Create: `frontend/src/lib/outbox.ts`, `frontend/src/lib/idb.ts`, `frontend/tests/outbox.test.ts`, `frontend/tests-e2e/04-offline.spec.ts`
 - Modify: `frontend/src/lib/api.ts`, `frontend/src/lib/TopBar.svelte`, `frontend/src/routes/ActivityForm.svelte`, `frontend/src/routes/Settings.svelte`, `frontend/src/i18n/en.ts`, `frontend/src/i18n/de.ts`
-- Test: `frontend/tests/outbox.test.ts`, `frontend/e2e/offline.spec.ts`
+- Test: `frontend/tests/outbox.test.ts`, `frontend/tests-e2e/04-offline.spec.ts`
 
 **Interfaces:**
 - Consumes: `client_op_id` from Task 7.
@@ -2252,8 +2256,10 @@ and in `frontend/src/i18n/de.ts`:
 
 - [ ] **Step 9: Write the offline e2e test**
 
-Create `frontend/e2e/offline.spec.ts` following the setup already used by the existing
-Playwright spec in that directory (same fixture for logging in and creating an object):
+Create `frontend/tests-e2e/04-offline.spec.ts`. Read `frontend/tests-e2e/02-lifecycle.spec.ts`
+first and reuse its setup verbatim — the suite runs serially against one shared server
+(`workers: 1`, `fullyParallel: false`), so the numbered prefix and the existing login /
+object-creation flow are what make a new spec fit:
 
 ```ts
 import { expect, test } from '@playwright/test';
