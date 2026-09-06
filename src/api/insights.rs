@@ -1,6 +1,8 @@
 use super::objects::load_owned_object;
 use crate::auth::AuthUser;
-use crate::domain::insights::{consumption_per_100_milli, cost_per_counter_milli, Fill};
+use crate::domain::insights::{
+    consumption_per_100_milli, cost_per_counter_milli, default_fuel_unit, fuel_cost_per_counter_milli, Fill,
+};
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Path, State};
@@ -42,15 +44,6 @@ pub struct InsightsOut {
     pub fuel: Option<FuelOut>,
 }
 
-/// The unit a quantity is in when the object does not name one: petrol countries measure
-/// kilometres in litres and miles in gallons.
-fn default_fuel_unit(counter_unit: Option<&str>) -> &'static str {
-    match counter_unit {
-        Some("mi") => "gal",
-        _ => "l",
-    }
-}
-
 async fn read(
     user: AuthUser,
     State(state): State<App>,
@@ -86,8 +79,8 @@ async fn read(
     let span = counter_span.as_ref().map(|s| s.to - s.from).unwrap_or(0);
     let overall_cost_per_counter_milli = cost_per_counter_milli(total_cost, span);
 
-    let fill_rows: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT counter_value, quantity_milli FROM activities \
+    let fill_rows: Vec<(i64, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT counter_value, quantity_milli, cost_cents FROM activities \
          WHERE object_id = ? AND category = 'fuel' AND counter_value IS NOT NULL \
          AND quantity_milli IS NOT NULL ORDER BY counter_value",
     )
@@ -100,14 +93,12 @@ async fn read(
     } else {
         let fills: Vec<Fill> = fill_rows
             .iter()
-            .map(|(counter, quantity_milli)| Fill { counter: *counter, quantity_milli: *quantity_milli })
+            .map(|(counter, quantity_milli, cost_cents)| Fill {
+                counter: *counter,
+                quantity_milli: *quantity_milli,
+                cost_cents: *cost_cents,
+            })
             .collect();
-        let fuel_cost: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(cost_cents), 0) FROM activities WHERE object_id = ? AND category = 'fuel'",
-        )
-        .bind(object_id)
-        .fetch_one(&state.db)
-        .await?;
         Some(FuelOut {
             unit: object
                 .fuel_unit
@@ -115,7 +106,7 @@ async fn read(
                 .unwrap_or_else(|| default_fuel_unit(object.counter_unit.as_deref()).to_string()),
             quantity_milli: fills.iter().map(|f| f.quantity_milli).sum(),
             per_100_milli: consumption_per_100_milli(&fills),
-            cost_per_counter_milli: cost_per_counter_milli(fuel_cost, span),
+            cost_per_counter_milli: fuel_cost_per_counter_milli(&fills),
         })
     };
 
