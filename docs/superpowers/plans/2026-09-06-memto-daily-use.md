@@ -1044,7 +1044,8 @@ Extend the existing `from '../src/lib/format'` import on line 2 with `perCounter
 
 describe('perCounter', () => {
   it('renders milli-cents per unit as money with two decimals', () => {
-    expect(perCounter(47_777, 'EUR', 'en')).toBe('€47.78');
+    // 47_777 is cents-per-unit x 1000 -- 47.777 cents/km, i.e. 48 cents.
+    expect(perCounter(47_777, 'EUR', 'en')).toBe('€0.48');
   });
   it('renders nothing when there is no value', () => {
     expect(perCounter(null, 'EUR', 'en')).toBe('');
