@@ -32,7 +32,15 @@ setUnauthorizedHandler(() => {
  * queued writes sat there, with a perfectly valid cookie, until a manual reload.
  */
 let sessionKnown = false;
-globalThis.addEventListener?.('online', () => { if (!sessionKnown) void loadSession(); });
+/** Both triggers, for the same reason `flushOutbox` uses both (see ../lib/api.ts): the common
+ *  real outage -- a captive portal, weak signal, a proxy returning 502 -- never fires `online`
+ *  at all, and coming back to the tab is the moment a user actually finds out they have a
+ *  connection again. Cheap to repeat: it only runs while the session is still unknown. */
+const retrySession = () => { if (!sessionKnown) void loadSession(); };
+globalThis.addEventListener?.('online', retrySession);
+globalThis.addEventListener?.('visibilitychange', () => {
+  if (globalThis.document?.visibilityState === 'visible') retrySession();
+});
 
 export async function loadSession(): Promise<void> {
   let status: { setup_required: boolean };

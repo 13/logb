@@ -281,3 +281,50 @@ test('a queued write survives somebody else signing in on the same device', asyn
     expect(activities.filter((a) => a.title === 'Hydraulic oil')).toHaveLength(1);
   }).toPass();
 });
+
+/**
+ * A boot with no connection. `/api/auth/*` is NetworkOnly, so the very first request of
+ * `loadSession` fails and the app never learns who is signed in -- and the outbox refuses to
+ * send while it has no user, since it cannot tell whose ops these are. That state used to be
+ * permanent for the life of the page: reconnecting fired a flush that returned immediately, and
+ * the queued write sat there with a perfectly valid cookie until a manual reload.
+ */
+test('a write queued before an offline boot still sends when the connection returns', async ({ page, context }) => {
+  await signIn(page);
+
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Chainsaw');
+  await page.getByLabel('Category').fill('tool');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Chainsaw' })).toBeVisible();
+  const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
+
+  // The reload below has to be served by the service worker, so wait for it to take control.
+  await page.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
+
+  await context.setOffline(true);
+  await page.getByRole('button', { name: /Log/ }).first().click();
+  await page.getByLabel('Title').fill('Chain oil');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Chain oil', { exact: true })).toBeVisible();
+
+  // Restart the app with no connection: the shell comes from the precache, but every /api/auth
+  // request fails, so this boot ends with the session unknown rather than known-anonymous.
+  await page.reload();
+  await page.waitForTimeout(500);
+
+  await context.setOffline(false);
+  // Coming back to the tab, which is how a user finds out they have a connection again -- and
+  // the trigger that has to work, since a captive portal or a 502 never fires `online` at all.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+  });
+
+  await expect(async () => {
+    const res = await page.request.get(`/api/objects/${objectId}/activities`);
+    expect(res.ok()).toBe(true);
+    const activities = (await res.json()) as Array<{ title: string }>;
+    expect(activities.filter((a) => a.title === 'Chain oil')).toHaveLength(1);
+  }).toPass();
+});
