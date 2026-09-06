@@ -57,7 +57,17 @@ export function fileUrl(fileId: number, thumb = false): string {
   return `/api/files/${fileId}${thumb ? '/thumb' : ''}`;
 }
 
-const store: OutboxStore = idbStore();
+let store: OutboxStore = idbStore();
+
+/**
+ * Test seam only: swaps the store `createQueued`/`flushOutbox` write through, so a unit test
+ * can hand them a `memoryStore()` (see `./outbox.ts`) instead of the real IndexedDB-backed one,
+ * which does not exist in the test environment. Production never calls this -- the module
+ * always starts, and stays, on the real `idbStore()` above.
+ */
+export function setOutboxStoreForTesting(s: OutboxStore): void {
+  store = s;
+}
 
 /**
  * POST that survives a dead connection: on anything that isn't a genuine server rejection
