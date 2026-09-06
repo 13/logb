@@ -66,7 +66,10 @@ describe('parseQuantity', () => {
     expect(parseQuantity('abc')).toBeNaN();
   });
   it('rounds x1000 scaling exactly, without floating-point drift', () => {
-    expect(parseQuantity('0.1')).toBe(100);
+    // These two are the ones that bite: 1.005 * 1000 is 1004.9999999999999 in IEEE 754 and
+    // 3.14159 * 1000 is 3141.5899999999997, so both truncate one short without the rounding.
+    expect(parseQuantity('1.005')).toBe(1005);
+    expect(parseQuantity('3.14159')).toBe(3142);
     expect(parseQuantity('41.3')).toBe(41_300);
   });
 });
