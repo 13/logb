@@ -45,6 +45,8 @@ struct ActivityExport {
     notes: String,
     counter_value: Option<i64>,
     cost_cents: Option<i64>,
+    #[serde(default)]
+    quantity_milli: Option<i64>,
     created_at: String,
     attachments: Vec<AttachmentExport>,
 }
@@ -67,6 +69,8 @@ struct ObjectExport {
     name: String,
     category: String,
     counter_unit: Option<String>,
+    #[serde(default)]
+    fuel_unit: Option<String>,
     description: String,
     purchase_date: Option<String>,
     purchase_price_cents: Option<i64>,
@@ -115,7 +119,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
@@ -128,7 +132,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at \
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at \
              FROM activities WHERE object_id = ? ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
@@ -144,12 +148,12 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             None => None,
         };
         out.push(ObjectExport {
-            name: o.name, category: o.category, counter_unit: o.counter_unit, description: o.description,
+            name: o.name, category: o.category, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
             activities: acts.iter().map(|a| Ok(ActivityExport {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
-                counter_value: a.counter_value, cost_cents: a.cost_cents, created_at: a.created_at.clone(),
+                counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
                 attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             })).collect::<Result<Vec<_>, AppError>>()?,
             attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
@@ -272,9 +276,9 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     for o in data.objects {
         let now = db::now();
         let (object_id,): (i64,) = sqlx::query_as(
-            "INSERT INTO objects (user_id, name, category, counter_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
-            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.description)
+            "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
+             archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
+            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
             .fetch_one(&mut *tx).await?;
         counts.objects += 1;
@@ -282,10 +286,10 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let mut activity_ids = Vec::new();
         for a in &o.activities {
             let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
-                .bind(a.counter_value).bind(a.cost_cents).bind(&a.created_at).bind(&now)
+                .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .fetch_one(&mut *tx).await?;
             activity_ids.push(aid);
             counts.activities += 1;
@@ -338,6 +342,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             name: o.name.clone(),
             category: o.category.clone(),
             counter_unit: o.counter_unit.clone(),
+            fuel_unit: o.fuel_unit.clone(),
             description: o.description.clone(),
             purchase_date: o.purchase_date.clone(),
             purchase_price_cents: o.purchase_price_cents,
@@ -350,7 +355,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         // stand-in row is never inspected, since the real object doesn't exist yet.
         let object_stub = ObjectRow {
             id: 0, user_id: 0, name: o.name.clone(), category: o.category.clone(),
-            counter_unit: o.counter_unit.clone(), description: o.description.clone(),
+            counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description: o.description.clone(),
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
@@ -360,6 +365,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             let mut act_input = ActivityInput {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
+                quantity_milli: a.quantity_milli,
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;

@@ -70,3 +70,20 @@ async fn requires_login() {
     let app = common::spawn().await;
     assert_eq!(reqwest::get(app.url("/objects")).await.unwrap().status(), 401);
 }
+
+#[tokio::test]
+async fn fuel_unit_round_trips_and_is_validated() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "E-bike", "category": "bike", "counter_unit": "km", "fuel_unit": "kwh"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let bike: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(bike["fuel_unit"], "kwh");
+
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Car", "category": "car", "fuel_unit": "barrels"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}

@@ -7,13 +7,14 @@ export interface User { id: number; username: string; is_admin: boolean; lang: s
 export interface Settings { currency: string }
 
 export interface ObjectStats { total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number }
+export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {
-  id: number; user_id: number; name: string; category: string; counter_unit: CounterUnit; description: string;
+  id: number; user_id: number; name: string; category: string; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null;
   cover_attachment_id: number | null; cover_file_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
 }
 export interface ObjectInput {
-  name: string; category: string; counter_unit: CounterUnit; description: string;
+  name: string; category: string; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
 }
 
@@ -24,9 +25,9 @@ export interface Attachment {
 
 export interface Activity {
   id: number; object_id: number; date: string; category: Category; title: string; notes: string;
-  counter_value: number | null; cost_cents: number | null; created_at: string; updated_at: string; attachments: Attachment[];
+  counter_value: number | null; cost_cents: number | null; quantity_milli: number | null; created_at: string; updated_at: string; attachments: Attachment[];
 }
-export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null }
+export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null; quantity_milli: number | null }
 
 export interface TitleSuggestion {
   title: string; category: Category; last_date: string;

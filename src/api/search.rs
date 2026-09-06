@@ -71,7 +71,7 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let pattern = like_pattern(term);
 
     let objects = sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+        "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
          FROM objects WHERE user_id = ?1 AND ( \
            name LIKE ?2 ESCAPE '\\' OR category LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \

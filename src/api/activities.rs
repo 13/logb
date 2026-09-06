@@ -31,6 +31,7 @@ pub struct ActivityRow {
     pub notes: String,
     pub counter_value: Option<i64>,
     pub cost_cents: Option<i64>,
+    pub quantity_milli: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -46,6 +47,8 @@ pub struct ActivityInput {
     pub counter_value: Option<i64>,
     #[serde(default)]
     pub cost_cents: Option<i64>,
+    #[serde(default)]
+    pub quantity_milli: Option<i64>,
 }
 
 impl ActivityInput {
@@ -64,6 +67,12 @@ impl ActivityInput {
         }
         if matches!(self.cost_cents, Some(c) if c < 0) {
             return Err(AppError::BadRequest("cost_cents must be >= 0".into()));
+        }
+        if let Some(q) = self.quantity_milli {
+            if q < 0 { return Err(AppError::BadRequest("quantity_milli must be >= 0".into())); }
+            if object.counter_unit.is_none() {
+                return Err(AppError::BadRequest("quantity_milli needs an object with a counter".into()));
+            }
         }
         Ok(())
     }
@@ -92,7 +101,7 @@ async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError>
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
-         a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
+         a.quantity_milli, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = ? AND o.user_id = ?",
     )
     .bind(id).bind(user_id)
@@ -135,7 +144,7 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at \
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at \
          FROM activities WHERE object_id = ?1 \
          AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4) \
          ORDER BY date DESC, id DESC LIMIT ?5 OFFSET ?6",
@@ -203,12 +212,12 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     body.validate(&object)?;
     let now = db::now();
     let row = sqlx::query_as::<_, ActivityRow>(
-        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, created_at, updated_at",
+        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
-    .bind(body.counter_value).bind(body.cost_cents).bind(&now).bind(&now)
+    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&now).bind(&now)
     .fetch_one(&state.db).await?;
     Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)))
 }
@@ -223,10 +232,10 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
     body.validate(&object)?;
     sqlx::query(
-        "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, updated_at = ? WHERE id = ?",
+        "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, quantity_milli = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
-    .bind(body.counter_value).bind(body.cost_cents).bind(db::now()).bind(id)
+    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(id)
     .execute(&state.db).await?;
     let row = load_owned_activity(&state, user.id, id).await?;
     Ok(Json(one_out(&state, row).await?))

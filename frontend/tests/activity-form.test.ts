@@ -3,7 +3,7 @@ import { emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate
 import type { Activity, TitleSuggestion } from '../src/lib/types';
 
 function a(id: number, date: string): Activity {
-  return { id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, created_at: '', updated_at: '', attachments: [] };
+  return { id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [] };
 }
 
 describe('activity form', () => {
@@ -13,8 +13,8 @@ describe('activity form', () => {
   });
 
   it('maps an activity to input', () => {
-    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12 };
-    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500 });
+    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300 };
+    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300 });
   });
 
   it('validates required fields', () => {

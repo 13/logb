@@ -22,6 +22,7 @@ pub struct ObjectRow {
     pub name: String,
     pub category: String,
     pub counter_unit: Option<String>,
+    pub fuel_unit: Option<String>,
     pub description: String,
     pub purchase_date: Option<String>,
     pub purchase_price_cents: Option<i64>,
@@ -54,6 +55,8 @@ pub struct ObjectInput {
     pub category: String,
     #[serde(default)]
     pub counter_unit: Option<String>,
+    #[serde(default)]
+    pub fuel_unit: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -96,6 +99,11 @@ impl ObjectInput {
                 return Err(AppError::BadRequest("counter_unit must be km, mi, h or null".into()));
             }
         }
+        if let Some(u) = &self.fuel_unit {
+            if !matches!(u.as_str(), "l" | "gal" | "kwh") {
+                return Err(AppError::BadRequest("fuel_unit must be l, gal, kwh or null".into()));
+            }
+        }
         if let Some(d) = &self.purchase_date { validate_date(d)?; }
         if matches!(self.purchase_price_cents, Some(p) if p < 0) {
             return Err(AppError::BadRequest("purchase_price_cents must be >= 0".into()));
@@ -107,7 +115,7 @@ impl ObjectInput {
 /// The object with `id` if it belongs to `user_id`; otherwise 404.
 pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<ObjectRow, AppError> {
     sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+        "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
          FROM objects WHERE id = ? AND user_id = ?",
     )
@@ -193,13 +201,13 @@ pub struct ListQuery {
 async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ObjectOut>>, AppError> {
     let rows = if q.archived {
         sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? AND archived_at IS NOT NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
     } else {
         sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, description, purchase_date, \
+            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? AND archived_at IS NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
@@ -217,13 +225,13 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let now = db::now();
     let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
     let row = sqlx::query_as::<_, ObjectRow>(
-        "INSERT INTO objects (user_id, name, category, counter_unit, description, purchase_date, \
+        "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) \
-         RETURNING id, user_id, name, category, counter_unit, description, purchase_date, \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) \
+         RETURNING id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at",
     )
-    .bind(user.id).bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.description)
+    .bind(user.id).bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(&now).bind(&now)
     .fetch_one(&state.db).await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
@@ -255,10 +263,10 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         }
     };
     sqlx::query(
-        "UPDATE objects SET name = ?, category = ?, counter_unit = ?, description = ?, purchase_date = ?, \
+        "UPDATE objects SET name = ?, category = ?, counter_unit = ?, fuel_unit = ?, description = ?, purchase_date = ?, \
          purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ?",
     )
-    .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.description)
+    .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at)
     .bind(cover_attachment_id).bind(db::now()).bind(id)
     .execute(&state.db).await?;

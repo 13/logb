@@ -153,6 +153,34 @@ async fn recent_titles_are_distinct_and_newest_first() {
 }
 
 #[tokio::test]
+async fn fuel_quantity_round_trips_and_is_validated() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "counter_value": 12_000, "cost_cents": 6210, "quantity_milli": 41_300
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let a: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(a["quantity_milli"], 41_300);
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-06", "category": "fuel", "title": "Fuel", "quantity_milli": -1
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "a negative quantity is rejected");
+
+    let no_counter = app.create_object(&app.client, "Drill", None).await;
+    let nid = no_counter["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{nid}/activities"))).json(&json!({
+        "date": "2026-03-06", "category": "fuel", "title": "Fuel", "quantity_milli": 1000
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "a quantity without a counter cannot become consumption");
+}
+
+#[tokio::test]
 async fn recent_titles_of_another_users_object_are_404() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

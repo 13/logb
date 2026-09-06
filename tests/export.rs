@@ -218,6 +218,41 @@ async fn import_rejects_an_oversized_archive_body() {
     assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
 }
 
+/// A column the archive does not carry is a column a restore silently erases -- fuel
+/// quantity and fuel unit must round-trip through export and import like every other field.
+#[tokio::test]
+async fn export_round_trips_fuel_quantity() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Golf", "category": "car", "counter_unit": "km", "fuel_unit": "l"
+    })).send().await.unwrap();
+    let car: serde_json::Value = res.json().await.unwrap();
+    let id = car["id"].as_i64().unwrap();
+    app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-05", "category": "fuel", "title": "Fuel",
+        "counter_value": 12_000, "quantity_milli": 41_300
+    })).send().await.unwrap();
+
+    let zip = app.client.get(app.url("/export")).send().await.unwrap().bytes().await.unwrap();
+
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    let res = fresh.client.post(fresh.url("/import"))
+        .header("content-type", "application/zip")
+        .body(zip.to_vec())
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objects: Vec<serde_json::Value> = fresh.client.get(fresh.url("/objects"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(objects[0]["fuel_unit"], "l");
+    let nid = objects[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = fresh.client.get(fresh.url(&format!("/objects/{nid}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(acts[0]["quantity_milli"], 41_300, "the archive must not drop the quantity");
+}
+
 /// The archive is built into a scratch file and streamed back; the scratch file must not
 /// survive the request, and the response must still be a complete, readable zip.
 #[tokio::test]
