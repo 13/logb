@@ -54,9 +54,30 @@ pub struct Config {
     /// here, so raise it where many people sign in from the same place.
     #[arg(long, env = "MEMTO_LOGIN_MAX_ATTEMPTS", default_value_t = 10)]
     pub login_max_attempts: u32,
+    /// Comma-separated origins allowed to call the API from a browser on a DIFFERENT origin,
+    /// e.g. a separate web client during development. Empty (the default) sends no CORS
+    /// headers at all, which is what the bundled SPA needs, since it is same-origin.
+    ///
+    /// Credentials are never allowed on a cross-origin request, whatever is listed here: the
+    /// session cookie must not ride along on a request some other site made. A cross-origin
+    /// client authenticates with a bearer token, which only travels because that client chose
+    /// to attach it.
+    #[arg(long, env = "MEMTO_CORS_ORIGINS", default_value = "")]
+    pub cors_origins: String,
 }
 
 impl Config {
+    /// The configured origins, parsed. An entry that is not a valid origin is dropped rather
+    /// than crashing the server: a typo in one entry should not take the instance down.
+    pub fn cors_origin_list(&self) -> Vec<axum::http::HeaderValue> {
+        self.cors_origins
+            .split(',')
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .filter_map(|o| o.parse().ok())
+            .collect()
+    }
+
     pub fn max_upload_bytes(&self) -> usize {
         self.max_upload_mb * 1024 * 1024
     }

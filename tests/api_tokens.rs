@@ -192,3 +192,45 @@ async fn use_is_recorded_so_a_forgotten_token_can_be_recognised() {
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert!(used.is_some(), "using a token should record that it was used");
 }
+
+/// CORS exists for a SEPARATE web client on another origin -- the bundled SPA is same-origin and
+/// needs none of it, so an instance that has not asked for it must behave exactly as before.
+#[tokio::test]
+async fn cross_origin_headers_are_absent_until_configured() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.get(app.url("/objects"))
+        .header(reqwest::header::ORIGIN, "https://elsewhere.example")
+        .send().await.unwrap();
+    assert!(
+        res.headers().get("access-control-allow-origin").is_none(),
+        "no CORS headers should be sent unless origins are configured",
+    );
+}
+
+/// With an origin configured, the browser is told that origin may call the API -- but never
+/// that it may send credentials. Allowing that would let a listed site make the browser attach
+/// the session cookie to requests THAT site initiated, which is cross-site request forgery. A
+/// cross-origin client authenticates with a bearer token, which travels only because it chose
+/// to attach it.
+#[tokio::test]
+async fn a_configured_origin_is_allowed_but_never_with_credentials() {
+    let app = common::spawn_with(|c| c.cors_origins = "https://app.example".into()).await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.get(app.url("/objects"))
+        .header(reqwest::header::ORIGIN, "https://app.example")
+        .send().await.unwrap();
+    assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "https://app.example");
+    assert!(
+        res.headers().get("access-control-allow-credentials").is_none(),
+        "a cross-origin caller must not be able to ride the session cookie",
+    );
+
+    // An origin that was not listed is simply not told it may call, whatever it claims to be.
+    let res = app.client.get(app.url("/objects"))
+        .header(reqwest::header::ORIGIN, "https://elsewhere.example")
+        .send().await.unwrap();
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+}

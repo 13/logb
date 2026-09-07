@@ -9,7 +9,7 @@ license = "MIT"
 axum = { version = "0.8", features = ["multipart", "macros"] }
 axum-extra = { version = "0.12", features = ["cookie"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["compression-gzip", "set-header", "trace"] }
+tower-http = { version = "0.7", features = ["compression-gzip", "cors", "set-header", "trace"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
 argon2 = "0.6"
 rand = "0.10"

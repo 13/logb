@@ -82,6 +82,7 @@ with the JSON and every file, importable into any instance.
 | `MEMTO_LOG`           | `info`    | tracing filter                                                                                                               |
 | `MEMTO_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
 | `MEMTO_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address |
+| `MEMTO_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
 
 Put memto behind a reverse proxy with HTTPS when exposing it beyond your LAN.
 
@@ -207,7 +208,40 @@ case-insensitive for ASCII only, so `olwechsel` will not find `Ölwechsel`.
 
 ## API
 
-JSON under `/api`, cookie session. See `docs/superpowers/specs/2026-09-04-memto-design.md`.
+JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which
+`tests/openapi.rs` checks against the router — a route added, removed or
+renamed without updating it fails the build.
+
+Two credentials work everywhere except token management: the `memto_session`
+cookie a browser gets from `POST /auth/login`, and an API token for clients
+that are not browsers.
+
+```bash
+# Create one under Settings → API access, or over the API with a session:
+curl -sS -X POST https://memto.example/api/auth/tokens \
+  -H 'content-type: application/json' -b cookies.txt \
+  -d '{"name":"laptop"}'
+
+curl -sS https://memto.example/api/objects -H 'authorization: Bearer memto_pat_...'
+```
+
+The plaintext is shown once and stored only as a hash; there is no way to
+recover it afterwards, so a lost token is revoked and replaced. Issuing and
+revoking tokens deliberately require a session cookie, never a token, so a
+leaked token cannot mint replacements or revoke the ones you would notice with.
+Changing a password revokes every token as well as every session.
+
+Writes that may be retried — `POST` of an activity or an attachment — accept a
+`client_op_id`: any string unique to the write, generated once and kept across
+retries. The server records it under a unique index, so replaying a write whose
+response was lost resolves to the row already created rather than duplicating
+it. The bundled web client uses this for its offline queue, and any client that
+queues writes should do the same.
+
+`MEMTO_CORS_ORIGINS` (comma-separated) lets a web client on another origin call
+the API; unset, no CORS headers are sent at all. Credentials are never allowed
+cross-origin whatever is listed, so such a client must authenticate with a
+bearer token rather than the session cookie.
 
 ## License
 

@@ -87,7 +87,16 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         config,
         login_attempts: Mutex::new(HashMap::new()),
     });
-    let router = Router::new()
+    // Off unless configured: the bundled SPA is same-origin and needs none of this. It exists
+    // for a SEPARATE web client -- another origin in development, say -- which cannot call the
+    // API at all without it.
+    //
+    // `allow_credentials` is deliberately absent. Permitting it would let a listed origin make
+    // the browser attach the session cookie to requests that site initiated, which is the
+    // classic cross-site request forgery shape. A cross-origin client uses a bearer token
+    // instead: that travels only because the client put it there.
+    let cors = state.config.cors_origin_list();
+    let base = Router::new()
         .nest("/api", api::router(max_upload, max_import))
         .fallback(spa::handler)
         // The default predicate already skips images, gRPC and event streams. Export archives
@@ -96,7 +105,20 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         .layer(CompressionLayer::new().compress_when(
             DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http());
+    // Applied with an `if` rather than an always-present layer, so an instance that has not
+    // configured any origin behaves exactly as it did before this existed.
+    let base = if cors.is_empty() {
+        base
+    } else {
+        base.layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(cors)
+                .allow_methods(tower_http::cors::AllowMethods::mirror_request())
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        )
+    };
+    let router = base
         .layer(axum::middleware::from_fn(request_id))
         .layer(SetResponseHeaderLayer::if_not_present(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP)))
         .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))

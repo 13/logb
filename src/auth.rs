@@ -334,6 +334,7 @@ mod tests {
             log: "warn".into(),
             trust_proxy,
             login_max_attempts: 10,
+            cors_origins: String::new(),
         };
         Arc::new(AppState { db, storage, config, login_attempts: Mutex::new(HashMap::new()) })
     }

@@ -26,6 +26,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> memto::config::Config {
         log: "warn".into(),
         trust_proxy: false,
         login_max_attempts: 10,
+        cors_origins: String::new(),
     }
 }
 
