@@ -30,7 +30,14 @@
 }
 * { box-sizing: border-box; margin: 0; }
 html, body { min-height: 100%; }
-body { background: var(--bg); color: var(--text); -webkit-tap-highlight-color: transparent; }
+/* `overscroll-behavior-y: contain` turns off Chrome on Android's pull-to-refresh. Overscrolling
+   at the top of a timeline is easy to do one-handed, and reloading the app mid-entry is never
+   what was meant -- the queued write survives it, but whatever is typed into the open form does
+   not. Scrolling itself is unaffected. */
+body {
+  background: var(--bg); color: var(--text); -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: contain;
+}
 a { color: var(--accent); }
 main { max-width: 720px; margin: 0 auto; padding: 12px 12px calc(96px + env(safe-area-inset-bottom)); }
 h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin: 16px 0 8px; }

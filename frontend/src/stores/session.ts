@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { api, flushOutbox, isRejection, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
+import { api, flushOutbox, isRejection, persistStorage, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { clearObjectCache } from '../lib/object-cache';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
@@ -86,6 +86,9 @@ async function doLoadSession(): Promise<boolean> {
     // The flush `main.ts` fires at module load happens before this, so it knows no user and
     // deliberately sends nothing (see `doFlushOutbox`). This is the boot flush that counts.
     void flushOutbox();
+    // A queued upload holds the only copy of that photo, so it is worth asking the browser not
+    // to evict it. Fire-and-forget: see `persistStorage`.
+    void persistStorage();
     const s = await api<Settings>('GET', '/settings');
     currency.set(s.currency);
   } catch (e) {

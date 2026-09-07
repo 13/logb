@@ -3,7 +3,7 @@
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
   import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueuedActivity } from '../lib/api';
-  import { serialize } from '../lib/outbox';
+  import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
@@ -105,7 +105,7 @@
    *  one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
    *  id the outbox stores and later rewrites (see `persistResolvedId` in ../lib/outbox.ts). */
   function mintTempId(): number {
-    const s = crypto.randomUUID();
+    const s = newOpId(); // not crypto.randomUUID: absent on a plain-http origin (see ../lib/outbox.ts)
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
     return -(Math.abs(h) || 1);

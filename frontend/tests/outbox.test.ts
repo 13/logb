@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { compareQueueOrder, createLock, memoryStore, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { compareQueueOrder, createLock, memoryStore, newOpId, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -475,5 +475,47 @@ describe('compareQueueOrder with a cross-tab seq collision', () => {
     const b = op('bbb', { seq: 7, queued_at: 1_000 });
     expect([b, a].sort(compareQueueOrder).map((o) => o.id)).toEqual(['aaa', 'bbb']);
     expect([a, b].sort(compareQueueOrder).map((o) => o.id)).toEqual(['aaa', 'bbb']);
+  });
+});
+
+/**
+ * Self-hosting means reaching this over the LAN as `http://192.168.x.x:8080` at least some of
+ * the time, and a plain-http origin is not a secure context: Chrome does not expose
+ * `crypto.randomUUID` there at all. `newOpId` runs at the very top of `createQueued`, before
+ * the request and outside its try, so logging an activity from a phone on the LAN threw a
+ * TypeError and failed outright -- the ordinary save, not an offline corner.
+ */
+describe('newOpId on an origin without crypto.randomUUID', () => {
+  const real = globalThis.crypto;
+  afterEach(() => { Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true }); });
+
+  function withoutRandomUUID() {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) },
+      configurable: true,
+    });
+  }
+
+  it('still returns a well-formed v4 uuid', () => {
+    withoutRandomUUID();
+    const id = newOpId();
+
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it('returns a different id every time', () => {
+    withoutRandomUUID();
+    const ids = new Set(Array.from({ length: 500 }, () => newOpId()));
+
+    // Two devices queueing offline must not collide: the server would read one write as a
+    // replay of the other and silently drop it.
+    expect(ids.size).toBe(500);
+  });
+
+  it('uses the platform implementation when there is one', () => {
+    const spy = vi.spyOn(real, 'randomUUID');
+    newOpId();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

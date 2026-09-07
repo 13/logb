@@ -21,6 +21,38 @@ a host directory to 65532 before bind-mounting one.
 Everything lives in `./data`: `memto.db` (SQLite), `files/` (originals,
 content-addressed), `thumbs/`.
 
+## On a phone
+
+memto is a PWA and the phone is the case it is designed for: logging a fill-up
+at the pump, photographing a receipt in a garage with no signal. Installed from
+Chrome's "Add to Home screen", it runs full-screen, works offline, and queues
+what you log until there is a connection again.
+
+**It has to be served over HTTPS with a certificate the phone trusts.** This is
+not a hardening recommendation, it is what makes the app work at all: browsers
+gate service workers on a secure origin, so over plain http there is no offline
+shell, nothing to install, and no cross-tab coordination. `localhost` counts as
+secure; `http://192.168.1.10:8080` does not. A self-signed certificate is not
+enough either — the phone has to trust it.
+
+Two approaches that work:
+
+- **Tailscale** (simplest for one household): install it on the server and the
+  phone, enable MagicDNS and HTTPS, and reach memto at
+  `https://myserver.tailnet-name.ts.net`. Nothing is exposed to the internet.
+- **A reverse proxy with a real certificate**: Caddy or nginx with Let's
+  Encrypt on a domain you own, proxying to memto's port. Set
+  `MEMTO_TRUST_PROXY=true` so the login rate limiter sees the real client
+  address, and leave `MEMTO_SECURE_COOKIE=auto`.
+
+Over plain http on the LAN the app still runs and still saves — nothing depends
+on `crypto.randomUUID`, which browsers withhold there — but it is a website,
+not an installed app: no offline, no home-screen icon.
+
+If several people sign in on one phone, note that a write queued offline
+belongs to whoever made it: it stays put until that person signs back in, and
+nobody else can see, send or discard it.
+
 ## Backup
 
 ```bash
@@ -142,6 +174,14 @@ MEMTO_NOTIFY_URL=https://ntfy.sh/my-private-topic MEMTO_NOTIFY_FORMAT=text
 With `text` the body is the message and the summary rides in a `Title` header,
 which is what ntfy and similar services render. The default `json` posts
 `{ "title", "message", "reminders": [...] }` for a webhook that wants structure.
+
+That `text` shape is exactly what [ntfy](https://ntfy.sh) expects, which makes
+it the path of least resistance to notifications on an Android phone: pick an
+unguessable topic name, point `MEMTO_NOTIFY_URL` at it, install the ntfy app
+and subscribe to the same topic. A topic on the public server is readable by
+anyone who knows its name, so treat the name as the secret or self-host ntfy.
+memto has no push notifications of its own and asks for no notification
+permission.
 
 The digest is a notification, not a queue: the day is marked as handled before
 the request goes out, so an endpoint that is down costs one failed request a

@@ -189,6 +189,30 @@ export function onOutboxFlushed(fn: (resolved: Map<number, number>, changed: boo
   return () => flushListeners.delete(fn);
 }
 
+/**
+ * Asks the browser to keep this origin's storage rather than evicting it under pressure.
+ *
+ * The outbox is IndexedDB, and a queued upload carries the photo itself. By default that is
+ * "best-effort" storage, which Android Chrome may clear when the device is low on space -- so
+ * the one thing here that cannot be re-fetched from the server, because the server has never
+ * seen it, is the thing most at risk. A granted request makes the origin's data persistent
+ * until the user clears it themselves.
+ *
+ * Called once the session is known, since that is when there is something worth keeping and
+ * when a browser that weights the decision by engagement is most likely to say yes. Failure is
+ * not worth reporting: it is an optimisation, the API is absent on some browsers, and nothing
+ * the user could do about it would help.
+ */
+export async function persistStorage(): Promise<boolean> {
+  try {
+    const storage = globalThis.navigator?.storage;
+    if (!storage?.persist || !storage.persisted) return false;
+    return (await storage.persisted()) || (await storage.persist());
+  } catch {
+    return false;
+  }
+}
+
 /** The queue as one comparable value: which ops exist, whether each is parked, and how many
  *  attempts it has behind it. `attempts` is in there because a pass can SEND an op and then
  *  fail to remove it (an IndexedDB error in the write-back): the op survives, un-parked, so

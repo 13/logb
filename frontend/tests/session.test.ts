@@ -182,3 +182,50 @@ describe('ending a session', () => {
     expect(went).toEqual(['/login']);
   });
 });
+
+/**
+ * A queued upload carries the photo itself, and the server has never seen it -- so of
+ * everything the app stores locally, that is the one thing eviction destroys outright. Android
+ * Chrome clears "best-effort" storage under space pressure, so the app asks for its origin to
+ * be kept once there is a session worth keeping it for.
+ */
+describe('storage persistence', () => {
+  it('asks the browser to keep the queue once the session is known', async () => {
+    const persist = vi.fn(async () => true);
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { storage: { persist, persisted: async () => false } },
+      configurable: true,
+    });
+    serve(signedIn);
+    const session = await freshSession();
+
+    await session.loadSession();
+    await new Promise((r) => setTimeout(r, 0)); // fire-and-forget
+
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it('does not ask again when the origin is already persistent', async () => {
+    const persist = vi.fn(async () => true);
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { storage: { persist, persisted: async () => true } },
+      configurable: true,
+    });
+    serve(signedIn);
+    const session = await freshSession();
+
+    await session.loadSession();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('carries on where the browser has no such API', async () => {
+    Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+    serve(signedIn);
+    const session = await freshSession();
+
+    // The point is that this resolves at all: an optimisation must not break signing in.
+    expect(await session.loadSession()).toBe(true);
+  });
+});

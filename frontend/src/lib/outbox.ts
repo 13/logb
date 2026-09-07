@@ -68,8 +68,29 @@ export function memoryStore(): OutboxStore {
   };
 }
 
+/**
+ * A UUID for a queued op, which doubles as its `client_op_id` on the wire.
+ *
+ * `crypto.randomUUID()` is [SecureContext]: Chrome does not expose it at all on a plain-http
+ * origin. Self-hosting means reaching this over the LAN as `http://192.168.x.x:8080` at least
+ * some of the time, and there this threw a TypeError at the very top of `createQueued` --
+ * before the request, before the try -- so logging an activity from a phone on the LAN failed
+ * outright. Not an offline corner: the ordinary save.
+ *
+ * `getRandomValues` carries no such restriction, so the fallback is still a real random v4,
+ * just assembled by hand. `Math.random` would not be acceptable here even for an idempotency
+ * key: two devices queueing offline must not collide, and a collision would make the server
+ * treat one write as a replay of the other and silently drop it.
+ */
 export function newOpId(): string {
-  return globalThis.crypto.randomUUID();
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === 'function') return c.randomUUID();
+  const b = new Uint8Array(16);
+  c.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 1
+  const hex = [...b].map((n) => n.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /**
