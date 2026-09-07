@@ -12,6 +12,7 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { Activity, ActivityInput, Category, MemObject } from '../lib/types';
+  import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import type { QueuedOp } from '../lib/outbox';
 
   let { id }: { id: string } = $props();
@@ -25,10 +26,6 @@
   let loadingMore = $state(false);
   let category = $state<Category | ''>('');
   let error = $state('');
-  const PAGE = 100;
-  /// Must match MAX_LIMIT in src/api/activities.rs: the server clamps a bigger `limit` silently,
-  /// so asking for more than this loses rows with no error to notice.
-  const MAX_LIMIT = 500;
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
    *  401/403/404 is the server answering, and this object may simply belong to someone else. */
@@ -82,59 +79,30 @@
   /// whichever resolved last used to win regardless of which started last.
   let loadSeq = 0;
 
-  /// - `reset` starts over from page one: what a filter or object change wants.
-  /// - `append` fetches the next page and adds it to what is on screen.
-  /// - `refresh` re-reads everything already on screen without shrinking it back to one page.
-  ///
-  /// A pending queued create for this object is prepended to any load that is not an append,
-  /// since it will not appear in any page the server sends back until the outbox has replayed it.
-  async function loadActivities(mode: 'reset' | 'append' | 'refresh' = 'reset') {
-    const append = mode === 'append';
+  /// The window arithmetic, the chunk loop and the merge live in ../lib/timeline-load.ts, where
+  /// they are unit-testable; what stays here is the part that genuinely needs the component:
+  /// reading and assigning its state, the offline-cache fallback, and the supersede check.
+  async function loadActivities(mode: LoadMode = 'reset') {
     const token = ++loadSeq;
-    // The offset must count only rows the server itself sent back. A prepended pending entry
-    // (see `pendingActivities` above) has no server-side page position at all -- counting it in
-    // `activities.length` would shift every subsequent "load more" request back by one real
-    // activity per pending op, silently skipping it.
     // `untrack`: this runs synchronously inside the `oid`/`category` $effect below, so reading
     // `activities` here made that effect depend on the very list it goes on to assign. The
     // effect then re-ran on its own result and started over from page one -- which is why
     // "Show N older" appeared to do nothing at all: the appended page was fetched, rendered,
     // and immediately replaced by a fresh page-one load.
     const loaded = untrack(() => activities.filter((a) => !a.pending).length);
-    // A refresh must cover every page the user has already pulled in. Requesting one PAGE would
-    // silently throw away every "load more" they did, which is what a flush -- fired on every
-    // `visibilitychange`, so on merely switching away from the tab and back -- used to do. The
-    // server clamps `limit` to MAX_LIMIT, so a window wider than that is fetched in chunks
-    // rather than asked for in one request that would come back quietly truncated.
-    const want = mode === 'refresh' ? Math.max(PAGE, loaded) : PAGE;
-    const base = append ? loaded : 0;
+    const { want, base, append } = windowFor(mode, loaded);
     const pending = append ? [] : await pendingActivities();
     let items: Activity[] = [];
     let total = 0;
     let fetched = false;
     try {
-      // Rows the SERVER has handed back, which is not `items.length` once duplicates are
-      // dropped below. The offset must advance by this, not by what was kept: a chunk that is
-      // full-length but entirely duplicate would otherwise leave the offset where it was and
-      // re-issue the identical request for ever, with no token check in sight to stop it.
-      let received = 0;
-      while (items.length < want) {
-        const limit = Math.min(MAX_LIMIT, want - items.length);
-        const params = new URLSearchParams({ limit: String(limit), offset: String(base + received) });
+      const page = await fetchWindow<Activity>(want, base, (limit, offset) => {
+        const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (category) params.set('category', category);
-        const page = await apiPage<Activity>(`/objects/${oid}/activities?${params}`);
-        received += page.items.length;
-        // Chunks are separate requests over one ORDER BY, so a row inserted at the top between
-        // them shifts everything down and the next chunk repeats a row this one already has.
-        // `Timeline`'s {#each} is keyed by id, and a duplicate key throws and blanks the list.
-        const seen = new Set(items.map((a) => a.id));
-        items = [...items, ...page.items.filter((a) => !seen.has(a.id))];
-        total = page.total;
-        // A SHORT page, not just an empty one: the server had nothing more to give, and asking
-        // again is a guaranteed-empty round trip -- which, for an object with fewer activities
-        // than a page, is every single load.
-        if (page.items.length < limit) break;
-      }
+        return apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+      });
+      items = page.items;
+      total = page.total;
       fetched = true;
     } catch (e) {
       if (append) throw e;
@@ -149,7 +117,7 @@
     // and caching that would replace a good page with nothing, so the next offline load would
     // show an empty timeline instead of the last one the user actually saw.
     if (!append && fetched) setCachedActivities(oid, { items, total });
-    activities = append ? [...activities, ...items] : [...pending, ...items];
+    activities = mergeWindow(append, activities, pending, items);
     activityTotal = total + pending.length;
   }
 
@@ -171,23 +139,13 @@
   // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
   // every extra page the user had loaded.
   $effect(() => onOutboxFlushed(async (_resolved, changed) => {
-    // Two conditions, because neither covers the other.
-    //
-    // `changed` is what THIS pass did, which is the only thing that sees a queued upload land
-    // (an upload changes an existing entry's thumbnails and the object's stats, and never
-    // appears as a row of its own).
-    //
-    // It says nothing about a pass another TAB ran, though: that tab sends and removes the op,
-    // and this tab's next flush then sees an empty queue before and after and reports no
-    // change -- leaving the dimmed pending row on screen for a write that landed minutes ago.
-    // So also compare what is rendered against what the queue says should be: read fresh here
-    // rather than sampled at load time, so it cannot go stale the way the key this replaces did.
-    const rendered = activities.filter((a) => a.pending).map((a) => a.id).sort().join(',');
-    const queued = (await pendingActivities()).map((a) => a.id).sort().join(',');
-    if (!changed && rendered === queued) return;
+    const rendered = activities.filter((a) => a.pending).map((a) => a.id);
+    const queued = (await pendingActivities()).map((a) => a.id);
+    if (!shouldReload(changed, rendered, queued)) return;
     loadObject();
     loadActivities('refresh');
   }));
+
   $effect(() => {
     const url = new URL(location.href);
     url.searchParams.set('tab', tab);
