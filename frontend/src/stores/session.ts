@@ -4,6 +4,17 @@ import { clearObjectCache } from '../lib/object-cache';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
 
+/**
+ * How this module navigates. Injected the same way `setUnauthorizedHandler` is, so the session
+ * state machine -- which now decides quite a lot: known versus merely unreachable, when the
+ * outbox may send, when to retry -- can be tested without a DOM. It was previously untestable
+ * only because of this one import, and four review findings landed in it.
+ */
+let navigate: (path: string, replace?: boolean) => void = go;
+export function setNavigateForTesting(fn: (path: string, replace?: boolean) => void): void {
+  navigate = fn;
+}
+
 /** undefined = not loaded yet, null = anonymous */
 export const user = writable<User | null | undefined>(undefined);
 export const setupRequired = writable<boolean>(false);
@@ -20,7 +31,7 @@ setUnauthorizedHandler(() => {
   // the user signs back in. It is only detached from the current session, so nothing replays
   // or displays it until someone claims it by logging in (see `setOutboxUser` in ../lib/api).
   setOutboxUser(null);
-  if (location.pathname !== '/login') go('/login', true);
+  if (globalThis.location?.pathname !== '/login') navigate('/login', true);
 });
 
 /**
@@ -113,7 +124,7 @@ export async function logout(): Promise<void> {
   sessionKnown = true;
   clearObjectCache();
   setOutboxUser(null);
-  go('/login', true);
+  navigate('/login', true);
 }
 
 /** Ends every session of this account, on every device, this browser included. */
@@ -123,5 +134,5 @@ export async function logoutEverywhere(): Promise<void> {
   sessionKnown = true;
   clearObjectCache();
   setOutboxUser(null);
-  go('/login', true);
+  navigate('/login', true);
 }
