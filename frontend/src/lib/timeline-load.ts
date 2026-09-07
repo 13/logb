@@ -26,9 +26,9 @@ export const PAGE_SIZE = 100;
 /**
  * Must equal `MAX_LIMIT` in `src/api/activities.rs`. The server CLAMPS a larger `limit` instead
  * of refusing it, so a value that drifts above the real cap loses rows with a successful
- * response and nothing to notice. `tests/activities.rs` pins the server's number and
- * `tests-e2e/05-pagination.spec.ts` pins that a larger request comes back clamped, so a change
- * on either side fails rather than silently truncating a timeline.
+ * response and nothing to notice. `tests/activities.rs` reads this declaration and fails if the
+ * two ever disagree, pins that the server clamps rather than refuses, and
+ * `timeline-load.test.ts` pins that no single request asks for more than this.
  */
 export const MAX_LIMIT = 500;
 

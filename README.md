@@ -81,6 +81,32 @@ scratch data directory (`.e2e-data`, wiped on each run):
 cd frontend && npm run e2e
 ```
 
+Every spec must also pass on its own (`npx playwright test 03-search`). One
+server and one database are shared across the whole run, so it is easy to write
+a spec that quietly depends on data an earlier one left behind — and then a
+single-spec run, which is what you reach for when investigating a failure,
+fails for an unrelated reason.
+
+### Two rules learned the hard way
+
+**When a second review lands in the same area, redesign instead of patching.**
+The offline outbox went through five review rounds, each finding a real defect
+in the previous round's fix. The ones that kept recurring were patched at the
+point of failure, each patch adding a mechanism: a cache key gained a sentinel,
+then early publication, then a second comparison. What finally settled it was
+deleting the key and having the flush report whether it changed anything.
+
+**A mutation check that passes means the test is wrong, not that the code is
+safe.** Deleting a guard and watching its test still pass happened twice here:
+once because the object under test was large enough to mask the condition, once
+because the staged failure tripped a different safeguard. Both times the check
+looked like reassurance and was worth none. Make the mutation as small as the
+guard, and be suspicious of a green result.
+
+Bugs that need a browser to find are expensive; the fix is usually to move the
+logic somewhere a unit test can reach it (`lib/timeline-load.ts` is the result
+of doing that), not to write another end-to-end test.
+
 ## Security
 
 Sessions are 30-day cookies, `HttpOnly` and `SameSite=Lax`, `Secure` behind an

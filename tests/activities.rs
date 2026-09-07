@@ -348,3 +348,59 @@ async fn concurrent_creates_sharing_one_op_id_resolve_to_one_activity() {
     let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
     assert_eq!(list.len(), 1);
 }
+
+/// The client pages the timeline in chunks sized against this cap (`MAX_LIMIT` in
+/// frontend/src/lib/timeline-load.ts). The server CLAMPS a larger limit rather than refusing
+/// it, so if the two numbers ever drift apart the client asks for more than it gets, believes
+/// it received a full window, and silently drops every row past the cap -- with a 200 and
+/// nothing to notice. This pins the behaviour; `the_client_and_server_agree_on_the_page_limit`
+/// below pins that the two constants are the same number.
+#[tokio::test]
+async fn the_page_limit_is_capped_at_500_and_the_cap_is_silent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    for i in 0..3 {
+        app.client.post(app.url(&format!("/objects/{id}/activities")))
+            .json(&json!({ "date": "2026-01-01", "category": "fuel", "title": format!("Entry {i}") }))
+            .send().await.unwrap();
+    }
+
+    // Asking for more than the cap is accepted, not rejected: that is exactly what makes a
+    // drift silent, and what the client's chunking exists to work around.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=100000")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers().get("x-total-count").unwrap(), "3");
+
+    // The documented cap, asked for exactly, is honoured.
+    let res = app.client.get(app.url(&format!("/objects/{id}/activities?limit=500")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "500 is within the cap");
+}
+
+/// The other half of the contract above: the client hard-codes the same cap, because it has to
+/// size its own chunks against it and the server offers no way to ask. A comment asking the
+/// next person to keep the two in step is not a check; reading the other file is.
+///
+/// Deliberately on this side of the wire: the frontend's tsconfig keeps Node's types out of
+/// browser code, and widening it so a test could read a file would let `process` and friends
+/// type-check inside the app itself.
+#[test]
+fn the_client_and_server_agree_on_the_page_limit() {
+    let ts = std::fs::read_to_string("frontend/src/lib/timeline-load.ts")
+        .expect("frontend/src/lib/timeline-load.ts should be readable from the crate root");
+    let declared = ts
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("export const MAX_LIMIT = ")?.strip_suffix(';'))
+        .expect("MAX_LIMIT is no longer declared in timeline-load.ts the way this test looks for it")
+        .parse::<i64>()
+        .expect("MAX_LIMIT should be a plain number");
+
+    assert_eq!(
+        declared, 500,
+        "the client's MAX_LIMIT and the server's must match, or the client silently loses \
+         every row past the smaller of the two",
+    );
+}

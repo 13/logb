@@ -1,5 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
+/**
+ * Every spec must pass on its own (`npx playwright test 03-search`), not only as part of a full
+ * run. One server and one database are shared across the whole run, so it is easy to write a
+ * spec that quietly depends on data an earlier one left behind -- and then a `-g` run to
+ * investigate a failure fails for an unrelated reason, which is exactly when that is least
+ * welcome. Seed what the spec needs, and use names distinctive enough that a query cannot
+ * match another spec's rows in the shared database.
+ */
 export default defineConfig({
   testDir: 'tests-e2e',
   fullyParallel: false,

@@ -1,29 +1,47 @@
 import { test, expect } from '@playwright/test';
 import { signIn } from './helpers';
 
-// Runs after 02-lifecycle, which leaves a "Golf" object carrying a "Winter tyres" activity.
+/**
+ * Seeds its own object and activity through the API rather than searching for what another
+ * spec happened to leave behind. The terms are deliberately unlike anything the other specs
+ * create, so a hit can only be this test's own row however many objects the shared database
+ * has accumulated by the time this runs.
+ */
+async function seed(page: import('@playwright/test').Page) {
+  const object = await page.request.post('/api/objects', {
+    data: { name: 'Saab', category: 'vehicle', counter_unit: 'km' },
+  });
+  expect(object.ok()).toBe(true);
+  const { id } = (await object.json()) as { id: number };
+  const activity = await page.request.post(`/api/objects/${id}/activities`, {
+    data: { date: '2026-01-01', category: 'maintenance', title: 'Cambelt', notes: '' },
+  });
+  expect(activity.ok()).toBe(true);
+}
+
 test('search finds an object and an activity from the dashboard', async ({ page }) => {
   await signIn(page);
+  await seed(page);
   await page.getByRole('button', { name: 'Search' }).click();
   await expect(page).toHaveURL(/\/search$/);
 
-  await page.getByLabel(/Search objects and activities/).fill('golf');
+  await page.getByLabel(/Search objects and activities/).fill('saab');
   await expect(page.getByRole('heading', { name: 'OBJECTS' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Golf/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Saab/ })).toBeVisible();
 
-  await page.getByLabel(/Search objects and activities/).fill('tyres');
+  await page.getByLabel(/Search objects and activities/).fill('cambelt');
   await expect(page.getByRole('heading', { name: 'ACTIVITIES' })).toBeVisible();
-  const hit = page.getByRole('button', { name: /Winter tyres/ });
+  const hit = page.getByRole('button', { name: /Cambelt/ });
   await expect(hit).toBeVisible();
 
   // The query is in the URL, so the result list survives a reload.
-  await expect(page).toHaveURL(/\/search\?q=tyres$/);
+  await expect(page).toHaveURL(/\/search\?q=cambelt$/);
   await page.reload();
-  await expect(page.getByRole('button', { name: /Winter tyres/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Cambelt/ })).toBeVisible();
 
   // A hit opens the activity it points at.
-  await page.getByRole('button', { name: /Winter tyres/ }).click();
-  await expect(page.getByLabel('Title')).toHaveValue('Winter tyres');
+  await page.getByRole('button', { name: /Cambelt/ }).click();
+  await expect(page.getByLabel('Title')).toHaveValue('Cambelt');
 });
 
 test('a query with no hits says so', async ({ page }) => {
