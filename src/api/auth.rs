@@ -1,13 +1,14 @@
-use crate::auth::{self, AuthUser};
+use crate::auth::{self, AuthUser, SessionUser};
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post};
+use axum::extract::Path;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 
@@ -19,6 +20,87 @@ pub fn router() -> Router<App> {
         .route("/auth/logout", post(logout))
         .route("/auth/logout-all", post(logout_all))
         .route("/auth/me", get(me))
+        .route("/auth/tokens", get(list_tokens).post(create_token))
+        .route("/auth/tokens/{id}", delete(revoke_token))
+}
+
+/// An API token as it is listed afterwards: everything except the token itself, which only
+/// exists in the response to the call that created it.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ApiTokenRow {
+    pub id: i64,
+    pub name: String,
+    pub prefix: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct NewToken {
+    pub name: String,
+}
+
+/// The caller's own tokens, newest first. A token is never listed to anyone but its owner, and
+/// an admin has no view of anyone else's: an admin can already reset a password, which revokes
+/// them, and that is a visible act rather than a silent read.
+async fn list_tokens(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ApiTokenRow>>, AppError> {
+    Ok(Json(
+        sqlx::query_as::<_, ApiTokenRow>(
+            "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens              WHERE user_id = ? ORDER BY id DESC",
+        )
+        .bind(user.id)
+        .fetch_all(&state.db)
+        .await?,
+    ))
+}
+
+/// Issues a token, returning the plaintext exactly once. Only the hash is stored, so there is
+/// no second chance to read it and no way for anyone with the database to recover it.
+///
+/// `SessionUser`: this needs an interactive login, never a token. See the type's own comment --
+/// a token that can mint tokens is a leak that repairs itself faster than its owner can notice.
+async fn create_token(
+    SessionUser(user): SessionUser,
+    State(state): State<App>,
+    Json(body): Json<NewToken>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let name = body.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(AppError::BadRequest("name must be 1 to 64 characters".into()));
+    }
+    let token = auth::new_api_token();
+    let id: (i64,) = sqlx::query_as(
+        "INSERT INTO api_tokens (user_id, name, token_hash, prefix, created_at)          VALUES (?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(user.id)
+    .bind(name)
+    .bind(auth::hash_api_token(&token))
+    .bind(auth::token_prefix(&token))
+    .bind(db::now())
+    .fetch_one(&state.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({
+        "id": id.0,
+        "name": name,
+        "prefix": auth::token_prefix(&token),
+        "created_at": db::now(),
+        // The only time this is ever readable.
+        "token": token,
+    }))))
+}
+
+/// Revoking takes effect on the next request: nothing caches the lookup.
+async fn revoke_token(
+    SessionUser(user): SessionUser,
+    State(state): State<App>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    let done = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+        .bind(id).bind(user.id)
+        .execute(&state.db).await?;
+    // Someone else's token is reported as absent rather than forbidden: whether an id exists is
+    // not this caller's business either way.
+    if done.rows_affected() == 0 { Err(AppError::NotFound) } else { Ok(StatusCode::NO_CONTENT) }
 }
 
 #[derive(Deserialize)]

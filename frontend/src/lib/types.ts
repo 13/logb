@@ -67,3 +67,9 @@ export interface Insights {
   cost_per_counter_milli: number | null;
   fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null } | null;
 }
+
+/** An API token as it is listed: never the token itself, which the server returns exactly once
+ *  at creation and stores only as a hash. */
+export interface ApiToken {
+  id: number; name: string; prefix: string; created_at: string; last_used_at: string | null;
+}

@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import { api, deadOps, discardDeadOp, retryDead, uploadRaw } from '../lib/api';
-  import { t } from '../i18n';
+  import { locale, t } from '../i18n';
   import { LANG_NAMES, SUPPORTED } from '../i18n/detect';
+  import { fmtDate } from '../lib/format';
   import { settings } from '../stores/settings';
   import { currency, user, logout, logoutEverywhere } from '../stores/session';
-  import type { ImportCounts, User } from '../lib/types';
+  import type { ApiToken, ImportCounts, User } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
 
   let dead = $state<QueuedOp[]>([]);
@@ -19,14 +20,54 @@
   let message = $state('');
   let error = $state('');
   let fileEl: HTMLInputElement;
+  let tokens = $state<ApiToken[]>([]);
+  let tokenName = $state('');
+  /** The plaintext of a token just created. The server returns it once and stores only a hash,
+   *  so this is the single moment it can be read -- it is deliberately not persisted anywhere,
+   *  and is dropped as soon as the user creates another or leaves the screen. */
+  let freshToken = $state('');
+  let copied = $state(false);
 
   const isAdmin = $derived($user?.is_admin === true);
 
   onMount(async () => {
     currencyText = $currency;
     dead = await deadOps();
+    await loadTokens();
     if (isAdmin) await loadUsers();
   });
+
+  async function loadTokens() {
+    try { tokens = await api<ApiToken[]>('GET', '/auth/tokens'); } catch (e) { error = (e as Error).message; }
+  }
+
+  async function createToken() {
+    error = ''; copied = false;
+    try {
+      const made = await api<ApiToken & { token: string }>('POST', '/auth/tokens', { name: tokenName.trim() });
+      freshToken = made.token;
+      tokenName = '';
+      await loadTokens();
+    } catch (e) { error = (e as Error).message; }
+  }
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(freshToken);
+      copied = true;
+    } catch {
+      // No clipboard permission, or an insecure origin: the value is on screen to be selected
+      // by hand, so this is a convenience failing, not the feature failing.
+    }
+  }
+
+  async function revokeToken(tok: ApiToken) {
+    if (!confirm($t('tokens.revoke-confirm'))) return;
+    try {
+      await api('DELETE', `/auth/tokens/${tok.id}`);
+      await loadTokens();
+    } catch (e) { error = (e as Error).message; }
+  }
 
   async function retryOutbox() {
     await retryDead();
@@ -161,6 +202,38 @@
     <button class="primary" onclick={addUser} disabled={newName.length < 3 || newPass.length < 8}>{$t('settings.user-new')}</button>
   {/if}
 
+  <h2>{$t('tokens.title')}</h2>
+  <p class="muted">{$t('tokens.intro')}</p>
+  {#if freshToken}
+    <div class="card fresh-token">
+      <p>{$t('tokens.created')}</p>
+      <code>{freshToken}</code>
+      <button onclick={copyToken}>{copied ? $t('tokens.copied') : $t('tokens.copy')}</button>
+    </div>
+  {/if}
+  <div class="list">
+    {#each tokens as tok (tok.id)}
+      <div class="card row">
+        <span>
+          {tok.name}
+          <span class="muted small">
+            {tok.prefix}… ·
+            {tok.last_used_at ? $t('tokens.last-used', { date: fmtDate(tok.last_used_at.slice(0, 10), $locale) }) : $t('tokens.never-used')}
+          </span>
+        </span>
+        <button class="ghost danger-text" onclick={() => revokeToken(tok)}>{$t('tokens.revoke')}</button>
+      </div>
+    {:else}
+      <p class="muted">{$t('tokens.none')}</p>
+    {/each}
+  </div>
+  <div class="field">
+    <label for="tn">{$t('tokens.name')}</label>
+    <input id="tn" bind:value={tokenName} placeholder={$t('tokens.name-placeholder')} maxlength="64" />
+  </div>
+  <button class="primary" onclick={createToken} disabled={tokenName.trim().length === 0}>{$t('tokens.create')}</button>
+  <p class="muted small">{$t('tokens.password-note')}</p>
+
   <h2>{$t('settings.data')}</h2>
   <div class="list">
     <a class="button-like" href="/api/export">{$t('settings.export')}</a>
@@ -172,6 +245,9 @@
 </main>
 
 <style>
+  .fresh-token { display: grid; gap: 8px; }
+  /* The token is long and must be readable in full, since it can never be shown again. */
+  .fresh-token code { word-break: break-all; font-size: .85rem; background: var(--surface-2); padding: 8px; border-radius: 8px; }
   .row > button { flex: none; }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .danger-text { color: var(--danger); }

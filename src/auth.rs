@@ -82,13 +82,19 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     Ok(token)
 }
 
-/// Drops every session belonging to `user_id`.
+/// Drops every session AND every API token belonging to `user_id`.
 ///
 /// Called whenever a password changes: without it, a password reset -- the one action taken
 /// precisely because an account may be compromised -- leaves any existing session valid for
 /// the rest of its 30 days.
+///
+/// The same argument applies with more force to API tokens, which never expire at all: a reset
+/// that left them alone would revoke the credential the owner can see and keep the one an
+/// attacker actually took. The cost is that a password change signs the phone out of the API
+/// too, which is why the README says so and the Settings screen says so next to the button.
 pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM api_tokens WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
     Ok(())
 }
 
@@ -171,10 +177,106 @@ pub fn token_from_parts(parts: &Parts) -> Option<String> {
     CookieJar::from_headers(&parts.headers).get(COOKIE).map(|c| c.value().to_string())
 }
 
+/// The prefix every API token carries, so one is recognisable on sight -- in a log, a config
+/// file, a screenshot -- and can be revoked without having to work out what it is.
+pub const TOKEN_PREFIX: &str = "memto_pat_";
+
+/// How much of the plaintext is kept alongside the hash, purely so the token list can name the
+/// row the user is looking at. Short enough to be useless for reconstructing the token.
+const PREFIX_KEPT: usize = TOKEN_PREFIX.len() + 6;
+
+pub fn new_api_token() -> String {
+    format!("{TOKEN_PREFIX}{}", new_token())
+}
+
+/// Only the hash is stored (see migrations/0006_api_tokens.sql). SHA-256 rather than a password
+/// hash: this is a 256-bit random value, not something a user chose, so there is nothing for a
+/// dictionary to attack and no reason to make verification -- which happens on every single
+/// request -- deliberately slow.
+pub fn hash_api_token(token: &str) -> String {
+    crate::files::sha256_hex(token.as_bytes())
+}
+
+pub fn token_prefix(token: &str) -> String {
+    token.chars().take(PREFIX_KEPT).collect()
+}
+
+/// A `Bearer` credential from the `Authorization` header, if there is one.
+fn bearer_from_parts(parts: &Parts) -> Option<String> {
+    let raw = parts.headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, value) = raw.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let value = value.trim();
+    if value.is_empty() { None } else { Some(value.to_string()) }
+}
+
+/// Resolves a bearer token to its owner, and records that it was used.
+///
+/// `last_used_at` is written at most once a day per token rather than on every request: it
+/// exists so a user can recognise a token they no longer need, which day-level accuracy answers
+/// perfectly well, and a write per request would turn every read of the API into a write.
+async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>, AppError> {
+    let hash = hash_api_token(token);
+    let row = sqlx::query_as::<_, AuthUser>(
+        "SELECT u.id, u.username, u.is_admin, u.lang FROM api_tokens t \
+         JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+    )
+    .bind(&hash)
+    .fetch_optional(&state.db)
+    .await?;
+    if row.is_some() {
+        let today = db::today();
+        sqlx::query(
+            "UPDATE api_tokens SET last_used_at = ? \
+             WHERE token_hash = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+        )
+        .bind(db::now()).bind(&hash).bind(&today)
+        .execute(&state.db).await?;
+    }
+    Ok(row)
+}
+
+/// A caller authenticated by a session COOKIE specifically, never by an API token.
+///
+/// Managing tokens is the one thing a token may not do. A leaked token is bad; a leaked token
+/// that can mint more of itself, and revoke the ones its owner would use to notice, is worse --
+/// and nothing legitimate needs it, since a client obtains its first token through an ordinary
+/// interactive login.
+pub struct SessionUser(pub AuthUser);
+
+impl FromRequestParts<App> for SessionUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
+        let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
+        let user = sqlx::query_as::<_, AuthUser>(
+            "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
+             JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?",
+        )
+        .bind(token)
+        .bind(db::now())
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+        Ok(SessionUser(user))
+    }
+}
+
 impl FromRequestParts<App> for AuthUser {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
+        // A bearer token first, since a client that sends one is saying which credential it
+        // means -- and a native client may well be holding a stale cookie from the interactive
+        // login it used to obtain that token in the first place.
+        if let Some(bearer) = bearer_from_parts(parts) {
+            if let Some(user) = user_for_api_token(state, &bearer).await? {
+                return Ok(user);
+            }
+            return Err(AppError::Unauthorized);
+        }
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         sqlx::query_as::<_, AuthUser>(
             "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
