@@ -2,12 +2,20 @@
 
 /// Whether an incoming edit supersedes the stored one for a field.
 ///
-/// Timestamps are RFC3339 UTC with a fixed number of digits, so a lexical comparison is also
-/// a chronological one and no parsing is needed. Equal timestamps break on `device_id`, which
-/// is arbitrary but *consistent*: every device applying the same pair of ops reaches the same
-/// answer without talking to any other device, which is what keeps two phones from converging
-/// on different values. An op identical to the stored one does not win, so a replay is a
-/// no-op rather than a rewrite.
+/// Timestamps are RFC3339 UTC with a fixed number of digits, canonicalized upstream before
+/// reaching here, so a lexical comparison is also a chronological one and no parsing is needed.
+/// Equal timestamps are broken by `device_id`: the incoming edit wins if its device_id is
+/// lexically greater. This tiebreaker remains consistent across all devices because `device_id`
+/// is expected to be unique among concurrently active writers, a precondition that is the
+/// client's responsibility to maintain.
+///
+/// If two devices violate this precondition and use the same device_id, a full tie can occur:
+/// equal timestamps and identical device_id mean neither op wins in the comparison. The
+/// first-arriving op persists in this case. Convergence is still guaranteed because
+/// `GET /sync/pull` orders all ops by the server's `changes.seq`, a monotonic sequence that
+/// every client observes identically. All participants independently walk this sequence in the
+/// same order, so they each independently keep the same first-arriving op in a tie. An op
+/// identical to the stored one does not win, so a replay is a no-op rather than a rewrite.
 pub fn wins(
     incoming_edited_at: &str,
     incoming_device: &str,
