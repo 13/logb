@@ -1,5 +1,7 @@
 //! The sync protocol's vocabulary: what an op can name, and what it may change.
 
+pub mod apply;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
