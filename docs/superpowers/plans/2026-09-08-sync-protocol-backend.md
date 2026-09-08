@@ -1433,7 +1433,9 @@ git commit -m "feat: serve a full snapshot for a new or expired device"
 
 **Interfaces:**
 - Consumes: `changes` and the tombstone columns.
-- Produces: `pub async fn purge(db: &sqlx::SqlitePool, retention_days: i64) -> Result<u64, AppError>` in `src/sync/feed.rs`, returning the number of `changes` rows removed. `src/tasks.rs` calls it hourly with `RETENTION_DAYS`.
+- Produces: `pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64, AppError>` in `src/sync/feed.rs`, returning the number of `changes` rows removed. `src/tasks.rs` calls it hourly with `RETENTION_DAYS`.
+
+It takes `&App` rather than a bare pool because reclaiming an expired attachment's blob needs `state.storage`. Task 2 made this necessary: a tombstoned attachment still pins its file through `attachments.file_id ... ON DELETE RESTRICT`, so `purge_orphan_files` cannot free anything until the tombstone itself expires. If this purge dropped the rows without that call, every deleted photo would leave its bytes on disk permanently.
 
 Taking the window as a parameter rather than reading a constant is what makes this testable in a second instead of ninety days — the same shape `notify::tick(&state, hour)` already uses.
 
@@ -1463,7 +1465,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
         .bind(object_id).execute(&app.state.db).await.unwrap();
 
-    let removed = logby::sync::feed::purge(&app.state.db, 90).await.unwrap();
+    let removed = logby::sync::feed::purge(&app.state, 90).await.unwrap();
     assert_eq!(removed, 1, "the ancient log row went");
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
@@ -1489,12 +1491,56 @@ async fn purge_keeps_recent_history() {
         "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
-    assert_eq!(logby::sync::feed::purge(&app.state.db, 90).await.unwrap(), 0);
+    assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(rows, 1, "today's history is not history yet");
 }
+
+#[tokio::test]
+async fn purge_reclaims_the_blob_of_an_expired_attachment() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"%PDF-1.4 fake".to_vec())
+            .file_name("invoice.pdf")
+            .mime_str("application/pdf")
+            .unwrap(),
+    );
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/attachments")))
+        .multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let sha: String = sqlx::query_scalar(
+        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    let blob = app.state.storage.blob_path(&sha);
+    assert!(blob.exists(), "the upload landed on disk");
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/attachments/{attachment_id}")))
+            .send().await.unwrap().status(),
+        204
+    );
+    assert!(blob.exists(), "a tombstoned attachment still pins its blob");
+
+    sqlx::query("UPDATE attachments SET deleted_at = '2000-01-01T00:00:00Z'")
+        .execute(&app.state.db).await.unwrap();
+    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+
+    assert!(!blob.exists(), "an expired tombstone finally frees the bytes");
+    let files: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(files, 0, "the files row goes with its last attachment");
+}
 ```
+
+`purge_orphan_files` is `pub` on `crate::api::attachments` already, so no visibility change is needed. If it is not reachable from `src/sync/feed.rs`, widen it rather than duplicating its logic — the reference re-check it performs is the whole point of calling it.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1512,7 +1558,11 @@ Append to `src/sync/feed.rs`:
 /// still inside the window always finds the delete in the log before the row itself vanishes.
 /// Beyond the window a device has to re-bootstrap anyway, which is precisely when it no longer
 /// needs the tombstone to learn the row is gone.
-pub async fn purge(db: &sqlx::SqlitePool, retention_days: i64) -> Result<u64, AppError> {
+pub async fn purge(
+    state: &crate::state::App,
+    retention_days: i64,
+) -> Result<u64, AppError> {
+    let db = &state.db;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -1522,10 +1572,27 @@ pub async fn purge(db: &sqlx::SqlitePool, retention_days: i64) -> Result<u64, Ap
         .await?
         .rows_affected();
 
-    for table in ["attachments", "activities", "reminders", "objects", "files"] {
+    // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
+    // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
+    let pinned: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT file_id FROM attachments \
+         WHERE deleted_at IS NOT NULL AND deleted_at < ?")
+        .bind(&cutoff)
+        .fetch_all(db)
+        .await?;
+
+    // `files` is absent deliberately: nothing sets `files.deleted_at`, because a file is
+    // content-addressed and shared between attachments. A file dies when its last attachment
+    // does, which is what `purge_orphan_files` decides below.
+    for table in ["attachments", "activities", "reminders", "objects"] {
         let sql = format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < ?");
         sqlx::query(&sql).bind(&cutoff).execute(db).await?;
     }
+
+    // Now that no attachment references them, the unreferenced ones can give up their blob and
+    // thumbnail. `purge_orphan_files` re-checks each candidate against the live attachments, so
+    // a file still used by another object is left alone.
+    crate::api::attachments::purge_orphan_files(state, &pinned).await?;
 
     // A field clock for a row nobody can name any more is dead weight.
     sqlx::query(
@@ -1554,7 +1621,7 @@ const RETENTION_DAYS: i64 = 90;
 and inside the `if since_prune >= PRUNE_EVERY` block, after the existing `prune_sessions` match:
 
 ```rust
-                match crate::sync::feed::purge(&state.db, RETENTION_DAYS).await {
+                match crate::sync::feed::purge(&state, RETENTION_DAYS).await {
                     Ok(n) if n > 0 => tracing::debug!(changes = n, "purged expired sync history"),
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "sync purge failed"),
