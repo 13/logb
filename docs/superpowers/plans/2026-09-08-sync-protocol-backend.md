@@ -89,9 +89,13 @@ CREATE TABLE changes (
     applied_at   TEXT NOT NULL,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_id    TEXT NOT NULL,
-    client_op_id TEXT NOT NULL UNIQUE
+    client_op_id TEXT NOT NULL
 );
 CREATE INDEX idx_changes_user_seq ON changes(user_id, seq);
+-- Scoped to the user, not global. A globally unique client_op_id lets one account's op id
+-- collide with another's: the idempotency lookup finds the stranger's row, reports the op
+-- accepted, and never applies it -- a lost write reported as success.
+CREATE UNIQUE INDEX idx_changes_user_op ON changes(user_id, client_op_id);
 
 -- The winning edit time per field, which is what an arriving op is compared against. Separate
 -- from `changes` because that table holds losers too, and a scan of it per field would grow
@@ -1076,8 +1080,9 @@ async fn push(
         }
         // Idempotency: an op id already in the log was applied by an earlier attempt whose
         // response the client never saw. Report it as accepted without applying it twice.
-        let seen: Option<i64> = sqlx::query_scalar("SELECT seq FROM changes WHERE client_op_id = ?")
-            .bind(&op.client_op_id)
+        let seen: Option<i64> = sqlx::query_scalar(
+            "SELECT seq FROM changes WHERE user_id = ? AND client_op_id = ?")
+            .bind(user.id).bind(&op.client_op_id)
             .fetch_optional(&mut *tx)
             .await?;
         if seen.is_some() {
