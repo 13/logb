@@ -1369,6 +1369,34 @@
           }
         }
       }
+    },
+    "/sync/push": {
+      "post": {
+        "summary": "Apply a batch of offline ops with field-level last-write-wins.",
+        "description": "Every op in the batch is applied inside one transaction, so a client that retries after a lost response finds either all of its ops recorded or none. `results` is positional: `results[i]` describes `ops[i]`. An op that loses the last-write-wins comparison is `superseded` -- recorded in the change feed, but not written to the row; only a malformed or unauthorised op is `rejected`. Replaying a `client_op_id` already in the log reports `accepted` without applying it a second time.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushResult"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2153,6 +2181,119 @@
           },
           "reminders": {
             "type": "integer"
+          }
+        }
+      },
+      "Op": {
+        "type": "object",
+        "required": [
+          "client_op_id",
+          "entity",
+          "entity_uuid",
+          "op",
+          "edited_at",
+          "device_id"
+        ],
+        "properties": {
+          "client_op_id": {
+            "type": "string",
+            "description": "Unique per op; replaying one is a no-op."
+          },
+          "entity": {
+            "type": "string",
+            "enum": [
+              "object",
+              "activity",
+              "reminder",
+              "attachment",
+              "file"
+            ]
+          },
+          "entity_uuid": {
+            "type": "string",
+            "description": "The row's `client_uuid`."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "create",
+              "set",
+              "delete"
+            ]
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "description": "Required for `set`; must be a syncable column of `entity`."
+          },
+          "value": {
+            "description": "The new value for `set`: string, number, boolean or null."
+          },
+          "edited_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC3339. Canonicalised to UTC milliseconds before it is compared."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "Breaks ties on equal `edited_at`; the greater string wins."
+          }
+        }
+      },
+      "PushBody": {
+        "type": "object",
+        "required": [
+          "ops"
+        ],
+        "properties": {
+          "ops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Op"
+            }
+          }
+        }
+      },
+      "OpResult": {
+        "type": "object",
+        "properties": {
+          "client_op_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "superseded",
+              "rejected"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Present only when `outcome` is `rejected`."
+          }
+        }
+      },
+      "PushResult": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpResult"
+            },
+            "description": "One entry per op, in the order the ops were sent."
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ids": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "client_uuid to the server's integer id, for references a client only knows by uuid."
           }
         }
       }

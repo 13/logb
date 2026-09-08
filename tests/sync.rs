@@ -161,3 +161,269 @@ async fn a_deleted_objects_children_vanish_from_every_read_path() {
     // The attachment's file, reachable only through it, is also unreadable.
     assert_eq!(app.client.get(app.url(&format!("/files/{file_id}"))).send().await.unwrap().status(), 404);
 }
+
+/// An op batch as the wire format expects it.
+fn push_body(ops: serde_json::Value) -> serde_json::Value {
+    json!({ "ops": ops })
+}
+
+#[tokio::test]
+async fn a_set_op_updates_the_row_and_is_logged() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-1", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Golf VII",
+        "edited_at": "2026-02-01T10:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted");
+    assert!(body["server_time"].is_string());
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Golf VII");
+
+    let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-1'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1);
+}
+
+#[tokio::test]
+async fn an_older_edit_is_superseded_but_still_recorded() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let newer = json!([{
+        "client_op_id": "op-new", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Newer",
+        "edited_at": "2026-02-02T00:00:00Z", "device_id": "phone"
+    }]);
+    let older = json!([{
+        "client_op_id": "op-old", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Older",
+        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+    }]);
+    app.client.post(app.url("/sync/push")).json(&push_body(newer)).send().await.unwrap();
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(older)).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+
+    assert_eq!(body["results"][0]["outcome"], "superseded");
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Newer", "the loser must not overwrite the winner");
+    let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-old'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "a superseded op is still part of the log");
+}
+
+#[tokio::test]
+async fn a_replayed_push_is_idempotent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let batch = push_body(json!([{
+        "client_op_id": "op-same", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Once",
+        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+    }]));
+    for _ in 0..2 {
+        let res = app.client.post(app.url("/sync/push")).json(&batch).send().await.unwrap();
+        assert_eq!(res.status(), 200);
+    }
+    let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-same'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "the same op id lands exactly once");
+}
+
+#[tokio::test]
+async fn timestamps_are_compared_chronologically_not_lexically() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // Whole seconds first, then a value half a second LATER written with a fraction. Compared
+    // as raw strings the fractional one loses ('.' < 'Z'), so a lexical rule would keep "Early".
+    for (id, value, at) in [
+        ("op-whole", "Early", "2026-08-01T00:00:00Z"),
+        ("op-frac", "Later", "2026-08-01T00:00:00.500Z"),
+    ] {
+        let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": id, "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": value,
+            "edited_at": at, "device_id": "phone"
+        }]))).send().await.unwrap();
+        assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    }
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Later", "the chronologically later edit must win");
+
+    // An offset-form timestamp is the same instant as its Z form and must not re-win.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-offset", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Earlier still",
+        "edited_at": "2026-08-01T00:00:00+00:00", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "superseded");
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-junk", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Nonsense",
+        "edited_at": "last thursday", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "rejected");
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Later");
+}
+
+#[tokio::test]
+async fn a_field_outside_the_whitelist_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-evil", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "user_id", "value": 2,
+        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected");
+}
+
+#[tokio::test]
+async fn a_foreign_key_field_cannot_point_at_another_users_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let victim_object = car["id"].as_i64().unwrap();
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"%PDF-1.4 fake".to_vec())
+            .file_name("invoice.pdf")
+            .mime_str("application/pdf")
+            .unwrap(),
+    );
+    let res = app.client.post(app.url(&format!("/objects/{victim_object}/attachments")))
+        .multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    let victim_attachment = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    // A second account, with an object of its own, tries to adopt the first account's
+    // attachment as its cover image.
+    let mallory = app.create_user_client("mallory", "another password").await;
+    let theirs = app.create_object(&mallory, "Bike", None).await;
+    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(theirs["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-steal", "entity": "object", "entity_uuid": their_uuid,
+        "op": "set", "field": "cover_attachment_id", "value": victim_attachment,
+        "edited_at": "2026-07-01T00:00:00Z", "device_id": "mallory-phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected");
+
+    let cover: Option<i64> = sqlx::query_scalar(
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        .bind(&their_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(cover.is_none(), "the cross-account reference must not have landed");
+}
+
+#[tokio::test]
+async fn one_user_cannot_push_at_another_users_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let other = app.create_user_client("mallory", "another password").await;
+    let res = other.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-cross", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Stolen",
+        "edited_at": "2030-01-01T00:00:00Z", "device_id": "mallory-phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected");
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Golf", "an unrelated user changed nothing");
+}
+
+#[tokio::test]
+async fn results_stay_in_the_order_the_ops_were_sent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // A batch that mixes ops rejected at different stages -- an unparseable timestamp, a field
+    // off the whitelist -- with ones that land. `results[i]` must still describe `ops[i]`, so a
+    // client can line the two lists up by position and not only by `client_op_id`.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "ord-1", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "name", "value": "First",
+          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "ord-2", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "category", "value": "car",
+          "edited_at": "not a timestamp", "device_id": "phone" },
+        { "client_op_id": "ord-3", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "description", "value": "Mine",
+          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "ord-4", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "user_id", "value": 2,
+          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "ord-5", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "name", "value": "Superseded by ord-1",
+          "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    let results = body["results"].as_array().unwrap();
+
+    let seen: Vec<(&str, &str)> = results
+        .iter()
+        .map(|r| (r["client_op_id"].as_str().unwrap(), r["outcome"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("ord-1", "accepted"),
+            ("ord-2", "rejected"),
+            ("ord-3", "accepted"),
+            ("ord-4", "rejected"),
+            ("ord-5", "superseded"),
+        ],
+        "results[i] must describe ops[i]"
+    );
+}
