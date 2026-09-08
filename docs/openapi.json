@@ -768,7 +768,7 @@
         }
       },
       "delete": {
-        "summary": "Detach a file. The stored bytes go once nothing references them.",
+        "summary": "Detach a file. The stored bytes are reclaimed once nothing references them and the tombstone has aged out of the sync window.",
         "parameters": [
           {
             "name": "id",

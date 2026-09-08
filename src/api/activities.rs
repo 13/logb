@@ -263,7 +263,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             // `fetch_optional` rather than `fetch_one`: the row holding this op id may be a
             // tombstone, which the filter above hides. That is not a 500 -- the id really is
             // taken, so say so.
-            let Some(winner) = winner else { return Err(op_id_conflict()) };
+            let Some(winner) = winner else { return Err(super::op_id_conflict()) };
             return op_id_row_response(&state, winner, object_id).await;
         }
         Err(e) => return Err(e.into()),
@@ -271,18 +271,12 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)).into_response())
 }
 
-/// The op id is spoken for by a row this request cannot be handed: one belonging to another
-/// object, or one that has since been deleted.
-fn op_id_conflict() -> AppError {
-    AppError::Conflict("client_op_id already used for another object".into())
-}
-
 /// The row a client_op_id lookup found -- whether from the pre-check or after losing an
 /// insert race -- may belong to a different object than the one being posted to; that's a
 /// 409, not this object's row.
 async fn op_id_row_response(state: &App, existing: ActivityRow, object_id: i64) -> Result<Response, AppError> {
     if existing.object_id != object_id {
-        return Err(op_id_conflict());
+        return Err(super::op_id_conflict());
     }
     Ok((StatusCode::OK, Json(one_out(state, existing).await?)).into_response())
 }
@@ -306,9 +300,10 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     Ok(Json(one_out(&state, row).await?))
 }
 
-/// As with objects, the row is tombstoned rather than removed, and the cascade `ON DELETE
-/// CASCADE` used to provide -- this activity's attachments -- is written out by hand, in one
-/// transaction so a half-applied delete cannot survive a failure.
+/// As with objects, the row is tombstoned rather than removed, and the cascades `ON DELETE
+/// CASCADE` / `ON DELETE SET NULL` used to provide -- this activity's attachments, and any
+/// reminder `done_activity_id` points at it -- are written out by hand, in one transaction so
+/// a half-applied delete cannot survive a failure.
 ///
 /// The cover subquery deliberately does *not* skip tombstoned attachments: an object still
 /// pointing at one has a stale cover, and clearing it is the whole point of the statement.
@@ -328,6 +323,11 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     if affected == 0 {
         return Err(AppError::NotFound);
     }
+    // `done_activity_id INTEGER REFERENCES activities(id) ON DELETE SET NULL` in the schema
+    // cannot fire for this UPDATE, so a reminder marked done by this activity is unlinked by
+    // hand -- otherwise it would keep pointing at an activity that now reads as absent.
+    sqlx::query("UPDATE reminders SET done_activity_id = NULL WHERE done_activity_id = ? AND deleted_at IS NULL")
+        .bind(id).execute(&mut *tx).await?;
     sqlx::query("UPDATE attachments SET deleted_at = ? WHERE activity_id = ? AND deleted_at IS NULL")
         .bind(&now).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

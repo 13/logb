@@ -40,6 +40,10 @@ pub struct AttachmentOut {
     pub client_op_id: Option<String>,
 }
 
+/// INVARIANT: filters `a.deleted_at` but, unlike `load_owned`, not `o.deleted_at` -- every
+/// caller (`list`, `with_attachments`, `export`) already loads the object through a filtered
+/// query first, so a tombstoned object never reaches `object_id` here. Adding the join would
+/// just repeat a check every caller has already paid for.
 pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut>, AppError> {
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
@@ -274,7 +278,7 @@ async fn upload(
             // the filter hides. The id is still taken, so that is a conflict, not a 500.
             let Some((winner_id,)) = winner else {
                 purge_orphan_files(&state, &[file_id]).await?;
-                return Err(AppError::Conflict("client_op_id already used for another object".into()));
+                return Err(super::op_id_conflict());
             };
             // This request's own bytes are now referenced by nothing: the winner's attachment
             // points at the winner's file. Identical bytes dedup onto that same row, so the
@@ -301,7 +305,7 @@ async fn op_id_attachment_response(
 ) -> Result<(StatusCode, Json<AttachmentOut>), AppError> {
     let out = load_owned(state, user_id, id).await?;
     if out.object_id != object_id {
-        return Err(AppError::Conflict("client_op_id already used for another object".into()));
+        return Err(super::op_id_conflict());
     }
     Ok((StatusCode::OK, Json(out)))
 }

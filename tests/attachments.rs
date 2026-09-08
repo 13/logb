@@ -222,7 +222,7 @@ async fn cover_can_be_set_kept_and_cleared() {
 
 /// Deleting an object must take its files with it, not just its attachment rows.
 #[tokio::test]
-async fn deleting_an_object_purges_its_files() {
+async fn deleting_an_object_makes_its_files_unreadable() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", None).await;
@@ -236,6 +236,9 @@ async fn deleting_an_object_purges_its_files() {
     assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 200);
 
     assert_eq!(app.client.delete(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 204);
+    // Nothing is purged here: the row and blob deliberately survive the sync window so an
+    // offline client can still be told what it lost. `load_owned_file` is what makes both
+    // routes read as 404 in the meantime.
     assert_eq!(app.client.get(app.url(&format!("/files/{fid}"))).send().await.unwrap().status(), 404);
     assert_eq!(app.client.get(app.url(&format!("/files/{fid}/thumb"))).send().await.unwrap().status(), 404);
 }

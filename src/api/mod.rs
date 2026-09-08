@@ -9,6 +9,7 @@ pub mod search;
 pub mod settings;
 pub mod users;
 
+use crate::error::AppError;
 use crate::state::App;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -45,4 +46,12 @@ async fn health() -> Json<serde_json::Value> {
 /// normalised rather than rejected -- the write still lands, just without idempotency.
 pub(crate) fn normalize_op_id(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// The op id a client_op_id lookup resolved to is spoken for by a row this request cannot be
+/// handed: one belonging to another object, or one that has since been deleted -- the id stays
+/// taken (the unique index spans tombstones too), it just no longer names a row the caller can
+/// be shown. Shared by `activities` and `attachments`, whose create paths hit the same case.
+pub(crate) fn op_id_conflict() -> AppError {
+    AppError::Conflict("client_op_id already used".into())
 }

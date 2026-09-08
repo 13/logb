@@ -404,3 +404,44 @@ fn the_client_and_server_agree_on_the_page_limit() {
          every row past the smaller of the two",
     );
 }
+
+/// `reminders.done_activity_id ... ON DELETE SET NULL` cannot fire for the tombstoning
+/// UPDATE that replaced the hard DELETE, so the activity delete handler has to clear it by
+/// hand. Without that, a reminder marked done by an activity that is later deleted would keep
+/// pointing at an id `GET /activities/{id}` now answers 404 for.
+#[tokio::test]
+async fn deleting_the_activity_that_completed_a_reminder_clears_its_done_activity_id() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&act("2026-01-01", "maintenance", Some(100_000), Some(5_000)))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let activity: serde_json::Value = res.json().await.unwrap();
+    let aid = activity["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Oil", "due_counter": 105_000 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let reminder: serde_json::Value = res.json().await.unwrap();
+    let rid = reminder["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/reminders/{rid}/done")))
+        .json(&json!({ "activity_id": aid }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let done: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(done["done"]["done_activity_id"], aid, "sanity: the reminder really points at it");
+
+    assert_eq!(app.client.delete(app.url(&format!("/activities/{aid}"))).send().await.unwrap().status(), 204);
+
+    let res = app.client.get(app.url(&format!("/reminders/{rid}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the reminder itself must still read");
+    let r: serde_json::Value = res.json().await.unwrap();
+    assert!(r["done_activity_id"].is_null(), "the stale pointer must be cleared: {r}");
+    assert!(r["done_at"].is_string(), "clearing the pointer must not undo done-ness");
+}
