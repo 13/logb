@@ -81,6 +81,62 @@ fn binding(
     }
 }
 
+/// Checks a bound value against the same rules the matching REST handler enforces on the same
+/// column (`ObjectInput::validate`, `ActivityInput::validate`, `ReminderInput::validate` in
+/// `api::objects`/`activities`/`reminders`), so a `set` op cannot write anything a REST `PATCH`
+/// would refuse with 400. `binding` has already settled the value's SHAPE -- integer vs. text --
+/// which says nothing about whether the value itself makes sense: `name = ""`,
+/// `purchase_price_cents = -999` and `purchase_date = "not-a-date"` are all shaped correctly and
+/// would sail through `binding` untouched. Only a handful of columns happen to carry a SQLite
+/// CHECK that catches this by accident (`counter_unit`, `fuel_unit`, `activities.category`,
+/// `attachments.kind`); everything else has nothing standing between a client and the row
+/// without this.
+///
+/// Null is always left alone: it means "clear the field", exactly as `binding` already treats
+/// it, and whether a given column tolerates it is the schema's NOT NULL constraint to answer.
+fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), String> {
+    let Binding::Text(text) = bound else {
+        let Binding::Integer(n) = bound else { return Ok(()) };
+        // `repeat_months`/`repeat_counter` must be strictly positive -- see
+        // `ReminderInput::validate` -- which is a stricter bound than "non-negative" and
+        // therefore satisfies it too.
+        let must_be_positive =
+            matches!((entity, field), (Entity::Reminder, "repeat_months" | "repeat_counter"));
+        let non_negative = matches!(
+            (entity, field),
+            (Entity::Object, "purchase_price_cents")
+                | (Entity::Activity, "cost_cents" | "counter_value" | "quantity_milli")
+                | (Entity::Reminder, "due_counter")
+        );
+        if must_be_positive && *n <= 0 {
+            return Err(format!("{field} must be > 0"));
+        }
+        if non_negative && *n < 0 {
+            return Err(format!("{field} must be >= 0"));
+        }
+        return Ok(());
+    };
+
+    match (entity, field) {
+        (Entity::Object, "name" | "category")
+        | (Entity::Activity, "title")
+        | (Entity::Reminder, "title") => {
+            if text.trim().is_empty() {
+                return Err(format!("{field} is required"));
+            }
+        }
+        (Entity::Object, "purchase_date")
+        | (Entity::Activity, "date")
+        | (Entity::Reminder, "due_date") => {
+            // Reuses `objects::validate_date` rather than re-implementing the format, so the
+            // two paths cannot drift into accepting different dates.
+            crate::api::objects::validate_date(text).map_err(|e| e.to_string())?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Rewrites a client-supplied timestamp into the one canonical form `wins` can compare.
 ///
 /// `wins` compares `edited_at` lexically, which is only chronological when every value has the
@@ -180,6 +236,23 @@ pub async fn apply_op(
         // One timestamp for the parent and all its children, and the caller's transaction for
         // all of it, so a half-applied cascade cannot survive a failure part way through.
         OpKind::Delete => {
+            // A file is content-addressed and shared by every attachment that references it --
+            // "a file dies when its last attachment does" is the model `whitelist` already
+            // states, and `purge_orphan_files` is what implements it. Tombstoning one directly
+            // here would break that silently, in three separate places at once: nothing else
+            // in the codebase ever sets `files.deleted_at`, so the purge's `guards` array (see
+            // `sync::feed`) has no `files` entry and would never reclaim the tombstone; bootstrap
+            // filters `deleted_at IS NULL`, so the file vanishes from every device's snapshot
+            // while its still-live attachment keeps pointing at it; and the upload dedup
+            // (`api::attachments::create`) has no `deleted_at` filter, so re-uploading the same
+            // bytes would re-adopt the dead row and make the replacement photo unrenderable
+            // too. Refusing the op here is what keeps all three of those actually true.
+            if op.entity == Entity::File {
+                return Ok(Outcome::Rejected {
+                    reason: "files are not deletable over sync".into(),
+                });
+            }
+
             let now = crate::db::now();
             // Only `objects` and `activities` carry `updated_at` (migrations/0001_init.sql);
             // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
@@ -212,9 +285,10 @@ pub async fn apply_op(
                     clear_cover_of(&mut *tx, &op.entity_uuid).await?;
                     Vec::new()
                 }
-                // Reminders and files have no children of their own, and nothing else keeps a
-                // stray reference to either that a delete would need to clean up.
-                Entity::Reminder | Entity::File => Vec::new(),
+                // A reminder has no children of its own, and nothing else keeps a stray
+                // reference to it that a delete would need to clean up.
+                Entity::Reminder => Vec::new(),
+                Entity::File => unreachable!("a file delete is refused above, before reaching this match"),
             };
             log_cascade(&mut *tx, user_id, op, &cascaded).await?;
             Ok(Outcome::Accepted)
@@ -234,6 +308,37 @@ pub async fn apply_op(
                 Ok(bound) => bound,
                 Err(reason) => return Ok(Outcome::Rejected { reason }),
             };
+
+            // The shape is right, but nothing yet says the VALUE makes sense -- see
+            // `validate_value` for why that is a real gap and not paranoia.
+            if let Err(reason) = validate_value(op.entity, field, &bound) {
+                return Ok(Outcome::Rejected { reason });
+            }
+
+            // The whitelist lets `kind` change freely, but `objects::update` refuses to point
+            // `cover_attachment_id` at anything but a live `photo` attachment (`AND kind =
+            // 'photo'`), and the derived `cover_file_id` never re-checks `kind` on read. Without
+            // this, `set attachment.kind = document` could turn a live cover into a document
+            // over sync and leave the pointer live but meaningless -- exactly what the REST
+            // guard exists to prevent, reached through the second door.
+            if op.entity == Entity::Attachment && field == "kind" {
+                if let Binding::Text(new_kind) = &bound {
+                    if new_kind != "photo" {
+                        let is_cover: Option<(i64,)> = sqlx::query_as(
+                            "SELECT o.id FROM objects o \
+                             JOIN attachments a ON a.id = o.cover_attachment_id \
+                             WHERE a.client_uuid = ? AND o.deleted_at IS NULL")
+                            .bind(&op.entity_uuid)
+                            .fetch_optional(&mut *tx).await?;
+                        if is_cover.is_some() {
+                            return Ok(Outcome::Rejected {
+                                reason: "kind cannot change away from photo while it is an \
+                                         object's cover".into(),
+                            });
+                        }
+                    }
+                }
+            }
 
             // Two whitelisted fields are foreign keys, and a check on the field NAME says
             // nothing about the VALUE. Without this, `set object.cover_attachment_id` could

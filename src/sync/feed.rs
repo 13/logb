@@ -144,9 +144,13 @@ pub async fn purge(
         .fetch_all(db)
         .await?;
 
-    // `files` is absent deliberately: nothing sets `files.deleted_at`, because a file is
-    // content-addressed and shared between attachments. A file dies when its last attachment
-    // does, which is what `purge_orphan_files` decides below.
+    // `files` is absent deliberately: `files.deleted_at` is never set, because
+    // `sync::apply::apply_op`'s Delete arm refuses a `delete` op on `Entity::File` outright, so
+    // no code path ever produces a file tombstone for this loop to find. A file is
+    // content-addressed and shared between attachments; it dies when its last attachment does,
+    // which is what `purge_orphan_files` decides below. That refusal is the only reason this
+    // guards array may skip `files` -- if it were ever loosened, a `files` entry would have to
+    // be added here too, or a tombstoned file would sit unpurged forever.
     //
     // The `NOT EXISTS` guards are defence in depth, and the reason the order below matters.
     // `foreign_keys(true)` plus the schema's `ON DELETE CASCADE` means the hard delete of a

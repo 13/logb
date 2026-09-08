@@ -353,7 +353,7 @@
         }
       },
       "delete": {
-        "summary": "Delete an object with its activities, reminders and files.",
+        "summary": "Delete an object with its activities, reminders and attachments. The files and blobs they referenced deliberately survive until the retention purge.",
         "parameters": [
           {
             "name": "id",
@@ -2289,7 +2289,7 @@
             "description": "Required for `set`; must be a syncable column of `entity`."
           },
           "value": {
-            "description": "The new value for `set`: string, number, boolean or null."
+            "description": "The new value for `set`. Its shape must match the target column: a string for a text column, an integer for an integer column, or null to clear it -- a boolean is rejected everywhere, and any other mismatch (e.g. a string into an integer column) comes back `rejected` rather than being coerced."
           },
           "edited_at": {
             "type": "string",
@@ -2391,11 +2391,13 @@
           },
           "field": {
             "type": "string",
-            "nullable": true
+            "nullable": true,
+            "description": "Null for `create` and `delete`; only a `set` names a field."
           },
           "value": {
             "type": "string",
-            "nullable": true
+            "nullable": true,
+            "description": "Double-encoded JSON: this string is itself the JSON-serialized form of the value that was set, so a string value arrives as e.g. `\"\\\"Golf VII\\\"\"` and a client must `JSON.parse` it to recover the real value. Null here is ambiguous by construction: an explicit `value: null` on a `set` (clearing the field) is stored as SQL NULL and is indistinguishable from a `create`/`delete` row, which never carries a value at all."
           },
           "edited_at": {
             "type": "string",

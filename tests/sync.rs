@@ -1561,3 +1561,230 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
         );
     }
 }
+
+/// A `delete` op on `entity: "file"` used to fall into the same generic tombstone `UPDATE` as
+/// every other entity. Nothing else in the codebase ever sets `files.deleted_at`: the purge's
+/// `guards` array has no `files` entry (so the tombstone would never be purged), bootstrap
+/// filters `deleted_at IS NULL` (so the file vanishes from every device's snapshot while its
+/// still-live attachment keeps pointing at it), and the upload dedup has no `deleted_at` filter
+/// (so re-uploading the same bytes would re-adopt the dead row and make the replacement photo
+/// unrenderable too). One authenticated request could make an arbitrary number of photos
+/// unrenderable, on every device, unrecoverable without hand-written SQL. The fix is to refuse
+/// the op outright, so none of that machinery is ever exercised.
+#[tokio::test]
+async fn a_delete_op_on_a_file_is_rejected_and_leaves_it_live() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_object_id, _activity_id, _reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+
+    let file_uuid: String = sqlx::query_scalar(
+        "SELECT f.client_uuid FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-file", "entity": "file", "entity_uuid": file_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+
+    let deleted: Option<String> = sqlx::query_scalar(
+        "SELECT deleted_at FROM files WHERE client_uuid = ?")
+        .bind(&file_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(deleted.is_none(), "a file must never be tombstoned over sync");
+
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE client_op_id = 'op-del-file'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 0, "a rejected op is not logged");
+}
+
+/// `apply_op` checks a value's shape against its column but, before this fix, nothing checked
+/// the value ITSELF: only SQLite's own CHECK/NOT NULL constraints stood between a client and
+/// the row, and most of these columns carry no such constraint. Each op below is something the
+/// matching REST handler already rejects with 400 (`ObjectInput::validate`,
+/// `ActivityInput::validate`, `ReminderInput::validate`); sync must refuse it identically.
+#[tokio::test]
+async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, reminder_id, _attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
+
+    let cases = json!([
+        { "client_op_id": "v-obj-name", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "name", "value": "   ",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-obj-category", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "category", "value": "",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-obj-date", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "purchase_date", "value": "not-a-date",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-obj-price", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "purchase_price_cents", "value": -999,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-act-date", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "date", "value": "not-a-date",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-act-title", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "title", "value": "",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-act-cost", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "cost_cents", "value": -1,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-act-counter", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "counter_value", "value": -1,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-act-qty", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "quantity_milli", "value": -1,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-rem-title", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "title", "value": "",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-rem-date", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "due_date", "value": "not-a-date",
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-rem-due-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "due_counter", "value": -1,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-rem-repeat-months", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "repeat_months", "value": 0,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "v-rem-repeat-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "repeat_counter", "value": 0,
+          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" }
+    ]);
+    let ids: Vec<String> = cases.as_array().unwrap().iter()
+        .map(|c| c["client_op_id"].as_str().unwrap().to_string()).collect();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(cases)).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for (i, id) in ids.iter().enumerate() {
+        assert_eq!(
+            body["results"][i]["outcome"], "rejected",
+            "{id} must be rejected, same as the REST handler: {body}"
+        );
+    }
+
+    // None of it landed: the object, activity and reminder still hold what the REST creates
+    // put there.
+    let (name, category, purchase_date, price): (String, String, Option<String>, Option<i64>) =
+        sqlx::query_as(
+            "SELECT name, category, purchase_date, purchase_price_cents FROM objects WHERE client_uuid = ?")
+            .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!((name.as_str(), category.as_str(), purchase_date, price), ("Golf", "car", None, None));
+
+    let (date, title, cost, counter, qty): (String, String, Option<i64>, Option<i64>, Option<i64>) =
+        sqlx::query_as(
+            "SELECT date, title, cost_cents, counter_value, quantity_milli FROM activities WHERE client_uuid = ?")
+            .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(
+        (date.as_str(), title.as_str(), cost, counter, qty),
+        ("2026-01-01", "Timing belt", Some(5000), Some(1000), None)
+    );
+
+    let (rtitle, rdue_date, rdue_counter, rrepeat_months, rrepeat_counter):
+        (String, Option<String>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT title, due_date, due_counter, repeat_months, repeat_counter FROM reminders WHERE client_uuid = ?")
+        .bind(&reminder_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(
+        (rtitle.as_str(), rdue_date.as_deref(), rdue_counter, rrepeat_months, rrepeat_counter),
+        ("Service", Some("2026-09-01"), None, None, None)
+    );
+}
+
+/// The schema comments `field TEXT, -- NULL for create and delete`, but the push handler used
+/// to bind `op.field`/`op.value` verbatim for every op kind, so junk carried on a `create` or
+/// `delete` op was stored and served back over pull.
+#[tokio::test]
+async fn create_and_delete_ops_never_store_a_field_or_value() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_object_id, activity_id, _reminder_id, _attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "junk-create", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "create", "field": "title", "value": "should not be stored",
+          "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "junk-delete", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "delete", "field": "title", "value": "should not be stored either",
+          "edited_at": "2026-06-02T00:00:01Z", "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    assert_eq!(body["results"][1]["outcome"], "accepted", "{body}");
+
+    let rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT field, value FROM changes WHERE client_op_id IN ('junk-create', 'junk-delete') ORDER BY seq")
+        .fetch_all(&app.state.db).await.unwrap();
+    for (field, value) in rows {
+        assert_eq!((field, value), (None, None), "create and delete never carry a field or value");
+    }
+}
+
+/// `objects::update` refuses to point `cover_attachment_id` at anything but a live `photo`
+/// attachment, but `cover_file_id` is derived from whatever `cover_attachment_id` names without
+/// re-checking `kind`. The whitelist lets `kind` be changed over sync, so without a matching
+/// guard there, `set attachment.kind = document` could turn a live cover into a document and
+/// leave the pointer live but meaningless -- exactly what the REST guard exists to prevent.
+#[tokio::test]
+async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, _activity_id, _reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "cover_attachment_id", "value": attachment_id,
+        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-kind-away", "entity": "attachment", "entity_uuid": attachment_uuid,
+        "op": "set", "field": "kind", "value": "document",
+        "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+
+    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(kind, "photo", "the cover's kind must not change while it is still the cover");
+    let cover: Option<i64> = sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(cover, Some(attachment_id), "the cover pointer must be unaffected");
+
+    // Once it is no longer the cover, the same edit is an ordinary accepted write.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-clear-cover", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "cover_attachment_id", "value": null,
+        "edited_at": "2026-06-03T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-kind-ok", "entity": "attachment", "entity_uuid": attachment_uuid,
+        "op": "set", "field": "kind", "value": "document",
+        "edited_at": "2026-06-04T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(kind, "document", "with no cover pinning it, kind is free to change");
+}

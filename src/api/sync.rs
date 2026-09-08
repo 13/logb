@@ -7,7 +7,7 @@ use crate::state::App;
 use crate::sync::feed;
 use crate::sync::{
     apply::{apply_op, canonical_edited_at},
-    Op, Outcome,
+    Op, OpKind, Outcome,
 };
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
@@ -110,6 +110,15 @@ async fn push(
 
         let outcome = apply_op(&mut tx, user.id, op).await?;
         if !matches!(outcome, Outcome::Rejected { .. }) {
+            // The schema documents `field TEXT, -- NULL for create and delete`: only a `set`
+            // op names a field or carries a value, so anything a `create`/`delete` op happened
+            // to have in those spots is junk that must not be stored, or pull would serve it
+            // back to other devices as if it meant something.
+            let (field, value) = if op.op == OpKind::Set {
+                (op.field.as_deref(), op.value.as_ref().map(|v| v.to_string()))
+            } else {
+                (None, None)
+            };
             sqlx::query(
                 "INSERT INTO changes \
                  (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
@@ -118,8 +127,8 @@ async fn push(
                 .bind(op.entity.as_str())
                 .bind(&op.entity_uuid)
                 .bind(op.op.as_str())
-                .bind(op.field.as_deref())
-                .bind(op.value.as_ref().map(|v| v.to_string()))
+                .bind(field)
+                .bind(value)
                 .bind(&op.edited_at)
                 .bind(db::now())
                 .bind(user.id)

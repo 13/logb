@@ -9,22 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum Entity { Object, Activity, Reminder, Attachment, File }
 
-// `from_str` here returns Option, not the Result that `std::str::FromStr` demands: an unknown
-// entity name is an ordinary "not one of ours" answer on a parse of untrusted input, not an
-// error worth a type. Naming it anything else would just make every call site read worse.
-#[allow(clippy::should_implement_trait)]
 impl Entity {
-    pub fn from_str(s: &str) -> Option<Entity> {
-        match s {
-            "object" => Some(Entity::Object),
-            "activity" => Some(Entity::Activity),
-            "reminder" => Some(Entity::Reminder),
-            "attachment" => Some(Entity::Attachment),
-            "file" => Some(Entity::File),
-            _ => None,
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Entity::Object => "object",
@@ -52,20 +37,7 @@ impl Entity {
 #[serde(rename_all = "lowercase")]
 pub enum OpKind { Create, Set, Delete }
 
-// `from_str` here returns Option, not the Result that `std::str::FromStr` demands: an unknown
-// op kind name is an ordinary "not one of ours" answer on a parse of untrusted input, not an
-// error worth a type. Naming it anything else would just make every call site read worse.
-#[allow(clippy::should_implement_trait)]
 impl OpKind {
-    pub fn from_str(s: &str) -> Option<OpKind> {
-        match s {
-            "create" => Some(OpKind::Create),
-            "set" => Some(OpKind::Set),
-            "delete" => Some(OpKind::Delete),
-            _ => None,
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             OpKind::Create => "create",
@@ -150,39 +122,35 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
     }
 }
 
-/// Whether an op may write `field` on `entity`.
-///
-/// Defined in terms of `syncable_field_type` rather than beside it: a field is settable
-/// exactly when the one whitelist gives it a type.
-pub fn is_syncable_field(entity: Entity, field: &str) -> bool {
-    syncable_field_type(entity, field).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn entities_round_trip() {
-        assert_eq!(Entity::from_str("activity"), Some(Entity::Activity));
         assert_eq!(Entity::Activity.as_str(), "activity");
         assert_eq!(Entity::Activity.table(), "activities");
-        assert_eq!(Entity::from_str("users"), None);
     }
 
     #[test]
     fn the_whitelist_admits_real_columns() {
-        assert!(is_syncable_field(Entity::Object, "name"));
-        assert!(is_syncable_field(Entity::Activity, "quantity_milli"));
-        assert!(is_syncable_field(Entity::Reminder, "snoozed_until"));
-        assert!(is_syncable_field(Entity::Attachment, "caption"));
+        assert!(syncable_field_type(Entity::Object, "name").is_some());
+        assert!(syncable_field_type(Entity::Activity, "quantity_milli").is_some());
+        assert!(syncable_field_type(Entity::Reminder, "snoozed_until").is_some());
+        assert!(syncable_field_type(Entity::Attachment, "caption").is_some());
     }
 
     #[test]
     fn the_whitelist_refuses_identity_and_ownership() {
         for field in ["id", "user_id", "object_id", "client_uuid", "created_at", "deleted_at"] {
-            assert!(!is_syncable_field(Entity::Object, field), "{field} must not be settable");
-            assert!(!is_syncable_field(Entity::Activity, field), "{field} must not be settable");
+            assert!(
+                syncable_field_type(Entity::Object, field).is_none(),
+                "{field} must not be settable"
+            );
+            assert!(
+                syncable_field_type(Entity::Activity, field).is_none(),
+                "{field} must not be settable"
+            );
         }
     }
 
@@ -233,7 +201,10 @@ mod tests {
     #[test]
     fn files_are_immutable() {
         for field in ["sha256", "mime", "size", "original_name"] {
-            assert!(!is_syncable_field(Entity::File, field), "files are create/delete only");
+            assert!(
+                syncable_field_type(Entity::File, field).is_none(),
+                "files are create/delete only"
+            );
         }
     }
 }
