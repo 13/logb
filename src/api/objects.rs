@@ -2,11 +2,13 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 
 pub fn router() -> Router<App> {
@@ -230,6 +232,9 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     body.validate()?;
     let now = db::now();
     let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
+    let object_uuid = uuid::Uuid::new_v4().to_string();
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at, client_uuid) \
@@ -239,8 +244,10 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     )
     .bind(user.id).bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(&now).bind(&now)
-    .bind(uuid::Uuid::new_v4().to_string())
-    .fetch_one(&state.db).await?;
+    .bind(&object_uuid)
+    .fetch_one(&mut *tx).await?;
+    record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
 }
 
@@ -269,14 +276,39 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
             Some(cover)
         }
     };
+
+    // Only fields whose value actually differs are logged -- see `record::record_update` --
+    // so a PATCH that rewrites a field with its existing value produces no `changes` row.
+    let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
+    if body.name != existing.name { changed.push(("name", json!(body.name))); }
+    if body.category != existing.category { changed.push(("category", json!(body.category))); }
+    if body.counter_unit != existing.counter_unit { changed.push(("counter_unit", json!(body.counter_unit))); }
+    if body.fuel_unit != existing.fuel_unit { changed.push(("fuel_unit", json!(body.fuel_unit))); }
+    if body.description != existing.description { changed.push(("description", json!(body.description))); }
+    if body.purchase_date != existing.purchase_date { changed.push(("purchase_date", json!(body.purchase_date))); }
+    if body.purchase_price_cents != existing.purchase_price_cents {
+        changed.push(("purchase_price_cents", json!(body.purchase_price_cents)));
+    }
+    if archived_at != existing.archived_at { changed.push(("archived_at", json!(archived_at))); }
+    if cover_attachment_id != existing.cover_attachment_id {
+        changed.push(("cover_attachment_id", json!(cover_attachment_id)));
+    }
+
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE objects SET name = ?, category = ?, counter_unit = ?, fuel_unit = ?, description = ?, purchase_date = ?, \
          purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
-    .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at)
+    .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
     .bind(cover_attachment_id).bind(db::now()).bind(id)
-    .execute(&state.db).await?;
+    .execute(&mut *tx).await?;
+    if !changed.is_empty() {
+        let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;
+        record::record_update(&mut tx, user.id, Entity::Object, &uuid, &changed, &record::edited_at_now()).await?;
+    }
+    tx.commit().await?;
+
     let row = load_owned_object(&state, user.id, id).await?;
     Ok(Json(with_stats(&state, row).await?))
 }
@@ -295,6 +327,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 /// finally removes those tombstoned attachments.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     let now = db::now();
+    let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
     let affected = sqlx::query(
         "UPDATE objects SET deleted_at = ?, updated_at = ? \
@@ -304,17 +337,13 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    // `activities` is the only cascaded table that carries `updated_at` (`reminders` and
-    // `attachments` don't -- see `migrations/0001_init.sql`), and `sync::apply::cascade_object`
-    // has to leave the same database behind, so it bumps it too.
-    sqlx::query(
-        "UPDATE activities SET deleted_at = ?, updated_at = ? \
-         WHERE object_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(&now).bind(id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE reminders SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE attachments SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(id).execute(&mut *tx).await?;
+    // `record::cascade_object` is the single copy of this cascade, shared with
+    // `sync::apply::apply_op`'s `delete` handling -- see the module docs on `sync::record` for
+    // why hand-rolling it a second time here is exactly what drifted twice before.
+    let object_uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;
+    let cascaded = record::cascade_object(&mut tx, &object_uuid, &now).await?;
+    record::record_delete(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
+    record::log_cascade(&mut tx, user.id, &edited_at, record::DEVICE_ID, &cascaded).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -179,7 +179,7 @@ async fn a_set_op_updates_the_row_and_is_logged() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-1", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Golf VII",
-        "edited_at": "2026-02-01T10:00:00Z", "device_id": "phone"
+        "edited_at": "2031-02-01T10:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -207,12 +207,12 @@ async fn an_older_edit_is_superseded_but_still_recorded() {
     let newer = json!([{
         "client_op_id": "op-new", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Newer",
-        "edited_at": "2026-02-02T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-02-02T00:00:00Z", "device_id": "phone"
     }]);
     let older = json!([{
         "client_op_id": "op-old", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Older",
-        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
     }]);
     app.client.post(app.url("/sync/push")).json(&push_body(newer)).send().await.unwrap();
     let res = app.client.post(app.url("/sync/push")).json(&push_body(older)).send().await.unwrap();
@@ -239,7 +239,7 @@ async fn a_replayed_push_is_idempotent() {
     let batch = push_body(json!([{
         "client_op_id": "op-same", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Once",
-        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
     }]));
     for _ in 0..2 {
         let res = app.client.post(app.url("/sync/push")).json(&batch).send().await.unwrap();
@@ -262,8 +262,8 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
     // Whole seconds first, then a value half a second LATER written with a fraction. Compared
     // as raw strings the fractional one loses ('.' < 'Z'), so a lexical rule would keep "Early".
     for (id, value, at) in [
-        ("op-whole", "Early", "2026-08-01T00:00:00Z"),
-        ("op-frac", "Later", "2026-08-01T00:00:00.500Z"),
+        ("op-whole", "Early", "2031-08-01T00:00:00Z"),
+        ("op-frac", "Later", "2031-08-01T00:00:00.500Z"),
     ] {
         let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": id, "entity": "object", "entity_uuid": uuid,
@@ -281,7 +281,7 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-offset", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Earlier still",
-        "edited_at": "2026-08-01T00:00:00+00:00", "device_id": "phone"
+        "edited_at": "2031-08-01T00:00:00+00:00", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "superseded");
 
@@ -309,7 +309,7 @@ async fn a_field_outside_the_whitelist_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-evil", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "user_id", "value": 2,
-        "edited_at": "2026-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected");
@@ -344,7 +344,7 @@ async fn a_foreign_key_field_cannot_point_at_another_users_row() {
     let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-steal", "entity": "object", "entity_uuid": their_uuid,
         "op": "set", "field": "cover_attachment_id", "value": victim_attachment,
-        "edited_at": "2026-07-01T00:00:00Z", "device_id": "mallory-phone"
+        "edited_at": "2031-07-01T00:00:00Z", "device_id": "mallory-phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected");
@@ -393,19 +393,19 @@ async fn results_stay_in_the_order_the_ops_were_sent() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "ord-1", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": "First",
-          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "ord-2", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "category", "value": "car",
           "edited_at": "not a timestamp", "device_id": "phone" },
         { "client_op_id": "ord-3", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "description", "value": "Mine",
-          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "ord-4", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "user_id", "value": 2,
-          "edited_at": "2026-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "ord-5", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": "Superseded by ord-1",
-          "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -454,7 +454,7 @@ async fn two_users_can_use_the_same_client_op_id() {
         let res = client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": "op-shared", "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": name,
-            "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+            "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
         }]))).send().await.unwrap();
         assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
         let body: serde_json::Value = res.json().await.unwrap();
@@ -494,7 +494,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-cover", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
 
@@ -504,7 +504,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-junk-fk", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": "not-an-id",
-        "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
@@ -518,7 +518,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-clear-fk", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": null,
-        "edited_at": "2026-06-03T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-03T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
@@ -674,13 +674,13 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "mine-act", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "title", "value": "Timing belt done",
-          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" },
+          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" },
         { "client_op_id": "mine-rem", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "title", "value": "Service booked",
-          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" },
+          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" },
         { "client_op_id": "mine-att", "entity": "attachment", "entity_uuid": attachment_uuid,
           "op": "set", "field": "caption", "value": "The old belt",
-          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" }
+          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -714,7 +714,7 @@ async fn a_delete_op_tombstones_the_row_and_the_api_stops_serving_it() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -755,16 +755,16 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "ok-before", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "description", "value": "Mine",
-          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "bad-null", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": null,
-          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "bad-check", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "counter_unit", "value": "furlongs",
-          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "ok-after", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "category", "value": "boat",
-          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -801,8 +801,10 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
         "accepted ops committed; rejected ops wrote nothing"
     );
 
+    // `op = 'set'` excludes the object's own `create` row (task 9 logs REST creates too, under
+    // a freshly minted client_op_id of its own) -- this assertion is about the pushed batch.
     let logged: Vec<String> = sqlx::query_scalar(
-        "SELECT client_op_id FROM changes ORDER BY seq")
+        "SELECT client_op_id FROM changes WHERE op = 'set' ORDER BY seq")
         .fetch_all(&app.state.db).await.unwrap();
     assert_eq!(logged, vec!["ok-before", "ok-after"], "only the accepted ops are logged");
 }
@@ -822,10 +824,10 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "num-float", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_price_cents", "value": 1250.5,
-          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "num-huge", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": 100000000000000000000000_i128 as f64,
-          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" }
+          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -853,7 +855,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "num-repair", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "purchase_price_cents", "value": 1250,
-        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the client can still repair: {body}");
@@ -866,7 +868,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "num-int", "entity": "activity", "entity_uuid": activity_uuid,
         "op": "set", "field": "cost_cents", "value": 9900,
-        "edited_at": "2026-05-03T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-05-03T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
@@ -894,12 +896,12 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
         // A string into an INTEGER column: the unrepairable 500 above.
         { "client_op_id": "type-str-into-int", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": "abc",
-          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" },
         // And the milder direction, which corrupts silently: SQLite stores `true` in a TEXT
         // column as '1', so the object's name would have become the string "1".
         { "client_op_id": "type-bool-into-text", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "name", "value": true,
-          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" }
+          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -934,7 +936,7 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "type-repair", "entity": "activity", "entity_uuid": activity_uuid,
         "op": "set", "field": "counter_value", "value": 2000,
-        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the rejected op left no clock: {body}");
@@ -956,14 +958,15 @@ async fn pull_returns_ops_after_the_cursor_and_advances_it() {
         app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": n, "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": name,
-            "edited_at": format!("2026-03-0{}T00:00:00Z", if n == "op-a" { 1 } else { 2 }),
+            "edited_at": format!("2031-03-0{}T00:00:00Z", if n == "op-a" { 1 } else { 2 }),
             "device_id": "phone"
         }]))).send().await.unwrap();
     }
 
     let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
         .send().await.unwrap().json().await.unwrap();
-    assert_eq!(body["changes"].as_array().unwrap().len(), 2);
+    // The object's own `create` is now logged too (task 9), ahead of the two `set` ops.
+    assert_eq!(body["changes"].as_array().unwrap().len(), 3);
     assert_eq!(body["complete"], true);
     assert!(body["server_time"].is_string());
     let next = body["next_seq"].as_i64().unwrap();
@@ -986,7 +989,7 @@ async fn pull_pages_and_reports_incompleteness() {
         app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": format!("op-{i}"), "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "description", "value": format!("note {i}"),
-            "edited_at": format!("2026-04-0{}T00:00:00Z", i + 1), "device_id": "phone"
+            "edited_at": format!("2031-04-0{}T00:00:00Z", i + 1), "device_id": "phone"
         }]))).send().await.unwrap();
     }
 
@@ -1007,7 +1010,7 @@ async fn pull_never_leaks_another_users_changes() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-ben", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Ben's",
-        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
     let other = app.create_user_client("mallory", "another password").await;
@@ -1027,10 +1030,14 @@ async fn a_cursor_before_the_horizon_is_gone() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kept", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Kept",
-        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
-    // Simulate a purge having removed everything before this row.
+    // Simulate a purge having removed everything before this row -- including the object's
+    // own `create`, which is in the log too now (task 9), or the horizon would still read as
+    // the create row's untouched seq and this cursor would look current rather than stale.
+    sqlx::query("DELETE FROM changes WHERE client_op_id != 'op-kept'")
+        .execute(&app.state.db).await.unwrap();
     sqlx::query("UPDATE changes SET seq = 500 WHERE client_op_id = 'op-kept'")
         .execute(&app.state.db).await.unwrap();
 
@@ -1105,7 +1112,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-ancient", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Ancient",
-        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
     // Backdate both the log row and a tombstone well past any sane window.
@@ -1115,7 +1122,9 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
         .bind(object_id).execute(&app.state.db).await.unwrap();
 
     let removed = logby::sync::feed::purge(&app.state, 90).await.unwrap();
-    assert_eq!(removed, 1, "the ancient log row went");
+    // The blanket backdate above ages out every `changes` row for this user, including the
+    // object's own `create` (task 9 logs REST creates too), not only the pushed `set`.
+    assert_eq!(removed, 2, "the ancient log rows went");
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
@@ -1137,13 +1146,14 @@ async fn purge_keeps_recent_history() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-fresh", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Fresh",
-        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
     assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(rows, 1, "today's history is not history yet");
+    // The object's own `create` is logged too now, alongside the pushed `set`.
+    assert_eq!(rows, 2, "today's history is not history yet");
 }
 
 #[tokio::test]
@@ -1206,7 +1216,7 @@ async fn a_pushed_object_delete_cascades_tombstones_and_logs_each_child() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1278,7 +1288,7 @@ async fn a_pushed_activity_delete_cascades_to_its_attachments() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1312,7 +1322,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
     let cover: Option<i64> =
@@ -1322,7 +1332,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-attachment", "entity": "attachment", "entity_uuid": attachment_uuid,
-        "op": "delete", "edited_at": "2026-04-02T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-02T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1354,7 +1364,7 @@ async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_acti
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1385,7 +1395,7 @@ async fn a_pushed_activity_delete_bumps_its_own_updated_at() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1419,7 +1429,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1489,7 +1499,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
         let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": "op-name", "entity": "object", "entity_uuid": &object_uuid,
             "op": "set", "field": "name", "value": "Renamed",
-            "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+            "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
         }]))).send().await.unwrap();
         assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1555,8 +1565,11 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
 
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = ?")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+        // 9, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
+        // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
+        // than adding a tenth. All 9 must survive the sweep untouched.
         assert_eq!(
-            kept, 1,
+            kept, 9,
             "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
         );
     }
@@ -1584,7 +1597,7 @@ async fn a_delete_op_on_a_file_is_rejected_and_leaves_it_live() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-file", "entity": "file", "entity_uuid": file_uuid,
-        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1619,46 +1632,46 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
     let cases = json!([
         { "client_op_id": "v-obj-name", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "name", "value": "   ",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-obj-category", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "category", "value": "",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-obj-date", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_date", "value": "not-a-date",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-obj-price", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_price_cents", "value": -999,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-act-date", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "date", "value": "not-a-date",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-act-title", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "title", "value": "",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-act-cost", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "cost_cents", "value": -1,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-act-counter", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": -1,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-act-qty", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "quantity_milli", "value": -1,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-rem-title", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "title", "value": "",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-rem-date", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "due_date", "value": "not-a-date",
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-rem-due-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "due_counter", "value": -1,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-rem-repeat-months", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "repeat_months", "value": 0,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "v-rem-repeat-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "repeat_counter", "value": 0,
-          "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" }
     ]);
     let ids: Vec<String> = cases.as_array().unwrap().iter()
         .map(|c| c["client_op_id"].as_str().unwrap().to_string()).collect();
@@ -1714,10 +1727,10 @@ async fn create_and_delete_ops_never_store_a_field_or_value() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "junk-create", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "create", "field": "title", "value": "should not be stored",
-          "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone" },
         { "client_op_id": "junk-delete", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "delete", "field": "title", "value": "should not be stored either",
-          "edited_at": "2026-06-02T00:00:01Z", "device_id": "phone" }
+          "edited_at": "2031-06-02T00:00:01Z", "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1749,14 +1762,14 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kind-away", "entity": "attachment", "entity_uuid": attachment_uuid,
         "op": "set", "field": "kind", "value": "document",
-        "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1773,18 +1786,189 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-clear-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": null,
-        "edited_at": "2026-06-03T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-03T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kind-ok", "entity": "attachment", "entity_uuid": attachment_uuid,
         "op": "set", "field": "kind", "value": "document",
-        "edited_at": "2026-06-04T00:00:00Z", "device_id": "phone"
+        "edited_at": "2031-06-04T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
     let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = ?")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(kind, "document", "with no cover pinning it, kind is free to change");
+}
+
+// -- Task 9: REST writes recorded in the sync log ---------------------------------------
+
+/// The reason this task exists. Before it, a REST write left `field_clock` untouched, so a
+/// browser edit had no clock entry to protect it: a phone `set` op arriving later, but
+/// carrying an OLDER `edited_at` than the browser's edit, still found no stored `field_clock`
+/// row to lose to and was accepted -- silently overwriting the newer browser value. Once the
+/// REST update stamps `field_clock` (in the canonical form `wins` compares -- rule 1), the
+/// same stale phone op instead loses last-write-wins and comes back `superseded`.
+///
+/// A REST write never checks `wins` itself -- it always describes what a live user just did,
+/// so it always applies and always re-stamps the clock at the real current instant (see
+/// `sync::record::record_update`). The first phone op below is dated safely in the future
+/// (2032) purely so it clears the clock `record_create` already stamped at real "now" when
+/// the object was made, and is accepted -- establishing that the browser's later overwrite
+/// really is competing against a *newer*-looking stamp, not an empty one. The second phone op
+/// is dated in early 2026, safely before whatever "now" this test runs at, standing in for
+/// "before the browser's edit" without depending on wall-clock timing precision.
+#[tokio::test]
+async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "phone-op-1", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Phone Golf",
+        "edited_at": "2032-01-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
+
+    // The browser edits the same field over REST. Every other field is resent unchanged so
+    // only `name` moves. This unconditionally overwrites `field_clock` to the real current
+    // instant, regardless of the phone's on-paper-later 2032 stamp -- a REST write always
+    // reflects what just happened.
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Browser Golf", "category": "car", "counter_unit": "km", "description": "",
+        "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "phone-op-2", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Late Phone Golf",
+        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = ?")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Browser Golf", "the REST edit must survive a sync op stamped before it");
+}
+
+/// A browser create, edit and delete of the same object must each appear on `GET /sync/pull`,
+/// with the entity/op/field the write actually performed.
+#[tokio::test]
+async fn a_browser_create_edit_and_delete_are_all_visible_on_pull() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Golf VII", "category": "car", "counter_unit": "km", "description": "",
+        "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(),
+        204
+    );
+
+    let res = app.client.get(app.url("/sync/pull")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    let mine: Vec<serde_json::Value> = body["changes"].as_array().unwrap().iter()
+        .filter(|c| c["entity_uuid"] == uuid).cloned().collect();
+    assert_eq!(mine.len(), 3, "create, one set, delete: {mine:?}");
+
+    assert_eq!(mine[0]["entity"], "object");
+    assert_eq!(mine[0]["op"], "create");
+    assert!(mine[0]["field"].is_null());
+
+    assert_eq!(mine[1]["op"], "set");
+    assert_eq!(mine[1]["field"], "name");
+    assert_eq!(mine[1]["value"], "\"Golf VII\"");
+
+    assert_eq!(mine[2]["op"], "delete");
+    assert!(mine[2]["field"].is_null());
+}
+
+/// The log records what happened, and rewriting a field with the value it already holds did
+/// not happen -- see `sync::record::record_update`.
+#[tokio::test]
+async fn rewriting_a_field_with_its_existing_value_logs_nothing() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(before, 1, "the create itself is logged");
+
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Golf", "category": "car", "counter_unit": "km", "description": "",
+        "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(after, before, "a no-op edit must not add to the log");
+}
+
+/// The delete cascade is shared code (`sync::record::cascade_object`), not two hand-rolled
+/// copies -- a REST delete of an object must log a `delete` for the object itself and for
+/// every child the cascade tombstones, exactly as a sync delete does.
+#[tokio::test]
+async fn a_browser_delete_logs_the_object_and_every_cascaded_child() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    let res = app.client.delete(app.url(&format!("/objects/{object_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    for (uuid, label) in [
+        (&object_uuid, "object"), (&activity_uuid, "activity"),
+        (&reminder_uuid, "reminder"), (&attachment_uuid, "attachment"),
+    ] {
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT op, field FROM changes WHERE entity_uuid = ? AND op = 'delete'")
+            .bind(uuid).fetch_optional(&app.state.db).await.unwrap();
+        let (op, field) = row.unwrap_or_else(|| panic!("no delete logged for {label} ({uuid})"));
+        assert_eq!(op, "delete", "{label}");
+        assert!(field.is_none(), "{label}: create and delete never carry a field");
+    }
+}
+
+/// Settings and user rows are not part of the sync protocol -- `sync::whitelist` only ever
+/// names object/activity/reminder/attachment/file -- so writing them must never touch
+/// `changes`, however the write happened.
+#[tokio::test]
+async fn settings_and_user_writes_produce_no_changes_rows() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.put(app.url("/settings")).json(&json!({ "currency": "USD" })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let _ = app.create_user_client("mallory", "correct horse").await;
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(count, 0, "settings and user writes are outside the sync protocol");
 }

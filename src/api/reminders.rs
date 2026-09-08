@@ -5,12 +5,14 @@ use crate::db;
 use crate::domain::reminder::{counter_until, days_until, is_due, is_upcoming, next_due, snoozed_date, Repeat};
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -123,15 +125,22 @@ impl ReminderInput {
     }
 }
 
-async fn insert(state: &App, object_id: i64, b: &ReminderInput) -> Result<i64, AppError> {
+/// Inserts a reminder row inside the caller's transaction and returns `(id, client_uuid)`, so
+/// every caller can log the create in the same transaction as the write (see `sync::record`).
+async fn insert(
+    tx: &mut sqlx::SqliteConnection,
+    object_id: i64,
+    b: &ReminderInput,
+) -> Result<(i64, String), AppError> {
+    let uuid = uuid::Uuid::new_v4().to_string();
     let (id,): (i64,) = sqlx::query_as(
         "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(object_id).bind(&b.title).bind(&b.notes).bind(&b.due_date).bind(b.due_counter)
-    .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(uuid::Uuid::new_v4().to_string())
-    .fetch_one(&state.db).await?;
-    Ok(id)
+    .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(&uuid)
+    .fetch_one(&mut *tx).await?;
+    Ok((id, uuid))
 }
 
 async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<Vec<ReminderOut>>, AppError> {
@@ -186,7 +195,11 @@ async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQ
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<(StatusCode, Json<ReminderOut>), AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
     body.validate(object.counter_unit.as_deref())?;
-    let id = insert(&state, object_id, &body).await?;
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
+    let (id, uuid) = insert(&mut tx, object_id, &body).await?;
+    record::record_create(&mut tx, user.id, Entity::Reminder, &uuid, &edited_at).await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(load_owned(&state, user.id, id).await?.into())))
 }
 
@@ -197,12 +210,28 @@ async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> 
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<Json<ReminderOut>, AppError> {
     let existing = load_owned(&state, user.id, id).await?;
     body.validate(existing.counter_unit.as_deref())?;
+
+    // Only fields whose value actually differs are logged (see `record::record_update`).
+    let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
+    if body.title != existing.title { changed.push(("title", json!(body.title))); }
+    if body.notes != existing.notes { changed.push(("notes", json!(body.notes))); }
+    if body.due_date != existing.due_date { changed.push(("due_date", json!(body.due_date))); }
+    if body.due_counter != existing.due_counter { changed.push(("due_counter", json!(body.due_counter))); }
+    if body.repeat_months != existing.repeat_months { changed.push(("repeat_months", json!(body.repeat_months))); }
+    if body.repeat_counter != existing.repeat_counter { changed.push(("repeat_counter", json!(body.repeat_counter))); }
+
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE reminders SET title = ?, notes = ?, due_date = ?, due_counter = ?, repeat_months = ?, repeat_counter = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.title).bind(&body.notes).bind(&body.due_date).bind(body.due_counter)
     .bind(body.repeat_months).bind(body.repeat_counter).bind(id)
-    .execute(&state.db).await?;
+    .execute(&mut *tx).await?;
+    if !changed.is_empty() {
+        let uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
+        record::record_update(&mut tx, user.id, Entity::Reminder, &uuid, &changed, &record::edited_at_now()).await?;
+    }
+    tx.commit().await?;
     Ok(Json(load_owned(&state, user.id, id).await?.into()))
 }
 
@@ -210,11 +239,16 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 /// reminder has no children of its own, so there is no cascade to write out here.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned(&state, user.id, id).await?;
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
     let affected = sqlx::query("UPDATE reminders SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
-        .bind(db::now()).bind(id).execute(&state.db).await?.rows_affected();
+        .bind(db::now()).bind(id).execute(&mut *tx).await?.rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
     }
+    let uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
+    record::record_delete(&mut tx, user.id, Entity::Reminder, &uuid, &edited_at).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -246,9 +280,21 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         }
         None => None,
     };
+    let done_at = db::now();
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE reminders SET done_at = ?, done_activity_id = ? WHERE id = ? AND deleted_at IS NULL")
-        .bind(db::now()).bind(body.activity_id).bind(id)
-        .execute(&state.db).await?;
+        .bind(&done_at).bind(body.activity_id).bind(id)
+        .execute(&mut *tx).await?;
+    // `done_at` always changes: `r.done_at.is_some()` was already rejected above, so the old
+    // value was NULL. `done_activity_id` only changes when the caller actually linked one --
+    // leaving a reminder marked done without an activity keeps it NULL, which is not a change.
+    let mut changed = vec![("done_at", json!(done_at))];
+    if body.activity_id.is_some() {
+        changed.push(("done_activity_id", json!(body.activity_id)));
+    }
+    let reminder_uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
+    record::record_update(&mut tx, user.id, Entity::Reminder, &reminder_uuid, &changed, &edited_at).await?;
 
     let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
     // Only fall back to the object's highest reading when the linked activity has none:
@@ -258,16 +304,23 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         None => stats(&state, r.object_id).await?.current_counter,
     };
     let repeat = Repeat { months: r.repeat_months.map(|m| m as u32), counter: r.repeat_counter };
-    let next = match next_due(base_date, base_counter, r.due_counter, repeat) {
+    let next_id = match next_due(base_date, base_counter, r.due_counter, repeat) {
         Some((date, counter)) => {
             let input = ReminderInput {
                 title: r.title.clone(), notes: r.notes.clone(),
                 due_date: date.map(|d| d.to_string()), due_counter: counter,
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
             };
-            let nid = insert(&state, r.object_id, &input).await?;
-            Some(load_owned(&state, user.id, nid).await?.into())
+            let (nid, nuuid) = insert(&mut tx, r.object_id, &input).await?;
+            record::record_create(&mut tx, user.id, Entity::Reminder, &nuuid, &edited_at).await?;
+            Some(nid)
         }
+        None => None,
+    };
+    tx.commit().await?;
+
+    let next = match next_id {
+        Some(nid) => Some(load_owned(&state, user.id, nid).await?.into()),
         None => None,
     };
     Ok(Json(DoneOut { done: load_owned(&state, user.id, id).await?.into(), next }))
@@ -297,12 +350,22 @@ async fn snooze(
     if r.done_at.is_some() {
         return Err(AppError::Conflict("reminder already done".into()));
     }
-    let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
+    let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days).to_string();
+    let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ? AND deleted_at IS NULL")
-        .bind(until.to_string())
+        .bind(&until)
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    if r.snoozed_until.as_deref() != Some(until.as_str()) {
+        let uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
+        record::record_update(
+            &mut tx, user.id, Entity::Reminder, &uuid, &[("snoozed_until", json!(until))],
+            &record::edited_at_now(),
+        )
+        .await?;
+    }
+    tx.commit().await?;
     Ok(Json(load_owned(&state, user.id, id).await?.into()))
 }
 
@@ -320,11 +383,21 @@ async fn snooze(
 /// on the way to that same no-op-success end state -- it cannot make a done reminder due again
 /// (`done_at.is_some()` always wins in `ReminderOut::from`), so there is nothing to guard.
 async fn unsnooze(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ReminderOut>, AppError> {
-    load_owned(&state, user.id, id).await?;
+    let r = load_owned(&state, user.id, id).await?;
+    let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = ? AND deleted_at IS NULL")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    if r.snoozed_until.is_some() {
+        let uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
+        record::record_update(
+            &mut tx, user.id, Entity::Reminder, &uuid, &[("snoozed_until", serde_json::Value::Null)],
+            &record::edited_at_now(),
+        )
+        .await?;
+    }
+    tx.commit().await?;
     Ok(Json(load_owned(&state, user.id, id).await?.into()))
 }
 

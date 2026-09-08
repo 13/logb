@@ -4,12 +4,14 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub const CATEGORIES: [&str; 7] =
     ["maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other"];
@@ -235,6 +237,9 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         }
     }
     let now = db::now();
+    let activity_uuid = uuid::Uuid::new_v4().to_string();
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
@@ -242,8 +247,8 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
-    .bind(uuid::Uuid::new_v4().to_string())
-    .fetch_one(&state.db).await;
+    .bind(&activity_uuid)
+    .fetch_one(&mut *tx).await;
     let row = match inserted {
         Ok(row) => row,
         // Two concurrent requests carrying the same client_op_id -- e.g. several browser tabs
@@ -252,6 +257,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         // index instead of the pre-check catching it; treat that exactly like the pre-check
         // would have, by adopting the winner's row rather than failing the request.
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            tx.rollback().await?;
             let op = body.client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
@@ -268,6 +274,8 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         }
         Err(e) => return Err(e.into()),
     };
+    record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)).into_response())
 }
 
@@ -290,12 +298,31 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let existing = load_owned_activity(&state, user.id, id).await?;
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
     body.validate(&object)?;
+
+    // Only fields whose value actually differs are logged -- a PATCH that rewrites a field
+    // with its existing value produces no `changes` row (see `record::record_update`).
+    let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
+    if body.date != existing.date { changed.push(("date", json!(body.date))); }
+    if body.category != existing.category { changed.push(("category", json!(body.category))); }
+    if body.title != existing.title { changed.push(("title", json!(body.title))); }
+    if body.notes != existing.notes { changed.push(("notes", json!(body.notes))); }
+    if body.counter_value != existing.counter_value { changed.push(("counter_value", json!(body.counter_value))); }
+    if body.cost_cents != existing.cost_cents { changed.push(("cost_cents", json!(body.cost_cents))); }
+    if body.quantity_milli != existing.quantity_milli { changed.push(("quantity_milli", json!(body.quantity_milli))); }
+
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, quantity_milli = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(id)
-    .execute(&state.db).await?;
+    .execute(&mut *tx).await?;
+    if !changed.is_empty() {
+        let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
+        record::record_update(&mut tx, user.id, Entity::Activity, &uuid, &changed, &record::edited_at_now()).await?;
+    }
+    tx.commit().await?;
+
     let row = load_owned_activity(&state, user.id, id).await?;
     Ok(Json(one_out(&state, row).await?))
 }
@@ -310,26 +337,21 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned_activity(&state, user.id, id).await?;
     let now = db::now();
+    let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "UPDATE objects SET cover_attachment_id = NULL \
-         WHERE deleted_at IS NULL \
-         AND cover_attachment_id IN (SELECT id FROM attachments WHERE activity_id = ?)",
-    )
-    .bind(id).execute(&mut *tx).await?;
     let affected = sqlx::query("UPDATE activities SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(&now).bind(&now).bind(id)
         .execute(&mut *tx).await?.rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    // `done_activity_id INTEGER REFERENCES activities(id) ON DELETE SET NULL` in the schema
-    // cannot fire for this UPDATE, so a reminder marked done by this activity is unlinked by
-    // hand -- otherwise it would keep pointing at an activity that now reads as absent.
-    sqlx::query("UPDATE reminders SET done_activity_id = NULL WHERE done_activity_id = ? AND deleted_at IS NULL")
-        .bind(id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE attachments SET deleted_at = ? WHERE activity_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(id).execute(&mut *tx).await?;
+    // `record::cascade_activity` is the single copy of this cascade (the object's cover, a
+    // reminder's `done_activity_id`, and the activity's attachments), shared with
+    // `sync::apply::apply_op`'s `delete` handling -- see the module docs on `sync::record`.
+    let activity_uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
+    let cascaded = record::cascade_activity(&mut tx, &activity_uuid, &now).await?;
+    record::record_delete(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
+    record::log_cascade(&mut tx, user.id, &edited_at, record::DEVICE_ID, &cascaded).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

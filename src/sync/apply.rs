@@ -30,6 +30,7 @@ pub fn wins(
 }
 
 use crate::error::AppError;
+use crate::sync::record;
 use crate::sync::{syncable_field_type, Entity, FieldType, Op, OpKind, Outcome};
 
 /// A client value that has been checked against its column's type and is ready to bind.
@@ -276,13 +277,13 @@ pub async fn apply_op(
             query.bind(&op.entity_uuid).execute(&mut *tx).await?;
 
             let cascaded = match op.entity {
-                Entity::Object => cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
-                Entity::Activity => cascade_activity(&mut *tx, &op.entity_uuid, &now).await?,
+                Entity::Object => record::cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
+                Entity::Activity => record::cascade_activity(&mut *tx, &op.entity_uuid, &now).await?,
                 // An attachment has no children to tombstone, but it is not a leaf reference-wise:
                 // it can be an object's cover, and `cover_attachment_id` is a plain INTEGER with
-                // no FK to enforce that by itself -- see `clear_cover_of`.
+                // no FK to enforce that by itself -- see `record::clear_cover_of`.
                 Entity::Attachment => {
-                    clear_cover_of(&mut *tx, &op.entity_uuid).await?;
+                    record::clear_cover_of(&mut *tx, &op.entity_uuid).await?;
                     Vec::new()
                 }
                 // A reminder has no children of its own, and nothing else keeps a stray
@@ -290,7 +291,7 @@ pub async fn apply_op(
                 Entity::Reminder => Vec::new(),
                 Entity::File => unreachable!("a file delete is refused above, before reaching this match"),
             };
-            log_cascade(&mut *tx, user_id, op, &cascaded).await?;
+            record::log_cascade(&mut *tx, user_id, &op.edited_at, &op.device_id, &cascaded).await?;
             Ok(Outcome::Accepted)
         }
 
@@ -423,166 +424,14 @@ pub async fn apply_op(
                 return Err(e.into());
             }
 
-            sqlx::query(
-                "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
-                 VALUES (?, ?, ?, ?, ?) \
-                 ON CONFLICT(entity, entity_uuid, field) \
-                 DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id")
-                .bind(op.entity.as_str()).bind(&op.entity_uuid).bind(field)
-                .bind(&op.edited_at).bind(&op.device_id)
-                .execute(&mut *tx).await?;
+            record::stamp_field_clock(
+                &mut *tx, op.entity, &op.entity_uuid, field, &op.edited_at, &op.device_id,
+            )
+            .await?;
 
             Ok(Outcome::Accepted)
         }
     }
-}
-
-/// Tombstones an object's activities, reminders and attachments, answering the children this
-/// call actually tombstoned so the caller can log them.
-///
-/// Mirrors `api::objects::delete`: the same three tables, and `deleted_at IS NULL` on each so a
-/// child tombstoned earlier keeps its original time instead of being restamped by a repeat of
-/// the parent's delete -- and so a repeat contributes nothing to the log the second time.
-///
-/// Attachments are matched on `object_id`, not on their activity, because every attachment
-/// carries the object it belongs to whether or not it also names an activity. That is the same
-/// column the REST handler uses, so neither path can reach a row the other misses.
-async fn cascade_object(
-    tx: &mut sqlx::SqliteConnection,
-    object_uuid: &str,
-    now: &str,
-) -> Result<Vec<(Entity, String)>, AppError> {
-    let mut cascaded = Vec::new();
-    // Of the three cascaded tables, only `activities` carries `updated_at`
-    // (migrations/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
-    // bump on those two.
-    for (entity, has_updated_at) in
-        [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
-    {
-        // The table name comes from `Entity::table` over a closed set fixed above, never from
-        // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
-        // the author to have made.
-        let table = entity.table();
-        const MINE: &str =
-            "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ?)";
-        // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
-        // rows this cascade is about to claim.
-        let select = format!("SELECT client_uuid FROM {table} WHERE {MINE}");
-        let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
-            .bind(object_uuid).fetch_all(&mut *tx).await?;
-        let update = if has_updated_at {
-            format!("UPDATE {table} SET deleted_at = ?, updated_at = ? WHERE {MINE}")
-        } else {
-            format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}")
-        };
-        let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
-        let query = if has_updated_at { query.bind(now) } else { query };
-        query.bind(object_uuid).execute(&mut *tx).await?;
-        cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
-    }
-    Ok(cascaded)
-}
-
-/// Clears an object's cover pointer if the attachment just tombstoned is what it was pointing
-/// at, mirroring `api::attachments::delete`. There is no FK on `cover_attachment_id` -- it is a
-/// plain INTEGER column -- so this is the only thing standing between a deleted attachment and
-/// a stale id sitting in `objects`, and in every sync snapshot, indefinitely.
-async fn clear_cover_of(
-    tx: &mut sqlx::SqliteConnection,
-    attachment_uuid: &str,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
-         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = ?)")
-        .bind(attachment_uuid).execute(&mut *tx).await?;
-    Ok(())
-}
-
-/// Tombstones an activity's attachments and unhooks the references to it, answering the
-/// attachments this call tombstoned.
-///
-/// Mirrors `api::activities::delete`, including the two statements that are not tombstones:
-/// an object's cover and a reminder's `done_activity_id` would otherwise keep pointing at rows
-/// the API now reads as absent. `ON DELETE SET NULL` cannot fire for an UPDATE either, so both
-/// are written by hand -- and if only the REST path did so, the two delete paths would leave
-/// different databases behind for the same op.
-async fn cascade_activity(
-    tx: &mut sqlx::SqliteConnection,
-    activity_uuid: &str,
-    now: &str,
-) -> Result<Vec<(Entity, String)>, AppError> {
-    // As in the REST handler, the cover subquery deliberately does not skip tombstoned
-    // attachments: an object pointing at one has a stale cover, and clearing it is the point.
-    sqlx::query(
-        "UPDATE objects SET cover_attachment_id = NULL \
-         WHERE deleted_at IS NULL AND cover_attachment_id IN (\
-           SELECT id FROM attachments \
-           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = ?))")
-        .bind(activity_uuid).execute(&mut *tx).await?;
-    sqlx::query(
-        "UPDATE reminders SET done_activity_id = NULL \
-         WHERE deleted_at IS NULL \
-         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
-        .bind(activity_uuid).execute(&mut *tx).await?;
-
-    let uuids: Vec<Option<String>> = sqlx::query_scalar(
-        "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
-        .bind(activity_uuid).fetch_all(&mut *tx).await?;
-    sqlx::query(
-        "UPDATE attachments SET deleted_at = ? WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
-        .bind(now).bind(activity_uuid).execute(&mut *tx).await?;
-    Ok(nameable(uuids).map(|uuid| (Entity::Attachment, uuid)).collect())
-}
-
-/// The cascaded rows the log can actually name.
-///
-/// `client_uuid` is nullable, so a row written before the sync protocol existed -- or by any
-/// writer that never set one -- has nothing a `changes` entry could address. Such a row is
-/// still tombstoned; it is only omitted from the log, because an entry naming NULL would be
-/// unusable to every device that read it. No client can be holding a copy of a row it was
-/// never able to learn the identity of, so nothing is lost by the omission.
-fn nameable(uuids: Vec<Option<String>>) -> impl Iterator<Item = String> {
-    uuids.into_iter().flatten()
-}
-
-/// Records each cascaded tombstone in the change log, so a pulling device learns the child is
-/// gone rather than only hearing about its parent.
-///
-/// A cascaded delete has no op of its own -- the client sent one op, for the parent -- so each
-/// entry gets a freshly minted `client_op_id`. Reusing the parent's, decorated, would risk
-/// colliding with an id a client had minted itself, and `idx_changes_user_op` would answer
-/// that with a constraint failure that throws away the whole batch. Idempotency does not
-/// depend on these ids: the push handler resolves a replayed op by the PARENT's id before
-/// `apply_op` is reached, so the cascade never runs twice for one op. The child's own
-/// `deleted_at IS NULL` filter is the second guard, in case a delete arrives under a new id.
-///
-/// `edited_at` and `device_id` are the parent's: the cascade is that device's edit at that
-/// moment, and a child carrying a different clock would compete with the parent's op.
-async fn log_cascade(
-    tx: &mut sqlx::SqliteConnection,
-    user_id: i64,
-    op: &Op,
-    cascaded: &[(Entity, String)],
-) -> Result<(), AppError> {
-    for (entity, uuid) in cascaded {
-        sqlx::query(
-            "INSERT INTO changes \
-             (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
-              device_id, client_op_id) \
-             VALUES (?, ?, 'delete', NULL, NULL, ?, ?, ?, ?, ?)")
-            .bind(entity.as_str())
-            .bind(uuid)
-            .bind(&op.edited_at)
-            .bind(crate::db::now())
-            .bind(user_id)
-            .bind(&op.device_id)
-            .bind(uuid::Uuid::new_v4().to_string())
-            .execute(&mut *tx)
-            .await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

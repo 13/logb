@@ -8,6 +8,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::files;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderValue};
@@ -15,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::Sqlite;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -277,36 +279,45 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     validate_import(&data)?;
 
     let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0 };
+    // One instant for the whole import: every row it creates is "set" at the moment the
+    // import ran, not at whatever `created_at` the archive says (that field is preserved on
+    // the row itself, per rule 1 in `sync::record` -- this is about `changes`/`field_clock`
+    // only).
+    let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
     for o in data.objects {
         let now = db::now();
+        let object_uuid = uuid::Uuid::new_v4().to_string();
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
              archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&object_uuid)
             .fetch_one(&mut *tx).await?;
+        record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
         counts.objects += 1;
 
         let mut activity_ids = Vec::new();
         for a in &o.activities {
+            let activity_uuid = uuid::Uuid::new_v4().to_string();
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
-                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(&activity_uuid)
                 .fetch_one(&mut *tx).await?;
+            record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
             activity_ids.push(aid);
             counts.activities += 1;
             for x in &a.attachments {
-                if import_attachment(&state, &mut tx, user.id, object_id, Some(aid), x, &blobs).await?.is_some() { counts.attachments += 1; }
+                if import_attachment(&state, &mut tx, user.id, (object_id, Some(aid)), x, &blobs, &edited_at).await?.is_some() { counts.attachments += 1; }
             }
         }
         let mut cover: Option<i64> = None;
         for x in &o.attachments {
-            if let Some(att_id) = import_attachment(&state, &mut tx, user.id, object_id, None, x, &blobs).await? {
+            if let Some(att_id) = import_attachment(&state, &mut tx, user.id, (object_id, None), x, &blobs, &edited_at).await? {
                 counts.attachments += 1;
                 if o.cover_sha256.as_deref() == Some(x.sha256.as_str()) { cover = Some(att_id); }
             }
@@ -322,17 +333,27 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         }
         if let Some(c) = cover {
             sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ? AND deleted_at IS NULL").bind(c).bind(object_id).execute(&mut *tx).await?;
+            // A real change from the create above's NULL, so it gets its own `set` -- not
+            // folded into `record_create`, which only ever describes the row as it was
+            // when it was first written.
+            record::record_update(
+                &mut tx, user.id, Entity::Object, &object_uuid, &[("cover_attachment_id", json!(c))],
+                &edited_at,
+            )
+            .await?;
         }
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
+            let reminder_uuid = uuid::Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .bind(&r.snoozed_until)
-                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(&reminder_uuid)
                 .execute(&mut *tx).await?;
+            record::record_create(&mut tx, user.id, Entity::Reminder, &reminder_uuid, &edited_at).await?;
             counts.reminders += 1;
         }
     }
@@ -417,10 +438,14 @@ fn tag(e: AppError, location: &str) -> AppError {
 }
 
 /// Returns the new attachment id, or None when the blob is missing from the archive.
+///
+/// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
+/// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
 async fn import_attachment(
-    state: &App, tx: &mut sqlx::Transaction<'_, Sqlite>, user_id: i64, object_id: i64, activity_id: Option<i64>,
-    x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>,
+    state: &App, tx: &mut sqlx::Transaction<'_, Sqlite>, user_id: i64, parent: (i64, Option<i64>),
+    x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>, edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
+    let (object_id, activity_id) = parent;
     let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
         .bind(user_id).bind(&x.sha256).fetch_optional(&mut **tx).await?;
     let file_id = match existing {
@@ -432,22 +457,25 @@ async fn import_attachment(
                 tokio::task::spawn_blocking(move || files::process_image(&b)).await.map_err(|e| AppError::Internal(e.to_string()))?
             } else { None };
             state.storage.write_blob(&x.sha256, bytes).await?;
+            let file_uuid = uuid::Uuid::new_v4().to_string();
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
                 .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
                 .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
-                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(&file_uuid)
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
                 Ok((id,)) => {
                     if let Some(img) = &image { state.storage.write_thumb(id, &img.thumb_jpeg).await?; }
+                    record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
                     id
                 }
                 // Two concurrent imports (or an import racing a direct upload) of identical
                 // bytes for the same user trip UNIQUE(user_id, sha256). That's a cache hit,
-                // not an error -- reuse the row the winner just created.
+                // not an error -- reuse the row the winner just created, which was (or will
+                // be) logged by whichever request actually inserted it.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
                     let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
                         .bind(user_id).bind(&x.sha256).fetch_one(&mut **tx).await?;
@@ -458,10 +486,12 @@ async fn import_attachment(
             id
         }
     };
+    let attachment_uuid = uuid::Uuid::new_v4().to_string();
     let (id,): (i64,) = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")
         .bind(object_id).bind(activity_id).bind(file_id).bind(&x.kind).bind(&x.caption).bind(&x.created_at)
-        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&attachment_uuid)
         .fetch_one(&mut **tx).await?;
+    record::record_create(tx, user_id, Entity::Attachment, &attachment_uuid, edited_at).await?;
     Ok(Some(id))
 }

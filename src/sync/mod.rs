@@ -2,6 +2,7 @@
 
 pub mod apply;
 pub mod feed;
+pub mod record;
 
 use serde::{Deserialize, Serialize};
 

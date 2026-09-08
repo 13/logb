@@ -5,6 +5,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::files;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
@@ -12,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub fn router(max_upload_bytes: usize) -> Router<App> {
     Router::new()
@@ -216,6 +218,8 @@ async fn upload(
         Some((id,)) => id,
         None => {
             state.storage.write_blob(&sha, &bytes).await?;
+            let file_uuid = uuid::Uuid::new_v4().to_string();
+            let edited_at = record::edited_at_now();
             // The thumbnail is named after the file id, so it can only be written once the
             // row exists -- but the row must not become visible before the thumbnail does, or
             // a client that sees the new file can ask for a /thumb that is not on disk yet.
@@ -229,13 +233,14 @@ async fn upload(
             .bind(user.id).bind(&sha).bind(&name).bind(&mime).bind(bytes.len() as i64)
             .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
             .bind(image.as_ref().and_then(|i| i.taken_at.clone())).bind(db::now())
-            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&file_uuid)
             .fetch_one(&mut *tx).await;
             match inserted {
                 Ok((id,)) => {
                     if let Some(img) = &image {
                         state.storage.write_thumb(id, &img.thumb_jpeg).await?;
                     }
+                    record::record_create(&mut tx, user.id, Entity::File, &file_uuid, &edited_at).await?;
                     tx.commit().await?;
                     id
                 }
@@ -253,16 +258,23 @@ async fn upload(
         }
     };
 
+    let attachment_uuid = uuid::Uuid::new_v4().to_string();
+    let edited_at = record::edited_at_now();
+    let mut tx = state.db.begin().await?;
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at, client_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
     .bind(&client_op_id).bind(db::now())
-    .bind(uuid::Uuid::new_v4().to_string())
-    .fetch_one(&state.db).await;
+    .bind(&attachment_uuid)
+    .fetch_one(&mut *tx).await;
     let id = match inserted {
-        Ok((id,)) => id,
+        Ok((id,)) => {
+            record::record_create(&mut tx, user.id, Entity::Attachment, &attachment_uuid, &edited_at).await?;
+            tx.commit().await?;
+            id
+        }
         // Two concurrent uploads carrying the same client_op_id (several tabs sharing one
         // offline outbox, flushing on reconnect): the loser's INSERT trips the partial unique
         // index on attachments -- the same shape of race as the files-table dedup above.
@@ -270,6 +282,7 @@ async fn upload(
         // different object than this upload targeted, so apply the same object check the
         // pre-check above does, rather than handing back another object's attachment.
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            tx.rollback().await?;
             let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
             let winner: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ? AND deleted_at IS NULL")
                 .bind(op)
@@ -316,8 +329,19 @@ pub struct UpdateAttachment {
 }
 
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(body): Json<UpdateAttachment>) -> Result<Json<AttachmentOut>, AppError> {
-    load_owned(&state, user.id, id).await?;
-    sqlx::query("UPDATE attachments SET caption = ? WHERE id = ? AND deleted_at IS NULL").bind(body.caption.trim()).bind(id).execute(&state.db).await?;
+    let existing = load_owned(&state, user.id, id).await?;
+    let caption = body.caption.trim();
+    let mut tx = state.db.begin().await?;
+    sqlx::query("UPDATE attachments SET caption = ? WHERE id = ? AND deleted_at IS NULL").bind(caption).bind(id).execute(&mut *tx).await?;
+    if existing.caption != caption {
+        let uuid = record::uuid_of(&mut tx, Entity::Attachment, id).await?;
+        record::record_update(
+            &mut tx, user.id, Entity::Attachment, &uuid, &[("caption", json!(caption))],
+            &record::edited_at_now(),
+        )
+        .await?;
+    }
+    tx.commit().await?;
     Ok(Json(load_owned(&state, user.id, id).await?))
 }
 
@@ -326,16 +350,20 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 /// still references it, so the content is only reclaimed once the retention purge drops the
 /// tombstone. `load_owned_file` is what stops the file being served in the meantime.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
-    let a = load_owned(&state, user.id, id).await?;
+    load_owned(&state, user.id, id).await?;
     let now = db::now();
+    let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE objects SET cover_attachment_id = NULL WHERE id = ? AND cover_attachment_id = ? AND deleted_at IS NULL")
-        .bind(a.object_id).bind(id).execute(&mut *tx).await?;
     let affected = sqlx::query("UPDATE attachments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
     }
+    // `record::clear_cover_of` is the single copy of this statement, shared with
+    // `sync::apply::apply_op`'s `delete` handling.
+    let attachment_uuid = record::uuid_of(&mut tx, Entity::Attachment, id).await?;
+    record::clear_cover_of(&mut tx, &attachment_uuid).await?;
+    record::record_delete(&mut tx, user.id, Entity::Attachment, &attachment_uuid, &edited_at).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
