@@ -12,8 +12,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'memto',
-        short_name: 'memto',
+        name: 'logby',
+        short_name: 'logby',
         description: 'Complete history of your owned objects',
         theme_color: '#1f6f5f',
         background_color: '#f7f7f5',
@@ -40,7 +40,7 @@ export default defineConfig({
             urlPattern: /^\/api\/files\//,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'memto-files',
+              cacheName: 'logby-files',
               expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [200] },
             },
@@ -51,7 +51,7 @@ export default defineConfig({
             urlPattern: /^\/api\//,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'memto-api',
+              cacheName: 'logby-api',
               networkTimeoutSeconds: 4,
               expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
               cacheableResponse: { statuses: [200] },

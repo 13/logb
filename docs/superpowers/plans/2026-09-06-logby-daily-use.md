@@ -1,14 +1,14 @@
-# memto Daily-Use Improvements Implementation Plan
+# logby Daily-Use Improvements Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make memto faster to log into, able to answer "what has this cost me", and usable with no network.
+**Goal:** Make logby faster to log into, able to answer "what has this cost me", and usable with no network.
 
 **Architecture:** Three phases against the existing axum + SQLite + Svelte 5 app. Phase A is frontend plus one read-only endpoint. Phase C adds a migration, pure arithmetic in `src/domain/insights.rs`, an insights endpoint, and reminder lookahead/snooze. Phase B adds `client_op_id` idempotency columns and a client-side outbox that replays queued creates.
 
 **Tech Stack:** Rust 2021, axum 0.8, sqlx 0.9 (SQLite), chrono; Svelte 5 (runes), TypeScript, Vite, vitest, Playwright.
 
-**Spec:** `docs/superpowers/specs/2026-09-06-memto-daily-use-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-06-logby-daily-use-design.md`
 
 ## Global Constraints
 
@@ -2086,7 +2086,7 @@ Create `frontend/src/lib/idb.ts`:
 ```ts
 import type { OutboxStore, QueuedOp } from './outbox';
 
-const DB = 'memto-outbox';
+const DB = 'logby-outbox';
 const STORE = 'ops';
 
 function open(): Promise<IDBDatabase> {
@@ -2321,5 +2321,5 @@ docker compose up -d --build && curl -fsS http://localhost:8080/api/health
 Expected: all suites green; `/api/health` returns `{"status":"ok","version":"0.1.0"}`.
 
 The two migrations apply to an existing database on first boot. Verify explicitly against a
-copy of a populated `data/memto.db` before deploying — a new column with a partial unique
+copy of a populated `data/logby.db` before deploying — a new column with a partial unique
 index is cheap, but "the migration ran" is a claim that needs evidence, not confidence.

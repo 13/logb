@@ -14,7 +14,7 @@ import type { QueuedOp } from '../src/lib/outbox';
  * a fresh `IDBFactory` -- which is also what makes "another tab" expressible: a second import
  * over the same factory is a second connection to the same database.
  */
-const DB = 'memto-outbox';
+const DB = 'logby-outbox';
 const STORE = 'ops';
 
 async function freshModule() {

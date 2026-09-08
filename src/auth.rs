@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-pub const COOKIE: &str = "memto_session";
+pub const COOKIE: &str = "logby_session";
 const SESSION_DAYS: i64 = 30;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 
@@ -160,7 +160,7 @@ pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
 /// Every call first drops entries whose window has already elapsed, so the map only ever
 /// holds IPs that attempted a login within the last `LOGIN_WINDOW`. Without that sweep the
 /// map grows once per distinct source address for the lifetime of the process — unbounded
-/// memory, and remotely driveable when `MEMTO_TRUST_PROXY` makes the key attacker-chosen.
+/// memory, and remotely driveable when `LOGBY_TRUST_PROXY` makes the key attacker-chosen.
 pub fn check_login_rate(state: &App, ip: IpAddr) -> Result<(), AppError> {
     let mut map = state.login_attempts.lock().unwrap();
     let now = Instant::now();
@@ -179,7 +179,7 @@ pub fn token_from_parts(parts: &Parts) -> Option<String> {
 
 /// The prefix every API token carries, so one is recognisable on sight -- in a log, a config
 /// file, a screenshot -- and can be revoked without having to work out what it is.
-pub const TOKEN_PREFIX: &str = "memto_pat_";
+pub const TOKEN_PREFIX: &str = "logby_pat_";
 
 /// How much of the plaintext is kept alongside the hash, purely so the token list can name the
 /// row the user is looking at. Short enough to be useless for reconstructing the token.

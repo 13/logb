@@ -45,7 +45,7 @@ async fn the_plaintext_is_returned_once_and_never_stored() {
     app.setup("ben", "correct horse").await;
     let (id, token) = issue(&app, "phone").await;
 
-    assert!(token.starts_with("memto_pat_"), "a token should be recognisable on sight: {token}");
+    assert!(token.starts_with("logby_pat_"), "a token should be recognisable on sight: {token}");
 
     let listed: Vec<serde_json::Value> = app.client.get(app.url("/auth/tokens"))
         .send().await.unwrap().json().await.unwrap();
@@ -61,7 +61,7 @@ async fn the_plaintext_is_returned_once_and_never_stored() {
     let (hash,): (String,) = sqlx::query_as("SELECT token_hash FROM api_tokens WHERE id = ?")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert_ne!(hash, token);
-    assert_eq!(hash, memto::files::sha256_hex(token.as_bytes()));
+    assert_eq!(hash, logby::files::sha256_hex(token.as_bytes()));
 }
 
 #[tokio::test]
@@ -152,10 +152,10 @@ async fn a_bad_or_malformed_credential_is_refused() {
     let anon = bare_client();
 
     for header in [
-        "Bearer memto_pat_0000000000000000000000000000000000000000000000000000000000000000",
+        "Bearer logby_pat_0000000000000000000000000000000000000000000000000000000000000000",
         "Bearer ",
-        "Basic memto_pat_x",
-        "memto_pat_x",
+        "Basic logby_pat_x",
+        "logby_pat_x",
         "",
     ] {
         let res = anon.get(app.url("/objects"))

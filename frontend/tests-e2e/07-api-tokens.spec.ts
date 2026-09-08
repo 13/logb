@@ -17,7 +17,7 @@ test('a token can be created, used, and revoked from Settings', async ({ page, p
   const shown = page.locator('.fresh-token code');
   await expect(shown).toBeVisible();
   const token = (await shown.innerText()).trim();
-  expect(token).toMatch(/^memto_pat_[0-9a-f]{64}$/);
+  expect(token).toMatch(/^logby_pat_[0-9a-f]{64}$/);
 
   // It is listed afterwards by name and prefix, and never in full again.
   await expect(page.getByText('phone')).toBeVisible();

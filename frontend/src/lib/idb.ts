@@ -1,6 +1,6 @@
 import { compareQueueOrder, type OutboxStore, type QueuedOp } from './outbox';
 
-const DB = 'memto-outbox';
+const DB = 'logby-outbox';
 const STORE = 'ops';
 const SEQ = 'seq';
 

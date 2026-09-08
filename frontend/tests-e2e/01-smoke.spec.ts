@@ -3,8 +3,8 @@ import { signIn } from './helpers';
 
 test('first run leads to setup, then the dashboard', async ({ page }) => {
   await page.goto('/');
-  await expect(page).toHaveTitle('memto');
-  await expect(page.getByRole('heading', { name: /Welcome to memto/ })).toBeVisible();
+  await expect(page).toHaveTitle('logby');
+  await expect(page.getByRole('heading', { name: /Welcome to logby/ })).toBeVisible();
   await signIn(page);
   await expect(page.getByRole('heading', { name: /My objects/ })).toBeVisible();
 });
