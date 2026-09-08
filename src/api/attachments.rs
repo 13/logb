@@ -226,12 +226,13 @@ async fn upload(
             // the row only at commit, by which point the JPEG is already written.
             let mut tx = state.db.begin().await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
-                "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             )
             .bind(user.id).bind(&sha).bind(&name).bind(&mime).bind(bytes.len() as i64)
             .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
             .bind(image.as_ref().and_then(|i| i.taken_at.clone())).bind(db::now())
+            .bind(uuid::Uuid::new_v4().to_string())
             .fetch_one(&mut *tx).await;
             match inserted {
                 Ok((id,)) => {
@@ -256,11 +257,12 @@ async fn upload(
     };
 
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at, client_uuid) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
     .bind(&client_op_id).bind(db::now())
+    .bind(uuid::Uuid::new_v4().to_string())
     .fetch_one(&state.db).await;
     let id = match inserted {
         Ok((id,)) => id,

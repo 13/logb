@@ -124,11 +124,11 @@ impl ReminderInput {
 
 async fn insert(state: &App, object_id: i64, b: &ReminderInput) -> Result<i64, AppError> {
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(object_id).bind(&b.title).bind(&b.notes).bind(&b.due_date).bind(b.due_counter)
-    .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now())
+    .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(uuid::Uuid::new_v4().to_string())
     .fetch_one(&state.db).await?;
     Ok(id)
 }

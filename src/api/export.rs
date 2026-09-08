@@ -281,19 +281,21 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let now = db::now();
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id")
+             archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
+            .bind(uuid::Uuid::new_v4().to_string())
             .fetch_one(&mut *tx).await?;
         counts.objects += 1;
 
         let mut activity_ids = Vec::new();
         for a in &o.activities {
             let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
+                .bind(uuid::Uuid::new_v4().to_string())
                 .fetch_one(&mut *tx).await?;
             activity_ids.push(aid);
             counts.activities += 1;
@@ -322,11 +324,12 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
             sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .bind(&r.snoozed_until)
+                .bind(uuid::Uuid::new_v4().to_string())
                 .execute(&mut *tx).await?;
             counts.reminders += 1;
         }
@@ -428,11 +431,12 @@ async fn import_attachment(
             } else { None };
             state.storage.write_blob(&x.sha256, bytes).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
-                "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
                 .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
                 .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
                 .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
+                .bind(uuid::Uuid::new_v4().to_string())
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
                 Ok((id,)) => {
@@ -453,8 +457,9 @@ async fn import_attachment(
         }
     };
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")
+        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")
         .bind(object_id).bind(activity_id).bind(file_id).bind(&x.kind).bind(&x.caption).bind(&x.created_at)
+        .bind(uuid::Uuid::new_v4().to_string())
         .fetch_one(&mut **tx).await?;
     Ok(Some(id))
 }

@@ -232,13 +232,14 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) \
+         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at, client_uuid) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) \
          RETURNING id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at",
     )
     .bind(user.id).bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(&now).bind(&now)
+    .bind(uuid::Uuid::new_v4().to_string())
     .fetch_one(&state.db).await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
 }
