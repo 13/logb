@@ -718,6 +718,46 @@ async fn a_field_outside_the_whitelist_is_rejected() {
 }
 
 #[tokio::test]
+async fn a_foreign_key_field_cannot_point_at_another_users_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let victim_object = car["id"].as_i64().unwrap();
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"%PDF-1.4 fake".to_vec())
+            .file_name("invoice.pdf")
+            .mime_str("application/pdf")
+            .unwrap(),
+    );
+    let res = app.client.post(app.url(&format!("/objects/{victim_object}/attachments")))
+        .multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    let victim_attachment = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    // A second account, with an object of its own, tries to adopt the first account's
+    // attachment as its cover image.
+    let mallory = app.create_user_client("mallory", "another password").await;
+    let theirs = app.create_object(&mallory, "Bike", None).await;
+    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(theirs["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-steal", "entity": "object", "entity_uuid": their_uuid,
+        "op": "set", "field": "cover_attachment_id", "value": victim_attachment,
+        "edited_at": "2026-07-01T00:00:00Z", "device_id": "mallory-phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected");
+
+    let cover: Option<i64> = sqlx::query_scalar(
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        .bind(&their_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(cover.is_none(), "the cross-account reference must not have landed");
+}
+
+#[tokio::test]
 async fn one_user_cannot_push_at_another_users_row() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
@@ -818,6 +858,34 @@ pub async fn apply_op(
             };
             if !is_syncable_field(op.entity, field) {
                 return Ok(Outcome::Rejected { reason: format!("{field} is not settable") });
+            }
+
+            // Two whitelisted fields are foreign keys, and a check on the field NAME says
+            // nothing about the VALUE. Without this, `set object.cover_attachment_id` could
+            // point a row at another account's attachment -- which the object read then hands
+            // back as `cover_file_id`. The REST handlers already refuse a cross-object
+            // reference; sync has to refuse it identically, or it is just a second, unguarded
+            // door onto the same write.
+            if let Some(referenced) = op.value.as_ref().and_then(serde_json::Value::as_i64) {
+                let permitted: Option<i64> = match (op.entity, field) {
+                    (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
+                        "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
+                         WHERE a.id = ? AND o.client_uuid = ? AND a.deleted_at IS NULL")
+                        .bind(referenced).bind(&op.entity_uuid)
+                        .fetch_optional(&mut *tx).await?,
+                    (Entity::Reminder, "done_activity_id") => sqlx::query_scalar(
+                        "SELECT act.id FROM activities act \
+                         JOIN reminders r ON r.object_id = act.object_id \
+                         WHERE act.id = ? AND r.client_uuid = ? AND act.deleted_at IS NULL")
+                        .bind(referenced).bind(&op.entity_uuid)
+                        .fetch_optional(&mut *tx).await?,
+                    _ => Some(referenced),
+                };
+                if permitted.is_none() {
+                    return Ok(Outcome::Rejected {
+                        reason: format!("{field} must reference a row on the same object"),
+                    });
+                }
             }
 
             let stored: Option<(String, String)> = sqlx::query_as(
