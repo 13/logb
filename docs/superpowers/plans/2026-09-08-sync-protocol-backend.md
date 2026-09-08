@@ -602,6 +602,7 @@ git commit -m "feat: add the last-write-wins rule with a deterministic tie-break
 - Consumes: `wins` (Task 4), `Entity`/`OpKind`/`Op`/`Outcome`/`is_syncable_field` (Task 3), `AuthUser` extractor from `src/auth.rs`, `db::now()`.
 - Produces:
   - `pub async fn apply_op(tx: &mut sqlx::SqliteConnection, user_id: i64, op: &crate::sync::Op) -> Result<crate::sync::Outcome, crate::error::AppError>` in `src/sync/apply.rs`.
+  - `pub fn canonical_edited_at(raw: &str) -> Option<String>` in `src/sync/apply.rs`.
   - `POST /api/sync/push` taking `{ "ops": [Op, ...] }` and returning `{ "results": [{ "client_op_id": String, "outcome": "accepted"|"superseded"|"rejected", "reason"?: String }], "server_time": String, "ids": { "<uuid>": <i64> } }`.
 
 - [ ] **Step 1: Write the failing test**
@@ -700,6 +701,53 @@ async fn a_replayed_push_is_idempotent() {
 }
 
 #[tokio::test]
+async fn timestamps_are_compared_chronologically_not_lexically() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // Whole seconds first, then a value half a second LATER written with a fraction. Compared
+    // as raw strings the fractional one loses ('.' < 'Z'), so a lexical rule would keep "Early".
+    for (id, value, at) in [
+        ("op-whole", "Early", "2026-08-01T00:00:00Z"),
+        ("op-frac", "Later", "2026-08-01T00:00:00.500Z"),
+    ] {
+        let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": id, "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": value,
+            "edited_at": at, "device_id": "phone"
+        }]))).send().await.unwrap();
+        assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    }
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Later", "the chronologically later edit must win");
+
+    // An offset-form timestamp is the same instant as its Z form and must not re-win.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-offset", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Earlier still",
+        "edited_at": "2026-08-01T00:00:00+00:00", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "superseded");
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-junk", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Nonsense",
+        "edited_at": "last thursday", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "rejected");
+
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Later");
+}
+
+#[tokio::test]
 async fn a_field_outside_the_whitelist_is_rejected() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
@@ -793,6 +841,22 @@ Append to `src/sync/apply.rs`, above the test module:
 ```rust
 use crate::error::AppError;
 use crate::sync::{is_syncable_field, Entity, Op, OpKind, Outcome};
+
+/// Rewrites a client-supplied timestamp into the one canonical form `wins` can compare.
+///
+/// `wins` compares `edited_at` lexically, which is only chronological when every value has the
+/// same width and the same zone spelling. `db::now()` guarantees that for values the server
+/// writes, but `edited_at` arrives from a device and nothing constrains what it sends:
+/// `2026-01-01T00:00:00Z` sorts AFTER `2026-01-01T00:00:00.500Z` (`Z` is 0x5A, `.` is 0x2E)
+/// while being half a second earlier, and an offset form like `+00:00` does not order against
+/// `Z` at all. Either would hand the wrong edit the win, silently and unreproducibly. So every
+/// timestamp is parsed and re-emitted as UTC with fixed millisecond precision before it is
+/// compared with, or stored beside, any other.
+pub fn canonical_edited_at(raw: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
 
 /// Applies one op inside the caller's transaction and returns how it landed.
 ///
@@ -983,13 +1047,33 @@ pub struct PushOut {
 async fn push(
     State(state): State<App>,
     user: AuthUser,
-    Json(body): Json<PushBody>,
+    Json(mut body): Json<PushBody>,
 ) -> Result<Json<PushOut>, AppError> {
     let mut tx = state.db.begin().await?;
     let mut results = Vec::with_capacity(body.ops.len());
     let mut ids = HashMap::new();
 
+    // Canonicalise before anything reads the value: the ordering rule, the `field_clock` row
+    // it is compared against, and the copy written into `changes` must all be the same shape,
+    // or a later comparison is against a string that never went through here.
+    for op in &mut body.ops {
+        match crate::sync::apply::canonical_edited_at(&op.edited_at) {
+            Some(canonical) => op.edited_at = canonical,
+            None => {
+                results.push(OpResult {
+                    client_op_id: op.client_op_id.clone(),
+                    outcome: Outcome::Rejected { reason: "edited_at must be RFC3339".into() },
+                });
+                op.edited_at = String::new();
+            }
+        }
+    }
+
     for op in &body.ops {
+        // Rejected above by canonicalisation; its result is already recorded.
+        if op.edited_at.is_empty() {
+            continue;
+        }
         // Idempotency: an op id already in the log was applied by an earlier attempt whose
         // response the client never saw. Report it as accepted without applying it twice.
         let seen: Option<i64> = sqlx::query_scalar("SELECT seq FROM changes WHERE client_op_id = ?")
