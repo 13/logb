@@ -1264,6 +1264,21 @@ async fn a_cursor_before_the_horizon_is_gone() {
     let res = app.client.get(app.url("/sync/pull?since=1")).send().await.unwrap();
     assert_eq!(res.status(), 410, "a stale cursor must be told to re-bootstrap");
 }
+
+#[tokio::test]
+async fn a_cursor_against_an_emptied_log_is_gone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // A non-zero cursor can only have come from ops that existed, so an empty log means they
+    // were purged. Answering 200 here would let the client believe it is current forever.
+    let res = app.client.get(app.url("/sync/pull?since=7")).send().await.unwrap();
+    assert_eq!(res.status(), 410);
+
+    // A first pull is still legal against the same empty log.
+    let res = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1382,9 +1397,14 @@ async fn pull(
 ) -> Result<Json<PullOut>, AppError> {
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let horizon = feed::horizon(&state.db, user.id).await?;
-    // `since` of 0 is a first pull and always legal; anything below the horizon has missed
+    // `since` of 0 is a first pull and always legal. Anything below the horizon has missed
     // purged ops, and resuming from it would skip them without either side noticing.
-    if params.since > 0 && params.since < horizon - 1 {
+    //
+    // An empty log (horizon 0) with a non-zero cursor is the same failure wearing a different
+    // hat: a client only ever gets a non-zero cursor from ops that existed, so if none remain
+    // they were purged. Without this arm that client is handed 200 and an empty page, and
+    // silently carries on believing it is current.
+    if params.since > 0 && (horizon == 0 || params.since < horizon - 1) {
         return Err(AppError::Gone);
     }
     let changes = feed::pull(&state.db, user.id, params.since, limit).await?;
