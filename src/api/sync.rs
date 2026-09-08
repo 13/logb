@@ -4,18 +4,21 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::feed;
 use crate::sync::{
     apply::{apply_op, canonical_edited_at},
     Op, Outcome,
 };
-use axum::extract::State;
-use axum::routing::post;
+use axum::extract::{Query, State};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub fn router() -> Router<App> {
-    Router::new().route("/sync/push", post(push))
+    Router::new()
+        .route("/sync/push", post(push))
+        .route("/sync/pull", get(pull))
 }
 
 #[derive(Deserialize)]
@@ -140,4 +143,48 @@ async fn push(
 
     tx.commit().await?;
     Ok(Json(PushOut { results, server_time: db::now(), ids }))
+}
+
+/// A page big enough that a normal catch-up is one round trip, small enough that a phone on a
+/// bad connection is not asked to hold a huge response in memory.
+const DEFAULT_LIMIT: i64 = 500;
+const MAX_LIMIT: i64 = 1000;
+
+#[derive(Deserialize)]
+pub struct PullParams {
+    #[serde(default)]
+    pub since: i64,
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct PullOut {
+    pub changes: Vec<feed::ChangeRow>,
+    pub next_seq: i64,
+    /// False when the page filled exactly, meaning the client should pull again immediately.
+    pub complete: bool,
+    pub server_time: String,
+}
+
+async fn pull(
+    State(state): State<App>,
+    user: AuthUser,
+    Query(params): Query<PullParams>,
+) -> Result<Json<PullOut>, AppError> {
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let horizon = feed::horizon(&state.db, user.id).await?;
+    // `since` of 0 is a first pull and always legal. Anything below the horizon has missed
+    // purged ops, and resuming from it would skip them without either side noticing.
+    //
+    // An empty log (horizon 0) with a non-zero cursor is the same failure wearing a different
+    // hat: a client only ever gets a non-zero cursor from ops that existed, so if none remain
+    // they were purged. Without this arm that client is handed 200 and an empty page, and
+    // silently carries on believing it is current.
+    if params.since > 0 && (horizon == 0 || params.since < horizon - 1) {
+        return Err(AppError::Gone);
+    }
+    let changes = feed::pull(&state.db, user.id, params.since, limit).await?;
+    let complete = (changes.len() as i64) < limit;
+    let next_seq = changes.last().map(|c| c.seq).unwrap_or(params.since);
+    Ok(Json(PullOut { changes, next_seq, complete, server_time: db::now() }))
 }

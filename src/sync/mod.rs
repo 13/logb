@@ -1,6 +1,7 @@
 //! The sync protocol's vocabulary: what an op can name, and what it may change.
 
 pub mod apply;
+pub mod feed;
 
 use serde::{Deserialize, Serialize};
 

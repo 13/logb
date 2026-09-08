@@ -942,3 +942,113 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(counter, Some(2000));
 }
+
+#[tokio::test]
+async fn pull_returns_ops_after_the_cursor_and_advances_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    for (n, name) in [("op-a", "First"), ("op-b", "Second")] {
+        app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": n, "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": name,
+            "edited_at": format!("2026-03-0{}T00:00:00Z", if n == "op-a" { 1 } else { 2 }),
+            "device_id": "phone"
+        }]))).send().await.unwrap();
+    }
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(body["complete"], true);
+    assert!(body["server_time"].is_string());
+    let next = body["next_seq"].as_i64().unwrap();
+
+    let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={next}")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["changes"].as_array().unwrap().len(), 0, "the cursor is exhausted");
+}
+
+#[tokio::test]
+async fn pull_pages_and_reports_incompleteness() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    for i in 0..3 {
+        app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": format!("op-{i}"), "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "description", "value": format!("note {i}"),
+            "edited_at": format!("2026-04-0{}T00:00:00Z", i + 1), "device_id": "phone"
+        }]))).send().await.unwrap();
+    }
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0&limit=2"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(body["complete"], false, "more remains behind the page");
+}
+
+#[tokio::test]
+async fn pull_never_leaks_another_users_changes() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+    app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-ben", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Ben's",
+        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+
+    let other = app.create_user_client("mallory", "another password").await;
+    let body: serde_json::Value = other.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["changes"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn a_cursor_before_the_horizon_is_gone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+    app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-kept", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Kept",
+        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+
+    // Simulate a purge having removed everything before this row.
+    sqlx::query("UPDATE changes SET seq = 500 WHERE client_op_id = 'op-kept'")
+        .execute(&app.state.db).await.unwrap();
+
+    let res = app.client.get(app.url("/sync/pull?since=1")).send().await.unwrap();
+    assert_eq!(res.status(), 410, "a stale cursor must be told to re-bootstrap");
+}
+
+#[tokio::test]
+async fn a_cursor_against_an_emptied_log_is_gone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // A non-zero cursor can only have come from ops that existed, so an empty log means they
+    // were purged. Answering 200 here would let the client believe it is current forever.
+    let res = app.client.get(app.url("/sync/pull?since=7")).send().await.unwrap();
+    assert_eq!(res.status(), 410);
+
+    // A first pull is still legal against the same empty log.
+    let res = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}

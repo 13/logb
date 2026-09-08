@@ -1397,6 +1397,50 @@
           }
         }
       }
+    },
+    "/sync/pull": {
+      "get": {
+        "summary": "Page through the change feed from a cursor.",
+        "description": "`since` is the `next_seq` from the previous call, or 0 for a first pull. `complete` is false when the page filled exactly, meaning the client should pull again immediately with the returned `next_seq`. A `since` older than the server's retention horizon -- including a non-zero `since` against a log that has been purged empty -- answers 410 instead of a silently-incomplete 200; the client must re-bootstrap from a fresh export rather than trust an incremental catch-up.",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            },
+            "description": "The cursor to resume after: the `next_seq` from a previous pull, or 0 for a first pull."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 500,
+              "maximum": 1000
+            },
+            "description": "Maximum number of changes to return. Clamped to [1, 1000]."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullResult"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`since` predates the retained history; re-bootstrap instead of resuming."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2294,6 +2338,77 @@
               "type": "integer"
             },
             "description": "client_uuid to the server's integer id, for references a client only knows by uuid."
+          }
+        }
+      },
+      "ChangeRow": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monotonic pull cursor. Pass the last row's `seq` back as `since` to resume."
+          },
+          "entity": {
+            "type": "string",
+            "enum": [
+              "object",
+              "activity",
+              "reminder",
+              "attachment",
+              "file"
+            ]
+          },
+          "entity_uuid": {
+            "type": "string",
+            "description": "The row's `client_uuid`."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "create",
+              "set",
+              "delete"
+            ]
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "value": {
+            "type": "string",
+            "nullable": true
+          },
+          "edited_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PullResult": {
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeRow"
+            }
+          },
+          "next_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pass as `since` on the next call."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "False when the page filled exactly; the client should pull again immediately."
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

@@ -15,6 +15,8 @@ pub enum AppError {
     NotFound,
     #[error("{0}")]
     Conflict(String),
+    #[error("cursor is older than the retained history")]
+    Gone,
     #[error("payload too large")]
     TooLarge,
     #[error("too many requests")]
@@ -35,6 +37,7 @@ impl AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            AppError::Gone => (StatusCode::GONE, "gone"),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             AppError::Db(sqlx::Error::RowNotFound) => (StatusCode::NOT_FOUND, "not_found"),
