@@ -282,6 +282,24 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
     };
     let done_at = db::now();
     let edited_at = record::edited_at_now();
+
+    // Computed before `begin()`, not after: `stats` acquires its own pooled connection, and
+    // the pool is `max_connections(4)` (`db.rs`). Calling it while this handler's transaction
+    // already holds the write lock lets four concurrent `done` calls each hold a connection
+    // and block waiting for a fifth -- a deadlock until the acquire timeout, then a 500. Its
+    // inputs (the linked activity, and the object's highest `counter_value` when there isn't
+    // one) are not written by this transaction, so hoisting the read changes nothing about
+    // `next_due`'s result.
+    let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
+    // Only fall back to the object's highest reading when the linked activity has none:
+    // `.or(..)` on an awaited value would run the stats query even in the common case.
+    let base_counter = match activity.as_ref().and_then(|a| a.counter_value) {
+        Some(c) => Some(c),
+        None => stats(&state, r.object_id).await?.current_counter,
+    };
+    let repeat = Repeat { months: r.repeat_months.map(|m| m as u32), counter: r.repeat_counter };
+    let next_plan = next_due(base_date, base_counter, r.due_counter, repeat);
+
     let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE reminders SET done_at = ?, done_activity_id = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(&done_at).bind(body.activity_id).bind(id)
@@ -296,15 +314,7 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
     let reminder_uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
     record::record_update(&mut tx, user.id, Entity::Reminder, &reminder_uuid, &changed, &edited_at).await?;
 
-    let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
-    // Only fall back to the object's highest reading when the linked activity has none:
-    // `.or(..)` on an awaited value would run the stats query even in the common case.
-    let base_counter = match activity.as_ref().and_then(|a| a.counter_value) {
-        Some(c) => Some(c),
-        None => stats(&state, r.object_id).await?.current_counter,
-    };
-    let repeat = Repeat { months: r.repeat_months.map(|m| m as u32), counter: r.repeat_counter };
-    let next_id = match next_due(base_date, base_counter, r.due_counter, repeat) {
+    let next_id = match next_plan {
         Some((date, counter)) => {
             let input = ReminderInput {
                 title: r.title.clone(), notes: r.notes.clone(),

@@ -2,6 +2,23 @@ mod common;
 use reqwest::multipart::{Form, Part};
 use serde_json::json;
 
+/// An `edited_at` a fixed number of seconds after "right now", in the same canonical form
+/// `sync::apply::canonical_edited_at` produces. A literal calendar date pinned "in the future"
+/// (2031, say) is only in the future until the wall clock passes it -- this file used to
+/// hardcode exactly that, and every `set` op relying on it to beat a REST create's real-time
+/// `field_clock` stamp would have started failing the moment "now" caught up to the literal.
+/// An offset from the clock the test actually runs against cannot expire.
+fn after_now(secs: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(secs))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// The mirror of `after_now`, for an op that must lose last-write-wins against something
+/// stamped at real "now" -- e.g. a phone op standing in for "before the browser's edit".
+fn before_now(secs: i64) -> String {
+    after_now(-secs)
+}
+
 #[tokio::test]
 async fn every_created_row_gets_a_client_uuid() {
     let app = common::spawn().await;
@@ -83,10 +100,16 @@ fn png() -> Vec<u8> {
     out.into_inner()
 }
 
-/// Task 2's read-path filters (`/search`, `/export`, `/insights`, the reminder digest) are the
-/// bulk of that change and are each exercised separately elsewhere; this is the one place that
-/// checks all four agree a deleted object's activity, reminder and attachment are gone, not
+/// Checks all four of task 2's read-path filters (`/search`, `/export`, `/insights`, the
+/// reminder digest) agree a deleted object's activity, reminder and attachment are gone, not
 /// just the object itself.
+///
+/// This alone proves less than it looks like: every assertion below is satisfied by the
+/// OBJECT-level filter alone (`o.deleted_at IS NULL`), because the fixture only ever deletes
+/// the object -- a child-level filter (`a.deleted_at IS NULL`, `r.deleted_at IS NULL`,
+/// `t.deleted_at IS NULL`) could be missing entirely from every one of these four read paths
+/// and this test would still pass. `a_deleting_only_a_child_hides_it_from_every_read_path`
+/// below is what actually exercises those, one child at a time.
 #[tokio::test]
 async fn a_deleted_objects_children_vanish_from_every_read_path() {
     let app = common::spawn().await;
@@ -162,6 +185,105 @@ async fn a_deleted_objects_children_vanish_from_every_read_path() {
     assert_eq!(app.client.get(app.url(&format!("/files/{file_id}"))).send().await.unwrap().status(), 404);
 }
 
+/// The sibling above deletes the OBJECT, so every one of its assertions is satisfied by the
+/// object-level filter (`o.deleted_at IS NULL`) alone -- a child-level filter could be missing
+/// entirely from `search.rs`, `insights.rs`, `export.rs` or the reminder digest
+/// (`api::reminders::due_for_user`) and that test would not notice. This one deletes a LIVE
+/// object's activity, and separately its reminder, with the object itself untouched, and
+/// checks only the read paths that actually depend on the CHILD's own `deleted_at`.
+#[tokio::test]
+async fn a_deleting_only_a_child_hides_it_from_every_read_path() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // -- An activity, deleted on its own. `/search` and `/objects/{id}/insights` both read
+    // `activities.deleted_at` directly; neither has any reason to consult the object's.
+    let car = app.create_object(&app.client, "Kwyjibo", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
+        .json(&json!({
+            "date": "2026-01-01", "category": "repair",
+            "title": "Kwyjibo timing belt", "notes": "", "counter_value": 1000, "cost_cents": 5000
+        }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let activity_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    // Sanity: visible before the delete, so the assertions below test the delete's effect and
+    // not an empty fixture.
+    let r: serde_json::Value =
+        app.client.get(app.url("/search?q=Kwyjibo")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["activities"].as_array().unwrap().len(), 1, "{r}");
+    let insights: serde_json::Value = app.client.get(app.url(&format!("/objects/{object_id}/insights")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(insights["by_year"].as_array().unwrap().len(), 1, "{insights}");
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/activities/{activity_id}"))).send().await.unwrap().status(),
+        204
+    );
+
+    // The object itself is still very much alive -- only its child is gone.
+    assert_eq!(app.client.get(app.url(&format!("/objects/{object_id}"))).send().await.unwrap().status(), 200);
+
+    let r: serde_json::Value =
+        app.client.get(app.url("/search?q=Kwyjibo")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["objects"].as_array().unwrap().len(), 1, "the live object still matches: {r}");
+    assert_eq!(r["activities"].as_array().unwrap().len(), 0, "a deleted activity must not surface: {r}");
+
+    let insights: serde_json::Value = app.client.get(app.url(&format!("/objects/{object_id}/insights")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(insights["by_year"].as_array().unwrap().len(), 0, "a deleted activity must not roll into insights: {insights}");
+    assert_eq!(insights["by_category"].as_array().unwrap().len(), 0, "{insights}");
+
+    let obj = export_object(&app, "Kwyjibo").await;
+    assert_eq!(obj["activities"].as_array().unwrap().len(), 0, "a deleted activity must not appear in export: {obj}");
+
+    // -- A reminder, deleted on its own. `/export` reads `reminders.deleted_at` directly, and
+    // the reminder digest (`notify::collect`, via `due_for_user`) is built from the same
+    // filter -- again, independently of whatever the object's own `deleted_at` says.
+    let bike = app.create_object(&app.client, "Zyzzybalubah", Some("km")).await;
+    let bike_id = bike["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{bike_id}/reminders")))
+        .json(&json!({ "title": "Zyzzybalubah service", "due_date": "2020-01-01" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let reminder_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    assert!(
+        logby::notify::collect(&app.state).await.unwrap().is_some(),
+        "sanity: the reminder really is due before the delete"
+    );
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/reminders/{reminder_id}"))).send().await.unwrap().status(),
+        204
+    );
+
+    assert_eq!(app.client.get(app.url(&format!("/objects/{bike_id}"))).send().await.unwrap().status(), 200);
+    assert!(
+        logby::notify::collect(&app.state).await.unwrap().is_none(),
+        "a deleted reminder must not appear in the digest, even though its object is alive"
+    );
+
+    let obj = export_object(&app, "Zyzzybalubah").await;
+    assert_eq!(obj["reminders"].as_array().unwrap().len(), 0, "a deleted reminder must not appear in export: {obj}");
+}
+
+/// Fetches a full export and returns the one object named `name`, as a JSON value, so a test
+/// can inspect its nested activities/reminders/attachments arrays.
+async fn export_object(app: &common::TestApp, name: &str) -> serde_json::Value {
+    let res = app.client.get(app.url("/export")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let zip_bytes = res.bytes().await.unwrap().to_vec();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+    let mut data_json = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("data.json").unwrap(), &mut data_json).unwrap();
+    let data: serde_json::Value = serde_json::from_str(&data_json).unwrap();
+    data["objects"].as_array().unwrap().iter().find(|o| o["name"] == name).cloned()
+        .unwrap_or_else(|| panic!("no object named {name} in the export: {data}"))
+}
+
 /// An op batch as the wire format expects it.
 fn push_body(ops: serde_json::Value) -> serde_json::Value {
     json!({ "ops": ops })
@@ -179,7 +301,7 @@ async fn a_set_op_updates_the_row_and_is_logged() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-1", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Golf VII",
-        "edited_at": "2031-02-01T10:00:00Z", "device_id": "phone"
+        "edited_at": after_now(2714460), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -207,12 +329,12 @@ async fn an_older_edit_is_superseded_but_still_recorded() {
     let newer = json!([{
         "client_op_id": "op-new", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Newer",
-        "edited_at": "2031-02-02T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(2764860), "device_id": "phone"
     }]);
     let older = json!([{
         "client_op_id": "op-old", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Older",
-        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(2678460), "device_id": "phone"
     }]);
     app.client.post(app.url("/sync/push")).json(&push_body(newer)).send().await.unwrap();
     let res = app.client.post(app.url("/sync/push")).json(&push_body(older)).send().await.unwrap();
@@ -239,12 +361,25 @@ async fn a_replayed_push_is_idempotent() {
     let batch = push_body(json!([{
         "client_op_id": "op-same", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Once",
-        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(2678460), "device_id": "phone"
     }]));
+    // Both attempts must answer `accepted`: the first because it genuinely applied, the
+    // second because idempotency reports the earlier attempt's outcome, not a fresh
+    // `superseded` from replaying against the clock its own first attempt just stamped.
+    // Asserting only the log count below would pass just the same if the first attempt had
+    // silently lost last-write-wins -- a `changes` row is written for `superseded` too (see
+    // `an_older_edit_is_superseded_but_still_recorded`), so a log count of 1 alone does not
+    // prove this op ever actually applied.
     for _ in 0..2 {
         let res = app.client.post(app.url("/sync/push")).json(&batch).send().await.unwrap();
         assert_eq!(res.status(), 200);
+        let body: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
     }
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Once", "the op actually applied, not merely logged");
+
     let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-same'")
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(logged, 1, "the same op id lands exactly once");
@@ -259,12 +394,20 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
-    // Whole seconds first, then a value half a second LATER written with a fraction. Compared
-    // as raw strings the fractional one loses ('.' < 'Z'), so a lexical rule would keep "Early".
-    for (id, value, at) in [
-        ("op-whole", "Early", "2031-08-01T00:00:00Z"),
-        ("op-frac", "Later", "2031-08-01T00:00:00.500Z"),
-    ] {
+    // An anchor safely in the future, floored to a whole second so "whole" and "frac" below
+    // differ by exactly 500ms with nothing left to chance from `Utc::now()`'s own fraction.
+    let anchor = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        (chrono::Utc::now() + chrono::Duration::seconds(600)).timestamp(), 0,
+    ).unwrap();
+    // No fraction at all -- what a client that never bothered with sub-second precision sends.
+    let whole = anchor.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // Half a second LATER, written with a fraction. Compared as raw strings the fractional one
+    // loses ('.' < 'Z'), so a lexical rule would keep "Early"; canonicalization is what stops
+    // that.
+    let frac = (anchor + chrono::Duration::milliseconds(500))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+    for (id, value, at) in [("op-whole", "Early", whole.as_str()), ("op-frac", "Later", frac.as_str())] {
         let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": id, "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": value,
@@ -277,11 +420,13 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Later", "the chronologically later edit must win");
 
-    // An offset-form timestamp is the same instant as its Z form and must not re-win.
+    // The same instant as `whole`, in offset-notation form (`+00:00` rather than `Z`); must
+    // not re-win over the "Later" (`frac`) value it is chronologically earlier than.
+    let offset_form = anchor.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-offset", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Earlier still",
-        "edited_at": "2031-08-01T00:00:00+00:00", "device_id": "phone"
+        "edited_at": offset_form, "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "superseded");
 
@@ -309,7 +454,7 @@ async fn a_field_outside_the_whitelist_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-evil", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "user_id", "value": 2,
-        "edited_at": "2031-02-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(2678460), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected");
@@ -344,7 +489,7 @@ async fn a_foreign_key_field_cannot_point_at_another_users_row() {
     let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-steal", "entity": "object", "entity_uuid": their_uuid,
         "op": "set", "field": "cover_attachment_id", "value": victim_attachment,
-        "edited_at": "2031-07-01T00:00:00Z", "device_id": "mallory-phone"
+        "edited_at": after_now(15638460), "device_id": "mallory-phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected");
@@ -393,19 +538,19 @@ async fn results_stay_in_the_order_the_ops_were_sent() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "ord-1", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": "First",
-          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(5097660), "device_id": "phone" },
         { "client_op_id": "ord-2", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "category", "value": "car",
           "edited_at": "not a timestamp", "device_id": "phone" },
         { "client_op_id": "ord-3", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "description", "value": "Mine",
-          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(5097660), "device_id": "phone" },
         { "client_op_id": "ord-4", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "user_id", "value": 2,
-          "edited_at": "2031-03-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(5097660), "device_id": "phone" },
         { "client_op_id": "ord-5", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": "Superseded by ord-1",
-          "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": after_now(60), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -454,7 +599,7 @@ async fn two_users_can_use_the_same_client_op_id() {
         let res = client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": "op-shared", "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": name,
-            "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
+            "edited_at": after_now(10368060), "device_id": "phone"
         }]))).send().await.unwrap();
         assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
         let body: serde_json::Value = res.json().await.unwrap();
@@ -494,7 +639,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-cover", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13046460), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
 
@@ -504,7 +649,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-junk-fk", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": "not-an-id",
-        "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13132860), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
@@ -518,7 +663,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-clear-fk", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "cover_attachment_id", "value": null,
-        "edited_at": "2031-06-03T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13219260), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
@@ -674,13 +819,13 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "mine-act", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "title", "value": "Timing belt done",
-          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" },
+          "edited_at": after_now(2678460), "device_id": "ben-phone" },
         { "client_op_id": "mine-rem", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "title", "value": "Service booked",
-          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" },
+          "edited_at": after_now(2678460), "device_id": "ben-phone" },
         { "client_op_id": "mine-att", "entity": "attachment", "entity_uuid": attachment_uuid,
           "op": "set", "field": "caption", "value": "The old belt",
-          "edited_at": "2031-02-01T00:00:00Z", "device_id": "ben-phone" }
+          "edited_at": after_now(2678460), "device_id": "ben-phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -714,7 +859,7 @@ async fn a_delete_op_tombstones_the_row_and_the_api_stops_serving_it() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -755,16 +900,16 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "ok-before", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "description", "value": "Mine",
-          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(7776060), "device_id": "phone" },
         { "client_op_id": "bad-null", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "name", "value": null,
-          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(7776060), "device_id": "phone" },
         { "client_op_id": "bad-check", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "counter_unit", "value": "furlongs",
-          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(7776060), "device_id": "phone" },
         { "client_op_id": "ok-after", "entity": "object", "entity_uuid": uuid,
           "op": "set", "field": "category", "value": "boat",
-          "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": after_now(7776060), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -824,10 +969,10 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "num-float", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_price_cents", "value": 1250.5,
-          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(10454460), "device_id": "phone" },
         { "client_op_id": "num-huge", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": 100000000000000000000000_i128 as f64,
-          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" }
+          "edited_at": after_now(10454460), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -855,7 +1000,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "num-repair", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "purchase_price_cents", "value": 1250,
-        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(10368060), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the client can still repair: {body}");
@@ -868,7 +1013,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "num-int", "entity": "activity", "entity_uuid": activity_uuid,
         "op": "set", "field": "cost_cents", "value": 9900,
-        "edited_at": "2031-05-03T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(10540860), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
@@ -896,12 +1041,12 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
         // A string into an INTEGER column: the unrepairable 500 above.
         { "client_op_id": "type-str-into-int", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": "abc",
-          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(10454460), "device_id": "phone" },
         // And the milder direction, which corrupts silently: SQLite stores `true` in a TEXT
         // column as '1', so the object's name would have become the string "1".
         { "client_op_id": "type-bool-into-text", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "name", "value": true,
-          "edited_at": "2031-05-02T00:00:00Z", "device_id": "phone" }
+          "edited_at": after_now(10454460), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -936,7 +1081,7 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "type-repair", "entity": "activity", "entity_uuid": activity_uuid,
         "op": "set", "field": "counter_value", "value": 2000,
-        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(10368060), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the rejected op left no clock: {body}");
@@ -958,7 +1103,9 @@ async fn pull_returns_ops_after_the_cursor_and_advances_it() {
         app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": n, "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": name,
-            "edited_at": format!("2031-03-0{}T00:00:00Z", if n == "op-a" { 1 } else { 2 }),
+            // op-a strictly earlier than op-b, one day apart -- the gap is what pull's
+            // ordering is pinned against, not the absolute date.
+            "edited_at": after_now(5097660 + if n == "op-a" { 0 } else { 86400 }),
             "device_id": "phone"
         }]))).send().await.unwrap();
     }
@@ -989,7 +1136,8 @@ async fn pull_pages_and_reports_incompleteness() {
         app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": format!("op-{i}"), "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "description", "value": format!("note {i}"),
-            "edited_at": format!("2031-04-0{}T00:00:00Z", i + 1), "device_id": "phone"
+            // Each op a day after the last -- the gaps are what paging is pinned against.
+            "edited_at": after_now(7776060 + i as i64 * 86400), "device_id": "phone"
         }]))).send().await.unwrap();
     }
 
@@ -997,6 +1145,95 @@ async fn pull_pages_and_reports_incompleteness() {
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(body["changes"].as_array().unwrap().len(), 2);
     assert_eq!(body["complete"], false, "more remains behind the page");
+}
+
+/// Every other pull test checks counts; none pins a single field of a `ChangeRow`, so the
+/// whole wire contract a phone client is about to be built against is unpinned. `value` is the
+/// sharpest trap: `changes.value` stores `op.value.to_string()` (`api::sync::push`), the JSON
+/// TEXT of the op's own value, so a plain string arrives double-encoded -- a JSON string
+/// literal sitting inside the outer JSON string.
+#[tokio::test]
+async fn a_pulled_change_rows_fields_match_the_op_that_produced_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf VI", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let edited_at = after_now(60);
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-wire", "entity": "object", "entity_uuid": &uuid,
+        "op": "set", "field": "name", "value": "Golf VII",
+        "edited_at": &edited_at, "device_id": "phone-42"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
+
+    let body: serde_json::Value =
+        app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let row = body["changes"].as_array().unwrap().iter()
+        .find(|c| c["op"] == "set" && c["field"] == "name")
+        .unwrap_or_else(|| panic!("no set/name row in {body}"));
+
+    assert_eq!(row["entity"], "object");
+    assert_eq!(row["entity_uuid"], uuid);
+    assert_eq!(row["op"], "set");
+    assert_eq!(row["field"], "name");
+    assert_eq!(row["value"], "\"Golf VII\"", "a string value arrives double-encoded");
+    // `edited_at` was already millisecond-precision (`after_now` uses the same
+    // `SecondsFormat::Millis` canonical form), so this also pins canonicalization as
+    // idempotent on an already-canonical value, not merely present.
+    assert_eq!(row["edited_at"], edited_at);
+    assert_eq!(row["device_id"], "phone-42");
+    assert!(row["seq"].as_i64().unwrap() > 0);
+}
+
+/// Chains partial pages end to end and confirms every row surfaces exactly once, in `seq`
+/// order, with `complete` true only on the last one -- the property a phone client actually
+/// depends on to catch up without gaps or duplicates.
+#[tokio::test]
+async fn pull_pages_chain_to_deliver_every_row_exactly_once_in_seq_order() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // 7 pushed sets, plus the object's own `create` already in the log: 8 rows, which does not
+    // divide evenly by the page size below, so the last page is genuinely partial rather than
+    // landing on the boundary by luck.
+    for i in 0..7 {
+        app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": format!("op-{i}"), "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "description", "value": format!("note {i}"),
+            "edited_at": after_now(60 + i as i64), "device_id": "phone"
+        }]))).send().await.unwrap();
+    }
+
+    let mut seen: Vec<i64> = Vec::new();
+    let mut since = 0i64;
+    loop {
+        let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&limit=3")))
+            .send().await.unwrap().json().await.unwrap();
+        let changes = body["changes"].as_array().unwrap();
+        let complete = body["complete"].as_bool().unwrap();
+        assert!(complete || changes.len() == 3, "an incomplete page must be full: {body}");
+        for c in changes {
+            seen.push(c["seq"].as_i64().unwrap());
+        }
+        since = body["next_seq"].as_i64().unwrap();
+        if complete {
+            break;
+        }
+    }
+
+    assert_eq!(seen.len(), 8, "1 create + 7 sets, across however many pages it took");
+    let mut sorted = seen.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, seen, "every row exactly once, already in seq order");
 }
 
 #[tokio::test]
@@ -1010,7 +1247,7 @@ async fn pull_never_leaks_another_users_changes() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-ben", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Ben's",
-        "edited_at": "2031-05-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(10368060), "device_id": "phone"
     }]))).send().await.unwrap();
 
     let other = app.create_user_client("mallory", "another password").await;
@@ -1030,7 +1267,7 @@ async fn a_cursor_before_the_horizon_is_gone() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kept", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Kept",
-        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13046460), "device_id": "phone"
     }]))).send().await.unwrap();
 
     // Simulate a purge having removed everything before this row -- including the object's
@@ -1043,6 +1280,41 @@ async fn a_cursor_before_the_horizon_is_gone() {
 
     let res = app.client.get(app.url("/sync/pull?since=1")).send().await.unwrap();
     assert_eq!(res.status(), 410, "a stale cursor must be told to re-bootstrap");
+}
+
+/// `api::sync::pull` rejects `since < horizon - 1`, not `since <= horizon` or any other
+/// off-by-one -- `since == horizon - 1` means the client has already seen the row one below
+/// the oldest surviving `seq`, so nothing was purged out from under it; `since == horizon - 2`
+/// means it is missing exactly the row the horizon itself sits on. Mutation testing proved the
+/// existing tests do not pin the exact boundary: changing `- 1` to `- 2` (the data-losing
+/// direction -- a client landing exactly on the boundary would be told 200 and silently
+/// resume past a purged row) left `cargo test --test sync` green.
+#[tokio::test]
+async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+    app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-kept", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Kept",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+
+    // As in the sibling test above: simulate a purge leaving exactly one row, at seq 500, so
+    // the horizon (the oldest surviving seq) is 500.
+    sqlx::query("DELETE FROM changes WHERE client_op_id != 'op-kept'")
+        .execute(&app.state.db).await.unwrap();
+    sqlx::query("UPDATE changes SET seq = 500 WHERE client_op_id = 'op-kept'")
+        .execute(&app.state.db).await.unwrap();
+
+    let res = app.client.get(app.url("/sync/pull?since=499")).send().await.unwrap();
+    assert_eq!(res.status(), 200, "since == horizon - 1 (499) has missed nothing and must be accepted");
+
+    let res = app.client.get(app.url("/sync/pull?since=498")).send().await.unwrap();
+    assert_eq!(res.status(), 410, "since == horizon - 2 (498) has missed seq 499 and must be refused");
 }
 
 #[tokio::test]
@@ -1100,6 +1372,67 @@ async fn bootstrap_is_scoped_to_the_caller() {
     assert_eq!(body["objects"].as_array().unwrap().len(), 0);
 }
 
+/// The sibling above only pins `objects` -- `feed::snapshot`'s activities/reminders/
+/// attachments/files queries are four more statements, each with its own `WHERE`, and nothing
+/// about the objects check proves any of them are scoped. Mutation testing confirmed it:
+/// stripping `o.user_id = ?` and `o.deleted_at IS NULL` from all four left the whole suite
+/// green. This pins two failure modes those clauses guard against: another account's rows
+/// leaking in (the `user_id`/join half), and a LIVE child surviving in a snapshot because its
+/// parent object was tombstoned without it (the `o.deleted_at IS NULL` half) -- which the
+/// child's own `deleted_at IS NULL` filter cannot catch on its own, since the child really is
+/// live.
+#[tokio::test]
+async fn bootstrap_scopes_every_child_table_and_hides_a_live_child_of_a_tombstoned_object() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    object_with_children(&app, &app.client, "Golf").await;
+
+    // -- Cross-account: a second account with an object of its own, and none of ben's rows,
+    // must see none of ben's activities, reminders, attachments or files.
+    let mallory = app.create_user_client("mallory", "another password").await;
+    app.create_object(&mallory, "Bike", None).await;
+
+    let body: serde_json::Value = mallory.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+    for table in ["activities", "reminders", "attachments", "files"] {
+        assert_eq!(
+            body[table].as_array().unwrap().len(), 0,
+            "mallory's bootstrap must not carry ben's {table}: {body}"
+        );
+    }
+
+    // -- A live child of a tombstoned object. `api::objects::delete` always cascades the
+    // tombstone to every child, so reaching "object gone, child still live" needs a raw update
+    // that bypasses the cascade -- exactly the shape a bug in that cascade (or a hand-run
+    // migration) would leave behind, and precisely what the join's `o.deleted_at IS NULL` has
+    // to catch since the child rows here are otherwise ordinary and live.
+    let (orphan_object, orphan_activity, orphan_reminder, orphan_attachment) =
+        object_with_children(&app, &app.client, "Orphaned").await;
+    sqlx::query("UPDATE objects SET deleted_at = ? WHERE id = ?")
+        .bind(logby::db::now()).bind(orphan_object).execute(&app.state.db).await.unwrap();
+    let object_deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = ?")
+        .bind(orphan_object).fetch_one(&app.state.db).await.unwrap();
+    assert!(object_deleted.is_some(), "fixture setup: the object must be tombstoned");
+    for (table, id) in [
+        ("activities", orphan_activity), ("reminders", orphan_reminder), ("attachments", orphan_attachment),
+    ] {
+        let deleted: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT deleted_at FROM {table} WHERE id = ?"
+        )))
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+        assert!(deleted.is_none(), "fixture setup: the {table} row must still be live");
+    }
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+    for table in ["activities", "reminders", "attachments"] {
+        assert!(
+            body[table].as_array().unwrap().iter().all(|r| r["object_id"] != orphan_object),
+            "a live child of a tombstoned object must not appear in {table}: {body}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn purge_drops_old_log_rows_and_old_tombstones() {
     let app = common::spawn().await;
@@ -1112,7 +1445,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-ancient", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Ancient",
-        "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(60), "device_id": "phone"
     }]))).send().await.unwrap();
 
     // Backdate both the log row and a tombstone well past any sane window.
@@ -1146,7 +1479,7 @@ async fn purge_keeps_recent_history() {
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-fresh", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Fresh",
-        "edited_at": "2031-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(60), "device_id": "phone"
     }]))).send().await.unwrap();
 
     assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
@@ -1216,7 +1549,7 @@ async fn a_pushed_object_delete_cascades_tombstones_and_logs_each_child() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1288,7 +1621,7 @@ async fn a_pushed_activity_delete_cascades_to_its_attachments() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1322,7 +1655,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
     let cover: Option<i64> =
@@ -1332,7 +1665,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-attachment", "entity": "attachment", "entity_uuid": attachment_uuid,
-        "op": "delete", "edited_at": "2031-04-02T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7862460), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1364,7 +1697,7 @@ async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_acti
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1395,7 +1728,7 @@ async fn a_pushed_activity_delete_bumps_its_own_updated_at() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1429,7 +1762,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1499,7 +1832,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
         let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
             "client_op_id": "op-name", "entity": "object", "entity_uuid": &object_uuid,
             "op": "set", "field": "name", "value": "Renamed",
-            "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+            "edited_at": after_now(7776060), "device_id": "phone"
         }]))).send().await.unwrap();
         assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
@@ -1597,7 +1930,7 @@ async fn a_delete_op_on_a_file_is_rejected_and_leaves_it_live() {
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-del-file", "entity": "file", "entity_uuid": file_uuid,
-        "op": "delete", "edited_at": "2031-04-01T00:00:00Z", "device_id": "phone"
+        "op": "delete", "edited_at": after_now(7776060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1632,46 +1965,46 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
     let cases = json!([
         { "client_op_id": "v-obj-name", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "name", "value": "   ",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-obj-category", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "category", "value": "",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-obj-date", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_date", "value": "not-a-date",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-obj-price", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_price_cents", "value": -999,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-act-date", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "date", "value": "not-a-date",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-act-title", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "title", "value": "",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-act-cost", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "cost_cents", "value": -1,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-act-counter", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "counter_value", "value": -1,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-act-qty", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "quantity_milli", "value": -1,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-rem-title", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "title", "value": "",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-rem-date", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "due_date", "value": "not-a-date",
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-rem-due-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "due_counter", "value": -1,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-rem-repeat-months", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "repeat_months", "value": 0,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-rem-repeat-counter", "entity": "reminder", "entity_uuid": reminder_uuid,
           "op": "set", "field": "repeat_counter", "value": 0,
-          "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone" }
+          "edited_at": after_now(13046460), "device_id": "phone" }
     ]);
     let ids: Vec<String> = cases.as_array().unwrap().iter()
         .map(|c| c["client_op_id"].as_str().unwrap().to_string()).collect();
@@ -1727,10 +2060,10 @@ async fn create_and_delete_ops_never_store_a_field_or_value() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "junk-create", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "create", "field": "title", "value": "should not be stored",
-          "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone" },
+          "edited_at": after_now(13132860), "device_id": "phone" },
         { "client_op_id": "junk-delete", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "delete", "field": "title", "value": "should not be stored either",
-          "edited_at": "2031-06-02T00:00:01Z", "device_id": "phone" }
+          "edited_at": after_now(13132861), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1762,14 +2095,14 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": attachment_id,
-        "edited_at": "2031-06-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13046460), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kind-away", "entity": "attachment", "entity_uuid": attachment_uuid,
         "op": "set", "field": "kind", "value": "document",
-        "edited_at": "2031-06-02T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13132860), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
@@ -1786,14 +2119,14 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-clear-cover", "entity": "object", "entity_uuid": object_uuid,
         "op": "set", "field": "cover_attachment_id", "value": null,
-        "edited_at": "2031-06-03T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13219260), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "op-kind-ok", "entity": "attachment", "entity_uuid": attachment_uuid,
         "op": "set", "field": "kind", "value": "document",
-        "edited_at": "2031-06-04T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(13305660), "device_id": "phone"
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
@@ -1814,11 +2147,11 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
 /// A REST write never checks `wins` itself -- it always describes what a live user just did,
 /// so it always applies and always re-stamps the clock at the real current instant (see
 /// `sync::record::record_update`). The first phone op below is dated safely in the future
-/// (2032) purely so it clears the clock `record_create` already stamped at real "now" when
-/// the object was made, and is accepted -- establishing that the browser's later overwrite
-/// really is competing against a *newer*-looking stamp, not an empty one. The second phone op
-/// is dated in early 2026, safely before whatever "now" this test runs at, standing in for
-/// "before the browser's edit" without depending on wall-clock timing precision.
+/// (`after_now`) purely so it clears the clock `record_create` already stamped at real "now"
+/// when the object was made, and is accepted -- establishing that the browser's later
+/// overwrite really is competing against a *newer*-looking stamp, not an empty one. The second
+/// phone op is dated safely in the past (`before_now`), standing in for "before the browser's
+/// edit" without depending on wall-clock timing precision.
 #[tokio::test]
 async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     let app = common::spawn().await;
@@ -1831,15 +2164,15 @@ async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "phone-op-1", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Phone Golf",
-        "edited_at": "2032-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": after_now(31536060), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
 
     // The browser edits the same field over REST. Every other field is resent unchanged so
     // only `name` moves. This unconditionally overwrites `field_clock` to the real current
-    // instant, regardless of the phone's on-paper-later 2032 stamp -- a REST write always
-    // reflects what just happened.
+    // instant, regardless of the phone's on-paper-later stamp -- a REST write always reflects
+    // what just happened.
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
         "name": "Browser Golf", "category": "car", "counter_unit": "km", "description": "",
         "purchase_date": null, "purchase_price_cents": null
@@ -1849,7 +2182,7 @@ async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "phone-op-2", "entity": "object", "entity_uuid": uuid,
         "op": "set", "field": "name", "value": "Late Phone Golf",
-        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+        "edited_at": before_now(60), "device_id": "phone"
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();

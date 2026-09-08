@@ -18,7 +18,6 @@
 //! that from happening a third time.
 
 use crate::error::AppError;
-use crate::sync::apply::canonical_edited_at;
 use crate::sync::{Entity, OpKind};
 
 /// Identifies the REST path as an LWW participant in `field_clock` and `changes`.
@@ -31,14 +30,24 @@ use crate::sync::{Entity, OpKind};
 pub(crate) const DEVICE_ID: &str = "rest";
 
 /// The current instant, in the one canonical form `wins` can compare (see rule 1 in the module
-/// docs of `sync::apply`: `db::now()`'s second-precision `Z` sorts, lexically, *above* any
-/// millisecond-precision value from `canonical_edited_at`, even one that is chronologically
-/// later). Routing the server's own clock reading through the exact function that canonicalises
-/// a client's `edited_at` guarantees a REST write's clock is stored in the identical shape,
-/// rather than merely a similar-looking one that happens to also parse.
+/// docs of `sync::apply`: `wins` compares `edited_at` lexically, which is only chronological
+/// when every stored value shares the same width and zone spelling -- UTC, fixed millisecond
+/// precision, trailing `Z`, exactly what `canonical_edited_at` produces for a client's own
+/// `edited_at`). A REST write's clock has to land in that identical shape, not merely a
+/// similar-looking one, or `wins`'s comparison against it is meaningless.
+///
+/// Deliberately NOT `canonical_edited_at(&db::now())`, even though that also yields the right
+/// shape: `db::now()` is `SecondsFormat::Secs`, so every millisecond digit it could have kept
+/// is already gone before `canonical_edited_at` ever sees it, and what comes out the other end
+/// is always `…:SS.000Z` -- the right FORM wrapped around a value that is never later than the
+/// top of its own second, up to 999ms earlier than the write actually happened. A phone op
+/// edited at `…:SS.400Z`, genuinely earlier than a browser edit at `…:SS.900Z`, still beat it
+/// under `wins` when the browser's own clock only ever remembered `…:SS.000Z` -- the exact lost
+/// update this module exists to close, surviving inside the one-second window. Reading the
+/// clock directly at the millisecond precision `wins` actually compares at is the fix: it is
+/// the point, not an optimisation on top of the shape being right.
 pub(crate) fn edited_at_now() -> String {
-    canonical_edited_at(&crate::db::now())
-        .expect("db::now() always yields an RFC3339 value canonical_edited_at can parse")
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// The `client_uuid` of `entity`'s row `id`.
