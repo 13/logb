@@ -117,6 +117,10 @@ async fn rows(
 /// still inside the window always finds the delete in the log before the row itself vanishes.
 /// Beyond the window a device has to re-bootstrap anyway, which is precisely when it no longer
 /// needs the tombstone to learn the row is gone.
+///
+/// That promise is only kept if no row can be removed through a parent's `ON DELETE CASCADE`
+/// ahead of its own expiry, so a parent whose children have not all aged out is skipped and
+/// tried again next run. See the guards on the delete loop below.
 pub async fn purge(
     state: &crate::state::App,
     retention_days: i64,
@@ -143,10 +147,39 @@ pub async fn purge(
     // `files` is absent deliberately: nothing sets `files.deleted_at`, because a file is
     // content-addressed and shared between attachments. A file dies when its last attachment
     // does, which is what `purge_orphan_files` decides below.
-    for table in ["attachments", "activities", "reminders", "objects"] {
-        // `table` only ever comes from the fixed list above, never from user input -- exactly
-        // the audit `AssertSqlSafe` asks the author to have made before sqlx will accept it.
-        let sql = format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < ?");
+    //
+    // The `NOT EXISTS` guards are defence in depth, and the reason the order below matters.
+    // `foreign_keys(true)` plus the schema's `ON DELETE CASCADE` means the hard delete of a
+    // parent takes every child with it, whatever state that child is in. A delete path that
+    // forgets to cascade tombstones -- as `sync::apply::apply_op` once did -- therefore turns
+    // this purge into a silent destroyer of LIVE rows: gone with no tombstone and no `changes`
+    // entry, so no device ever learns they existed, and a destroyed attachment strands its
+    // `files` row where the pinned list above (built from tombstoned attachments only) can
+    // never see it, leaking the blob on disk forever.
+    //
+    // Children are purged before their parents, so by the time a parent is considered every
+    // child tombstone that has aged out is already gone. Any child row still present is
+    // therefore either live or a tombstone still inside the window -- exactly the two kinds
+    // this function promises not to destroy early. So the parent waits instead. Waiting is
+    // recoverable: the row is still there next run, and the anomaly stays visible. Tombstoning
+    // the stragglers here instead would stamp them with today's date and could not log them --
+    // the log rows for their window are already gone, and a purge has no device to attribute
+    // them to -- so no device would ever learn of them and the next run would destroy them for
+    // good. That is the same silent loss wearing a tidier hat.
+    let guards = [
+        ("attachments", ""),
+        ("activities", "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)"),
+        ("reminders", ""),
+        ("objects", "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
+                     AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
+                     AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
+    ];
+    for (table, guard) in guards {
+        // `table` and `guard` only ever come from the fixed list above, never from user input
+        // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
+        // accept it.
+        let sql =
+            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < ? {guard}");
         sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(db).await?;
     }
 
@@ -156,11 +189,22 @@ pub async fn purge(
     crate::api::attachments::purge_orphan_files(state, &pinned).await?;
 
     // A field clock for a row nobody can name any more is dead weight.
+    //
+    // A correlated `NOT EXISTS` per table, not `entity_uuid NOT IN (SELECT client_uuid ...)`.
+    // `client_uuid` is nullable on all five tables, and `x NOT IN (subquery)` evaluates to
+    // UNKNOWN -- never true -- for EVERY row the moment that subquery yields a single NULL. So
+    // one row anywhere in the database without a uuid disabled this sweep entirely, for every
+    // genuinely orphaned clock, permanently and with nothing to show for it. `NOT EXISTS` asks
+    // the only question that matters, "does any row still carry this uuid", and a NULL uuid
+    // simply never matches -- which is right, since a row with no uuid is not one a
+    // `field_clock` row could have been naming.
     sqlx::query(
-        "DELETE FROM field_clock WHERE entity_uuid NOT IN (\
-           SELECT client_uuid FROM objects UNION ALL SELECT client_uuid FROM activities \
-           UNION ALL SELECT client_uuid FROM reminders UNION ALL SELECT client_uuid FROM attachments \
-           UNION ALL SELECT client_uuid FROM files)")
+        "DELETE FROM field_clock WHERE \
+           NOT EXISTS (SELECT 1 FROM objects WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM activities WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid)")
         .execute(db)
         .await?;
 

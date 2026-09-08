@@ -1187,3 +1187,221 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(files, 0, "the files row goes with its last attachment");
 }
+
+/// A delete arriving over sync has to leave the same database behind as the same delete made
+/// over REST. It did not: `apply_op` tombstoned only the row the op named, so an object deleted
+/// through push kept live activities, reminders and attachments -- which the retention purge
+/// then hard-deleted through the schema's `ON DELETE CASCADE`, without a tombstone and without
+/// a log entry, so no other device ever learned they existed or vanished.
+#[tokio::test]
+async fn a_pushed_object_delete_cascades_tombstones_and_logs_each_child() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    for (table, id) in
+        [("activities", activity_id), ("reminders", reminder_id), ("attachments", attachment_id)]
+    {
+        let deleted: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT deleted_at FROM {table} WHERE id = ?"
+        )))
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+        assert!(deleted.is_some(), "the {table} row must be tombstoned with its object");
+    }
+
+    // A tombstone nobody is told about is the same as no tombstone at all for a device that
+    // was offline, so each cascaded child has to reach the feed on its own uuid.
+    for (entity, uuid) in [
+        ("activity", &activity_uuid),
+        ("reminder", &reminder_uuid),
+        ("attachment", &attachment_uuid),
+    ] {
+        let logged: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM changes WHERE entity = ? AND entity_uuid = ? AND op = 'delete'")
+            .bind(entity).bind(uuid).fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(logged, 1, "the cascaded {entity} delete must be in the log for other devices");
+    }
+
+    let res = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    let uuids: Vec<&str> = body["changes"].as_array().unwrap().iter()
+        .filter(|c| c["op"] == "delete")
+        .map(|c| c["entity_uuid"].as_str().unwrap())
+        .collect();
+    for uuid in [&object_uuid, &activity_uuid, &reminder_uuid, &attachment_uuid] {
+        assert!(uuids.contains(&uuid.as_str()), "pull must carry the delete of {uuid}: {uuids:?}");
+    }
+}
+
+/// The other half of the cascade `api::activities::delete` performs: an activity's attachments
+/// go with it. Without this a pushed activity delete left attachments that only the retention
+/// purge would ever remove, and it would remove them by destroying them.
+#[tokio::test]
+async fn a_pushed_activity_delete_cascades_to_its_attachments() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
+        .json(&json!({
+            "date": "2026-01-01", "category": "repair", "title": "Timing belt",
+            "notes": "", "counter_value": 1000, "cost_cents": 5000
+        }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "create activity: {}", res.text().await.unwrap());
+    let activity_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/attachments")))
+        .multipart(
+            Form::new()
+                .text("activity_id", activity_id.to_string())
+                .part("file", Part::bytes(png()).file_name("belt.png").mime_str("image/png").unwrap()),
+        )
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "create attachment: {}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    let deleted: Option<String> =
+        sqlx::query_scalar("SELECT deleted_at FROM attachments WHERE id = ?")
+            .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    assert!(deleted.is_some(), "the activity's attachment must be tombstoned with it");
+
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE entity = 'attachment' AND entity_uuid = ? \
+         AND op = 'delete'")
+        .bind(&attachment_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "the cascaded attachment delete must be in the log");
+}
+
+/// The defect this pair of fixes exists for, end to end: a pushed delete followed by a purge
+/// past the retention window must not destroy a single row silently, and must not strand a
+/// blob on disk.
+///
+/// Before the fix the purge's `DELETE FROM objects` fired `ON DELETE CASCADE` over children
+/// that were still live -- they vanished with no tombstone and no log entry, and the
+/// attachment's `files` row became unreachable: `purge` builds its pinned list from TOMBSTONED
+/// attachments, so a live one destroyed here is never a candidate and its bytes leak forever.
+#[tokio::test]
+async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+
+    let sha: String = sqlx::query_scalar(
+        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    let blob = app.state.storage.blob_path(&sha);
+    assert!(blob.exists(), "the fixture's upload landed on disk");
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    // Only the object's tombstone is aged out. Its children were tombstoned just now, so they
+    // are still inside the window and the purge has no business removing them yet -- through
+    // the cascade or otherwise.
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+        .bind(object_id).execute(&app.state.db).await.unwrap();
+    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+
+    for (table, id) in
+        [("activities", activity_id), ("reminders", reminder_id), ("attachments", attachment_id)]
+    {
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table} WHERE id = ?"
+        )))
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(rows, 1, "the {table} row is still inside the window and must survive");
+    }
+    assert!(blob.exists(), "no attachment has aged out, so its blob must still be pinned");
+    let files: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(files, 1, "the files row must not be orphaned by a destroyed attachment");
+
+    // And the wait is only a wait: once the children's own tombstones age out too, the purge
+    // finishes the job and reclaims the bytes. Holding a parent back must not wedge it.
+    for table in ["activities", "reminders", "attachments"] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {table} SET deleted_at = '2000-01-01T00:00:00Z'"
+        )))
+        .execute(&app.state.db).await.unwrap();
+    }
+    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+
+    for table in ["objects", "activities", "reminders", "attachments", "files"] {
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table}"
+        )))
+        .fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(rows, 0, "{table} should be empty once every tombstone has aged out");
+    }
+    assert!(!blob.exists(), "the expired attachment finally frees the bytes");
+}
+
+/// `client_uuid` is nullable on all five tables, so a database can hold a row without one.
+/// `entity_uuid NOT IN (SELECT client_uuid ...)` is UNKNOWN for every row the moment that
+/// subquery yields one NULL, which turned the orphan sweep into a permanent no-op for the whole
+/// database. The NULL below is deliberate: it is the hazard the sweep has to survive.
+#[tokio::test]
+async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-name", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "name", "value": "Renamed",
+        "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    // A row from before `client_uuid` existed, or from any writer that never set it.
+    sqlx::query(
+        "INSERT INTO activities (object_id, date, category, title, notes, created_at, updated_at) \
+         VALUES (?, '2026-03-05', 'other', 'Legacy', '', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
+        .bind(object_id).execute(&app.state.db).await.unwrap();
+
+    // A clock for a uuid no table carries any more: the sweep's whole reason to exist.
+    sqlx::query(
+        "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
+         VALUES ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone')")
+        .execute(&app.state.db).await.unwrap();
+
+    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+
+    let orphans: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM field_clock WHERE entity_uuid = 'gone-with-the-row'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(orphans, 0, "the orphaned clock must be swept even beside a NULL client_uuid");
+
+    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = ?")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(kept, 1, "a clock for a row that still exists must be left alone");
+}

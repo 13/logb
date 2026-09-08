@@ -165,13 +165,36 @@ pub async fn apply_op(
         // only has to be logged, so the pull feed carries it to other devices.
         OpKind::Create => Ok(Outcome::Accepted),
 
+        // A delete over sync must leave the same database behind as the same delete over REST.
+        // It is a tombstone rather than a row removal, so the schema's `ON DELETE CASCADE`
+        // never fires and the cascade has to be spelled out here, exactly as
+        // `api::objects::delete` and `api::activities::delete` spell it out.
+        //
+        // Skipping it was not merely untidy. The children stayed LIVE, and the retention purge
+        // later hard-deletes the expired parent -- a real `DELETE`, which does fire the
+        // cascade, destroying rows that never got a tombstone and never got a `changes` entry.
+        // No device could ever learn they had existed or vanished, and an attachment destroyed
+        // that way stranded its `files` row (the purge's pinned list is built from TOMBSTONED
+        // attachments, so a live one is never a candidate) and leaked its blob on disk forever.
+        //
+        // One timestamp for the parent and all its children, and the caller's transaction for
+        // all of it, so a half-applied cascade cannot survive a failure part way through.
         OpKind::Delete => {
+            let now = crate::db::now();
             let sql = format!(
                 "UPDATE {} SET deleted_at = ? WHERE client_uuid = ? AND deleted_at IS NULL",
                 op.entity.table()
             );
-            sqlx::query(sqlx::AssertSqlSafe(sql)).bind(crate::db::now()).bind(&op.entity_uuid)
+            sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&now).bind(&op.entity_uuid)
                 .execute(&mut *tx).await?;
+
+            let cascaded = match op.entity {
+                Entity::Object => cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
+                Entity::Activity => cascade_activity(&mut *tx, &op.entity_uuid, &now).await?,
+                // Reminders, attachments and files have no children of their own.
+                Entity::Reminder | Entity::Attachment | Entity::File => Vec::new(),
+            };
+            log_cascade(&mut *tx, user_id, op, &cascaded).await?;
             Ok(Outcome::Accepted)
         }
 
@@ -285,6 +308,129 @@ pub async fn apply_op(
             Ok(Outcome::Accepted)
         }
     }
+}
+
+/// Tombstones an object's activities, reminders and attachments, answering the children this
+/// call actually tombstoned so the caller can log them.
+///
+/// Mirrors `api::objects::delete`: the same three tables, and `deleted_at IS NULL` on each so a
+/// child tombstoned earlier keeps its original time instead of being restamped by a repeat of
+/// the parent's delete -- and so a repeat contributes nothing to the log the second time.
+///
+/// Attachments are matched on `object_id`, not on their activity, because every attachment
+/// carries the object it belongs to whether or not it also names an activity. That is the same
+/// column the REST handler uses, so neither path can reach a row the other misses.
+async fn cascade_object(
+    tx: &mut sqlx::SqliteConnection,
+    object_uuid: &str,
+    now: &str,
+) -> Result<Vec<(Entity, String)>, AppError> {
+    let mut cascaded = Vec::new();
+    for entity in [Entity::Activity, Entity::Reminder, Entity::Attachment] {
+        // The table name comes from `Entity::table` over a closed set fixed above, never from
+        // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
+        // the author to have made.
+        let table = entity.table();
+        const MINE: &str =
+            "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ?)";
+        // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
+        // rows this cascade is about to claim.
+        let select = format!("SELECT client_uuid FROM {table} WHERE {MINE}");
+        let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
+            .bind(object_uuid).fetch_all(&mut *tx).await?;
+        let update = format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}");
+        sqlx::query(sqlx::AssertSqlSafe(update))
+            .bind(now).bind(object_uuid).execute(&mut *tx).await?;
+        cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
+    }
+    Ok(cascaded)
+}
+
+/// Tombstones an activity's attachments and unhooks the references to it, answering the
+/// attachments this call tombstoned.
+///
+/// Mirrors `api::activities::delete`, including the two statements that are not tombstones:
+/// an object's cover and a reminder's `done_activity_id` would otherwise keep pointing at rows
+/// the API now reads as absent. `ON DELETE SET NULL` cannot fire for an UPDATE either, so both
+/// are written by hand -- and if only the REST path did so, the two delete paths would leave
+/// different databases behind for the same op.
+async fn cascade_activity(
+    tx: &mut sqlx::SqliteConnection,
+    activity_uuid: &str,
+    now: &str,
+) -> Result<Vec<(Entity, String)>, AppError> {
+    // As in the REST handler, the cover subquery deliberately does not skip tombstoned
+    // attachments: an object pointing at one has a stale cover, and clearing it is the point.
+    sqlx::query(
+        "UPDATE objects SET cover_attachment_id = NULL \
+         WHERE deleted_at IS NULL AND cover_attachment_id IN (\
+           SELECT id FROM attachments \
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = ?))")
+        .bind(activity_uuid).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE reminders SET done_activity_id = NULL \
+         WHERE deleted_at IS NULL \
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+        .bind(activity_uuid).execute(&mut *tx).await?;
+
+    let uuids: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+        .bind(activity_uuid).fetch_all(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE attachments SET deleted_at = ? WHERE deleted_at IS NULL \
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+        .bind(now).bind(activity_uuid).execute(&mut *tx).await?;
+    Ok(nameable(uuids).map(|uuid| (Entity::Attachment, uuid)).collect())
+}
+
+/// The cascaded rows the log can actually name.
+///
+/// `client_uuid` is nullable, so a row written before the sync protocol existed -- or by any
+/// writer that never set one -- has nothing a `changes` entry could address. Such a row is
+/// still tombstoned; it is only omitted from the log, because an entry naming NULL would be
+/// unusable to every device that read it. No client can be holding a copy of a row it was
+/// never able to learn the identity of, so nothing is lost by the omission.
+fn nameable(uuids: Vec<Option<String>>) -> impl Iterator<Item = String> {
+    uuids.into_iter().flatten()
+}
+
+/// Records each cascaded tombstone in the change log, so a pulling device learns the child is
+/// gone rather than only hearing about its parent.
+///
+/// A cascaded delete has no op of its own -- the client sent one op, for the parent -- so each
+/// entry gets a freshly minted `client_op_id`. Reusing the parent's, decorated, would risk
+/// colliding with an id a client had minted itself, and `idx_changes_user_op` would answer
+/// that with a constraint failure that throws away the whole batch. Idempotency does not
+/// depend on these ids: the push handler resolves a replayed op by the PARENT's id before
+/// `apply_op` is reached, so the cascade never runs twice for one op. The child's own
+/// `deleted_at IS NULL` filter is the second guard, in case a delete arrives under a new id.
+///
+/// `edited_at` and `device_id` are the parent's: the cascade is that device's edit at that
+/// moment, and a child carrying a different clock would compete with the parent's op.
+async fn log_cascade(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    op: &Op,
+    cascaded: &[(Entity, String)],
+) -> Result<(), AppError> {
+    for (entity, uuid) in cascaded {
+        sqlx::query(
+            "INSERT INTO changes \
+             (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
+              device_id, client_op_id) \
+             VALUES (?, ?, 'delete', NULL, NULL, ?, ?, ?, ?, ?)")
+            .bind(entity.as_str())
+            .bind(uuid)
+            .bind(&op.edited_at)
+            .bind(crate::db::now())
+            .bind(user_id)
+            .bind(&op.device_id)
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

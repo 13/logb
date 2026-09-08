@@ -296,10 +296,16 @@ async fn the_partial_unique_index_rejects_a_duplicate_non_null_op_id() {
 
     let insert = || {
         sqlx::query(
-            "INSERT INTO activities (object_id, date, category, title, notes, client_op_id, created_at, updated_at) \
-             VALUES (?, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
+            // `client_uuid` is supplied even though the column is nullable and this test does
+            // not read it: every writer in the application sets one, and a row without it is
+            // one the sync protocol cannot name in `changes` or in a `field_clock` sweep. A
+            // fixture that manufactures the impossible row makes the suite disagree with the
+            // system it is testing.
+            "INSERT INTO activities (object_id, date, category, title, notes, client_op_id, client_uuid, created_at, updated_at) \
+             VALUES (?, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', ?, '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
         )
         .bind(id)
+        .bind(uuid::Uuid::new_v4().to_string())
         .execute(&app.state.db)
     };
 
