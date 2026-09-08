@@ -581,19 +581,57 @@ async fn object_with_children(
 
 /// Every other push test in this file sets a field on an `object`, whose ownership is a column
 /// read. The three child entities each reach `objects.user_id` through a join of their own, and
-/// those joins are the whole of the authorization check for them: a typo in any one would let
-/// any account write any other account's rows, and nothing here would have noticed.
+/// those joins are the whole of the authorization check for them.
+///
+/// Asserting only that a cross-account push comes back `rejected` would pin almost none of
+/// that. A join that matched NOTHING would satisfy it while breaking every legitimate push at
+/// a child row, so this test has a positive half as well: the owning account's pushes at its
+/// own reminder and attachment must be `accepted` and must actually land. And the rejection
+/// REASON is asserted, not just the outcome, because "unknown entity_uuid" from an ownership
+/// check and the same words from a lookup that can never find anything are the two answers
+/// this test exists to tell apart.
+///
+/// The fixture exists for the third failure mode: a join on the wrong COLUMN. If two accounts
+/// each create one object and one child of each kind, every child row's id equals its own
+/// `object_id`, so `o.id = r.id` reads exactly like `o.id = r.object_id` and the typo is
+/// invisible. Giving the second account rows of its own AND a spare object offsets the two id
+/// sequences: each of the victim's child rows then carries an id that names the OTHER account's
+/// object, so a wrong-column join both accepts a push it must reject and rejects one it must
+/// accept.
 #[tokio::test]
 async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    let (_, activity_id, reminder_id, attachment_id) =
+
+    // Mallory first, and with one more object than child sets, so no id lines up with itself.
+    let mallory = app.create_user_client("mallory", "another password").await;
+    app.create_object(&mallory, "Spare", None).await;
+    object_with_children(&app, &mallory, "Brompton").await;
+
+    let (object_id, activity_id, reminder_id, attachment_id) =
         object_with_children(&app, &app.client, "Golf").await;
     let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
     let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
     let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
 
-    let mallory = app.create_user_client("mallory", "another password").await;
+    // The premise the fixture buys, stated so it fails loudly rather than quietly rotting if
+    // `object_with_children` ever changes what it creates.
+    let mallory_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'mallory'")
+        .fetch_one(&app.state.db).await.unwrap();
+    for (label, child_id) in
+        [("activity", activity_id), ("reminder", reminder_id), ("attachment", attachment_id)]
+    {
+        assert_ne!(child_id, object_id, "the {label} id must not equal its own object_id");
+        let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = ?")
+            .bind(child_id).fetch_optional(&app.state.db).await.unwrap();
+        assert_eq!(
+            owner,
+            Some(mallory_id),
+            "the {label} id must name the other account's object, or a join on the wrong \
+             column would give the same answer as the right one"
+        );
+    }
+
     let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([
         { "client_op_id": "op-act", "entity": "activity", "entity_uuid": activity_uuid,
           "op": "set", "field": "title", "value": "Stolen activity",
@@ -609,6 +647,9 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
     let body: serde_json::Value = res.json().await.unwrap();
     for i in 0..3 {
         assert_eq!(body["results"][i]["outcome"], "rejected", "{body}");
+        // The reason an ownership check gives. A lookup that found nothing at all says the
+        // same thing, which is exactly why the positive half below has to exist too.
+        assert_eq!(body["results"][i]["reason"], "unknown entity_uuid", "{body}");
     }
 
     let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
@@ -626,6 +667,36 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
         "SELECT count(*) FROM changes WHERE client_op_id IN ('op-act', 'op-rem', 'op-att')")
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(logged, 0, "a rejected op is never logged");
+
+    // The positive half. Each of the same three joins now has to FIND the row: an ownership
+    // check that rejects everything is not an ownership check, and the rejections above cannot
+    // tell the difference on their own.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "mine-act", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "title", "value": "Timing belt done",
+          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" },
+        { "client_op_id": "mine-rem", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "title", "value": "Service booked",
+          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" },
+        { "client_op_id": "mine-att", "entity": "attachment", "entity_uuid": attachment_uuid,
+          "op": "set", "field": "caption", "value": "The old belt",
+          "edited_at": "2026-02-01T00:00:00Z", "device_id": "ben-phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for i in 0..3 {
+        assert_eq!(body["results"][i]["outcome"], "accepted", "{body}");
+    }
+
+    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(title, "Timing belt done", "the owner's own write must land");
+    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = ?")
+        .bind(reminder_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(title, "Service booked", "the owner's own write must land");
+    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(caption, "The old belt", "the owner's own write must land");
 }
 
 #[tokio::test]
@@ -791,7 +862,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
         .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(price, Some(1250));
 
-    // An integer, and a bool, are still ordinary accepted values.
+    // An integer is still an ordinary accepted value.
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
         "client_op_id": "num-int", "entity": "activity", "entity_uuid": activity_uuid,
         "op": "set", "field": "cost_cents", "value": 9900,
@@ -803,4 +874,71 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
         "SELECT cost_cents FROM activities WHERE client_uuid = ?")
         .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(cost, Some(9900));
+}
+
+/// A JSON string bound into an INTEGER column used to be `accepted`. SQLite's INTEGER affinity
+/// cannot convert `"abc"`, so it stored it verbatim as TEXT, and every read decodes that column
+/// as `Option<i64>`: the object's activity list and the activity itself answered 500 from then
+/// on. From then on, because the write advanced `field_clock` too, so the client's correction --
+/// carrying the value's original, EARLIER `edited_at` -- came back `superseded`. One malformed
+/// op from any authenticated client, and the row could never be read or repaired again.
+#[tokio::test]
+async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, _, _) = object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        // A string into an INTEGER column: the unrepairable 500 above.
+        { "client_op_id": "type-str-into-int", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "counter_value", "value": "abc",
+          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" },
+        // And the milder direction, which corrupts silently: SQLite stores `true` in a TEXT
+        // column as '1', so the object's name would have become the string "1".
+        { "client_op_id": "type-bool-into-text", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "name", "value": true,
+          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for (i, field) in [(0, "counter_value"), (1, "name")] {
+        assert_eq!(body["results"][i]["outcome"], "rejected", "{body}");
+        assert!(
+            body["results"][i]["reason"].as_str().unwrap().contains(field),
+            "the reason must name the field: {body}"
+        );
+    }
+
+    // The columns still hold what they held, in the storage class they are declared with.
+    let stored: (String, Option<i64>) = sqlx::query_as(
+        "SELECT typeof(counter_value), counter_value FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored, ("integer".into(), Some(1000)), "the integer column is still an integer");
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(name, "Golf", "the text column is untouched");
+
+    // The reads that used to 500 on a corrupted row.
+    for path in [format!("/objects/{object_id}/activities"), format!("/activities/{activity_id}")] {
+        assert_eq!(
+            app.client.get(app.url(&path)).send().await.unwrap().status(),
+            200,
+            "{path} must still decode"
+        );
+    }
+
+    // And the clock did not move, so an edit carrying an EARLIER timestamp -- which is all a
+    // correcting client has -- still wins.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "type-repair", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "set", "field": "counter_value", "value": 2000,
+        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "the rejected op left no clock: {body}");
+    let counter: Option<i64> = sqlx::query_scalar("SELECT counter_value FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(counter, Some(2000));
 }

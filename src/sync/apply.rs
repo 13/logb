@@ -30,7 +30,56 @@ pub fn wins(
 }
 
 use crate::error::AppError;
-use crate::sync::{is_syncable_field, Entity, Op, OpKind, Outcome};
+use crate::sync::{syncable_field_type, Entity, FieldType, Op, OpKind, Outcome};
+
+/// A client value that has been checked against its column's type and is ready to bind.
+#[derive(Debug, PartialEq, Eq)]
+enum Binding {
+    Null,
+    Integer(i64),
+    Text(String),
+}
+
+/// Checks a value against the type of the column it is headed for, yielding either something
+/// bindable or the reason the op is rejected.
+///
+/// SQLite columns are dynamically typed, and affinity does not convert what it cannot: an
+/// INTEGER column keeps the string `"abc"` verbatim as TEXT, and a TEXT column keeps `true` as
+/// `'1'`. Nothing complains on the way in, so the damage only appears on the way out -- and it
+/// is not cosmetic. Every read decodes the integer columns as `Option<i64>` (`api::activities`,
+/// `api::objects`), so a string sitting in one of them fails to decode: `GET
+/// /objects/{id}/activities` and `GET /activities/{id}` answer 500 on every request from then
+/// on, from one op sent by any authenticated client.
+///
+/// From then on, because the write also advances `field_clock`. A correction necessarily
+/// carries the value's original -- therefore EARLIER -- `edited_at`, so it loses
+/// last-write-wins and is answered `superseded`: the corruption locks out its own repair. The
+/// milder direction (a bool or a number into a TEXT column) corrupts silently but is
+/// unrepairable for the same reason. So the shape is checked here, before the column is
+/// written and before the clock moves.
+///
+/// Null is legal for every field: it is how a client clears a nullable column. Which columns
+/// tolerate it is the schema's NOT NULL constraints to answer, not this function's -- a NULL
+/// aimed at a NOT NULL column comes back as a constraint violation and is rejected there.
+fn binding(
+    field: &str,
+    field_type: FieldType,
+    value: Option<&serde_json::Value>,
+) -> Result<Binding, String> {
+    use serde_json::Value;
+    match (field_type, value) {
+        (_, None | Some(Value::Null)) => Ok(Binding::Null),
+        // `as_i64` answers `None` for a float or a magnitude past i64 -- values SQLite would
+        // store as a float or as text rather than refuse.
+        (FieldType::Integer, Some(Value::Number(n))) => n
+            .as_i64()
+            .map(Binding::Integer)
+            .ok_or_else(|| format!("{field} must be an integer")),
+        (FieldType::Integer, Some(_)) => Err(format!("{field} must be an integer")),
+        (FieldType::Text, Some(Value::String(s))) => Ok(Binding::Text(s.clone())),
+        (FieldType::Text, Some(_)) => Err(format!("{field} must be a string")),
+    }
+}
 
 /// Rewrites a client-supplied timestamp into the one canonical form `wins` can compare.
 ///
@@ -130,9 +179,16 @@ pub async fn apply_op(
             let Some(field) = op.field.as_deref() else {
                 return Ok(Outcome::Rejected { reason: "set requires a field".into() });
             };
-            if !is_syncable_field(op.entity, field) {
+            let Some(field_type) = syncable_field_type(op.entity, field) else {
                 return Ok(Outcome::Rejected { reason: format!("{field} is not settable") });
-            }
+            };
+
+            // The value has to match the column before anything else looks at it: see
+            // `binding` for why a mistyped write is unrepairable rather than merely wrong.
+            let bound = match binding(field, field_type, op.value.as_ref()) {
+                Ok(bound) => bound,
+                Err(reason) => return Ok(Outcome::Rejected { reason }),
+            };
 
             // Two whitelisted fields are foreign keys, and a check on the field NAME says
             // nothing about the VALUE. Without this, `set object.cover_attachment_id` could
@@ -141,18 +197,10 @@ pub async fn apply_op(
             // reference; sync has to refuse it identically, or it is just a second, unguarded
             // door onto the same write.
             //
-            // The check reads the VALUE, so a value that is not an id at all must not be able
-            // to slip past it: SQLite columns are dynamically typed, and a string bound to
-            // `cover_attachment_id` would be stored verbatim. Such a value cannot name another
-            // account's row, but it corrupts an integer column, so for these two fields
-            // anything that is neither an integer nor null is refused here rather than falling
-            // through to the write. Null stays legal: it is how a client clears the reference.
-            let is_foreign_key = matches!(
-                (op.entity, field),
-                (Entity::Object, "cover_attachment_id") | (Entity::Reminder, "done_activity_id")
-            );
-            let clearing = matches!(op.value, None | Some(serde_json::Value::Null));
-            if let Some(referenced) = op.value.as_ref().and_then(serde_json::Value::as_i64) {
+            // Only an integer can name a row, and `binding` has already refused everything
+            // else these two INTEGER fields could have carried. Null falls through untouched:
+            // clearing the reference is how a client removes a cover.
+            if let Binding::Integer(referenced) = &bound {
                 let permitted: Option<i64> = match (op.entity, field) {
                     (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
                         "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
@@ -165,17 +213,13 @@ pub async fn apply_op(
                          WHERE act.id = ? AND r.client_uuid = ? AND act.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
-                    _ => Some(referenced),
+                    _ => Some(*referenced),
                 };
                 if permitted.is_none() {
                     return Ok(Outcome::Rejected {
                         reason: format!("{field} must reference a row on the same object"),
                     });
                 }
-            } else if is_foreign_key && !clearing {
-                return Ok(Outcome::Rejected {
-                    reason: format!("{field} must be an integer id or null"),
-                });
             }
 
             let stored: Option<(String, String)> = sqlx::query_as(
@@ -200,30 +244,12 @@ pub async fn apply_op(
                 op.entity.table()
             );
             let query = sqlx::query(sqlx::AssertSqlSafe(sql));
-            let query = match op.value.as_ref() {
-                None | Some(serde_json::Value::Null) => query.bind(None::<String>),
-                Some(serde_json::Value::String(s)) => query.bind(s.clone()),
-                Some(serde_json::Value::Number(n)) => {
-                    // Every numeric column reachable through the whitelist is an INTEGER, and
-                    // `as_i64` answers `None` for a float or a magnitude past i64. Binding that
-                    // `None` writes NULL: the op would report `accepted` and advance
-                    // `field_clock`, so the client's correction -- which necessarily carries the
-                    // value's original, EARLIER `edited_at` -- would then lose last-write-wins
-                    // and could never repair the row. Silent loss that also locks out the fix,
-                    // so a number that is not an i64 is refused before the write instead.
-                    let Some(n) = n.as_i64() else {
-                        return Ok(Outcome::Rejected {
-                            reason: format!("{field} must be an integer"),
-                        });
-                    };
-                    query.bind(Some(n))
-                }
-                Some(serde_json::Value::Bool(b)) => query.bind(Some(i64::from(*b))),
-                Some(other) => {
-                    return Ok(Outcome::Rejected {
-                        reason: format!("unsupported value type: {other}"),
-                    })
-                }
+            // Nothing decides here: `binding` already settled what may reach the column, so
+            // there is no second, weaker opinion about types for the first to drift from.
+            let query = match bound {
+                Binding::Null => query.bind(None::<String>),
+                Binding::Integer(n) => query.bind(n),
+                Binding::Text(s) => query.bind(s),
             };
             // A value that the schema refuses -- NULL into a NOT NULL column, a string outside
             // a CHECK list -- is a malformed op, and the contract puts a malformed op in the
@@ -280,6 +306,34 @@ mod tests {
         let t = "2026-01-01T00:00:00Z";
         assert!(wins(t, "phone", t, "desktop"), "phone > desktop");
         assert!(!wins(t, "desktop", t, "phone"), "desktop < phone");
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_shape_never_reaches_the_column() {
+        use serde_json::json;
+        // An integer column takes an integer or null, and nothing else -- a string is what
+        // SQLite would have stored as TEXT, making every later read of the row fail to decode.
+        assert_eq!(binding("counter_value", FieldType::Integer, Some(&json!(7))), Ok(Binding::Integer(7)));
+        assert_eq!(binding("counter_value", FieldType::Integer, None), Ok(Binding::Null));
+        assert_eq!(binding("counter_value", FieldType::Integer, Some(&json!(null))), Ok(Binding::Null));
+        for bad in [json!("abc"), json!(true), json!(1.5), json!([1]), json!({})] {
+            assert_eq!(
+                binding("counter_value", FieldType::Integer, Some(&bad)),
+                Err("counter_value must be an integer".into()),
+                "{bad} is not an integer"
+            );
+        }
+
+        // And the other direction: `true` in a TEXT column would have been stored as '1'.
+        assert_eq!(binding("name", FieldType::Text, Some(&json!("Golf"))), Ok(Binding::Text("Golf".into())));
+        assert_eq!(binding("name", FieldType::Text, Some(&json!(null))), Ok(Binding::Null));
+        for bad in [json!(true), json!(7), json!(1.5), json!([1]), json!({})] {
+            assert_eq!(
+                binding("name", FieldType::Text, Some(&bad)),
+                Err("name must be a string".into()),
+                "{bad} is not a string"
+            );
+        }
     }
 
     #[test]

@@ -96,31 +96,65 @@ pub enum Outcome {
     Rejected { reason: String },
 }
 
-/// Whether an op may write `field` on `entity`.
+/// The shape of the column behind a syncable field.
+///
+/// Only two shapes are reachable over sync: an INTEGER column and a TEXT one. The distinction
+/// matters because SQLite does not enforce it -- see `apply::binding`, which is the only place
+/// that acts on this, for what a mistyped write costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldType {
+    Integer,
+    Text,
+}
+
+/// The column type behind `field` on `entity`, or `None` if the field is not settable at all.
 ///
 /// This is the protocol's security boundary, and the reason it is a whitelist rather than a
 /// blacklist: `id`, `user_id` and the parent foreign keys are all ordinary columns, so a
 /// blacklist that forgot one would let a `set` op move somebody else's row into the caller's
 /// account. Anything absent here is simply not settable over sync.
-pub fn is_syncable_field(entity: Entity, field: &str) -> bool {
-    let allowed: &[&str] = match entity {
+///
+/// The type travels with the name so that there is exactly ONE list. A second list -- names
+/// here, types elsewhere -- would let a field be added to one and not the other, and the half
+/// that drifts is the half that stops being checked.
+///
+/// The types mirror `migrations/`: everything not named INTEGER there is a TEXT column.
+pub fn syncable_field_type(entity: Entity, field: &str) -> Option<FieldType> {
+    whitelist(entity).iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
+}
+
+/// The whitelist itself. Private, so no caller can ask a question about a field other than
+/// "may it be written, and as what"; the tests below walk it to pin it against the schema.
+fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
+    use FieldType::{Integer, Text};
+    match entity {
         Entity::Object => &[
-            "name", "category", "counter_unit", "fuel_unit", "description",
-            "purchase_date", "purchase_price_cents", "archived_at", "cover_attachment_id",
+            ("name", Text), ("category", Text), ("counter_unit", Text), ("fuel_unit", Text),
+            ("description", Text), ("purchase_date", Text),
+            ("purchase_price_cents", Integer), ("archived_at", Text),
+            ("cover_attachment_id", Integer),
         ],
         Entity::Activity => &[
-            "date", "category", "title", "notes", "counter_value", "cost_cents",
-            "quantity_milli",
+            ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
+            ("counter_value", Integer), ("cost_cents", Integer), ("quantity_milli", Integer),
         ],
         Entity::Reminder => &[
-            "title", "notes", "due_date", "due_counter", "repeat_months", "repeat_counter",
-            "done_at", "done_activity_id", "snoozed_until",
+            ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
+            ("repeat_months", Integer), ("repeat_counter", Integer), ("done_at", Text),
+            ("done_activity_id", Integer), ("snoozed_until", Text),
         ],
-        Entity::Attachment => &["kind", "caption"],
+        Entity::Attachment => &[("kind", Text), ("caption", Text)],
         // Content-addressed and written once. A file changes by being replaced, never edited.
         Entity::File => &[],
-    };
-    allowed.contains(&field)
+    }
+}
+
+/// Whether an op may write `field` on `entity`.
+///
+/// Defined in terms of `syncable_field_type` rather than beside it: a field is settable
+/// exactly when the one whitelist gives it a type.
+pub fn is_syncable_field(entity: Entity, field: &str) -> bool {
+    syncable_field_type(entity, field).is_some()
 }
 
 #[cfg(test)]
@@ -148,6 +182,50 @@ mod tests {
         for field in ["id", "user_id", "object_id", "client_uuid", "created_at", "deleted_at"] {
             assert!(!is_syncable_field(Entity::Object, field), "{field} must not be settable");
             assert!(!is_syncable_field(Entity::Activity, field), "{field} must not be settable");
+        }
+    }
+
+    /// Every INTEGER column reachable through the whitelist, read off `migrations/`. The list
+    /// is spelled out here rather than derived so that the test disagrees with the whitelist
+    /// when either one changes alone.
+    const INTEGER_COLUMNS: &[(Entity, &str)] = &[
+        (Entity::Object, "purchase_price_cents"),
+        (Entity::Object, "cover_attachment_id"),
+        (Entity::Activity, "counter_value"),
+        (Entity::Activity, "cost_cents"),
+        (Entity::Activity, "quantity_milli"),
+        (Entity::Reminder, "due_counter"),
+        (Entity::Reminder, "repeat_months"),
+        (Entity::Reminder, "repeat_counter"),
+        (Entity::Reminder, "done_activity_id"),
+    ];
+
+    #[test]
+    fn every_whitelisted_field_carries_its_schema_type() {
+        let entities = [
+            Entity::Object, Entity::Activity, Entity::Reminder, Entity::Attachment, Entity::File,
+        ];
+        for entity in entities {
+            for (field, ty) in whitelist(entity) {
+                let integer_in_schema = INTEGER_COLUMNS.contains(&(entity, field));
+                let expected = if integer_in_schema { FieldType::Integer } else { FieldType::Text };
+                assert_eq!(
+                    *ty,
+                    expected,
+                    "{}.{field} is {expected:?} in migrations/",
+                    entity.as_str()
+                );
+            }
+        }
+        // The other direction: a field cannot be dropped from the whitelist while still being
+        // named above, which would leave the pairing untested rather than failing.
+        for (entity, field) in INTEGER_COLUMNS {
+            assert_eq!(
+                syncable_field_type(*entity, field),
+                Some(FieldType::Integer),
+                "{}.{field} must still be a syncable integer field",
+                entity.as_str()
+            );
         }
     }
 
