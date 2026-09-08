@@ -189,8 +189,9 @@ async fn a_deleted_objects_children_vanish_from_every_read_path() {
 /// object-level filter (`o.deleted_at IS NULL`) alone -- a child-level filter could be missing
 /// entirely from `search.rs`, `insights.rs`, `export.rs` or the reminder digest
 /// (`api::reminders::due_for_user`) and that test would not notice. This one deletes a LIVE
-/// object's activity, and separately its reminder, with the object itself untouched, and
-/// checks only the read paths that actually depend on the CHILD's own `deleted_at`.
+/// object's activity, separately its reminder, and separately its attachment, with the object
+/// itself untouched, and checks only the read paths that actually depend on the CHILD's own
+/// `deleted_at`.
 #[tokio::test]
 async fn a_deleting_only_a_child_hides_it_from_every_read_path() {
     let app = common::spawn().await;
@@ -268,6 +269,41 @@ async fn a_deleting_only_a_child_hides_it_from_every_read_path() {
 
     let obj = export_object(&app, "Zyzzybalubah").await;
     assert_eq!(obj["reminders"].as_array().unwrap().len(), 0, "a deleted reminder must not appear in export: {obj}");
+
+    // -- An attachment, deleted on its own. `GET /objects/{id}/attachments`, the activity-list
+    // enrichment (`api::activities::with_attachments`) and `/export` all read
+    // `attachments::for_object`, which filters `a.deleted_at IS NULL` -- again, independently
+    // of whatever the object's own `deleted_at` says.
+    let van = app.create_object(&app.client, "Bumpkis", Some("km")).await;
+    let van_id = van["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{van_id}/attachments")))
+        .multipart(
+            Form::new()
+                .part("file", Part::bytes(png()).file_name("bumpkis.png").mime_str("image/png").unwrap()),
+        )
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    // Sanity: visible before the delete, so the assertions below test the delete's effect and
+    // not an empty fixture.
+    let atts: serde_json::Value = app.client.get(app.url(&format!("/objects/{van_id}/attachments")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(atts.as_array().unwrap().len(), 1, "{atts}");
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/attachments/{attachment_id}"))).send().await.unwrap().status(),
+        204
+    );
+
+    assert_eq!(app.client.get(app.url(&format!("/objects/{van_id}"))).send().await.unwrap().status(), 200);
+
+    let atts: serde_json::Value = app.client.get(app.url(&format!("/objects/{van_id}/attachments")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(atts.as_array().unwrap().len(), 0, "a deleted attachment must not surface: {atts}");
+
+    let obj = export_object(&app, "Bumpkis").await;
+    assert_eq!(obj["attachments"].as_array().unwrap().len(), 0, "a deleted attachment must not appear in export: {obj}");
 }
 
 /// Fetches a full export and returns the one object named `name`, as a JSON value, so a test

@@ -286,10 +286,12 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
     // Computed before `begin()`, not after: `stats` acquires its own pooled connection, and
     // the pool is `max_connections(4)` (`db.rs`). Calling it while this handler's transaction
     // already holds the write lock lets four concurrent `done` calls each hold a connection
-    // and block waiting for a fifth -- a deadlock until the acquire timeout, then a 500. Its
-    // inputs (the linked activity, and the object's highest `counter_value` when there isn't
-    // one) are not written by this transaction, so hoisting the read changes nothing about
-    // `next_due`'s result.
+    // and block waiting for a fifth -- a deadlock until the acquire timeout, then a 500. The
+    // only field of `stats`'s result this call reads is `current_counter`
+    // (`MAX(activities.counter_value)`), and this transaction never writes `activities` -- so
+    // hoisting the read changes nothing about `next_due`'s result. `stats`'s query also reads
+    // `reminders`, for `due_reminder_count`, which this transaction DOES write (the UPDATE
+    // below); that column is simply never looked at here, so its staleness is harmless.
     let base_date = activity.as_ref().and_then(|a| parse_date(&a.date)).unwrap_or_else(today);
     // Only fall back to the object's highest reading when the linked activity has none:
     // `.or(..)` on an awaited value would run the stats query even in the common case.

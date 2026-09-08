@@ -346,3 +346,28 @@ pub(crate) async fn log_cascade(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the fix described in `edited_at_now`'s doc comment: this is a unit test, not a
+    /// behavioural one, because `edited_at_now` is `pub(crate)` and the regression it guards
+    /// is about the VALUE this function returns, not about anything an integration test could
+    /// observe through a timing-dependent race against a REST write's real wall clock.
+    /// Sampling ~100 calls and asserting at least one does not end in `.000Z` is
+    /// deterministic-red under the previous `canonical_edited_at(&crate::db::now())` body
+    /// (that routes every call through `SecondsFormat::Secs`, so EVERY sample ends in
+    /// `.000Z`, always) and the false-failure probability under the current body is
+    /// astronomically small: a genuine millisecond reading lands on `.000` about 1 time in
+    /// 1000, so all 100 independent samples doing so at once is roughly (1/1000)^100.
+    #[test]
+    fn edited_at_now_carries_real_millisecond_precision() {
+        let non_floored = (0..100).filter(|_| !edited_at_now().ends_with(".000Z")).count();
+        assert!(
+            non_floored > 0,
+            "edited_at_now() must read the clock at millisecond precision, not just wrap a \
+             whole-second reading in the right shape -- see the doc comment on edited_at_now"
+        );
+    }
+}
