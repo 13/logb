@@ -1441,6 +1441,24 @@
           }
         }
       }
+    },
+    "/sync/bootstrap": {
+      "get": {
+        "summary": "The full snapshot a new device starts from, or that a stale device falls back to.",
+        "description": "Every live (non-tombstoned) row the caller owns, across every syncable table, plus `seq` -- the cursor to resume incremental pulls from -- and `server_time`. `seq` is read before the rows are, so an op landing between the two reads is, at worst, delivered again by the first `GET /sync/pull`; the apply path is idempotent, so that is harmless. This is the only read path that returns `client_uuid` for existing rows, so a device must bootstrap before it can push anything that references them. Used both by a brand-new device and by one whose cursor is older than the retention horizon, after `GET /sync/pull` answers 410.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapResult"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2405,6 +2423,55 @@
           "complete": {
             "type": "boolean",
             "description": "False when the page filled exactly; the client should pull again immediately."
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BootstrapResult": {
+        "type": "object",
+        "properties": {
+          "objects": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `objects`, verbatim, keyed by column name."
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `activities` whose object is also live."
+          },
+          "reminders": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `reminders` whose object is also live."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `attachments` whose object is also live."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `files`, verbatim, keyed by column name."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pass as `since` on the first `GET /sync/pull` call."
           },
           "server_time": {
             "type": "string",

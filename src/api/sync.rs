@@ -19,6 +19,7 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/sync/push", post(push))
         .route("/sync/pull", get(pull))
+        .route("/sync/bootstrap", get(bootstrap))
 }
 
 #[derive(Deserialize)]
@@ -187,4 +188,15 @@ async fn pull(
     let complete = (changes.len() as i64) < limit;
     let next_seq = changes.last().map(|c| c.seq).unwrap_or(params.since);
     Ok(Json(PullOut { changes, next_seq, complete, server_time: db::now() }))
+}
+
+async fn bootstrap(
+    State(state): State<App>,
+    user: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (seq, mut snapshot) = feed::snapshot(&state.db, user.id).await?;
+    let map = snapshot.as_object_mut().expect("snapshot builds a JSON object");
+    map.insert("seq".into(), serde_json::json!(seq));
+    map.insert("server_time".into(), serde_json::json!(db::now()));
+    Ok(Json(snapshot))
 }

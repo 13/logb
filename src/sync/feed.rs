@@ -42,3 +42,71 @@ pub async fn horizon(db: &sqlx::SqlitePool, user_id: i64) -> Result<i64, AppErro
         .await?;
     Ok(lowest.unwrap_or(0))
 }
+
+/// Every live row the user owns, plus the cursor to resume incremental pulls from.
+///
+/// The cursor is read BEFORE the rows. Taken afterwards, an op landing between the two reads
+/// would be baked into the snapshot and then delivered again by the first pull -- harmless for
+/// an idempotent apply, but it would also let an op that landed between them be skipped if the
+/// order were reversed. Reading it first can only ever repeat work, never lose it.
+pub async fn snapshot(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+) -> Result<(i64, serde_json::Value), AppError> {
+    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(db)
+        .await?;
+
+    let objects = rows(db, "SELECT * FROM objects WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+    let activities = rows(db,
+        "SELECT a.* FROM activities a JOIN objects o ON o.id = a.object_id \
+         WHERE o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+    let reminders = rows(db,
+        "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
+         WHERE o.user_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+    let attachments = rows(db,
+        "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
+         WHERE o.user_id = ? AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+    let files = rows(db, "SELECT * FROM files WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+
+    Ok((seq, serde_json::json!({
+        "objects": objects,
+        "activities": activities,
+        "reminders": reminders,
+        "attachments": attachments,
+        "files": files,
+    })))
+}
+
+/// Reads a whole table as JSON objects, column names taken from the result set.
+///
+/// Generic in the shape it returns because the snapshot ships rows verbatim -- a typed struct
+/// per table would have to be kept in step with five schemas for no gain to any caller.
+async fn rows(
+    db: &sqlx::SqlitePool,
+    sql: &'static str,
+    user_id: i64,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    use sqlx::{Column, Row, TypeInfo, ValueRef};
+    let fetched = sqlx::query(sql).bind(user_id).fetch_all(db).await?;
+    let mut out = Vec::with_capacity(fetched.len());
+    for row in fetched {
+        let mut map = serde_json::Map::new();
+        for (i, col) in row.columns().iter().enumerate() {
+            let raw = row.try_get_raw(i)?;
+            let value = if raw.is_null() {
+                serde_json::Value::Null
+            } else {
+                match raw.type_info().name() {
+                    "INTEGER" => serde_json::json!(row.try_get::<i64, _>(i)?),
+                    "REAL" => serde_json::json!(row.try_get::<f64, _>(i)?),
+                    _ => serde_json::json!(row.try_get::<String, _>(i)?),
+                }
+            };
+            map.insert(col.name().to_string(), value);
+        }
+        out.push(serde_json::Value::Object(map));
+    }
+    Ok(out)
+}

@@ -1052,3 +1052,43 @@ async fn a_cursor_against_an_emptied_log_is_gone() {
     let res = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap();
     assert_eq!(res.status(), 200);
 }
+
+#[tokio::test]
+async fn bootstrap_returns_live_rows_and_a_resumable_cursor() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let keep = app.create_object(&app.client, "Golf", Some("km")).await;
+    let drop = app.create_object(&app.client, "Old Bike", None).await;
+    let drop_id = drop["id"].as_i64().unwrap();
+    assert_eq!(
+        app.client.delete(app.url(&format!("/objects/{drop_id}"))).send().await.unwrap().status(),
+        204
+    );
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+
+    let objects = body["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 1, "the tombstoned object is absent");
+    assert_eq!(objects[0]["name"], keep["name"]);
+    assert!(objects[0]["client_uuid"].is_string(), "rows are addressable by uuid");
+    assert!(body["seq"].is_i64());
+    assert!(body["server_time"].is_string());
+
+    // The cursor is immediately usable.
+    let seq = body["seq"].as_i64().unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since={seq}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn bootstrap_is_scoped_to_the_caller() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", Some("km")).await;
+
+    let other = app.create_user_client("mallory", "another password").await;
+    let body: serde_json::Value = other.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["objects"].as_array().unwrap().len(), 0);
+}
