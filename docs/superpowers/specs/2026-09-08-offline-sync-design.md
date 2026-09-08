@@ -1,0 +1,178 @@
+# Offline-first Android client with server sync
+
+Status: approved design, not yet implemented.
+
+## Problem
+
+logby today is a PWA whose offline story stops at opportunistic caching. Workbox keeps the
+last 200 API GETs for a week and 300 file blobs for a month, so a screen the user happened to
+visit recently still renders on a dead connection — and nothing else does. Writes fare better
+but only just: `outbox.ts` queues three op kinds, all creates, and says why in its own header
+comment — an edit or a delete "would have to be reconciled against whatever the server did in
+the meantime; a create cannot disagree with anything".
+
+That is the wrong shape for a phone. The goal is an Android client where the network is
+irrelevant to every interaction: all data readable, full create/edit/delete, photos both
+directions, for as long as the phone is offline.
+
+## Scope
+
+In scope: an Android application, built with Capacitor from the existing Svelte source, that
+reads and writes a complete local SQLite mirror and reconciles with the server in the
+background.
+
+Out of scope: the desktop browser, which keeps today's behaviour unchanged — online-only
+against the API, with the existing Workbox caching. Offline-first is an Android concern only.
+The query layer is written against an interface the same plugin implements over wasm+OPFS, so
+enabling the browser later is configuration rather than a rewrite, but it is not built now.
+
+## Decisions
+
+**Local truth.** The phone renders from local SQLite, always. Sync is a background reconciler,
+never a fetch path on the way to a screen. This is the load-bearing decision: it makes offline
+the default state rather than a degraded one, and removes optimistic-update-and-rollback from
+the client entirely.
+
+**Identity.** Every syncable table gains `client_uuid TEXT UNIQUE NOT NULL` — `objects`,
+`activities`, `reminders`, `attachments`, `files`. The client mints it, so a row born offline
+has an identity before the server has seen it, and an object created offline can carry
+activities and attachments that reference it. The server keeps its integer `id` as the
+primary key and maps UUID to id on arrival. Ops address entities by UUID only. `tempId` and
+`persistResolvedId` in `outbox.ts` are deleted.
+
+**Conflict resolution.** Field-level last-write-wins. Two devices editing different fields of
+one activity both keep their edit; a true same-field collision resolves silently to the newer
+write. No conflict UI, no conflict store, no user decision on a phone.
+
+**Clocks.** Field-level LWW across devices means comparing timestamps that devices produced.
+Every sync response carries the server's time; the client stores the offset and stamps
+`edited_at` in corrected time. Ties break on `device_id` string comparison so every participant
+resolves identically without coordination.
+
+**Deletes.** Soft, via `deleted_at`, set by a delete op. Rows and their `changes` entries
+survive 90 days, then a purge job in `tasks.rs` removes both. A phone whose cursor predates the
+purge horizon is told to re-bootstrap.
+
+**Photos.** Everything mirrors eventually. Thumbnails download eagerly and are never evicted,
+so the mirror always renders. Full-size originals wait for an unmetered connection and become
+an LRU cache under a user-set budget, defaulting to 4 GB — when storage binds, originals are
+evicted and re-downloaded on demand while metadata and thumbnails stay intact.
+
+## Server
+
+Two new tables:
+
+```sql
+CREATE TABLE changes (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,  -- the pull cursor
+  entity       TEXT NOT NULL,        -- object | activity | reminder | attachment | file
+  entity_uuid  TEXT NOT NULL,
+  op           TEXT NOT NULL,        -- create | set | delete
+  field        TEXT,                 -- NULL for create and delete
+  value        TEXT,                 -- JSON scalar
+  edited_at    TEXT NOT NULL,        -- skew-corrected device time; the LWW key
+  applied_at   TEXT NOT NULL,        -- server receive time
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id    TEXT NOT NULL,
+  client_op_id TEXT NOT NULL UNIQUE  -- idempotency; the outbox already mints these
+);
+CREATE INDEX idx_changes_user_seq ON changes(user_id, seq);
+
+CREATE TABLE field_clock (
+  entity      TEXT NOT NULL,
+  entity_uuid TEXT NOT NULL,
+  field       TEXT NOT NULL,
+  edited_at   TEXT NOT NULL,
+  device_id   TEXT NOT NULL,
+  PRIMARY KEY (entity, entity_uuid, field)
+);
+```
+
+An incoming op wins iff its `edited_at` is greater than the stored `field_clock.edited_at`, or
+equal with a greater `device_id`. A losing op is **accepted, not rejected** — it is recorded and
+reported back as `superseded`, and the client applies the winner locally. Only a malformed or
+unauthorized op is rejected.
+
+Three endpoints:
+
+- `POST /api/sync/push` — a batch of ops. Returns per-op `accepted | superseded | rejected`
+  plus UUID-to-id mappings for creates. Idempotent on `client_op_id`, so a push whose response
+  was lost replays safely.
+- `GET /api/sync/pull?since=<seq>&limit=` — ops after the cursor, plus `server_time`,
+  `next_seq`, and a `complete` flag. Returns `410` when `since` predates the purge horizon.
+- `GET /api/sync/bootstrap` — a full snapshot for a new device, or one that got a `410`.
+  Cheaper than replaying an entire log.
+
+Blobs continue to use the existing `/api/files/<id>` and upload routes unchanged.
+
+## Client
+
+Native SQLite through `@capacitor-community/sqlite`. The mirror holds the syncable tables keyed
+on `client_uuid`, plus three local-only tables: `ops` (the pending queue), `sync_state` (cursor
+`seq`, clock offset, `device_id`), and `blobs` (sha256, local path, presence, `last_access` for
+eviction).
+
+Every write is one transaction: apply to the mirror, append the op, commit. Remote ops apply
+through the same LWW rule the server uses, so the client converges without needing to trust the
+order in which it received them.
+
+Modules: `lib/local/schema.ts` for local migrations, `lib/local/repo.ts` for queries returning
+the exact shapes the API returns today (`MemObject`, `Activity`), `lib/sync/engine.ts` for the
+push/pull/apply loop, `lib/sync/ops.ts` for recording and applying ops.
+
+**The seam is the risk.** On Android this replaces `outbox.ts`, `idb.ts` and `object-cache.ts`
+outright while desktop keeps them, so components must import from a `lib/data/` interface with
+two implementations rather than calling `api()` directly. Introducing that seam touches every
+component and lands as its own phase, with no behaviour change, before any Capacitor code
+exists.
+
+Sync runs on app foreground, on manual pull-to-refresh, and on a periodic Android background
+task. Metadata syncs on any connection; blob transfer waits for unmetered.
+
+## Authentication
+
+A Capacitor app is a separate origin and cannot use the `logby_session` cookie, so it
+authenticates with a `logby_pat_` bearer token — a path that already exists and is tested
+(`auth.rs:182`, `LOGBY_CORS_ORIGINS`).
+
+The user logs in online once; the app mints a PAT via `/api/auth/tokens` and stores it in
+Capacitor secure storage backed by the Android Keystore, requiring biometric or PIN to decrypt.
+App open unlocks, decrypts, then syncs. Offline unlock works because the keystore is local, so
+the mirror stays readable and ops keep queuing with no connection.
+
+On a 401 the app discards the PAT and requires online re-login, but keeps the mirror. Mirrors
+are per user, so a shared household device holds one per account.
+
+## Testing
+
+The server side tests at the HTTP level like everything else in `tests/`: LWW resolution as
+table-driven cases covering newer-wins, older-superseded, and the `device_id` tie-break; push
+idempotency on a replayed `client_op_id`; and the purge-horizon to `410` to bootstrap path
+explicitly.
+
+The sync engine is pure logic over a store interface — the pattern `outbox.ts` already
+established with `memoryStore()` — so it tests against in-memory SQLite with no device.
+Emulator-driven end-to-end coverage of the Capacitor build is a disproportionate lift; it gets a
+manual smoke checklist instead, and that is a deliberate gap rather than an oversight.
+
+## Phases
+
+Each phase is its own plan and build cycle.
+
+1. **Sync protocol backend.** Schema, `changes` and `field_clock`, the three endpoints, LWW,
+   tombstones, purge job. Server-only, fully testable, ships without touching any client.
+   Independently useful and carries no client risk.
+2. **Data-source seam.** Introduce `lib/data/`; desktop keeps the API implementation. Pure
+   refactor, no behaviour change.
+3. **Capacitor shell and mirror, reads only.** App renders from local, pull-only sync, writes
+   still go online.
+4. **Offline writes.** Op recording, push, supersede handling.
+5. **Blobs.** Download queue, WiFi gating, LRU budget, offline capture and upload.
+6. **Unlock and keystore.**
+
+## Known interaction
+
+Automated backup is a separate, unstarted concern, but it collides with this one: restoring a
+server snapshot silently rolls back writes that phones believe were accepted. Whichever lands
+second must account for the other — most likely by having a restored server advertise a fresh
+bootstrap epoch that forces clients to reconcile rather than resume from a stale cursor.
