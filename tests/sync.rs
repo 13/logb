@@ -1294,6 +1294,107 @@ async fn a_pushed_activity_delete_cascades_to_its_attachments() {
     assert_eq!(logged, 1, "the cascaded attachment delete must be in the log");
 }
 
+/// The one reference `c0de5be`'s cascade sweep missed: an attachment has no children of its
+/// own, but it can be an object's cover, and that pointer is not a foreign key -- nothing but
+/// `api::attachments::delete` clearing it by hand keeps it honest. A delete arriving over sync
+/// skipped that, so the object was left naming a tombstoned (and eventually hard-deleted)
+/// attachment id forever, flattened straight into `ObjectOut` and into every sync snapshot.
+#[tokio::test]
+async fn a_pushed_attachment_delete_clears_the_objects_cover() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, _activity_id, _reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    // Make the attachment the object's cover, exactly as a client would before deleting it.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-set-cover", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "cover_attachment_id", "value": attachment_id,
+        "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
+    let cover: Option<i64> =
+        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+            .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(cover, Some(attachment_id), "fixture setup: the cover must be set before deletion");
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-attachment", "entity": "attachment", "entity_uuid": attachment_uuid,
+        "op": "delete", "edited_at": "2026-04-02T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    let cover: Option<i64> =
+        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+            .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert!(cover.is_none(), "a pushed attachment delete must clear the object's cover, same as REST");
+}
+
+/// `apply_op`'s own-row tombstone `UPDATE` set only `deleted_at`, while the REST delete
+/// handlers also stamp `updated_at`. Only `objects` and `activities` carry that column
+/// (`reminders`, `attachments` and `files` do not -- see `migrations/0001_init.sql`), so this
+/// bumps the object's own row and, through `cascade_object`, the cascaded activity's row too.
+#[tokio::test]
+async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_activities() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, _reminder_id, _attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+
+    // Backdate both rows' `updated_at` so a later read can tell a real bump from a value that
+    // was already current.
+    let stale = "2020-01-01T00:00:00Z";
+    sqlx::query("UPDATE objects SET updated_at = ? WHERE id = ?")
+        .bind(stale).bind(object_id).execute(&app.state.db).await.unwrap();
+    sqlx::query("UPDATE activities SET updated_at = ? WHERE id = ?")
+        .bind(stale).bind(activity_id).execute(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-object", "entity": "object", "entity_uuid": object_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    let object_updated: String = sqlx::query_scalar("SELECT updated_at FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert_ne!(object_updated, stale, "the object's own tombstone must bump updated_at");
+
+    let activity_updated: String =
+        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = ?")
+            .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_ne!(activity_updated, stale, "a cascaded activity tombstone must bump updated_at too");
+}
+
+/// The other half of the own-row case above: an activity deleted directly (not cascaded from
+/// its object) goes through `apply_op`'s own-row tombstone `UPDATE` rather than
+/// `cascade_object`, and that branch has to bump `updated_at` too.
+#[tokio::test]
+async fn a_pushed_activity_delete_bumps_its_own_updated_at() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_object_id, activity_id, _reminder_id, _attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+
+    let stale = "2020-01-01T00:00:00Z";
+    sqlx::query("UPDATE activities SET updated_at = ? WHERE id = ?")
+        .bind(stale).bind(activity_id).execute(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del-activity", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+
+    let activity_updated: String =
+        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = ?")
+            .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_ne!(activity_updated, stale, "a directly-deleted activity must bump its own updated_at");
+}
+
 /// The defect this pair of fixes exists for, end to end: a pushed delete followed by a purge
 /// past the retention window must not destroy a single row silently, and must not strand a
 /// blob on disk.
@@ -1366,42 +1467,97 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
 /// `client_uuid` is nullable on all five tables, so a database can hold a row without one.
 /// `entity_uuid NOT IN (SELECT client_uuid ...)` is UNKNOWN for every row the moment that
 /// subquery yields one NULL, which turned the orphan sweep into a permanent no-op for the whole
-/// database. The NULL below is deliberate: it is the hazard the sweep has to survive.
+/// database. The sweep's fix (`NOT EXISTS`, one correlated clause per table) is structurally
+/// identical across `objects`, `activities`, `reminders`, `attachments` and `files`, so a test
+/// that plants the NULL in only one of them proves nothing about the other four -- a clause
+/// that regressed back to the `NOT IN` shape on any one of them would pass a single-table test
+/// unnoticed. This drives the same scenario once per table, planting the NULL row in a
+/// different table each time.
 #[tokio::test]
-async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid() {
-    let app = common::spawn().await;
-    app.setup("ben", "correct horse").await;
-    let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let object_id = car["id"].as_i64().unwrap();
-    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_table() {
+    for legacy_table in ["objects", "activities", "reminders", "attachments", "files"] {
+        let app = common::spawn().await;
+        app.setup("ben", "correct horse").await;
+        let car = app.create_object(&app.client, "Golf", Some("km")).await;
+        let object_id = car["id"].as_i64().unwrap();
+        let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+        let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = ?")
+            .bind(object_id).fetch_one(&app.state.db).await.unwrap();
 
-    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
-        "client_op_id": "op-name", "entity": "object", "entity_uuid": object_uuid,
-        "op": "set", "field": "name", "value": "Renamed",
-        "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
-    }]))).send().await.unwrap();
-    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+        // A live clock the sweep must leave alone, so a run that swept everything -- rather
+        // than only the orphan -- would still be caught.
+        let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": "op-name", "entity": "object", "entity_uuid": &object_uuid,
+            "op": "set", "field": "name", "value": "Renamed",
+            "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+        }]))).send().await.unwrap();
+        assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
-    // A row from before `client_uuid` existed, or from any writer that never set it.
-    sqlx::query(
-        "INSERT INTO activities (object_id, date, category, title, notes, created_at, updated_at) \
-         VALUES (?, '2026-03-05', 'other', 'Legacy', '', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
-        .bind(object_id).execute(&app.state.db).await.unwrap();
+        // A row from before `client_uuid` existed, or from any writer that never set it, in the
+        // table under test this iteration -- every column each table's NOT NULL constraints
+        // require, and nothing that names `client_uuid`, so it defaults NULL.
+        match legacy_table {
+            "objects" => {
+                sqlx::query(
+                    "INSERT INTO objects (user_id, name, category, created_at, updated_at) \
+                     VALUES (?, 'Legacy', 'car', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
+                    .bind(user_id).execute(&app.state.db).await.unwrap();
+            }
+            "activities" => {
+                sqlx::query(
+                    "INSERT INTO activities \
+                     (object_id, date, category, title, notes, created_at, updated_at) \
+                     VALUES (?, '2026-03-05', 'other', 'Legacy', '', \
+                             '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
+                    .bind(object_id).execute(&app.state.db).await.unwrap();
+            }
+            "reminders" => {
+                sqlx::query(
+                    "INSERT INTO reminders (object_id, title, due_date, created_at) \
+                     VALUES (?, 'Legacy', '2026-09-01', '2026-03-05T00:00:00Z')")
+                    .bind(object_id).execute(&app.state.db).await.unwrap();
+            }
+            "attachments" => {
+                let file_id: i64 = sqlx::query_scalar(
+                    "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
+                     VALUES (?, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z') \
+                     RETURNING id")
+                    .bind(user_id).fetch_one(&app.state.db).await.unwrap();
+                sqlx::query(
+                    "INSERT INTO attachments (object_id, file_id, kind, created_at) \
+                     VALUES (?, ?, 'photo', '2026-03-05T00:00:00Z')")
+                    .bind(object_id).bind(file_id).execute(&app.state.db).await.unwrap();
+            }
+            "files" => {
+                sqlx::query(
+                    "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
+                     VALUES (?, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z')")
+                    .bind(user_id).execute(&app.state.db).await.unwrap();
+            }
+            other => unreachable!("not one of the five tables: {other}"),
+        }
 
-    // A clock for a uuid no table carries any more: the sweep's whole reason to exist.
-    sqlx::query(
-        "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
-         VALUES ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone')")
-        .execute(&app.state.db).await.unwrap();
+        // A clock for a uuid no table carries any more: the sweep's whole reason to exist.
+        sqlx::query(
+            "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
+             VALUES ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone')")
+            .execute(&app.state.db).await.unwrap();
 
-    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+        logby::sync::feed::purge(&app.state, 90).await.unwrap();
 
-    let orphans: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM field_clock WHERE entity_uuid = 'gone-with-the-row'")
-        .fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(orphans, 0, "the orphaned clock must be swept even beside a NULL client_uuid");
+        let orphans: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM field_clock WHERE entity_uuid = 'gone-with-the-row'")
+            .fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(
+            orphans, 0,
+            "the orphaned clock must be swept even beside a NULL client_uuid in {legacy_table}"
+        );
 
-    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = ?")
-        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(kept, 1, "a clock for a row that still exists must be left alone");
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = ?")
+            .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(
+            kept, 1,
+            "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
+        );
+    }
 }

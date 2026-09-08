@@ -304,8 +304,13 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    sqlx::query("UPDATE activities SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(id).execute(&mut *tx).await?;
+    // `activities` is the only cascaded table that carries `updated_at` (`reminders` and
+    // `attachments` don't -- see `migrations/0001_init.sql`), and `sync::apply::cascade_object`
+    // has to leave the same database behind, so it bumps it too.
+    sqlx::query(
+        "UPDATE activities SET deleted_at = ?, updated_at = ? \
+         WHERE object_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(&now).bind(id).execute(&mut *tx).await?;
     sqlx::query("UPDATE reminders SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
         .bind(&now).bind(id).execute(&mut *tx).await?;
     sqlx::query("UPDATE attachments SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")

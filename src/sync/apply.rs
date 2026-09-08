@@ -181,18 +181,40 @@ pub async fn apply_op(
         // all of it, so a half-applied cascade cannot survive a failure part way through.
         OpKind::Delete => {
             let now = crate::db::now();
-            let sql = format!(
-                "UPDATE {} SET deleted_at = ? WHERE client_uuid = ? AND deleted_at IS NULL",
-                op.entity.table()
-            );
-            sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&now).bind(&op.entity_uuid)
-                .execute(&mut *tx).await?;
+            // Only `objects` and `activities` carry `updated_at` (migrations/0001_init.sql);
+            // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
+            // alongside `deleted_at` wherever the column exists, so this has to too, or a row
+            // tombstoned over sync keeps whatever `updated_at` it had before the delete.
+            let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity);
+            let sql = if has_updated_at {
+                format!(
+                    "UPDATE {} SET deleted_at = ?, updated_at = ? \
+                     WHERE client_uuid = ? AND deleted_at IS NULL",
+                    op.entity.table()
+                )
+            } else {
+                format!(
+                    "UPDATE {} SET deleted_at = ? WHERE client_uuid = ? AND deleted_at IS NULL",
+                    op.entity.table()
+                )
+            };
+            let query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&now);
+            let query = if has_updated_at { query.bind(&now) } else { query };
+            query.bind(&op.entity_uuid).execute(&mut *tx).await?;
 
             let cascaded = match op.entity {
                 Entity::Object => cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
                 Entity::Activity => cascade_activity(&mut *tx, &op.entity_uuid, &now).await?,
-                // Reminders, attachments and files have no children of their own.
-                Entity::Reminder | Entity::Attachment | Entity::File => Vec::new(),
+                // An attachment has no children to tombstone, but it is not a leaf reference-wise:
+                // it can be an object's cover, and `cover_attachment_id` is a plain INTEGER with
+                // no FK to enforce that by itself -- see `clear_cover_of`.
+                Entity::Attachment => {
+                    clear_cover_of(&mut *tx, &op.entity_uuid).await?;
+                    Vec::new()
+                }
+                // Reminders and files have no children of their own, and nothing else keeps a
+                // stray reference to either that a delete would need to clean up.
+                Entity::Reminder | Entity::File => Vec::new(),
             };
             log_cascade(&mut *tx, user_id, op, &cascaded).await?;
             Ok(Outcome::Accepted)
@@ -326,7 +348,12 @@ async fn cascade_object(
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
     let mut cascaded = Vec::new();
-    for entity in [Entity::Activity, Entity::Reminder, Entity::Attachment] {
+    // Of the three cascaded tables, only `activities` carries `updated_at`
+    // (migrations/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
+    // bump on those two.
+    for (entity, has_updated_at) in
+        [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
+    {
         // The table name comes from `Entity::table` over a closed set fixed above, never from
         // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
         // the author to have made.
@@ -338,12 +365,32 @@ async fn cascade_object(
         let select = format!("SELECT client_uuid FROM {table} WHERE {MINE}");
         let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
             .bind(object_uuid).fetch_all(&mut *tx).await?;
-        let update = format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}");
-        sqlx::query(sqlx::AssertSqlSafe(update))
-            .bind(now).bind(object_uuid).execute(&mut *tx).await?;
+        let update = if has_updated_at {
+            format!("UPDATE {table} SET deleted_at = ?, updated_at = ? WHERE {MINE}")
+        } else {
+            format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}")
+        };
+        let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
+        let query = if has_updated_at { query.bind(now) } else { query };
+        query.bind(object_uuid).execute(&mut *tx).await?;
         cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
     }
     Ok(cascaded)
+}
+
+/// Clears an object's cover pointer if the attachment just tombstoned is what it was pointing
+/// at, mirroring `api::attachments::delete`. There is no FK on `cover_attachment_id` -- it is a
+/// plain INTEGER column -- so this is the only thing standing between a deleted attachment and
+/// a stale id sitting in `objects`, and in every sync snapshot, indefinitely.
+async fn clear_cover_of(
+    tx: &mut sqlx::SqliteConnection,
+    attachment_uuid: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = ?)")
+        .bind(attachment_uuid).execute(&mut *tx).await?;
+    Ok(())
 }
 
 /// Tombstones an activity's attachments and unhooks the references to it, answering the
