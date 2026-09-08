@@ -117,7 +117,7 @@ pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<Obj
     sqlx::query_as::<_, ObjectRow>(
         "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-         FROM objects WHERE id = ? AND user_id = ?",
+         FROM objects WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -149,16 +149,16 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
     // in tests/objects.rs is what catches them drifting apart.
     let rows = sqlx::query_as::<_, DerivedRow>(
         "SELECT o.id AS object_id, \
-           COALESCE((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id), 0) AS total_cost_cents, \
-           (SELECT COUNT(*) FROM activities WHERE object_id = o.id) AS activity_count, \
-           (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id) AS current_counter, \
-           (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL \
+           COALESCE((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id AND deleted_at IS NULL), 0) AS total_cost_cents, \
+           (SELECT COUNT(*) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS activity_count, \
+           (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS current_counter, \
+           (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND r.deleted_at IS NULL \
               AND (r.snoozed_until IS NULL OR r.snoozed_until <= ?2) AND ( \
               (r.due_date IS NOT NULL AND r.due_date <= ?2) OR \
-              (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id)) \
+              (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL)) \
            )) AS due_reminder_count, \
-           (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id) AS cover_file_id \
-         FROM objects o WHERE (?1 IS NULL OR o.user_id = ?1) AND (?3 IS NULL OR o.id = ?3)",
+           (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
+         FROM objects o WHERE o.deleted_at IS NULL AND (?1 IS NULL OR o.user_id = ?1) AND (?3 IS NULL OR o.id = ?3)",
     )
     .bind(user_id).bind(db::today()).bind(only)
     .fetch_all(&state.db).await?;
@@ -209,13 +209,13 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
         sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = ? AND archived_at IS NOT NULL ORDER BY name COLLATE NOCASE")
+             FROM objects WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
     } else {
         sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = ? AND archived_at IS NULL ORDER BY name COLLATE NOCASE")
+             FROM objects WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
     };
     let mut derived = derived(&state, Some(user.id), None).await?;
@@ -261,7 +261,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         None => existing.cover_attachment_id,
         Some(None) => None,
         Some(Some(cover)) => {
-            let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = ? AND object_id = ? AND kind = 'photo'")
+            let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = ? AND object_id = ? AND kind = 'photo' AND deleted_at IS NULL")
                 .bind(cover).bind(id).fetch_optional(&state.db).await?;
             if ok.is_none() {
                 return Err(AppError::BadRequest("cover_attachment_id must be a photo of this object".into()));
@@ -271,7 +271,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     };
     sqlx::query(
         "UPDATE objects SET name = ?, category = ?, counter_unit = ?, fuel_unit = ?, description = ?, purchase_date = ?, \
-         purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ?",
+         purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at)
@@ -281,10 +281,35 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     Ok(Json(with_stats(&state, row).await?))
 }
 
+/// Deleting an object writes a tombstone rather than removing the row, so a client that was
+/// offline when the delete happened can still learn about it on its next sync.
+///
+/// `ON DELETE CASCADE` only fires for a real `DELETE`, so the cascade the schema used to
+/// provide has to be spelled out here -- without it the object's activities, reminders and
+/// attachments would stay alive and keep syncing after their parent was gone. One transaction,
+/// so a half-applied cascade cannot survive a failure mid-way.
+///
+/// The object's `files` rows and their blobs are deliberately left alone: a file is
+/// content-addressed and shared, `attachments.file_id` is `ON DELETE RESTRICT`, and the
+/// attachment rows pointing at it still exist. They are freed when the retention purge
+/// finally removes those tombstoned attachments.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
-    load_owned_object(&state, user.id, id).await?;
-    let files = super::attachments::files_of_object(&state, id).await?;
-    sqlx::query("DELETE FROM objects WHERE id = ?").bind(id).execute(&state.db).await?;
-    super::attachments::purge_orphan_files(&state, &files).await?;
+    let now = db::now();
+    let mut tx = state.db.begin().await?;
+    let affected = sqlx::query(
+        "UPDATE objects SET deleted_at = ?, updated_at = ? \
+         WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(&now).bind(id).bind(user.id)
+        .execute(&mut *tx).await?.rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    sqlx::query("UPDATE activities SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE reminders SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE attachments SET deleted_at = ? WHERE object_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

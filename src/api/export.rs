@@ -125,7 +125,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = ? ORDER BY id")
+             FROM objects WHERE user_id = ? AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
     let sha_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = ?")
@@ -137,13 +137,14 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
-             FROM activities WHERE object_id = ? ORDER BY date, id")
+             FROM activities WHERE object_id = ? AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(
             "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
              r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
-             NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? ORDER BY r.id")
+             NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id \
+             WHERE r.object_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")
             .bind(o.id).fetch_all(&state.db).await?;
         for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
         let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
@@ -313,13 +314,14 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         if cover.is_none() {
             if let Some(sha) = &o.cover_sha256 {
                 let row: Option<(i64,)> = sqlx::query_as(
-                    "SELECT a.id FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? AND f.sha256 = ? AND a.kind = 'photo' LIMIT 1")
+                    "SELECT a.id FROM attachments a JOIN files f ON f.id = a.file_id \
+                     WHERE a.object_id = ? AND f.sha256 = ? AND a.kind = 'photo' AND a.deleted_at IS NULL LIMIT 1")
                     .bind(object_id).bind(sha).fetch_optional(&mut *tx).await?;
                 cover = row.map(|r| r.0);
             }
         }
         if let Some(c) = cover {
-            sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ?").bind(c).bind(object_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ? AND deleted_at IS NULL").bind(c).bind(object_id).execute(&mut *tx).await?;
         }
         for r in &o.reminders {
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());

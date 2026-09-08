@@ -73,7 +73,7 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let objects = sqlx::query_as::<_, ObjectRow>(
         "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-         FROM objects WHERE user_id = ?1 AND ( \
+         FROM objects WHERE user_id = ?1 AND deleted_at IS NULL AND ( \
            name LIKE ?2 ESCAPE '\\' OR category LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
          ORDER BY archived_at IS NOT NULL, name COLLATE NOCASE LIMIT ?3",
     )
@@ -84,7 +84,8 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
          a.counter_value, a.cost_cents \
          FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = ?1 AND (a.title LIKE ?2 ESCAPE '\\' OR a.notes LIKE ?2 ESCAPE '\\') \
+         WHERE o.user_id = ?1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
+           AND (a.title LIKE ?2 ESCAPE '\\' OR a.notes LIKE ?2 ESCAPE '\\') \
          ORDER BY a.date DESC, a.id DESC LIMIT ?3",
     )
     .bind(user.id).bind(&pattern).bind(limit)

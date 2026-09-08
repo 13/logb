@@ -106,7 +106,7 @@ pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<A
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
          a.quantity_milli, a.client_op_id, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE a.id = ? AND o.user_id = ?",
+         WHERE a.id = ? AND o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -134,7 +134,7 @@ pub struct ListQuery {
 /// know whether a "load more" button belongs on screen.
 pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
     let (n,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM activities WHERE object_id = ?1 \
+        "SELECT COUNT(*) FROM activities WHERE object_id = ?1 AND deleted_at IS NULL \
          AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4)",
     )
     .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
@@ -149,7 +149,7 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
-         FROM activities WHERE object_id = ?1 \
+         FROM activities WHERE object_id = ?1 AND deleted_at IS NULL \
          AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4) \
          ORDER BY date DESC, id DESC LIMIT ?5 OFFSET ?6",
     )
@@ -196,12 +196,12 @@ async fn recent_titles(
     let rows = sqlx::query_as::<_, TitleSuggestion>(
         "SELECT a.title, a.category, MAX(a.date) AS last_date, \
            (SELECT x.cost_cents FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category \
+              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
               ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_cost_cents, \
            (SELECT x.counter_value FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category \
+              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
               ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter \
-         FROM activities a WHERE a.object_id = ?1 \
+         FROM activities a WHERE a.object_id = ?1 AND a.deleted_at IS NULL \
          GROUP BY a.title, a.category ORDER BY last_date DESC LIMIT ?2",
     )
     .bind(object_id)
@@ -217,12 +217,15 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     // A blank (or all-whitespace) client_op_id means no idempotency was requested, not a
     // real, indexable id -- see `super::normalize_op_id` for why that distinction matters.
     body.client_op_id = super::normalize_op_id(body.client_op_id.take());
-    // A retry after a lost response must resolve to the row the first attempt made.
+    // A retry after a lost response must resolve to the row the first attempt made. A
+    // tombstoned row is deliberately not that row: the op id stays taken (the unique index
+    // spans tombstones too), but the activity it named is gone, and handing a deleted row
+    // back as if it were live would leak it. `op_id_conflict` is what that case becomes.
     if let Some(op) = body.client_op_id.as_deref() {
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
              quantity_milli, client_op_id, created_at, updated_at \
-             FROM activities WHERE client_op_id = ?",
+             FROM activities WHERE client_op_id = ? AND deleted_at IS NULL",
         )
         .bind(op)
         .fetch_optional(&state.db)
@@ -253,10 +256,14 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
                  quantity_milli, client_op_id, created_at, updated_at \
-                 FROM activities WHERE client_op_id = ?",
+                 FROM activities WHERE client_op_id = ? AND deleted_at IS NULL",
             )
             .bind(op)
-            .fetch_one(&state.db).await?;
+            .fetch_optional(&state.db).await?;
+            // `fetch_optional` rather than `fetch_one`: the row holding this op id may be a
+            // tombstone, which the filter above hides. That is not a 500 -- the id really is
+            // taken, so say so.
+            let Some(winner) = winner else { return Err(op_id_conflict()) };
             return op_id_row_response(&state, winner, object_id).await;
         }
         Err(e) => return Err(e.into()),
@@ -264,12 +271,18 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     Ok((StatusCode::CREATED, Json(one_out(&state, row).await?)).into_response())
 }
 
+/// The op id is spoken for by a row this request cannot be handed: one belonging to another
+/// object, or one that has since been deleted.
+fn op_id_conflict() -> AppError {
+    AppError::Conflict("client_op_id already used for another object".into())
+}
+
 /// The row a client_op_id lookup found -- whether from the pre-check or after losing an
 /// insert race -- may belong to a different object than the one being posted to; that's a
 /// 409, not this object's row.
 async fn op_id_row_response(state: &App, existing: ActivityRow, object_id: i64) -> Result<Response, AppError> {
     if existing.object_id != object_id {
-        return Err(AppError::Conflict("client_op_id already used for another object".into()));
+        return Err(op_id_conflict());
     }
     Ok((StatusCode::OK, Json(one_out(state, existing).await?)).into_response())
 }
@@ -284,7 +297,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
     body.validate(&object)?;
     sqlx::query(
-        "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, quantity_milli = ?, updated_at = ? WHERE id = ?",
+        "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, quantity_milli = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(id)
@@ -293,15 +306,30 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     Ok(Json(one_out(&state, row).await?))
 }
 
+/// As with objects, the row is tombstoned rather than removed, and the cascade `ON DELETE
+/// CASCADE` used to provide -- this activity's attachments -- is written out by hand, in one
+/// transaction so a half-applied delete cannot survive a failure.
+///
+/// The cover subquery deliberately does *not* skip tombstoned attachments: an object still
+/// pointing at one has a stale cover, and clearing it is the whole point of the statement.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned_activity(&state, user.id, id).await?;
+    let now = db::now();
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL \
-         WHERE cover_attachment_id IN (SELECT id FROM attachments WHERE activity_id = ?)",
+         WHERE deleted_at IS NULL \
+         AND cover_attachment_id IN (SELECT id FROM attachments WHERE activity_id = ?)",
     )
-    .bind(id).execute(&state.db).await?;
-    let files = attachments::files_of_activity(&state, id).await?;
-    sqlx::query("DELETE FROM activities WHERE id = ?").bind(id).execute(&state.db).await?;
-    attachments::purge_orphan_files(&state, &files).await?;
+    .bind(id).execute(&mut *tx).await?;
+    let affected = sqlx::query("UPDATE activities SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(&now).bind(id)
+        .execute(&mut *tx).await?.rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    sqlx::query("UPDATE attachments SET deleted_at = ? WHERE activity_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

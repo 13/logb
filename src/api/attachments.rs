@@ -44,7 +44,8 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
          f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
-         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? ORDER BY a.created_at DESC, a.id DESC",
+         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? AND a.deleted_at IS NULL \
+         ORDER BY a.created_at DESC, a.id DESC",
     )
     .bind(object_id).fetch_all(&state.db).await?)
 }
@@ -54,31 +55,23 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
          f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
-         WHERE a.id = ? AND o.user_id = ?",
+         WHERE a.id = ? AND o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound)
 }
 
-/// The distinct `file_id`s an object's attachments point at, collected *before* those
-/// attachments are deleted so `purge_orphan_files` knows which files to re-check.
-pub async fn files_of_object(state: &App, object_id: i64) -> Result<Vec<i64>, AppError> {
-    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE object_id = ?")
-        .bind(object_id).fetch_all(&state.db).await?;
-    Ok(rows.into_iter().map(|r| r.0).collect())
-}
-
-/// As `files_of_object`, for the attachments hanging off a single activity.
-pub async fn files_of_activity(state: &App, activity_id: i64) -> Result<Vec<i64>, AppError> {
-    let rows: Vec<(i64,)> = sqlx::query_as("SELECT DISTINCT file_id FROM attachments WHERE activity_id = ?")
-        .bind(activity_id).fetch_all(&state.db).await?;
-    Ok(rows.into_iter().map(|r| r.0).collect())
-}
-
 /// Delete the `files` rows (and blobs) among `candidates` that no attachment references any
 /// more. Callers pass the ids the deletion could plausibly have orphaned; the previous version
 /// re-scanned the whole `files` table on every single delete.
+///
+/// The reference check counts *every* attachment row, tombstoned ones included, because that
+/// is what `attachments.file_id ON DELETE RESTRICT` counts: a tombstoned attachment still
+/// pins its file, and deleting the row out from under it would abort with a foreign key
+/// error. So this only ever fires for a file no attachment has ever pointed at -- the orphan a
+/// lost upload race leaves behind. Files whose attachments were merely tombstoned are freed
+/// when the retention purge finally removes those rows.
 pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), AppError> {
     if candidates.is_empty() {
         return Ok(());
@@ -193,7 +186,7 @@ async fn upload(
     // not skip the upload itself; what it skips is the hash computation and the blob and
     // thumbnail writes below.
     if let Some(op) = client_op_id.as_deref() {
-        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ? AND deleted_at IS NULL")
             .bind(op)
             .fetch_optional(&state.db)
             .await?;
@@ -274,9 +267,15 @@ async fn upload(
         // pre-check above does, rather than handing back another object's attachment.
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
             let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
-            let (winner_id,): (i64,) = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ?")
+            let winner: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ? AND deleted_at IS NULL")
                 .bind(op)
-                .fetch_one(&state.db).await?;
+                .fetch_optional(&state.db).await?;
+            // As on the activity path: the row holding this op id may be a tombstone, which
+            // the filter hides. The id is still taken, so that is a conflict, not a 500.
+            let Some((winner_id,)) = winner else {
+                purge_orphan_files(&state, &[file_id]).await?;
+                return Err(AppError::Conflict("client_op_id already used for another object".into()));
+            };
             // This request's own bytes are now referenced by nothing: the winner's attachment
             // points at the winner's file. Identical bytes dedup onto that same row, so the
             // orphan only exists when one op id was reused with DIFFERENT bytes -- a violation
@@ -314,16 +313,26 @@ pub struct UpdateAttachment {
 
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(body): Json<UpdateAttachment>) -> Result<Json<AttachmentOut>, AppError> {
     load_owned(&state, user.id, id).await?;
-    sqlx::query("UPDATE attachments SET caption = ? WHERE id = ?").bind(body.caption.trim()).bind(id).execute(&state.db).await?;
+    sqlx::query("UPDATE attachments SET caption = ? WHERE id = ? AND deleted_at IS NULL").bind(body.caption.trim()).bind(id).execute(&state.db).await?;
     Ok(Json(load_owned(&state, user.id, id).await?))
 }
 
+/// Tombstoned rather than removed, so an offline client learns the attachment is gone. The
+/// `files` row and its blob stay: `attachments.file_id` is `ON DELETE RESTRICT` and this row
+/// still references it, so the content is only reclaimed once the retention purge drops the
+/// tombstone. `load_owned_file` is what stops the file being served in the meantime.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     let a = load_owned(&state, user.id, id).await?;
-    sqlx::query("UPDATE objects SET cover_attachment_id = NULL WHERE id = ? AND cover_attachment_id = ?")
-        .bind(a.object_id).bind(id).execute(&state.db).await?;
-    sqlx::query("DELETE FROM attachments WHERE id = ?").bind(id).execute(&state.db).await?;
-    purge_orphan_files(&state, &[a.file_id]).await?;
+    let now = db::now();
+    let mut tx = state.db.begin().await?;
+    sqlx::query("UPDATE objects SET cover_attachment_id = NULL WHERE id = ? AND cover_attachment_id = ? AND deleted_at IS NULL")
+        .bind(a.object_id).bind(id).execute(&mut *tx).await?;
+    let affected = sqlx::query("UPDATE attachments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -335,8 +344,17 @@ struct FileRow {
     mime: String,
 }
 
+/// A `files` row is reachable only through an attachment, so it stops being readable the
+/// moment every attachment pointing at it is tombstoned -- which is how deleting the last
+/// attachment of a photo, or the activity or object it hung off, still makes `/files/{id}`
+/// read as absent even though the row and blob survive for the sync window.
 async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, AppError> {
-    sqlx::query_as::<_, FileRow>("SELECT id, sha256, original_name, mime FROM files WHERE id = ? AND user_id = ?")
+    sqlx::query_as::<_, FileRow>(
+        "SELECT f.id, f.sha256, f.original_name, f.mime FROM files f \
+         WHERE f.id = ? AND f.user_id = ? AND EXISTS ( \
+           SELECT 1 FROM attachments a JOIN objects o ON o.id = a.object_id \
+           WHERE a.file_id = f.id AND a.deleted_at IS NULL AND o.deleted_at IS NULL)",
+    )
         .bind(id).bind(user_id)
         .fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound)

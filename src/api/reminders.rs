@@ -81,8 +81,9 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<ReminderRow, A
     sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
-         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
-         FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.id = ? AND o.user_id = ?",
+         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
+         FROM reminders r JOIN objects o ON o.id = r.object_id \
+         WHERE r.id = ? AND o.user_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -138,8 +139,9 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
-         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
-         FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.object_id = ? \
+         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
+         FROM reminders r JOIN objects o ON o.id = r.object_id \
+         WHERE r.object_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.done_at IS NOT NULL, r.due_date IS NULL, r.due_date, r.due_counter, r.id",
     )
     .bind(object_id).fetch_all(&state.db).await?;
@@ -152,9 +154,10 @@ pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result
     let rows = sqlx::query_as::<_, ReminderRow>(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
-         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id) AS current_counter \
+         (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
          WHERE o.user_id = ? AND r.done_at IS NULL AND o.archived_at IS NULL \
+           AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )
     .bind(user_id).fetch_all(&state.db).await?;
@@ -195,7 +198,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let existing = load_owned(&state, user.id, id).await?;
     body.validate(existing.counter_unit.as_deref())?;
     sqlx::query(
-        "UPDATE reminders SET title = ?, notes = ?, due_date = ?, due_counter = ?, repeat_months = ?, repeat_counter = ? WHERE id = ?",
+        "UPDATE reminders SET title = ?, notes = ?, due_date = ?, due_counter = ?, repeat_months = ?, repeat_counter = ? WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&body.title).bind(&body.notes).bind(&body.due_date).bind(body.due_counter)
     .bind(body.repeat_months).bind(body.repeat_counter).bind(id)
@@ -203,9 +206,15 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     Ok(Json(load_owned(&state, user.id, id).await?.into()))
 }
 
+/// Tombstoned rather than removed, so an offline client learns the reminder is gone. A
+/// reminder has no children of its own, so there is no cascade to write out here.
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     load_owned(&state, user.id, id).await?;
-    sqlx::query("DELETE FROM reminders WHERE id = ?").bind(id).execute(&state.db).await?;
+    let affected = sqlx::query("UPDATE reminders SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .bind(db::now()).bind(id).execute(&state.db).await?.rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -237,7 +246,7 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
         }
         None => None,
     };
-    sqlx::query("UPDATE reminders SET done_at = ?, done_activity_id = ? WHERE id = ?")
+    sqlx::query("UPDATE reminders SET done_at = ?, done_activity_id = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(db::now()).bind(body.activity_id).bind(id)
         .execute(&state.db).await?;
 
@@ -289,7 +298,7 @@ async fn snooze(
         return Err(AppError::Conflict("reminder already done".into()));
     }
     let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days);
-    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ? AND deleted_at IS NULL")
         .bind(until.to_string())
         .bind(id)
         .execute(&state.db)
@@ -312,7 +321,7 @@ async fn snooze(
 /// (`done_at.is_some()` always wins in `ReminderOut::from`), so there is nothing to guard.
 async fn unsnooze(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ReminderOut>, AppError> {
     load_owned(&state, user.id, id).await?;
-    sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = ? AND deleted_at IS NULL")
         .bind(id)
         .execute(&state.db)
         .await?;
