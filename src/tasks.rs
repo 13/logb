@@ -10,6 +10,10 @@ use std::time::Duration;
 const TICK: Duration = Duration::from_secs(60);
 /// Expired sessions are swept at most this often; the table is tiny and the delete is indexed.
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
+/// How long a device may stay offline before an incremental pull is no longer possible and it
+/// must re-bootstrap. Also how long a tombstone survives, since the two are the same guarantee
+/// seen from either end.
+const RETENTION_DAYS: i64 = 90;
 
 /// Removes sessions whose expiry has passed. Returns how many went.
 ///
@@ -39,6 +43,11 @@ pub fn spawn(state: App) {
                     Ok(n) if n > 0 => tracing::debug!(sessions = n, "pruned expired sessions"),
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "session prune failed"),
+                }
+                match crate::sync::feed::purge(&state, RETENTION_DAYS).await {
+                    Ok(n) if n > 0 => tracing::debug!(changes = n, "purged expired sync history"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "sync purge failed"),
                 }
             }
             match notify::tick(&state, db::local_hour()).await {

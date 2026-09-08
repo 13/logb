@@ -1092,3 +1092,98 @@ async fn bootstrap_is_scoped_to_the_caller() {
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(body["objects"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn purge_drops_old_log_rows_and_old_tombstones() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+
+    app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-ancient", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Ancient",
+        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+
+    // Backdate both the log row and a tombstone well past any sane window.
+    sqlx::query("UPDATE changes SET applied_at = '2000-01-01T00:00:00Z'")
+        .execute(&app.state.db).await.unwrap();
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+        .bind(object_id).execute(&app.state.db).await.unwrap();
+
+    let removed = logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    assert_eq!(removed, 1, "the ancient log row went");
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(rows, 0);
+
+    let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(objects, 0, "an expired tombstone is finally a real delete");
+}
+
+#[tokio::test]
+async fn purge_keeps_recent_history() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+    app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-fresh", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "name", "value": "Fresh",
+        "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+
+    assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(rows, 1, "today's history is not history yet");
+}
+
+#[tokio::test]
+async fn purge_reclaims_the_blob_of_an_expired_attachment() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"%PDF-1.4 fake".to_vec())
+            .file_name("invoice.pdf")
+            .mime_str("application/pdf")
+            .unwrap(),
+    );
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/attachments")))
+        .multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let sha: String = sqlx::query_scalar(
+        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    let blob = app.state.storage.blob_path(&sha);
+    assert!(blob.exists(), "the upload landed on disk");
+
+    assert_eq!(
+        app.client.delete(app.url(&format!("/attachments/{attachment_id}")))
+            .send().await.unwrap().status(),
+        204
+    );
+    assert!(blob.exists(), "a tombstoned attachment still pins its blob");
+
+    sqlx::query("UPDATE attachments SET deleted_at = '2000-01-01T00:00:00Z'")
+        .execute(&app.state.db).await.unwrap();
+    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+
+    assert!(!blob.exists(), "an expired tombstone finally frees the bytes");
+    let files: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(files, 0, "the files row goes with its last attachment");
+}
