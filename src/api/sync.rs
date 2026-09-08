@@ -51,7 +51,14 @@ async fn push(
     user: AuthUser,
     Json(mut body): Json<PushBody>,
 ) -> Result<Json<PushOut>, AppError> {
-    let mut tx = state.db.begin().await?;
+    // `BEGIN IMMEDIATE`, not the default deferred begin. A deferred transaction takes its read
+    // snapshot first and only asks for the write lock at its first write, so under WAL two
+    // devices pushing at once can find the database changed underneath them and get
+    // `SQLITE_BUSY_SNAPSHOT` -- which `busy_timeout` does not retry, because waiting cannot fix
+    // a stale snapshot. That surfaces as a 500 and the whole batch is thrown away. Push is the
+    // endpoint most likely to have concurrent writers, so it takes the write lock up front,
+    // where `busy_timeout` does apply.
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let mut ids = HashMap::new();
 
     // Canonicalise before anything reads the value: the ordering rule, the `field_clock` row

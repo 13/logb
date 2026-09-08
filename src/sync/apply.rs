@@ -48,6 +48,26 @@ pub fn canonical_edited_at(raw: &str) -> Option<String> {
         .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
+/// Whether a database error is a constraint violation, i.e. the statement was refused for what
+/// it tried to store rather than because anything is wrong with the database.
+///
+/// SQLite reports every constraint failure with `SQLITE_CONSTRAINT` (19) as the primary result
+/// code in the low byte of the extended code it hands back: 1299 NOT NULL, 275 CHECK, 787
+/// FOREIGN KEY, 2067 UNIQUE, and the rest. Testing the low byte therefore catches every subtype,
+/// including the ones `DatabaseError::kind()` folds into `ErrorKind::Other`, while still letting
+/// an I/O error, a locked database or a schema fault through as the genuine 500 it is.
+fn is_constraint_violation(err: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(db) = err else {
+        return false;
+    };
+    db.code()
+        .and_then(|code| code.parse::<i32>().ok())
+        .is_some_and(|code| code & 0xff == SQLITE_CONSTRAINT)
+}
+
+/// SQLite's primary result code for a constraint violation.
+const SQLITE_CONSTRAINT: i32 = 19;
+
 /// Applies one op inside the caller's transaction and returns how it landed.
 ///
 /// Ownership is resolved by joining back to `objects.user_id` rather than trusting anything in
@@ -183,7 +203,21 @@ pub async fn apply_op(
             let query = match op.value.as_ref() {
                 None | Some(serde_json::Value::Null) => query.bind(None::<String>),
                 Some(serde_json::Value::String(s)) => query.bind(s.clone()),
-                Some(serde_json::Value::Number(n)) => query.bind(n.as_i64()),
+                Some(serde_json::Value::Number(n)) => {
+                    // Every numeric column reachable through the whitelist is an INTEGER, and
+                    // `as_i64` answers `None` for a float or a magnitude past i64. Binding that
+                    // `None` writes NULL: the op would report `accepted` and advance
+                    // `field_clock`, so the client's correction -- which necessarily carries the
+                    // value's original, EARLIER `edited_at` -- would then lose last-write-wins
+                    // and could never repair the row. Silent loss that also locks out the fix,
+                    // so a number that is not an i64 is refused before the write instead.
+                    let Some(n) = n.as_i64() else {
+                        return Ok(Outcome::Rejected {
+                            reason: format!("{field} must be an integer"),
+                        });
+                    };
+                    query.bind(Some(n))
+                }
                 Some(serde_json::Value::Bool(b)) => query.bind(Some(i64::from(*b))),
                 Some(other) => {
                     return Ok(Outcome::Rejected {
@@ -191,7 +225,27 @@ pub async fn apply_op(
                     })
                 }
             };
-            query.bind(&op.entity_uuid).execute(&mut *tx).await?;
+            // A value that the schema refuses -- NULL into a NOT NULL column, a string outside
+            // a CHECK list -- is a malformed op, and the contract puts a malformed op in the
+            // `rejected` bucket. Letting the `sqlx::Error` escape instead made it a 500, which
+            // rolled back the whole batch including ops already accepted, and the client's
+            // identical retry hit the same op and the same 500 forever: sync stalled on one op
+            // the client had no way to identify. Only constraint failures are converted; every
+            // other database error is a genuine fault and still propagates.
+            //
+            // This relies on SQLite's default `ON CONFLICT ABORT`, which rolls back only the
+            // failing statement and leaves the enclosing transaction open and usable -- so the
+            // ops either side of a rejected one still commit together, and batch atomicity
+            // holds. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
+            // `tests/sync.rs` pins that, asserting the writes before and after really landed.
+            if let Err(e) = query.bind(&op.entity_uuid).execute(&mut *tx).await {
+                if is_constraint_violation(&e) {
+                    return Ok(Outcome::Rejected {
+                        reason: format!("{field} violates a database constraint"),
+                    });
+                }
+                return Err(e.into());
+            }
 
             sqlx::query(
                 "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \

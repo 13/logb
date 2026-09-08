@@ -527,3 +527,280 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(cover.is_none(), "null clears the reference");
 }
+
+/// The uuid a client knows a row by. Table names here are literals in this file, never input.
+async fn client_uuid(db: &sqlx::SqlitePool, table: &str, id: i64) -> String {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT client_uuid FROM {table} WHERE id = ?"
+    )))
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+/// Creates an object with one activity, one reminder and one attachment, and returns
+/// `(object_id, activity_id, reminder_id, attachment_id)`.
+async fn object_with_children(
+    app: &common::TestApp,
+    client: &reqwest::Client,
+    name: &str,
+) -> (i64, i64, i64, i64) {
+    let object = app.create_object(client, name, Some("km")).await;
+    let object_id = object["id"].as_i64().unwrap();
+
+    let res = client
+        .post(app.url(&format!("/objects/{object_id}/activities")))
+        .json(&json!({
+            "date": "2026-01-01", "category": "repair", "title": "Timing belt",
+            "notes": "", "counter_value": 1000, "cost_cents": 5000
+        }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "create activity: {}", res.text().await.unwrap());
+    let activity_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let res = client
+        .post(app.url(&format!("/objects/{object_id}/reminders")))
+        .json(&json!({ "title": "Service", "due_date": "2026-09-01" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "create reminder: {}", res.text().await.unwrap());
+    let reminder_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let res = client
+        .post(app.url(&format!("/objects/{object_id}/attachments")))
+        .multipart(Form::new().part(
+            "file",
+            Part::bytes(png()).file_name("belt.png").mime_str("image/png").unwrap(),
+        ))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "create attachment: {}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    (object_id, activity_id, reminder_id, attachment_id)
+}
+
+/// Every other push test in this file sets a field on an `object`, whose ownership is a column
+/// read. The three child entities each reach `objects.user_id` through a join of their own, and
+/// those joins are the whole of the authorization check for them: a typo in any one would let
+/// any account write any other account's rows, and nothing here would have noticed.
+#[tokio::test]
+async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_, activity_id, reminder_id, attachment_id) =
+        object_with_children(&app, &app.client, "Golf").await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+
+    let mallory = app.create_user_client("mallory", "another password").await;
+    let res = mallory.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-act", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "title", "value": "Stolen activity",
+          "edited_at": "2030-01-01T00:00:00Z", "device_id": "mallory-phone" },
+        { "client_op_id": "op-rem", "entity": "reminder", "entity_uuid": reminder_uuid,
+          "op": "set", "field": "title", "value": "Stolen reminder",
+          "edited_at": "2030-01-01T00:00:00Z", "device_id": "mallory-phone" },
+        { "client_op_id": "op-att", "entity": "attachment", "entity_uuid": attachment_uuid,
+          "op": "set", "field": "caption", "value": "Stolen caption",
+          "edited_at": "2030-01-01T00:00:00Z", "device_id": "mallory-phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for i in 0..3 {
+        assert_eq!(body["results"][i]["outcome"], "rejected", "{body}");
+    }
+
+    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(title, "Timing belt", "another account's activity is untouched");
+    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = ?")
+        .bind(reminder_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(title, "Service", "another account's reminder is untouched");
+    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = ?")
+        .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(caption, "", "another account's attachment is untouched");
+
+    // A rejected op is not part of the log, so it must not reach a pull feed either.
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE client_op_id IN ('op-act', 'op-rem', 'op-att')")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 0, "a rejected op is never logged");
+}
+
+#[tokio::test]
+async fn a_delete_op_tombstones_the_row_and_the_api_stops_serving_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_, activity_id, _, _) = object_with_children(&app, &app.client, "Golf").await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+
+    assert_eq!(
+        app.client.get(app.url(&format!("/activities/{activity_id}"))).send().await.unwrap().status(),
+        200,
+        "the row is readable before the delete"
+    );
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-del", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "delete", "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(rows, 1, "the row survives; only deleted_at is set");
+    let deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM activities WHERE id = ?")
+        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+    assert!(deleted.is_some(), "the delete op tombstones the row");
+
+    assert_eq!(
+        app.client.get(app.url(&format!("/activities/{activity_id}"))).send().await.unwrap().status(),
+        404,
+        "a tombstoned activity reads as absent"
+    );
+
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE client_op_id = 'op-del' AND op = 'delete'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "the delete is in the log for other devices to pull");
+}
+
+/// A constraint violation used to escape as `sqlx::Error`, which the error mapper turns into a
+/// 500. That rolled the whole transaction back, so ops already accepted in the same batch were
+/// discarded, and the client's identical retry hit the same op and the same 500 forever: sync
+/// stalled permanently on one op the client had no way to identify.
+#[tokio::test]
+async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid = client_uuid(&app.state.db, "objects", car["id"].as_i64().unwrap()).await;
+
+    // Ops 2 and 3 violate a NOT NULL and a CHECK constraint respectively; 1 and 4 are ordinary
+    // writes that must survive them.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "ok-before", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "description", "value": "Mine",
+          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "bad-null", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "name", "value": null,
+          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "bad-check", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "counter_unit", "value": "furlongs",
+          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "ok-after", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "category", "value": "boat",
+          "edited_at": "2026-04-01T00:00:00Z", "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    let seen: Vec<(&str, &str)> = body["results"].as_array().unwrap().iter()
+        .map(|r| (r["client_op_id"].as_str().unwrap(), r["outcome"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("ok-before", "accepted"),
+            ("bad-null", "rejected"),
+            ("bad-check", "rejected"),
+            ("ok-after", "accepted"),
+        ],
+        "one malformed op must not change any other op's outcome: {body}"
+    );
+    assert!(
+        body["results"][1]["reason"].as_str().unwrap().contains("name"),
+        "the reason must name the field so the client can drop that op: {body}"
+    );
+    assert!(
+        body["results"][2]["reason"].as_str().unwrap().contains("counter_unit"),
+        "the reason must name the field so the client can drop that op: {body}"
+    );
+
+    // The transaction stayed usable: the ops either side of the failures really committed, and
+    // the failing statements changed nothing.
+    let row: (String, String, Option<String>, String) = sqlx::query_as(
+        "SELECT name, category, counter_unit, description FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(
+        row,
+        ("Golf".into(), "boat".into(), Some("km".into()), "Mine".into()),
+        "accepted ops committed; rejected ops wrote nothing"
+    );
+
+    let logged: Vec<String> = sqlx::query_scalar(
+        "SELECT client_op_id FROM changes ORDER BY seq")
+        .fetch_all(&app.state.db).await.unwrap();
+    assert_eq!(logged, vec!["ok-before", "ok-after"], "only the accepted ops are logged");
+}
+
+/// `as_i64()` returns `None` for a float or an out-of-range magnitude, and the old binding fed
+/// that `None` straight to SQLite as NULL: the op reported `accepted` and advanced `field_clock`,
+/// so the client's correction -- carrying the value's original, earlier `edited_at` -- then lost
+/// the last-write-wins comparison and could never repair the row.
+#[tokio::test]
+async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, _, _) = object_with_children(&app, &app.client, "Golf").await;
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "num-float", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "purchase_price_cents", "value": 1250.5,
+          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" },
+        { "client_op_id": "num-huge", "entity": "activity", "entity_uuid": activity_uuid,
+          "op": "set", "field": "counter_value", "value": 100000000000000000000000_i128 as f64,
+          "edited_at": "2026-05-02T00:00:00Z", "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for (i, field) in [(0, "purchase_price_cents"), (1, "counter_value")] {
+        assert_eq!(body["results"][i]["outcome"], "rejected", "{body}");
+        assert!(
+            body["results"][i]["reason"].as_str().unwrap().contains(field),
+            "the reason must name the field: {body}"
+        );
+    }
+
+    // Neither column was written -- the old code stored NULL and called it success.
+    let price: Option<i64> = sqlx::query_scalar(
+        "SELECT purchase_price_cents FROM objects WHERE client_uuid = ?")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(price.is_none(), "the row still holds what the REST create put there");
+    let counter: Option<i64> = sqlx::query_scalar(
+        "SELECT counter_value FROM activities WHERE client_uuid = ?")
+        .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(counter, Some(1000), "the good value the REST create wrote must survive");
+
+    // The repair: the client resends the value it always had, carrying its ORIGINAL edited_at,
+    // which is EARLIER than the rejected op's. That only wins if the rejected op left no
+    // `field_clock` row behind.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "num-repair", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "purchase_price_cents", "value": 1250,
+        "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "the client can still repair: {body}");
+    let price: Option<i64> = sqlx::query_scalar(
+        "SELECT purchase_price_cents FROM objects WHERE client_uuid = ?")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(price, Some(1250));
+
+    // An integer, and a bool, are still ordinary accepted values.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "num-int", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "set", "field": "cost_cents", "value": 9900,
+        "edited_at": "2026-05-03T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    let cost: Option<i64> = sqlx::query_scalar(
+        "SELECT cost_cents FROM activities WHERE client_uuid = ?")
+        .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(cost, Some(9900));
+}
