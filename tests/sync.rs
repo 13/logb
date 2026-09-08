@@ -427,3 +427,103 @@ async fn results_stay_in_the_order_the_ops_were_sent() {
         "results[i] must describe ops[i]"
     );
 }
+
+#[tokio::test]
+async fn two_users_can_use_the_same_client_op_id() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let mine = app.create_object(&app.client, "Golf", Some("km")).await;
+    let my_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(mine["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let other = app.create_user_client("mallory", "another password").await;
+    let theirs = app.create_object(&other, "Bike", None).await;
+    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(theirs["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // Op ids are minted by clients, so nothing stops two accounts picking the same one. Each
+    // push touches only its own object, so both writes must land: if idempotency were judged
+    // on `client_op_id` alone, the second account would be told `accepted` and its write
+    // silently dropped -- a lost write reported as success.
+    for (client, uuid, name) in [
+        (&app.client, &my_uuid, "Golf VII"),
+        (&other, &their_uuid, "Brompton"),
+    ] {
+        let res = client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": "op-shared", "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": name,
+            "edited_at": "2026-05-01T00:00:00Z", "device_id": "phone"
+        }]))).send().await.unwrap();
+        assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
+        let body: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    }
+
+    for (uuid, expected) in [(&my_uuid, "Golf VII"), (&their_uuid, "Brompton")] {
+        let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+            .bind(uuid).fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(&name, expected, "each account's own write must land");
+    }
+
+    // Both ops really are in the log, one row per account, not one row shared by the pair.
+    let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-shared'")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 2, "the log is keyed by (user_id, client_op_id)");
+}
+
+#[tokio::test]
+async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(object_id).fetch_one(&app.state.db).await.unwrap();
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(png()).file_name("cover.png").mime_str("image/png").unwrap(),
+    );
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/attachments")))
+        .multipart(form).send().await.unwrap();
+    assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-cover", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "cover_attachment_id", "value": attachment_id,
+        "edited_at": "2026-06-01T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
+
+    // A foreign key holds an id or nothing. SQLite would happily store this string in the
+    // integer column, so the ownership check -- which only looks at integers -- must not be
+    // the only thing standing between a junk value and the write.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-junk-fk", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "cover_attachment_id", "value": "not-an-id",
+        "edited_at": "2026-06-02T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+
+    let cover: Option<i64> = sqlx::query_scalar(
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(cover, Some(attachment_id), "the column must be untouched by the rejected op");
+
+    // Null is still how a client clears the reference, and must not be caught by the above.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-clear-fk", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "cover_attachment_id", "value": null,
+        "edited_at": "2026-06-03T00:00:00Z", "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    let cover: Option<i64> = sqlx::query_scalar(
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(cover.is_none(), "null clears the reference");
+}

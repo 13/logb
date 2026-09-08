@@ -120,6 +120,18 @@ pub async fn apply_op(
             // back as `cover_file_id`. The REST handlers already refuse a cross-object
             // reference; sync has to refuse it identically, or it is just a second, unguarded
             // door onto the same write.
+            //
+            // The check reads the VALUE, so a value that is not an id at all must not be able
+            // to slip past it: SQLite columns are dynamically typed, and a string bound to
+            // `cover_attachment_id` would be stored verbatim. Such a value cannot name another
+            // account's row, but it corrupts an integer column, so for these two fields
+            // anything that is neither an integer nor null is refused here rather than falling
+            // through to the write. Null stays legal: it is how a client clears the reference.
+            let is_foreign_key = matches!(
+                (op.entity, field),
+                (Entity::Object, "cover_attachment_id") | (Entity::Reminder, "done_activity_id")
+            );
+            let clearing = matches!(op.value, None | Some(serde_json::Value::Null));
             if let Some(referenced) = op.value.as_ref().and_then(serde_json::Value::as_i64) {
                 let permitted: Option<i64> = match (op.entity, field) {
                     (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
@@ -140,6 +152,10 @@ pub async fn apply_op(
                         reason: format!("{field} must reference a row on the same object"),
                     });
                 }
+            } else if is_foreign_key && !clearing {
+                return Ok(Outcome::Rejected {
+                    reason: format!("{field} must be an integer id or null"),
+                });
             }
 
             let stored: Option<(String, String)> = sqlx::query_as(

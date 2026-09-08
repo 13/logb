@@ -41,9 +41,17 @@ CREATE TABLE changes (
     applied_at   TEXT NOT NULL,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_id    TEXT NOT NULL,
-    client_op_id TEXT NOT NULL UNIQUE
+    client_op_id TEXT NOT NULL
 );
 CREATE INDEX idx_changes_user_seq ON changes(user_id, seq);
+
+-- Op ids are minted by clients, so they are only ever unique within the account that minted
+-- them. A global UNIQUE on `client_op_id` would make one account's id collide with another's,
+-- and the push handler's idempotency lookup would then report the second account's op as
+-- already applied and silently drop the write. Uniqueness is per user, and the handler's
+-- lookup is scoped the same way -- the two must agree or idempotency is either a lost write
+-- or a constraint violation.
+CREATE UNIQUE INDEX idx_changes_user_op ON changes(user_id, client_op_id);
 
 -- The winning edit time per field, which is what an arriving op is compared against. Separate
 -- from `changes` because that table holds losers too, and a scan of it per field would grow

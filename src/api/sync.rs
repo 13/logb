@@ -77,10 +77,18 @@ async fn push(
 
         // Idempotency: an op id already in the log was applied by an earlier attempt whose
         // response the client never saw. Report it as accepted without applying it twice.
-        let seen: Option<i64> = sqlx::query_scalar("SELECT seq FROM changes WHERE client_op_id = ?")
-            .bind(&op.client_op_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        //
+        // Scoped by user because clients mint their own op ids, so an id is only unique within
+        // the account that minted it. Unscoped, one account reusing an id another had already
+        // used would be told `accepted` while its write was never applied -- a lost write
+        // reported as success. `idx_changes_user_op` makes the log agree: uniqueness is on
+        // (user_id, client_op_id), which is exactly what this lookup asks about.
+        let seen: Option<i64> =
+            sqlx::query_scalar("SELECT seq FROM changes WHERE user_id = ? AND client_op_id = ?")
+                .bind(user.id)
+                .bind(&op.client_op_id)
+                .fetch_optional(&mut *tx)
+                .await?;
         if seen.is_some() {
             results.push(OpResult {
                 client_op_id: op.client_op_id.clone(),
