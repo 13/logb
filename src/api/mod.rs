@@ -39,11 +39,24 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
 /// file", and an instance in the second state once ran for nineteen hours reporting itself
 /// healthy. Counting applied migrations catches both halves of that: a database with no schema,
 /// and one whose schema is older than the binary talking to it.
+///
+/// The comparison is deliberately one-directional: `applied < expected`. An ahead schema (more
+/// migrations applied than embedded in this binary) is tolerated and reports healthy. This is
+/// correct for rollbacks: when a deployment rolls back to an older release, the database schema
+/// is ahead of the binary, but all applied migrations are additive (`CREATE TABLE`, `CREATE
+/// INDEX`, `ALTER TABLE ADD COLUMN`), so the older binary genuinely does work against the newer
+/// schema. Failing health on an ahead schema would make rollbacks permanently unhealthy and
+/// unrecoverable. This assumption is load-bearing: a future destructive migration (dropped or
+/// renamed column, tightened `NOT NULL`) would break it, and this check would not notice. That
+/// constraint must be maintained.
 async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, AppError> {
     let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(&state.db)
         .await
-        .map_err(|e| AppError::Unavailable(format!("database unreadable: {e}")))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "health check: database query failed");
+            AppError::Unavailable("database unavailable".into())
+        })?;
     let expected = crate::db::expected_migrations() as i64;
     if applied < expected {
         return Err(AppError::Unavailable(format!(

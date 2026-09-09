@@ -81,3 +81,17 @@ async fn health_turns_503_when_the_schema_is_incomplete() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "unavailable");
 }
+
+#[tokio::test]
+async fn health_turns_503_when_the_database_is_unreachable() {
+    let app = common::spawn().await;
+    // The query-failure path: drop the entire migrations table so the query fails,
+    // not just returns a low count. This is different from the row-count path above.
+    sqlx::query("DROP TABLE _sqlx_migrations")
+        .execute(&app.state.db).await.unwrap();
+
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 503, "health must fail when the database query fails");
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "unavailable");
+}
