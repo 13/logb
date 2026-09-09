@@ -1,6 +1,7 @@
 # Offline-first Android client with server sync
 
-Status: approved design, not yet implemented.
+Status: phase 1 (the server) is implemented and merged. Phases 2-6 are not started.
+See "What phase 1 actually built" at the end for how the implementation amended this design.
 
 ## Problem
 
@@ -33,7 +34,9 @@ never a fetch path on the way to a screen. This is the load-bearing decision: it
 the default state rather than a degraded one, and removes optimistic-update-and-rollback from
 the client entirely.
 
-**Identity.** Every syncable table gains `client_uuid TEXT UNIQUE NOT NULL` — `objects`,
+**Identity.** Every syncable table gains a `client_uuid` (nullable at the schema level, since
+SQLite cannot `ALTER TABLE ADD COLUMN NOT NULL` without a default, with uniqueness enforced by
+an index) — `objects`,
 `activities`, `reminders`, `attachments`, `files`. The client mints it, so a row born offline
 has an identity before the server has seen it, and an object created offline can carry
 activities and attachments that reference it. The server keeps its integer `id` as the
@@ -74,9 +77,13 @@ CREATE TABLE changes (
   applied_at   TEXT NOT NULL,        -- server receive time
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   device_id    TEXT NOT NULL,
-  client_op_id TEXT NOT NULL UNIQUE  -- idempotency; the outbox already mints these
+  client_op_id TEXT NOT NULL          -- idempotency; the outbox already mints these
 );
 CREATE INDEX idx_changes_user_seq ON changes(user_id, seq);
+-- Scoped per user, not global: a globally unique op id lets one account's id collide with
+-- another's, and the idempotency lookup then reports the stranger's op as accepted without
+-- applying it -- a lost write reported as success.
+CREATE UNIQUE INDEX idx_changes_user_op ON changes(user_id, client_op_id);
 
 CREATE TABLE field_clock (
   entity      TEXT NOT NULL,
