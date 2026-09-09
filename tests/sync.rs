@@ -1313,6 +1313,15 @@ async fn a_cursor_before_the_horizon_is_gone() {
         "edited_at": after_now(13046460), "device_id": "phone"
     }]))).send().await.unwrap();
 
+    // The epoch this database is currently on, fetched before the purge is simulated below --
+    // that only rewrites `changes`, not `settings`, so the epoch is unaffected. Carrying it on
+    // the request below is what pins this 410 on the horizon rule specifically: without it, an
+    // un-epoched non-zero `since` is refused by the epoch check regardless of the horizon, and
+    // this test would pass even with the horizon rule deleted entirely.
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().unwrap().to_string();
+
     // Simulate a purge having removed everything before this row -- including the object's
     // own `create`, which is in the log too now (task 9), or the horizon would still read as
     // the create row's untouched seq and this cursor would look current rather than stale.
@@ -1321,7 +1330,7 @@ async fn a_cursor_before_the_horizon_is_gone() {
     sqlx::query("UPDATE changes SET seq = 500 WHERE client_op_id = 'op-kept'")
         .execute(&app.state.db).await.unwrap();
 
-    let res = app.client.get(app.url("/sync/pull?since=1")).send().await.unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since=1&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 410, "a stale cursor must be told to re-bootstrap");
 }
 
@@ -1362,7 +1371,9 @@ async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
     let res = app.client.get(app.url(&format!("/sync/pull?since=499&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 200, "since == horizon - 1 (499) has missed nothing and must be accepted");
 
-    let res = app.client.get(app.url("/sync/pull?since=498")).send().await.unwrap();
+    // Carrying the epoch here too: without it, this 410 comes from the epoch check (no epoch
+    // on a non-zero `since`), not the horizon rule this test exists to pin.
+    let res = app.client.get(app.url(&format!("/sync/pull?since=498&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 410, "since == horizon - 2 (498) has missed seq 499 and must be refused");
 }
 
@@ -1371,9 +1382,15 @@ async fn a_cursor_against_an_emptied_log_is_gone() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
 
+    // The epoch, so the assertion below is pinned on the horizon rule (empty log, so horizon
+    // is 0) rather than on the epoch check, which a bare non-zero `since` would also trip.
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().unwrap().to_string();
+
     // A non-zero cursor can only have come from ops that existed, so an empty log means they
     // were purged. Answering 200 here would let the client believe it is current forever.
-    let res = app.client.get(app.url("/sync/pull?since=7")).send().await.unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since=7&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 410);
 
     // A first pull is still legal against the same empty log.
@@ -2388,6 +2405,12 @@ async fn a_pull_carrying_a_stale_epoch_is_gone() {
 
     // A first pull carries no cursor, so it needs no epoch.
     assert_eq!(app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().status(), 200);
+
+    // The rule is `since > 0 && epoch mismatch`, on a single `&&` -- pin that a garbage epoch
+    // alongside `since=0` still passes, so a future edit cannot accidentally start checking the
+    // epoch on a first pull too.
+    let res = app.client.get(app.url("/sync/pull?since=0&epoch=garbage")).send().await.unwrap();
+    assert_eq!(res.status(), 200, "since=0 needs no epoch, garbage or otherwise");
 }
 
 #[tokio::test]
@@ -2422,4 +2445,26 @@ async fn rotating_the_epoch_forces_every_device_to_re_bootstrap() {
     let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
         .send().await.unwrap();
     assert_eq!(res.status(), 410, "the device's epoch is now the old database's");
+}
+
+/// `rotate` must not report success when nothing actually changed. A plain `UPDATE ... WHERE
+/// key = 'sync_epoch'` matches zero rows if that row is ever absent, and would still return a
+/// freshly minted uuid to the caller -- `--restore` would print "sync epoch is now ..." and
+/// exit 0 while the database goes on advertising its old identity (or, here, none at all, which
+/// then makes every pull 500 through `current`'s `fetch_one`).
+#[tokio::test]
+async fn rotate_heals_a_missing_row_instead_of_silently_reporting_a_fake_success() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    sqlx::query("DELETE FROM settings WHERE key = 'sync_epoch'")
+        .execute(&app.state.db).await.unwrap();
+
+    let fresh = logby::sync::epoch::rotate(&app.state.db).await
+        .expect("rotate must not silently no-op when the row is missing");
+
+    let value: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")
+        .fetch_one(&app.state.db).await
+        .expect("rotate reported success, but the row it claims to have set is not there");
+    assert_eq!(value, fresh, "the row actually on disk must match what rotate reported");
 }

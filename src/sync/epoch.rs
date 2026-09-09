@@ -13,11 +13,27 @@ pub async fn current(db: &sqlx::SqlitePool) -> Result<String, AppError> {
 ///
 /// Called by `--restore`. It is deliberately not reachable over HTTP: rotating without
 /// replacing the data would send every device to a bootstrap for no reason.
+///
+/// An upsert, not a plain `UPDATE`: a bare `UPDATE ... WHERE key = 'sync_epoch'` matches zero
+/// rows if that row is ever absent (a restored snapshot old enough to predate it, or the row
+/// having been lost some other way), and would still report the freshly minted uuid as the new
+/// epoch while the database went on advertising its old identity -- or none at all, which then
+/// makes every pull 500 through `current`'s `fetch_one`. The `rows_affected` assertion is the
+/// invariant this relies on: for a single primary-keyed row, insert-or-update always affects
+/// exactly one row, so anything else means the write did not do what it claims.
 pub async fn rotate(db: &sqlx::SqlitePool) -> Result<String, AppError> {
     let fresh = uuid::Uuid::new_v4().to_string();
-    sqlx::query("UPDATE settings SET value = ? WHERE key = 'sync_epoch'")
+    let result = sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('sync_epoch', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(&fresh)
         .execute(db)
         .await?;
+    if result.rows_affected() != 1 {
+        return Err(AppError::Internal(format!(
+            "sync epoch rotation affected {} rows, not 1 -- the epoch was not reliably set",
+            result.rows_affected()
+        )));
+    }
     Ok(fresh)
 }

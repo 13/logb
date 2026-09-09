@@ -17,7 +17,7 @@ pub enum AppError {
     Conflict(String),
     #[error("{0}")]
     Unavailable(String),
-    #[error("cursor is older than the retained history")]
+    #[error("this cursor cannot be resumed -- re-bootstrap")]
     Gone,
     #[error("payload too large")]
     TooLarge,

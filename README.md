@@ -76,7 +76,7 @@ The server must be stopped, so run it as a one-shot container against the same v
 
 ```bash
 docker compose stop logby
-docker compose run --rm logby /logby --restore /data/backups/logby-2026-09-01.db
+docker compose run --rm logby --restore /data/backups/logby-2026-09-01.db
 docker compose start logby
 ```
 
@@ -90,6 +90,9 @@ you do not need to do anything about it.
 Restoring only checks that the snapshot is a sound logby database, not that it came
 from this host, so moving a backup between hosts works on purpose: point a new
 instance's `--restore` at another instance's backup directory to migrate its data.
+The database only holds references to blobs by hash, not the blobs themselves, so
+`files/` has to be copied across too — following this section alone leaves you with
+a database whose photos and documents all 404.
 
 ## Configuration
 

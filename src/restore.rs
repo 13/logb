@@ -7,6 +7,20 @@
 use crate::db::{self, BoxError};
 use std::path::{Path, PathBuf};
 
+/// Picks out the one `sqlx::migrate!` failure that is not a real migration failure: a snapshot
+/// carrying a migration version this binary's embedded set does not contain. That is the ahead-
+/// schema case (an older binary restoring a newer release's backup), and it is detected before
+/// any migration is applied -- see `validate_applied_migrations` in sqlx -- so it must not be
+/// treated the same as a genuine migration error. Every other `MigrateError` variant (a dirty
+/// migration, a checksum mismatch, an execution failure) still means the abort-with-explanation
+/// path below, so this stays narrow on purpose.
+fn ahead_schema_version(err: &BoxError) -> Option<i64> {
+    match err.downcast_ref::<sqlx::migrate::MigrateError>() {
+        Some(sqlx::migrate::MigrateError::VersionMissing(version)) => Some(*version),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct Report {
     /// Where the replaced database was moved, if there was one.
@@ -96,16 +110,48 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
         )
         .into()
     })?;
-    let pool = db::connect(data_dir).await.map_err(|e| -> BoxError {
-        format!(
-            "restore failed while migrating the restored snapshot ({e}). the live database has \
-             already been replaced with a PARTIALLY MIGRATED copy of the snapshot at {}. \
-             {recovery}. do not start the server against it -- restore the previous copy (or a \
-             known-good snapshot) before starting the server.",
-            live.display()
-        )
-        .into()
-    })?;
+    let pool = match db::connect(data_dir).await {
+        Ok(pool) => pool,
+        Err(e) => match ahead_schema_version(&e) {
+            // A snapshot may instead be ahead of this binary -- an older binary restoring a
+            // newer release's backup -- which `sqlx::migrate!` reports as `VersionMissing`
+            // rather than a real migration failure: it happens before any migration is
+            // applied, so the copy just placed is untouched and fully usable, not "partially
+            // migrated". `api::mod::health` already treats an ahead schema as healthy on the
+            // grounds that migrations are additive; a restore has to reach the same
+            // conclusion, or an operator gets a green health probe on a database that never
+            // had its epoch rotated -- exactly what epoch rotation exists to prevent, and
+            // re-running --restore would hit this same "failure" forever.
+            Some(version) => {
+                tracing::warn!(
+                    version,
+                    "restored snapshot carries migration {version}, which this binary does \
+                     not recognise; treating the schema as ahead (additive-only, per the \
+                     health check's own rule) instead of aborting the restore"
+                );
+                db::connect_existing(data_dir).await.map_err(|e| -> BoxError {
+                    format!(
+                        "restore placed an ahead-schema snapshot but reopening it read-write \
+                         failed ({e}). {recovery}. do not start the server against it until \
+                         this is understood.",
+                    )
+                    .into()
+                })?
+            },
+            // Every other migration error (a dirty migration, a checksum mismatch, an
+            // execution failure) keeps aborting -- this catch stays narrow on purpose.
+            None => {
+                return Err(format!(
+                    "restore failed while migrating the restored snapshot ({e}). the live \
+                     database has already been replaced with a PARTIALLY MIGRATED copy of the \
+                     snapshot at {}. {recovery}. do not start the server against it -- restore \
+                     the previous copy (or a known-good snapshot) before starting the server.",
+                    live.display()
+                )
+                .into())
+            },
+        },
+    };
 
     // 4. Give it a new identity, so no device resumes on a cursor whose meaning has changed.
     let epoch = crate::sync::epoch::rotate(&pool).await.map_err(|e| -> BoxError {

@@ -294,6 +294,67 @@ async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
     );
 }
 
+/// A snapshot carrying a migration version this binary does not recognise -- an older binary
+/// restoring a newer backup -- makes `sqlx::migrate!` refuse with `VersionMissing`, *after* the
+/// live database has already been swapped for the snapshot. `api::mod::health` already treats
+/// exactly this situation (an ahead schema) as healthy, on the grounds that migrations are
+/// additive, so `--restore` must reach the same conclusion and still rotate the epoch --
+/// leaving the swap done but the epoch unrotated is the one failure mode the epoch exists to
+/// prevent.
+#[tokio::test]
+async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", Some("km")).await;
+    let snapshot = logby::backup::tick(&app.state, 1).await.unwrap().expect("a snapshot");
+
+    // Graft on a migration version no binary in this build ships -- standing in for a newer
+    // release's backup being restored by an older one.
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&snapshot).create_if_missing(false);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations \
+             (version, description, installed_on, success, checksum, execution_time) \
+             VALUES (?, 'from-the-future', CURRENT_TIMESTAMP, 1, ?, 0)")
+            .bind(99_999_999_i64)
+            .bind(vec![0u8; 32])
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+    let epoch_before: String = {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&snapshot).read_only(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        let v = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")
+            .fetch_one(&pool).await.unwrap();
+        pool.close().await;
+        v
+    };
+
+    let target = tempfile::tempdir().unwrap();
+    std::fs::copy(&snapshot, target.path().join("logby.db")).unwrap();
+
+    let report = logby::restore::run(target.path(), &snapshot).await
+        .expect("an ahead schema is additive and safe to use as-is, per the health check's own rule");
+    assert_ne!(report.epoch, epoch_before, "the epoch must be rotated even on this path");
+
+    let epoch_on_disk: String = {
+        let pool = logby::db::connect_existing(target.path()).await.unwrap();
+        let v = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")
+            .fetch_one(&pool).await.unwrap();
+        pool.close().await;
+        v
+    };
+    assert_eq!(epoch_on_disk, report.epoch, "the rotated epoch is actually on disk, not just reported");
+}
+
 #[tokio::test]
 async fn restore_refuses_a_file_that_is_not_a_database() {
     let target = tempfile::tempdir().unwrap();
