@@ -1411,7 +1411,7 @@
     "/sync/pull": {
       "get": {
         "summary": "Page through the change feed from a cursor.",
-        "description": "`since` is the `next_seq` from the previous call, or 0 for a first pull. `complete` is false when the page filled exactly, meaning the client should pull again immediately with the returned `next_seq`. A `since` older than the server's retention horizon -- including a non-zero `since` against a log that has been purged empty -- answers 410 instead of a silently-incomplete 200; the client must re-bootstrap from a fresh export rather than trust an incremental catch-up.",
+        "description": "`since` is the `next_seq` from the previous call, or 0 for a first pull. `complete` is false when the page filled exactly, meaning the client should pull again immediately with the returned `next_seq`. A `since` older than the server's retention horizon -- including a non-zero `since` against a log that has been purged empty -- answers 410 instead of a silently-incomplete 200; the client must re-bootstrap from a fresh export rather than trust an incremental catch-up. A non-zero `since` also requires `epoch` to match the database's current one -- see the `epoch` parameter -- or the same 410 is returned.",
         "parameters": [
           {
             "name": "since",
@@ -1433,6 +1433,14 @@
               "maximum": 1000
             },
             "description": "Maximum number of changes to return. Clamped to [1, 1000]."
+          },
+          {
+            "name": "epoch",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The `epoch` from a previous pull or bootstrap, proving which database `since` was issued against. Required whenever `since` is non-zero; a mismatched or missing epoch answers 410, the same as a stale `since`, because a restored database reissues `changes.seq` for entirely different ops."
           }
         ],
         "responses": {
@@ -2452,6 +2460,10 @@
           "server_time": {
             "type": "string",
             "format": "date-time"
+          },
+          "epoch": {
+            "type": "string",
+            "description": "Which database these seq numbers belong to. A client stores it beside its cursor and passes it back as the `epoch` query parameter on its next pull."
           }
         }
       },
@@ -2501,6 +2513,10 @@
           "server_time": {
             "type": "string",
             "format": "date-time"
+          },
+          "epoch": {
+            "type": "string",
+            "description": "Which database this snapshot came from. Pass alongside `seq` as the `epoch` query parameter on the first `GET /sync/pull` call."
           }
         }
       }

@@ -1153,8 +1153,9 @@ async fn pull_returns_ops_after_the_cursor_and_advances_it() {
     assert_eq!(body["complete"], true);
     assert!(body["server_time"].is_string());
     let next = body["next_seq"].as_i64().unwrap();
+    let epoch = body["epoch"].as_str().unwrap();
 
-    let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={next}")))
+    let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(body["changes"].as_array().unwrap().len(), 0, "the cursor is exhausted");
 }
@@ -1248,10 +1249,16 @@ async fn pull_pages_chain_to_deliver_every_row_exactly_once_in_seq_order() {
         }]))).send().await.unwrap();
     }
 
+    // Fetched once via bootstrap, off to the side, so it does not add a row to `seen` the way
+    // an extra pull would.
+    let epoch: serde_json::Value = app.client.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = epoch["epoch"].as_str().unwrap();
+
     let mut seen: Vec<i64> = Vec::new();
     let mut since = 0i64;
     loop {
-        let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&limit=3")))
+        let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&limit=3&epoch={epoch}")))
             .send().await.unwrap().json().await.unwrap();
         let changes = body["changes"].as_array().unwrap();
         let complete = body["complete"].as_bool().unwrap();
@@ -1339,6 +1346,12 @@ async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
         "edited_at": after_now(60), "device_id": "phone"
     }]))).send().await.unwrap();
 
+    // The epoch this database is currently on, fetched before the purge is simulated below --
+    // that only rewrites `changes`, not `settings`, so the epoch is unaffected.
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().unwrap().to_string();
+
     // As in the sibling test above: simulate a purge leaving exactly one row, at seq 500, so
     // the horizon (the oldest surviving seq) is 500.
     sqlx::query("DELETE FROM changes WHERE client_op_id != 'op-kept'")
@@ -1346,7 +1359,7 @@ async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
     sqlx::query("UPDATE changes SET seq = 500 WHERE client_op_id = 'op-kept'")
         .execute(&app.state.db).await.unwrap();
 
-    let res = app.client.get(app.url("/sync/pull?since=499")).send().await.unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since=499&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 200, "since == horizon - 1 (499) has missed nothing and must be accepted");
 
     let res = app.client.get(app.url("/sync/pull?since=498")).send().await.unwrap();
@@ -1390,9 +1403,10 @@ async fn bootstrap_returns_live_rows_and_a_resumable_cursor() {
     assert!(body["seq"].is_i64());
     assert!(body["server_time"].is_string());
 
-    // The cursor is immediately usable.
+    // The cursor is immediately usable, together with the epoch it was issued alongside.
     let seq = body["seq"].as_i64().unwrap();
-    let res = app.client.get(app.url(&format!("/sync/pull?since={seq}"))).send().await.unwrap();
+    let epoch = body["epoch"].as_str().unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since={seq}&epoch={epoch}"))).send().await.unwrap();
     assert_eq!(res.status(), 200);
 }
 
@@ -2340,4 +2354,72 @@ async fn settings_and_user_writes_produce_no_changes_rows() {
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(count, 0, "settings and user writes are outside the sync protocol");
+}
+
+#[tokio::test]
+async fn a_pull_carrying_a_stale_epoch_is_gone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let _ = car;
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().expect("pull states the epoch").to_string();
+    let next = body["next_seq"].as_i64().unwrap();
+    assert!(next > 0, "the REST create is already in the feed");
+
+    // The cursor is current and the epoch matches: ordinary catch-up.
+    let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+
+    // Same cursor, an epoch from a different database: the numbers no longer mean what the
+    // device thinks they mean.
+    let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch=not-this-database")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 410);
+
+    // A non-zero cursor with no epoch at all is the same failure: a client that cannot say
+    // which database it is resuming against cannot safely resume.
+    let res = app.client.get(app.url(&format!("/sync/pull?since={next}")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 410);
+
+    // A first pull carries no cursor, so it needs no epoch.
+    assert_eq!(app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn bootstrap_states_the_epoch_it_belongs_to() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let body: serde_json::Value = app.client.get(app.url("/sync/bootstrap"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().expect("bootstrap states the epoch");
+
+    // The pair is usable together: the seq and epoch a bootstrap hands out are accepted by pull.
+    let seq = body["seq"].as_i64().unwrap();
+    let res = app.client.get(app.url(&format!("/sync/pull?since={seq}&epoch={epoch}")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn rotating_the_epoch_forces_every_device_to_re_bootstrap() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", Some("km")).await;
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json().await.unwrap();
+    let epoch = body["epoch"].as_str().unwrap().to_string();
+    let next = body["next_seq"].as_i64().unwrap();
+
+    let fresh = logby::sync::epoch::rotate(&app.state.db).await.unwrap();
+    assert_ne!(fresh, epoch, "rotation produces a different epoch");
+
+    let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 410, "the device's epoch is now the old database's");
 }

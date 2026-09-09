@@ -165,6 +165,7 @@ pub struct PullParams {
     #[serde(default)]
     pub since: i64,
     pub limit: Option<i64>,
+    pub epoch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -174,6 +175,8 @@ pub struct PullOut {
     /// False when the page filled exactly, meaning the client should pull again immediately.
     pub complete: bool,
     pub server_time: String,
+    /// Which database these seq numbers belong to. A client stores it beside its cursor.
+    pub epoch: String,
 }
 
 async fn pull(
@@ -193,10 +196,18 @@ async fn pull(
     if params.since > 0 && (horizon == 0 || params.since < horizon - 1) {
         return Err(AppError::Gone);
     }
+    let epoch = crate::sync::epoch::current(&state.db).await?;
+    // A first pull (`since` 0) has no cursor to invalidate, so it needs no epoch. Any other
+    // cursor is a claim about a specific database, and a client that cannot back that claim --
+    // wrong epoch, or none at all -- must not be allowed to resume against seq numbers that may
+    // since have been reissued to different ops.
+    if params.since > 0 && params.epoch.as_deref() != Some(epoch.as_str()) {
+        return Err(AppError::Gone);
+    }
     let changes = feed::pull(&state.db, user.id, params.since, limit).await?;
     let complete = (changes.len() as i64) < limit;
     let next_seq = changes.last().map(|c| c.seq).unwrap_or(params.since);
-    Ok(Json(PullOut { changes, next_seq, complete, server_time: db::now() }))
+    Ok(Json(PullOut { changes, next_seq, complete, server_time: db::now(), epoch }))
 }
 
 async fn bootstrap(
@@ -207,5 +218,6 @@ async fn bootstrap(
     let map = snapshot.as_object_mut().expect("snapshot builds a JSON object");
     map.insert("seq".into(), serde_json::json!(seq));
     map.insert("server_time".into(), serde_json::json!(db::now()));
+    map.insert("epoch".into(), serde_json::json!(crate::sync::epoch::current(&state.db).await?));
     Ok(Json(snapshot))
 }
