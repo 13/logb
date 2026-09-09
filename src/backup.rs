@@ -17,12 +17,34 @@ pub const KEEP: usize = 14;
 ///
 /// A backup nobody has opened is a guess. This is the cheapest possible proof, and it runs in
 /// milliseconds on a database this size.
+///
+/// `integrity_check` alone is not enough: SQLite treats a zero-length file as a valid,
+/// schema-less database, so a `touch`, an interrupted copy, or a `backup_to` that died partway
+/// would sail through it. This checks the file is non-empty and that the schema this
+/// application always migrates in (`_sqlx_migrations`) is actually present, in addition to the
+/// integrity check -- and gives each rejection its own wording, since these are read from a log
+/// at 3am rather than matched in code.
 pub async fn verify(path: &Path) -> Result<(), BoxError> {
+    let len = std::fs::metadata(path)?.len();
+    if len == 0 {
+        return Err("the file is empty, not a database".into());
+    }
+
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(false)
         .read_only(true);
     let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
+
+    let has_schema: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'")
+            .fetch_optional(&pool)
+            .await?;
+    if has_schema.is_none() {
+        pool.close().await;
+        return Err("the file is a valid SQLite database but has no logby schema".into());
+    }
+
     let result: Result<(String,), _> = sqlx::query_as("PRAGMA integrity_check").fetch_one(&pool).await;
     pool.close().await;
     match result {
@@ -52,7 +74,13 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
         std::fs::remove_file(&dest)?;
     }
 
-    db::backup_to(&state.db, &dest).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Err(e) = db::backup_to(&state.db, &dest).await {
+        // A disk-full or similar failure can still leave a partial (even zero-length) file at
+        // `dest`. Left behind, it would be mistaken for a finished backup on the next tick
+        // today, the same way an unverifiable one would be -- so clear it the same way.
+        let _ = std::fs::remove_file(&dest);
+        return Err(AppError::Internal(e.to_string()));
+    }
     if let Err(e) = verify(&dest).await {
         // Leave no unrestorable file behind, and leave every earlier snapshot alone: a failure
         // today must not cost yesterday's good copy.
@@ -60,16 +88,32 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
         return Err(AppError::Internal(format!("snapshot failed verification: {e}")));
     }
 
-    prune(&dir)?;
+    // A prune problem must never be reported as a backup failure: the snapshot above is already
+    // written and verified, so `prune` handles its own errors internally rather than via `?`.
+    prune(&dir);
     Ok(Some(dest))
 }
 
 /// Deletes all but the newest `KEEP` snapshots.
 ///
-/// Only files this module named are considered. A dated name sorts chronologically as a string,
-/// so ordering needs no parsing -- and anything else in the directory is not ours to delete.
-fn prune(dir: &Path) -> std::io::Result<()> {
-    let mut ours: Vec<PathBuf> = std::fs::read_dir(dir)?
+/// Entries are selected by name pattern only (`logby-*.db`) -- there is no provenance tracking,
+/// so a directory or symlink that happens to match is treated the same as a real snapshot. A
+/// dated name sorts chronologically as a string, so ordering needs no parsing, and anything
+/// that does not match the pattern is not ours to delete.
+///
+/// Failures are logged and skipped rather than propagated: this runs after a snapshot has
+/// already been written and verified, so one undeletable entry (a stray directory, a
+/// permission problem) must not stop the others from being pruned, and must never be mistaken
+/// by the caller for the backup itself having failed.
+fn prune(dir: &Path) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), error = %e, "could not list backup directory for pruning");
+            return;
+        }
+    };
+    let mut ours: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             p.file_name()
@@ -81,7 +125,44 @@ fn prune(dir: &Path) -> std::io::Result<()> {
     let excess = ours.len().saturating_sub(KEEP);
     for path in ours.into_iter().take(excess) {
         tracing::debug!(path = %path.display(), "pruning an expired snapshot");
-        std::fs::remove_file(path)?;
+        if let Err(e) = std::fs::remove_file(&path) {
+            tracing::warn!(path = %path.display(), error = %e, "could not prune an expired snapshot");
+        }
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SQLite treats a zero-length file as a valid, schema-less database -- `integrity_check`
+    /// on one returns "ok". `verify` must catch this itself, before ever asking SQLite.
+    #[tokio::test]
+    async fn verify_rejects_an_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.db");
+        std::fs::write(&path, b"").unwrap();
+        let err = verify(&path).await.unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("empty"), "reason should name the file as empty: {err}");
+    }
+
+    /// A file can be a perfectly sound SQLite database and still not be a logby backup --
+    /// `integrity_check` alone cannot tell the difference, so `verify` must also look for the
+    /// schema this application always creates.
+    #[tokio::test]
+    async fn verify_rejects_a_valid_sqlite_file_that_is_not_a_logby_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unrelated.db");
+        {
+            let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+            let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+            sqlx::query("CREATE TABLE not_logby (id INTEGER)").execute(&pool).await.unwrap();
+            pool.close().await;
+        }
+        let err = verify(&path).await.unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("migration") || err.to_string().to_lowercase().contains("schema"),
+            "reason should name the missing logby schema, distinct from an integrity failure: {err}"
+        );
+    }
 }

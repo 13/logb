@@ -63,6 +63,108 @@ async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
 }
 
 #[tokio::test]
+async fn a_zero_length_file_in_todays_slot_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+
+    // A zero-length file lands in today's slot -- a stray `touch`, an interrupted copy, or a
+    // `backup_to` that failed partway and (before this fix) left its partial file behind.
+    // SQLite calls a zero-length file a valid, schema-less database, so a naive verify would
+    // wave it through and the day would silently go without a backup.
+    let today = backups.join(format!("logby-{}.db", logby::db::today()));
+    std::fs::write(&today, b"").unwrap();
+
+    let made = logby::backup::tick(&app.state, 1).await.unwrap()
+        .expect("an empty file must be replaced, not accepted as an already-done backup");
+    logby::backup::verify(&made).await.expect("the replacement is sound");
+    assert!(std::fs::metadata(&made).unwrap().len() > 0, "the slot no longer holds an empty file");
+}
+
+#[tokio::test]
+async fn a_prune_failure_does_not_mask_a_successful_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    // Enough dated snapshots to force pruning, with one slot occupied by a directory instead
+    // of a file -- `remove_file` on it fails with "Is a directory".
+    for day in 1..=20 {
+        if day == 5 {
+            std::fs::create_dir(backups.join(format!("logby-2020-01-{day:02}.db"))).unwrap();
+        } else {
+            std::fs::write(backups.join(format!("logby-2020-01-{day:02}.db")), b"old").unwrap();
+        }
+    }
+
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+
+    let made = logby::backup::tick(&app.state, 1).await.unwrap()
+        .expect("a prune problem must not be reported as a backup failure");
+    logby::backup::verify(&made).await.expect("the new snapshot itself is sound");
+
+    assert!(
+        !backups.join("logby-2020-01-01.db").exists(),
+        "the oldest real snapshot is still pruned: one bad entry does not stop the others"
+    );
+    assert!(
+        backups.join("logby-2020-01-05.db").is_dir(),
+        "the undeletable directory is left alone, not silently vanished, and does not panic the run"
+    );
+}
+
+#[tokio::test]
+async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    // Fourteen real dated snapshots -- already at capacity before anything else is added.
+    for day in 1..=14 {
+        std::fs::write(backups.join(format!("logby-2020-01-{day:02}.db")), b"old").unwrap();
+    }
+    // Not ours: the filter requires the ".db" suffix, and this file does not have it.
+    let not_ours = backups.join("logby-2020-01-01.db.bak");
+    std::fs::write(&not_ours, b"decoy").unwrap();
+    // Ours by name alone, though it was never a dated snapshot -- the filter has no
+    // provenance tracking, only a name pattern, so it takes a retention slot like any other.
+    let impostor = backups.join("logby-x.db");
+    std::fs::write(&impostor, b"decoy").unwrap();
+
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    logby::backup::tick(&app.state, 1).await.unwrap().expect("today's snapshot");
+
+    assert!(not_ours.exists(), "a name the filter does not match is never ours to delete");
+
+    let mut names: Vec<String> = std::fs::read_dir(&backups).unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("logby-") && n.ends_with(".db"))
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 14, "the filter still caps at fourteen: {names:?}");
+    assert!(
+        names.contains(&"logby-x.db".to_string()),
+        "a non-dated name matching the pattern is treated as ours and takes a retention slot: {names:?}"
+    );
+    assert!(
+        !names.contains(&"logby-2020-01-01.db".to_string()),
+        "the impostor's late sort position displaced the oldest real snapshot: {names:?}"
+    );
+}
+
+#[tokio::test]
 async fn retention_keeps_the_newest_fourteen() {
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
