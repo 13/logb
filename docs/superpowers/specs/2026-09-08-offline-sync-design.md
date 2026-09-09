@@ -176,3 +176,52 @@ Automated backup is a separate, unstarted concern, but it collides with this one
 server snapshot silently rolls back writes that phones believe were accepted. Whichever lands
 second must account for the other — most likely by having a restored server advertise a fresh
 bootstrap epoch that forces clients to reconcile rather than resume from a stale cursor.
+
+## What phase 1 actually built, and what it constrains
+
+Phase 1 is merged. Two things about it changed the design rather than merely implementing it,
+and both bind the phases that follow.
+
+**REST writes are logged too.** The design as written only ever had the sync endpoints writing
+to `changes` and `field_clock`, which left the browser invisible to the protocol: a device would
+never learn of an edit or delete made in the browser, and — worse — a REST write left the field
+clock holding whatever older timestamp a phone last wrote, so a sync op stamped *earlier* than
+the browser edit still won and overwrote it. Every REST create, update and delete now records
+per-field ops and stamps the clock, through shared helpers in `src/sync/record.rs`. The delete
+cascade is shared code rather than two matching copies, because the two paths drifted twice
+during phase 1 and each drift was caught only in review.
+
+### Prerequisite for phase 4: a create supersedes the edits made before it
+
+`record_create` stamps `field_clock` for every whitelisted field at creation time. That is
+deliberate — an unstamped field loses to nothing, so a stale offline edit would otherwise win
+against a fresh row by default. The consequence is a rule the client must be built around:
+
+> Any sync `set` whose `edited_at` predates the server-side create is superseded, for every
+> field.
+
+So a client that flushes an offline outbox as "REST-create the row, then push the `set` ops
+queued against it" loses all of those ops. Phase 4 has to pick one of:
+
+- give the create path the row's true offline creation time, so the edits that followed it are
+  genuinely later; or
+- carry offline creates as `create` ops through sync rather than through REST, so the whole
+  sequence shares one clock.
+
+The choice is open. What is not open is ignoring it — the failure is silent, and it presents as
+"some of my offline edits vanished".
+
+### Smaller constraints inherited from phase 1
+
+- `changes.value` is **double-encoded** JSON on the wire: a string value arrives as
+  `"\"Golf VII\""`, and a client must parse it. An explicit `value: null` on a `set` is stored
+  as SQL NULL and is therefore indistinguishable from an absent value.
+- `GET /sync/bootstrap` is the only path that exposes `client_uuid`, and ops address entities by
+  UUID alone, so a client cannot push anything until it has bootstrapped.
+- Two reference cleanups — clearing an object's cover when its attachment goes, and unlinking
+  `reminders.done_activity_id` — change rows without logging a `set` or stamping the clock. A
+  pulling device does not learn of either. Worth closing before phase 3 relies on the feed being
+  complete.
+- `client_uuid` is nullable at the schema level and backfilled rows carry a 32-character hex
+  value while newly minted ones are 36-character hyphenated v4. Nothing may validate it as a
+  strict UUID shape.
