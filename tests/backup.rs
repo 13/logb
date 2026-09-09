@@ -235,6 +235,65 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     assert_eq!(name, "Golf");
 }
 
+/// A restore that died between its two renames -- the live file moved aside, its -wal/-shm not
+/// yet moved -- leaves exactly this on disk: no `logby.db`, but sidecars sitting where the next
+/// restore's copy will land. They must not survive to sit beside a database they do not belong
+/// to; SQLite would read them as that database's journal.
+#[tokio::test]
+async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", Some("km")).await;
+    let snapshot = logby::backup::tick(&app.state, 1).await.unwrap().expect("a snapshot");
+
+    let target = tempfile::tempdir().unwrap();
+    let orphan_wal: &[u8] = b"wal belonging to some other database";
+    let orphan_shm: &[u8] = b"shm belonging to some other database";
+    std::fs::write(target.path().join("logby.db-wal"), orphan_wal).unwrap();
+    std::fs::write(target.path().join("logby.db-shm"), orphan_shm).unwrap();
+
+    logby::restore::run(target.path(), &snapshot).await.unwrap();
+
+    // The exact live path must not hold the orphan. This alone is not proof of a fix: SQLite's
+    // own close-time checkpoint clears a `-wal` beside a database it just opened regardless of
+    // this module's code, so an unfixed restore can leave this path clean too while the orphan
+    // was silently destroyed rather than preserved. The real assertion is the one below.
+    assert!(
+        !target.path().join("logby.db-wal").exists(),
+        "an orphaned -wal must not end up beside the freshly restored database"
+    );
+    assert!(
+        !target.path().join("logby.db-shm").exists(),
+        "an orphaned -shm must not end up beside the freshly restored database"
+    );
+
+    // The orphan must have been moved aside -- kept, recoverable, unmodified -- before anything
+    // touched `logby.db`, not silently clobbered by SQLite opening the new database.
+    let moved: Vec<_> = std::fs::read_dir(target.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with("-wal") && n != "logby.db-wal")
+        .collect();
+    assert_eq!(moved.len(), 1, "the orphaned -wal should be moved aside, not lost: {moved:?}");
+    assert_eq!(
+        std::fs::read(target.path().join(&moved[0])).unwrap(),
+        orphan_wal,
+        "the moved-aside file must be the original orphan, byte for byte"
+    );
+    let shm_name = moved[0].replace("-wal", "-shm");
+    assert_eq!(
+        std::fs::read(target.path().join(&shm_name)).unwrap(),
+        orphan_shm,
+        "the -shm must travel with its -wal, moved aside as the same set"
+    );
+}
+
 #[tokio::test]
 async fn restore_refuses_a_file_that_is_not_a_database() {
     let target = tempfile::tempdir().unwrap();

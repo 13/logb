@@ -87,6 +87,10 @@ A restored database gets a new sync epoch, so every phone re-bootstraps instead 
 resuming from a cursor that now points at different history. That is deliberate and
 you do not need to do anything about it.
 
+Restoring only checks that the snapshot is a sound logby database, not that it came
+from this host, so moving a backup between hosts works on purpose: point a new
+instance's `--restore` at another instance's backup directory to migrate its data.
+
 ## Configuration
 
 | Env                   | Default   |                                                                                                                              |

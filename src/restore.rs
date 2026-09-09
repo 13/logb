@@ -27,39 +27,96 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
             .create_if_missing(false)
             .read_only(true);
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
-        let looks_right: Result<(i64,), _> =
+        // A row count, not just a successful query: the table existing but empty would answer
+        // `fetch_one` fine, yet is not "migration history" -- every real logby database has run
+        // at least one migration, so an empty table is exactly as suspect as a missing one.
+        let count: Result<(i64,), _> =
             sqlx::query_as("SELECT count(*) FROM _sqlx_migrations").fetch_one(&pool).await;
         pool.close().await;
-        looks_right.map_err(|e| -> BoxError {
-            format!("{} is not a usable snapshot: no migration history ({e})", snapshot.display()).into()
-        })?;
+        match count {
+            Ok((n,)) if n > 0 => {},
+            Ok(_) => {
+                return Err(
+                    format!("{} is not a usable snapshot: no migration history (table is empty)", snapshot.display())
+                        .into(),
+                )
+            },
+            Err(e) => {
+                return Err(format!(
+                    "{} is not a usable snapshot: no migration history ({e})",
+                    snapshot.display()
+                )
+                .into())
+            },
+        }
     }
 
-    // 2. Move the live database aside. Its -wal and -shm go with it: leaving them beside a
-    //    different database would have SQLite reading another file's journal.
+    // 2. Move the live database aside, and its -wal/-shm with it. The sidecars are handled
+    //    whether or not `logby.db` itself exists: a restore that died between this step and the
+    //    copy below leaves exactly that -- an orphaned -wal/-shm with no main file -- and if left
+    //    in place it would sit beside the database the copy is about to create, with SQLite
+    //    reading it as that database's journal. Both share one stamp so the set, main file or
+    //    not, stays recoverable together.
     let live = data_dir.join("logby.db");
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let replaced_to = if live.exists() {
-        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
         let dest = data_dir.join(format!("logby.db.replaced-{stamp}"));
         std::fs::rename(&live, &dest)?;
-        for suffix in ["-wal", "-shm"] {
-            let from = data_dir.join(format!("logby.db{suffix}"));
-            if from.exists() {
-                std::fs::rename(&from, data_dir.join(format!("logby.db.replaced-{stamp}{suffix}")))?;
-            }
-        }
         Some(dest)
     } else {
         None
     };
+    for suffix in ["-wal", "-shm"] {
+        let from = data_dir.join(format!("logby.db{suffix}"));
+        if from.exists() {
+            std::fs::rename(&from, data_dir.join(format!("logby.db.replaced-{stamp}{suffix}")))?;
+        }
+    }
+
+    // From here on, `logby.db` has already been touched -- there is no "nothing happened"
+    // reading of a failure any more. A bare propagated error would let an operator assume a
+    // failed `--restore` is a no-op, start the server, and run it on a restored database that
+    // still advertises the old sync epoch (or isn't fully migrated) -- exactly what epoch
+    // rotation exists to prevent. Every error past this point must say plainly that the swap
+    // already happened, where the previous copy is kept, which step failed, and what to do.
+    let recovery = match &replaced_to {
+        Some(p) => format!("the database it replaced is kept at {}", p.display()),
+        None => "there was no previous database to keep -- this data directory had none".to_string(),
+    };
 
     // 3. Put the snapshot in place, then let `connect` migrate it -- a snapshot may predate the
     //    binary restoring it.
-    std::fs::copy(snapshot, &live)?;
-    let pool = db::connect(data_dir).await?;
+    std::fs::copy(snapshot, &live).map_err(|e| -> BoxError {
+        format!(
+            "restore failed while copying the snapshot into place ({e}). the live database has \
+             already been replaced and {} is currently MISSING -- there is no database there at \
+             all. {recovery}. restore the previous copy (or rerun --restore) before starting \
+             the server.",
+            live.display()
+        )
+        .into()
+    })?;
+    let pool = db::connect(data_dir).await.map_err(|e| -> BoxError {
+        format!(
+            "restore failed while migrating the restored snapshot ({e}). the live database has \
+             already been replaced with a PARTIALLY MIGRATED copy of the snapshot at {}. \
+             {recovery}. do not start the server against it -- restore the previous copy (or a \
+             known-good snapshot) before starting the server.",
+            live.display()
+        )
+        .into()
+    })?;
 
     // 4. Give it a new identity, so no device resumes on a cursor whose meaning has changed.
-    let epoch = crate::sync::epoch::rotate(&pool).await?;
+    let epoch = crate::sync::epoch::rotate(&pool).await.map_err(|e| -> BoxError {
+        format!(
+            "restore failed while rotating the sync epoch ({e}). the live database has already \
+             been replaced with the migrated snapshot, but it is STILL ADVERTISING THE OLD sync \
+             epoch. {recovery}. do not start the server until the epoch is rotated -- rerun \
+             --restore, or rotate the epoch by hand, before starting the server."
+        )
+        .into()
+    })?;
     pool.close().await;
 
     Ok(Report { replaced_to, epoch })
