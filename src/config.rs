@@ -41,6 +41,13 @@ pub struct Config {
     /// copy of that directory pairs with it.
     #[arg(long, value_name = "PATH")]
     pub backup: Option<PathBuf>,
+    /// Directory for nightly database snapshots. Unset disables automatic backup entirely, so
+    /// an instance that has not opted in behaves exactly as it did before this existed.
+    #[arg(long, env = "LOGBY_BACKUP_DIR")]
+    pub backup_dir: Option<PathBuf>,
+    /// Hour (0-23), in `LOGBY_TIMEZONE`, at which the nightly snapshot is written.
+    #[arg(long, env = "LOGBY_BACKUP_HOUR", default_value_t = 3)]
+    pub backup_hour: u32,
     /// Probe a running instance's `/api/health` on the configured port and exit 0 or 1.
     /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
     #[arg(long)]

@@ -55,6 +55,11 @@ pub fn spawn(state: App) {
                 Ok(None) => {}
                 Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
             }
+            match crate::backup::tick(&state, db::local_hour()).await {
+                Ok(Some(path)) => tracing::info!(path = %path.display(), "wrote database snapshot"),
+                Ok(None) => {}
+                Err(e) => tracing::error!(error = %e, "database snapshot failed"),
+            }
         }
     });
 }

@@ -329,6 +329,8 @@ mod tests {
         notify_format: "json".into(),
         timezone: chrono_tz::Tz::UTC,
         backup: None,
+        backup_dir: None,
+        backup_hour: 3,
         healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),
