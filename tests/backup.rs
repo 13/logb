@@ -197,3 +197,56 @@ async fn retention_keeps_the_newest_fourteen() {
     assert!(names.last().unwrap().contains(&logby::db::today()), "today's is kept");
     assert!(backups.join("notes.txt").exists(), "unrelated files are not ours to delete");
 }
+
+#[tokio::test]
+async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", Some("km")).await;
+
+    let snapshot = logby::backup::tick(&app.state, 1).await.unwrap().expect("a snapshot");
+    let epoch_before = logby::sync::epoch::current(&app.state.db).await.unwrap();
+
+    // The mistake we are recovering from.
+    app.create_object(&app.client, "Regrettable", None).await;
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(live, 2);
+
+    // The running instance holds the database open, so restore has to happen against a stopped
+    // one. Point it at a data directory of its own, seeded from this instance's snapshot.
+    let target = tempfile::tempdir().unwrap();
+    std::fs::copy(&snapshot, target.path().join("logby.db")).unwrap();
+    let report = logby::restore::run(target.path(), &snapshot).await.unwrap();
+
+    assert!(report.replaced_to.is_some(), "the database it replaced is kept, not deleted");
+    assert!(report.replaced_to.as_ref().unwrap().exists());
+    assert_ne!(report.epoch, epoch_before, "a restored database is a different database");
+
+    let pool = logby::db::connect_existing(target.path()).await.unwrap();
+    let restored: i64 = sqlx::query_scalar("SELECT count(*) FROM objects").fetch_one(&pool).await.unwrap();
+    assert_eq!(restored, 1, "the regrettable object is not in the restored database");
+    let name: String = sqlx::query_scalar("SELECT name FROM objects").fetch_one(&pool).await.unwrap();
+    assert_eq!(name, "Golf");
+}
+
+#[tokio::test]
+async fn restore_refuses_a_file_that_is_not_a_database() {
+    let target = tempfile::tempdir().unwrap();
+    let junk = target.path().join("not-a-snapshot.db");
+    std::fs::write(&junk, b"absolutely not a database").unwrap();
+    std::fs::write(target.path().join("logby.db"), b"the live one").unwrap();
+
+    let err = logby::restore::run(target.path(), &junk).await.unwrap_err();
+    assert!(err.to_string().contains("not a usable snapshot"), "got: {err}");
+    assert_eq!(
+        std::fs::read(target.path().join("logby.db")).unwrap(),
+        b"the live one",
+        "a refused restore must not have touched the live database"
+    );
+}

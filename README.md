@@ -65,6 +65,28 @@ mid-write and miss the WAL. Blobs under `files/` are content-addressed and never
 rewritten, so `rsync` covers them. Settings → Export is the other route: one zip
 with the JSON and every file, importable into any instance.
 
+Set `LOGBY_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGBY_BACKUP_HOUR`
+(default 3) and verified with `PRAGMA integrity_check` before it counts. The newest 14
+are kept. Point it at a volume that is itself backed up — a snapshot on the same disk
+protects you from your own mistakes, not from the disk's.
+
+## Restore
+
+The server must be stopped, so run it as a one-shot container against the same volume:
+
+```bash
+docker compose stop logby
+docker compose run --rm logby /logby --restore /data/backups/logby-2026-09-01.db
+docker compose start logby
+```
+
+The database being replaced is kept as `logby.db.replaced-<timestamp>` in the same
+directory — restoring the wrong snapshot is recoverable.
+
+A restored database gets a new sync epoch, so every phone re-bootstraps instead of
+resuming from a cursor that now points at different history. That is deliberate and
+you do not need to do anything about it.
+
 ## Configuration
 
 | Env                   | Default   |                                                                                                                              |

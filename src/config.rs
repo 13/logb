@@ -48,6 +48,11 @@ pub struct Config {
     /// Hour (0-23), in `LOGBY_TIMEZONE`, at which the nightly snapshot is written.
     #[arg(long, env = "LOGBY_BACKUP_HOUR", default_value_t = 3)]
     pub backup_hour: u32,
+    /// Replace the database with this snapshot and exit. The server must be stopped. The
+    /// database being replaced is kept alongside it, and every synced device is sent back to a
+    /// full bootstrap.
+    #[arg(long, value_name = "PATH")]
+    pub restore: Option<PathBuf>,
     /// Probe a running instance's `/api/health` on the configured port and exit 0 or 1.
     /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
     #[arg(long)]

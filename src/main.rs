@@ -15,6 +15,15 @@ async fn main() -> Result<(), logby::db::BoxError> {
         println!("database backed up to {}", dest.display());
         return Ok(());
     }
+    if let Some(src) = config.restore.clone() {
+        let report = logby::restore::run(&config.data_dir, &src).await?;
+        println!("restored {} into {}", src.display(), config.data_dir.display());
+        if let Some(kept) = report.replaced_to {
+            println!("the database it replaced is kept at {}", kept.display());
+        }
+        println!("sync epoch is now {} -- every device will re-bootstrap", report.epoch);
+        return Ok(());
+    }
     if config.healthcheck {
         return healthcheck(config.port).await;
     }

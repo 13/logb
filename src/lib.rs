@@ -7,6 +7,7 @@ pub mod domain;
 pub mod error;
 pub mod files;
 pub mod notify;
+pub mod restore;
 pub mod spa;
 pub mod state;
 pub mod sync;
