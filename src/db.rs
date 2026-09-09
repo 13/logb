@@ -92,6 +92,14 @@ pub fn local_hour() -> u32 {
     Utc::now().with_timezone(&timezone()).hour()
 }
 
+/// How many migrations this binary carries.
+///
+/// `sqlx::migrate!` embeds the directory at compile time, so this is what the running code
+/// believes the schema should be -- the number the health check compares the database against.
+pub fn expected_migrations() -> usize {
+    sqlx::migrate!("./migrations").iter().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

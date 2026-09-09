@@ -57,3 +57,27 @@ async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
     let empty = tempfile::tempdir().unwrap();
     assert!(logby::db::connect_existing(empty.path()).await.is_err(), "no database to back up");
 }
+
+#[tokio::test]
+async fn health_reports_the_database_state() {
+    let app = common::spawn().await;
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert!(body["migrations"].as_i64().unwrap() > 0, "it says how much schema it found");
+}
+
+#[tokio::test]
+async fn health_turns_503_when_the_schema_is_incomplete() {
+    let app = common::spawn().await;
+    // Exactly the shape of the real incident: the process is up and serving, but the database
+    // under it is not the one the binary was built for.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = (SELECT max(version) FROM _sqlx_migrations)")
+        .execute(&app.state.db).await.unwrap();
+
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 503, "a liveness probe must fail when the schema is behind");
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "unavailable");
+}

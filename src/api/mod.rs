@@ -12,6 +12,7 @@ pub mod users;
 
 use crate::error::AppError;
 use crate::state::App;
+use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
@@ -32,8 +33,28 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
         .merge(export::router(max_import_bytes))
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+/// Liveness that is worth the name: it answers for the database, not just the process.
+///
+/// A handler returning a constant cannot distinguish "serving correctly" from "serving an empty
+/// file", and an instance in the second state once ran for nineteen hours reporting itself
+/// healthy. Counting applied migrations catches both halves of that: a database with no schema,
+/// and one whose schema is older than the binary talking to it.
+async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, AppError> {
+    let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| AppError::Unavailable(format!("database unreadable: {e}")))?;
+    let expected = crate::db::expected_migrations() as i64;
+    if applied < expected {
+        return Err(AppError::Unavailable(format!(
+            "schema is behind: {applied} of {expected} migrations applied"
+        )));
+    }
+    Ok(Json(json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "migrations": applied,
+    })))
 }
 
 /// A blank (after trimming) `client_op_id` means the same thing as an absent one: no
