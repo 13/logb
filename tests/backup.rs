@@ -132,8 +132,11 @@ async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
         std::fs::write(backups.join(format!("logby-2020-01-{day:02}.db")), b"old").unwrap();
     }
     // Not ours: the filter requires the ".db" suffix, and this file does not have it.
-    let not_ours = backups.join("logby-2020-01-01.db.bak");
-    std::fs::write(&not_ours, b"decoy").unwrap();
+    let not_ours_suffix = backups.join("logby-2020-01-01.db.bak");
+    std::fs::write(&not_ours_suffix, b"decoy").unwrap();
+    // Not ours: ends in ".db" but lacks the "logby-" prefix -- filter must reject this.
+    let not_ours_prefix = backups.join("other-2020-01-01.db");
+    std::fs::write(&not_ours_prefix, b"decoy").unwrap();
     // Ours by name alone, though it was never a dated snapshot -- the filter has no
     // provenance tracking, only a name pattern, so it takes a retention slot like any other.
     let impostor = backups.join("logby-x.db");
@@ -146,7 +149,8 @@ async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
     app.setup("ben", "correct horse").await;
     logby::backup::tick(&app.state, 1).await.unwrap().expect("today's snapshot");
 
-    assert!(not_ours.exists(), "a name the filter does not match is never ours to delete");
+    assert!(not_ours_suffix.exists(), "a name the filter does not match (wrong suffix) is never ours to delete");
+    assert!(not_ours_prefix.exists(), "a name the filter does not match (missing prefix) is never ours to delete");
 
     let mut names: Vec<String> = std::fs::read_dir(&backups).unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

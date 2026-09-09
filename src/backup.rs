@@ -36,14 +36,26 @@ pub async fn verify(path: &Path) -> Result<(), BoxError> {
         .read_only(true);
     let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
 
-    let has_schema: Option<(String,)> =
+    // Capture result to avoid early return with `?` that skips pool.close(). Close pool
+    // unconditionally, then match and return or continue.
+    let has_schema: Result<Option<(String,)>, _> =
         sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'")
             .fetch_optional(&pool)
-            .await?;
-    if has_schema.is_none() {
-        pool.close().await;
-        return Err("the file is a valid SQLite database but has no logby schema".into());
+            .await;
+    pool.close().await;
+
+    match has_schema {
+        Ok(Some(_)) => {},  // schema found, continue to integrity check
+        Ok(None) => return Err("the file is a valid SQLite database but has no logby schema".into()),
+        Err(e) => return Err(Box::new(e)),
     }
+
+    // Reopen pool for integrity check.
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
 
     let result: Result<(String,), _> = sqlx::query_as("PRAGMA integrity_check").fetch_one(&pool).await;
     pool.close().await;
