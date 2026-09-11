@@ -1,6 +1,6 @@
 # Publishing a release image from CI
 
-Status: approved design, not yet implemented.
+Status: implemented and released. v0.1.0 is published at ghcr.io/13/logb.
 
 ## Problem
 
@@ -63,9 +63,9 @@ Pushing `v0.2.0` publishes three:
 
 ## Visibility
 
-The package is **public**. GHCR defaults new packages to private, which would mean the
-deployment host needs a stored token and a `docker login` to pull its own image. The repository
-is already public, so the image exposes nothing the source does not.
+The package is **public**, so the deployment host needs no stored token and no `docker login`
+to pull its own image. The repository is already public, so the image exposes nothing the source
+does not.
 
 This was expected to need a manual step after the first publish — flipping the package to
 public — but it did not: a package published by Actions from a public repository inherits that
