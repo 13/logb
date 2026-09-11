@@ -90,7 +90,34 @@ pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
         .connect(url)
         .await?;
     migrator(url).run(&pool).await?;
+    seed_settings(&pool).await?;
     Ok(pool)
+}
+
+/// The two `settings` rows the app cannot run without, written on first start if absent.
+///
+/// They used to be seeded by the SQLite migrations -- `currency` by 0001, `sync_epoch` by 0008
+/// with `INSERT ... lower(hex(randomblob(16)))`. Neither spelling ports: PostgreSQL has no
+/// `randomblob`, and a schema that seeds its own data would have to be kept in step with a
+/// second copy of these defaults. The PostgreSQL schema therefore seeds nothing and this is the
+/// one code path that produces both rows on either backend.
+///
+/// Without the `sync_epoch` row a fresh PostgreSQL database answers every sync pull and push
+/// with a 500, because `epoch::current` is a `fetch_one`; without `currency` the settings
+/// endpoint does the same.
+///
+/// `ON CONFLICT DO NOTHING` -- both dialects understand it -- is what makes this safe to run on
+/// every start, and, more importantly, what stops it overwriting an epoch that already exists.
+/// Minting a new one on each boot would silently send every device on a full re-bootstrap.
+async fn seed_settings(pool: &AnyPool) -> Result<(), BoxError> {
+    for (key, value) in [("sync_epoch", crate::sync::epoch::fresh()), ("currency", "EUR".to_string())] {
+        sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING")
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Opens an existing database without running migrations, for read-only side commands such

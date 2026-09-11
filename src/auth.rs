@@ -340,7 +340,13 @@ mod tests {
             cors_origins: String::new(),
             database_url: None,
         };
-        Arc::new(AppState { db, storage, config, login_attempts: Mutex::new(HashMap::new()) })
+        Arc::new(AppState {
+            db,
+            backend: crate::dialect::Backend::Sqlite,
+            storage,
+            config,
+            login_attempts: Mutex::new(HashMap::new()),
+        })
     }
 
     fn peer() -> SocketAddr {

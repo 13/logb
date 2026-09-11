@@ -156,7 +156,10 @@ async fn login(
     Json(body): Json<Credentials>,
 ) -> Result<(CookieJar, Json<AuthUser>), AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
-    let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE username = $1")
+    // Case-insensitive by `lower(...)` on both sides rather than by the column's collation:
+    // SQLite declares `UNIQUE COLLATE NOCASE`, PostgreSQL carries a unique index on
+    // `lower(username)`, and only this spelling signs "bEn" in as "Ben" on both.
+    let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE lower(username) = lower($1)")
         .bind(&body.username)
         .fetch_optional(&state.db).await?;
     let Some((id, hash)) = row else {

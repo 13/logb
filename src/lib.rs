@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backup;
 pub mod config;
 pub mod db;
+pub mod dialect;
 pub mod domain;
 pub mod error;
 pub mod files;
@@ -81,12 +82,15 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
 /// against it (the reminder digest scheduler). Tests use `build`, so they never start it.
 pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxError> {
     db::set_timezone(config.timezone);
-    let db = db::connect(&config.database_url()?).await?;
+    let url = config.database_url()?;
+    let backend = dialect::Backend::of(&url);
+    let db = db::connect(&url).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();
     let state: App = Arc::new(AppState {
         db,
+        backend,
         storage,
         config,
         login_attempts: Mutex::new(HashMap::new()),

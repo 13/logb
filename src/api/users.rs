@@ -44,16 +44,26 @@ async fn create(
 ) -> Result<(StatusCode, Json<UserOut>), AppError> {
     auth::validate_username(&body.username)?;
     auth::validate_password(&body.password)?;
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = $1")
+    // `lower(username)`, not `username`: SQLite gets case-insensitive uniqueness from the
+    // column's `COLLATE NOCASE`, which PostgreSQL has no equivalent of -- its schema declares a
+    // unique index on `lower(username)` instead. Comparing the same way here makes the two
+    // backends agree that "BEN" is taken when "Ben" exists, and lets PostgreSQL use that index.
+    // Usernames are ASCII by `validate_username`, so `lower` folds all of one.
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE lower(username) = lower($1)")
         .bind(&body.username).fetch_optional(&state.db).await?;
     if exists.is_some() {
         return Err(AppError::Conflict("username already taken".into()));
     }
+    // `is_admin` is bound as an integer, not a `bool`. `db::Bool` already handles reading the
+    // column back from either backend; this is the writing half of the same decision. The
+    // column is 0/1 on both -- SQLite has no boolean type and the PostgreSQL schema keeps the
+    // same shape -- and PostgreSQL refuses a boolean parameter for a SMALLINT column outright,
+    // which made every `POST /users` a 500 there. SQLite is indifferent.
     let user = sqlx::query_as::<_, UserOut>(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES ($1, $2, $3, 'en', $4) \
          RETURNING id, username, is_admin, lang, created_at",
     )
-    .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(body.is_admin).bind(db::now())
+    .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(i64::from(body.is_admin)).bind(db::now())
     .fetch_one(&state.db).await
     .map_err(|e| match e.as_database_error().filter(|d| d.is_unique_violation()) {
         Some(_) => AppError::Conflict("username already taken".into()),
@@ -116,7 +126,8 @@ async fn update(
         }
     }
     if let Some(a) = body.is_admin {
-        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(a).bind(id).execute(&state.db).await?;
+        // An integer, for the same reason as the INSERT above.
+        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(i64::from(a)).bind(id).execute(&state.db).await?;
     }
     if let Some(l) = &body.lang {
         sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&state.db).await?;

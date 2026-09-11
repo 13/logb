@@ -154,9 +154,13 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
     // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
     // in tests/objects.rs is what catches them drifting apart.
+    // `CAST(SUM(...) AS BIGINT)`, not a bare `SUM`: PostgreSQL widens a sum over a BIGINT
+    // column to NUMERIC, which sqlx's `Any` driver cannot decode at all -- every read of an
+    // object failed with "Any driver does not support the Postgres type Numeric" before the
+    // cast. SQLite reads the cast as INTEGER affinity and is unchanged by it.
     let rows = sqlx::query_as::<_, DerivedRow>(
         "SELECT o.id AS object_id, \
-           COALESCE((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id AND deleted_at IS NULL), 0) AS total_cost_cents, \
+           COALESCE(CAST((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS BIGINT), 0) AS total_cost_cents, \
            (SELECT COUNT(*) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS activity_count, \
            (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS current_counter, \
            (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND r.deleted_at IS NULL \
@@ -212,19 +216,17 @@ pub struct ListQuery {
 }
 
 async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ObjectOut>>, AppError> {
-    let rows = if q.archived {
-        sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-             purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY name COLLATE NOCASE")
-            .bind(user.id).fetch_all(&state.db).await?
-    } else {
-        sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-             purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at IS NULL ORDER BY name COLLATE NOCASE")
-            .bind(user.id).fetch_all(&state.db).await?
-    };
+    // `COLLATE NOCASE` is SQLite's spelling; PostgreSQL sorts by `lower(name)`. Without it a
+    // list reads as "Banana, apple, cherry", which looks like a bug to the person who typed
+    // the names. See `dialect::Backend::name_order`.
+    let order = state.backend.name_order("name");
+    let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
+    let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
+        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
+         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
+         FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
+         ORDER BY {order}")))
+        .bind(user.id).fetch_all(&state.db).await?;
     let mut derived = derived(&state, Some(user.id), None).await?;
     let out = rows
         .into_iter()
