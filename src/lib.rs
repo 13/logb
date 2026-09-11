@@ -28,7 +28,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-/// Baseline response headers for everything logby serves.
+/// Baseline response headers for everything LogB serves.
 ///
 /// Every header is set only `if_not_present`, so a handler that needs something stricter --
 /// the attachment routes, which serve user-supplied bytes under a sandbox policy -- keeps its
@@ -103,7 +103,7 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         .nest("/api", api::router(max_upload, max_import))
         .fallback(spa::handler)
         // The default predicate already skips images, gRPC and event streams. Export archives
-        // are the other already-compressed response logby serves: gzipping a zip burns CPU on
+        // are the other already-compressed response LogB serves: gzipping a zip burns CPU on
         // both ends for no gain.
         .layer(CompressionLayer::new().compress_when(
             DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),

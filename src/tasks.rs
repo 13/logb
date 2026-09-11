@@ -1,4 +1,4 @@
-//! The one background loop: everything logby does on a timer lives here.
+//! The one background loop: everything LogB does on a timer lives here.
 
 use crate::db;
 use crate::notify;

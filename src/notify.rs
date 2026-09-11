@@ -1,6 +1,6 @@
 //! Daily digest of due reminders, pushed to a webhook.
 //!
-//! logby has no mail transport and no push infrastructure of its own: a self-hosted instance
+//! LogB has no mail transport and no push infrastructure of its own: a self-hosted instance
 //! posts to a URL the operator already runs -- an ntfy topic, a chat webhook, a home-automation
 //! endpoint -- and lets that decide how the reminder reaches a phone.
 
@@ -59,9 +59,9 @@ pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
         return Ok(None);
     }
     let title = if items.len() == 1 {
-        "logby: 1 reminder due".to_string()
+        "LogB: 1 reminder due".to_string()
     } else {
-        format!("logby: {} reminders due", items.len())
+        format!("LogB: {} reminders due", items.len())
     };
     let message = items
         .iter()

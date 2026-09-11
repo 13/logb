@@ -1,4 +1,4 @@
-# logby — Design
+# logb — Design
 
 Date: 2026-09-04
 Status: approved (brainstorm)
@@ -66,12 +66,12 @@ Rules:
 
 ## File storage
 
-- `data/logby.db`
+- `data/logb.db`
 - `data/files/<sha256[0..2]>/<sha256>` — immutable originals, content-addressed
 - `data/thumbs/<file_id>.jpg` — 400 px longest side, JPEG q80, EXIF-rotated
 - Upload: multipart streamed to temp file, hashed, moved into place. Duplicate
   hash for same user reuses the existing `files` row.
-- Max upload size from `LOGBY_MAX_UPLOAD_MB` (default 50).
+- Max upload size from `LOGB_MAX_UPLOAD_MB` (default 50).
 - Allowed types: `image/*`, `application/pdf`, `.txt .md .doc .docx .xls .xlsx`.
 - Photos: EXIF `DateTimeOriginal` stored as `taken_at` and returned so the
   activity form can prefill the date. Thumbnail generated synchronously on
@@ -172,12 +172,12 @@ PWA: precache app shell only; API is network-only. No offline write queue in v1.
 
 | Env                     | Default   | Notes                                        |
 |-------------------------|-----------|----------------------------------------------|
-| `LOGBY_DATA_DIR`        | `./data`  | db, files, thumbs                            |
-| `LOGBY_BIND`            | `0.0.0.0` |                                              |
-| `LOGBY_PORT`            | `8080`    |                                              |
-| `LOGBY_MAX_UPLOAD_MB`   | `50`      |                                              |
-| `LOGBY_SECURE_COOKIE`   | `auto`    | `auto`: Secure when `X-Forwarded-Proto: https` |
-| `LOGBY_LOG`             | `info`    | tracing filter                               |
+| `LOGB_DATA_DIR`        | `./data`  | db, files, thumbs                            |
+| `LOGB_BIND`            | `0.0.0.0` |                                              |
+| `LOGB_PORT`            | `8080`    |                                              |
+| `LOGB_MAX_UPLOAD_MB`   | `50`      |                                              |
+| `LOGB_SECURE_COOKIE`   | `auto`    | `auto`: Secure when `X-Forwarded-Proto: https` |
+| `LOGB_LOG`             | `info`    | tracing filter                               |
 
 ## Build & deploy
 
@@ -186,7 +186,7 @@ PWA: precache app shell only; API is network-only. No offline write queue in v1.
   with the binary only.
 - `docker-compose.yml`: one service, `./data:/data`, port 8080.
 - `build.sh` (fshare pattern): tests, musl tarballs into `dist/`.
-- Backup: copy `data/` while stopped, or `sqlite3 logby.db ".backup"` plus
+- Backup: copy `data/` while stopped, or `sqlite3 logb.db ".backup"` plus
   `files/`. `/api/export` zip is the portable alternative.
 
 ## Testing

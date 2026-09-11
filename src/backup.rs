@@ -46,7 +46,7 @@ pub async fn verify(path: &Path) -> Result<(), BoxError> {
 
     match has_schema {
         Ok(Some(_)) => {},  // schema found, continue to integrity check
-        Ok(None) => return Err("the file is a valid SQLite database but has no logby schema".into()),
+        Ok(None) => return Err("the file is a valid SQLite database but has no LogB schema".into()),
         Err(e) => return Err(Box::new(e)),
     }
 
@@ -74,7 +74,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
         return Ok(None);
     }
     std::fs::create_dir_all(&dir)?;
-    let dest = dir.join(format!("logby-{}.db", db::today()));
+    let dest = dir.join(format!("logb-{}.db", db::today()));
 
     // An existing file only counts as done if it verifies. One that does not is worse than
     // nothing -- it occupies today's slot while being unrestorable -- so it is replaced.
@@ -108,7 +108,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
 
 /// Deletes all but the newest `KEEP` snapshots.
 ///
-/// Entries are selected by name pattern only (`logby-*.db`) -- there is no provenance tracking,
+/// Entries are selected by name pattern only (`logb-*.db`) -- there is no provenance tracking,
 /// so a directory or symlink that happens to match is treated the same as a real snapshot. A
 /// dated name sorts chronologically as a string, so ordering needs no parsing, and anything
 /// that does not match the pattern is not ours to delete.
@@ -130,7 +130,7 @@ fn prune(dir: &Path) {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("logby-") && n.ends_with(".db"))
+                .is_some_and(|n| n.starts_with("logb-") && n.ends_with(".db"))
         })
         .collect();
     ours.sort();
@@ -158,23 +158,23 @@ mod tests {
         assert!(err.to_string().to_lowercase().contains("empty"), "reason should name the file as empty: {err}");
     }
 
-    /// A file can be a perfectly sound SQLite database and still not be a logby backup --
+    /// A file can be a perfectly sound SQLite database and still not be a LogB backup --
     /// `integrity_check` alone cannot tell the difference, so `verify` must also look for the
     /// schema this application always creates.
     #[tokio::test]
-    async fn verify_rejects_a_valid_sqlite_file_that_is_not_a_logby_database() {
+    async fn verify_rejects_a_valid_sqlite_file_that_is_not_a_logb_database() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("unrelated.db");
         {
             let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
             let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
-            sqlx::query("CREATE TABLE not_logby (id INTEGER)").execute(&pool).await.unwrap();
+            sqlx::query("CREATE TABLE not_logb (id INTEGER)").execute(&pool).await.unwrap();
             pool.close().await;
         }
         let err = verify(&path).await.unwrap_err();
         assert!(
             err.to_string().to_lowercase().contains("migration") || err.to_string().to_lowercase().contains("schema"),
-            "reason should name the missing logby schema, distinct from an integrity failure: {err}"
+            "reason should name the missing LogB schema, distinct from an integrity failure: {err}"
         );
     }
 }

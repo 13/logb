@@ -11,7 +11,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub async fn connect(data_dir: &Path) -> Result<SqlitePool, BoxError> {
     std::fs::create_dir_all(data_dir)?;
     let opts = SqliteConnectOptions::new()
-        .filename(data_dir.join("logby.db"))
+        .filename(data_dir.join("logb.db"))
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true)
@@ -27,7 +27,7 @@ pub async fn connect(data_dir: &Path) -> Result<SqlitePool, BoxError> {
 /// Opens an existing database without running migrations, for read-only side commands such
 /// as `--backup` that must not touch the schema of a running instance.
 pub async fn connect_existing(data_dir: &Path) -> Result<SqlitePool, BoxError> {
-    let path = data_dir.join("logby.db");
+    let path = data_dir.join("logb.db");
     if !path.exists() {
         return Err(format!("no database at {}", path.display()).into());
     }
@@ -41,7 +41,7 @@ pub async fn connect_existing(data_dir: &Path) -> Result<SqlitePool, BoxError> {
 
 /// Writes a consistent snapshot of the database to `dest`.
 ///
-/// `VACUUM INTO` is the reason this exists: copying `logby.db` out from under a running
+/// `VACUUM INTO` is the reason this exists: copying `logb.db` out from under a running
 /// instance can catch it mid-write and miss the WAL entirely, while this runs inside a read
 /// transaction and produces a compacted, self-consistent file.
 pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> Result<(), BoxError> {
@@ -53,7 +53,7 @@ pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> Result<(), BoxError> {
     Ok(())
 }
 
-/// The instance's wall-clock timezone, set once from `LOGBY_TIMEZONE` at startup.
+/// The instance's wall-clock timezone, set once from `LOGB_TIMEZONE` at startup.
 ///
 /// A process-wide value rather than a parameter because `today()` is called from places with
 /// no access to the config -- notably the `ReminderRow -> ReminderOut` conversion that decides
@@ -71,7 +71,7 @@ pub fn timezone() -> Tz {
 
 /// RFC 3339 UTC timestamp with second precision, e.g. `2026-09-04T10:00:00Z`.
 ///
-/// Stored timestamps stay UTC regardless of `LOGBY_TIMEZONE`: they record when something
+/// Stored timestamps stay UTC regardless of `LOGB_TIMEZONE`: they record when something
 /// happened, and are rendered in the reader's own locale by the frontend.
 pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)

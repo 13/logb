@@ -1,15 +1,15 @@
 services:
-  logby:
+  logb:
     build: .
-    image: logby:latest
-    container_name: logby
+    image: logb:latest
+    container_name: logb
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       - ./data:/data
     environment:
-      LOGBY_MAX_UPLOAD_MB: "50"
-      LOGBY_SECURE_COOKIE: "auto"
-      LOGBY_LOG: "info"
-      LOGBY_TRUST_PROXY: "false"
+      LOGB_MAX_UPLOAD_MB: "50"
+      LOGB_SECURE_COOKIE: "auto"
+      LOGB_LOG: "info"
+      LOGB_TRUST_PROXY: "false"

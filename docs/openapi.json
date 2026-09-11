@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "logby",
+    "title": "LogB",
     "version": "0.1.0",
-    "description": "The HTTP API behind logby, served under `/api`.\n\nTwo credentials work everywhere except token management: the `logby_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logby_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; token management deliberately refuses bearer credentials, so a leaked token cannot mint replacements.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked against the running router by `tests/openapi.rs`: a route added, removed or renamed without updating it fails the build."
+    "description": "The HTTP API behind LogB, served under `/api`.\n\nTwo credentials work everywhere except token management: the `logb_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logb_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; token management deliberately refuses bearer credentials, so a leaked token cannot mint replacements.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked against the running router by `tests/openapi.rs`: a route added, removed or renamed without updating it fails the build."
   },
   "servers": [
     {
@@ -1484,7 +1484,7 @@
       "sessionCookie": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "logby_session",
+        "name": "logb_session",
         "description": "Set by `POST /auth/login`. HttpOnly, SameSite=Lax, 30 days."
       },
       "bearerToken": {

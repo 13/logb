@@ -148,7 +148,7 @@ async fn a_deleted_objects_children_vanish_from_every_read_path() {
     let r: serde_json::Value = app.client.get(app.url("/search?q=Zyzzyva")).send().await.unwrap().json().await.unwrap();
     assert_eq!(r["objects"].as_array().unwrap().len(), 1, "{r}");
     assert_eq!(r["activities"].as_array().unwrap().len(), 1, "{r}");
-    assert!(logby::notify::collect(&app.state).await.unwrap().is_some(), "the reminder really is due");
+    assert!(logb::notify::collect(&app.state).await.unwrap().is_some(), "the reminder really is due");
 
     assert_eq!(
         app.client.delete(app.url(&format!("/objects/{object_id}"))).send().await.unwrap().status(),
@@ -177,7 +177,7 @@ async fn a_deleted_objects_children_vanish_from_every_read_path() {
 
     // The reminder digest: the reminder was due before the delete, and must not be either.
     assert!(
-        logby::notify::collect(&app.state).await.unwrap().is_none(),
+        logb::notify::collect(&app.state).await.unwrap().is_none(),
         "a tombstoned reminder must not appear in the digest"
     );
 
@@ -252,7 +252,7 @@ async fn a_deleting_only_a_child_hides_it_from_every_read_path() {
     let reminder_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
 
     assert!(
-        logby::notify::collect(&app.state).await.unwrap().is_some(),
+        logb::notify::collect(&app.state).await.unwrap().is_some(),
         "sanity: the reminder really is due before the delete"
     );
 
@@ -263,7 +263,7 @@ async fn a_deleting_only_a_child_hides_it_from_every_read_path() {
 
     assert_eq!(app.client.get(app.url(&format!("/objects/{bike_id}"))).send().await.unwrap().status(), 200);
     assert!(
-        logby::notify::collect(&app.state).await.unwrap().is_none(),
+        logb::notify::collect(&app.state).await.unwrap().is_none(),
         "a deleted reminder must not appear in the digest, even though its object is alive"
     );
 
@@ -1476,7 +1476,7 @@ async fn bootstrap_scopes_every_child_table_and_hides_a_live_child_of_a_tombston
     let (orphan_object, orphan_activity, orphan_reminder, orphan_attachment) =
         object_with_children(&app, &app.client, "Orphaned").await;
     sqlx::query("UPDATE objects SET deleted_at = ? WHERE id = ?")
-        .bind(logby::db::now()).bind(orphan_object).execute(&app.state.db).await.unwrap();
+        .bind(logb::db::now()).bind(orphan_object).execute(&app.state.db).await.unwrap();
     let object_deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = ?")
         .bind(orphan_object).fetch_one(&app.state.db).await.unwrap();
     assert!(object_deleted.is_some(), "fixture setup: the object must be tombstoned");
@@ -1521,7 +1521,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
         .bind(object_id).execute(&app.state.db).await.unwrap();
 
-    let removed = logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    let removed = logb::sync::feed::purge(&app.state, 90).await.unwrap();
     // The blanket backdate above ages out every `changes` row for this user, including the
     // object's own `create` (task 9 logs REST creates too), not only the pushed `set`.
     assert_eq!(removed, 2, "the ancient log rows went");
@@ -1549,7 +1549,7 @@ async fn purge_keeps_recent_history() {
         "edited_at": after_now(60), "device_id": "phone"
     }]))).send().await.unwrap();
 
-    assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
+    assert_eq!(logb::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
     // The object's own `create` is logged too now, alongside the pushed `set`.
@@ -1590,7 +1590,7 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
 
     sqlx::query("UPDATE attachments SET deleted_at = '2000-01-01T00:00:00Z'")
         .execute(&app.state.db).await.unwrap();
-    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
     assert!(!blob.exists(), "an expired tombstone finally frees the bytes");
     let files: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
@@ -1838,7 +1838,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
     // the cascade or otherwise.
     sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
         .bind(object_id).execute(&app.state.db).await.unwrap();
-    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
     for (table, id) in
         [("activities", activity_id), ("reminders", reminder_id), ("attachments", attachment_id)]
@@ -1862,7 +1862,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
         )))
         .execute(&app.state.db).await.unwrap();
     }
-    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
     for table in ["objects", "activities", "reminders", "attachments", "files"] {
         let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -1953,7 +1953,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
              VALUES ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone')")
             .execute(&app.state.db).await.unwrap();
 
-        logby::sync::feed::purge(&app.state, 90).await.unwrap();
+        logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
         let orphans: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM field_clock WHERE entity_uuid = 'gone-with-the-row'")
@@ -2439,7 +2439,7 @@ async fn rotating_the_epoch_forces_every_device_to_re_bootstrap() {
     let epoch = body["epoch"].as_str().unwrap().to_string();
     let next = body["next_seq"].as_i64().unwrap();
 
-    let fresh = logby::sync::epoch::rotate(&app.state.db).await.unwrap();
+    let fresh = logb::sync::epoch::rotate(&app.state.db).await.unwrap();
     assert_ne!(fresh, epoch, "rotation produces a different epoch");
 
     let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
@@ -2460,7 +2460,7 @@ async fn rotate_heals_a_missing_row_instead_of_silently_reporting_a_fake_success
     sqlx::query("DELETE FROM settings WHERE key = 'sync_epoch'")
         .execute(&app.state.db).await.unwrap();
 
-    let fresh = logby::sync::epoch::rotate(&app.state.db).await
+    let fresh = logb::sync::epoch::rotate(&app.state.db).await
         .expect("rotate must not silently no-op when the row is missing");
 
     let value: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")

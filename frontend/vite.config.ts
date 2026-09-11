@@ -13,8 +13,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'logby',
-        short_name: 'logby',
+        name: 'LogB',
+        short_name: 'LogB',
         description: 'Complete history of your owned objects',
         theme_color: '#1f6f5f',
         background_color: '#f7f7f5',
@@ -37,7 +37,7 @@ export default defineConfig({
             urlPattern: /^\/api\/files\//,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'logby-files',
+              cacheName: 'logb-files',
               expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [200] },
             },
@@ -48,7 +48,7 @@ export default defineConfig({
             urlPattern: /^\/api\//,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'logby-api',
+              cacheName: 'logb-api',
               networkTimeoutSeconds: 4,
               expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
               cacheableResponse: { statuses: [200] },

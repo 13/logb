@@ -227,7 +227,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     // and the file cannot outlive the request even if the client disconnects mid-download.
     let _ = tokio::fs::remove_file(&scratch).await;
 
-    let name = format!("attachment; filename=\"logby-export-{}.zip\"", db::today());
+    let name = format!("attachment; filename=\"logb-export-{}.zip\"", db::today());
     Ok((
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/zip")),

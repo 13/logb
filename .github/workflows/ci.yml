@@ -91,15 +91,15 @@ jobs:
           context: .
           push: false
           load: true
-          tags: logby:ci
+          tags: logb:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # Smoke test: the image must boot and answer /api/health.
       - name: Boot the image
         run: |
-          docker run -d --name logby-ci -p 8080:8080 -v logby-ci-data:/data logby:ci
+          docker run -d --name logb-ci -p 8080:8080 -v logb-ci-data:/data logb:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health; then echo; exit 0; fi
             sleep 1
           done
-          echo "health check never succeeded"; docker logs logby-ci; exit 1
+          echo "health check never succeeded"; docker logs logb-ci; exit 1

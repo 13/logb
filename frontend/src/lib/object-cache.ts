@@ -15,7 +15,7 @@ import type { Activity, MemObject } from './types';
  * which is the server *answering*, possibly about an object that belongs to someone else
  * entirely, not the network failing to deliver the request.
  *
- * The SAME invariant covers the service worker's Workbox caches (`logby-api` / `logby-files`,
+ * The SAME invariant covers the service worker's Workbox caches (`logb-api` / `logb-files`,
  * configured in vite.config.ts): they hold `GET /api/...` responses -- including this same
  * object and activities data, plus the photos it links to via `cover_file_id` -- entirely
  * outside this module, and just as durably across an SPA login/logout. `clearObjectCache()`
@@ -42,8 +42,8 @@ export function setCachedActivities(id: number, page: { items: Activity[]; total
   activityPages.set(id, page);
 }
 
-/** Drop every cached object and activities page, plus the service worker's `logby-api` and
- *  `logby-files` Workbox caches (see the invariant above) -- names must match vite.config.ts
+/** Drop every cached object and activities page, plus the service worker's `logb-api` and
+ *  `logb-files` Workbox caches (see the invariant above) -- names must match vite.config.ts
  *  exactly, or a stale SW response keeps answering after this call and this cache gets
  *  re-poisoned from it on the very next load. `globalThis.caches` is guarded because it does
  *  not exist under vitest (node) or in a browser with no service worker support. Call on
@@ -52,6 +52,6 @@ export function setCachedActivities(id: number, page: { items: Activity[]; total
 export function clearObjectCache(): void {
   objects.clear();
   activityPages.clear();
-  void globalThis.caches?.delete('logby-api');
-  void globalThis.caches?.delete('logby-files');
+  void globalThis.caches?.delete('logb-api');
+  void globalThis.caches?.delete('logb-files');
 }

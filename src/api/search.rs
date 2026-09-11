@@ -58,7 +58,7 @@ fn like_pattern(q: &str) -> String {
 
 /// Substring search over the caller's own objects and activities.
 ///
-/// Deliberately `LIKE` rather than FTS5: at the scale logby is built for -- one household's
+/// Deliberately `LIKE` rather than FTS5: at the scale LogB is built for -- one household's
 /// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
 /// SQLite's `LIKE` folds case for ASCII only, so a query for "olwechsel" will not match
 /// "Ölwechsel"; that is the trade for not carrying an index.

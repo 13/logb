@@ -6,4 +6,4 @@ export interface LocalSettings {
   theme: 'auto' | 'light' | 'dark';
 }
 
-export const settings = persisted<LocalSettings>('logby.settings', { locale: 'auto', theme: 'auto' });
+export const settings = persisted<LocalSettings>('logb.settings', { locale: 'auto', theme: 'auto' });

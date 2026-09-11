@@ -1,4 +1,4 @@
-# logby
+# LogB
 
 Complete history of your owned objects — cars, e-bikes, homes, tools.
 Log what you did (date, mileage, cost, notes, photos, documents), see the
@@ -18,12 +18,12 @@ Settings.
 The container runs as uid 65532. A named volume inherits that ownership; chown
 a host directory to 65532 before bind-mounting one.
 
-Everything lives in `./data`: `logby.db` (SQLite), `files/` (originals,
+Everything lives in `./data`: `logb.db` (SQLite), `files/` (originals,
 content-addressed), `thumbs/`.
 
 ## On a phone
 
-logby is a PWA and the phone is the case it is designed for: logging a fill-up
+LogB is a PWA and the phone is the case it is designed for: logging a fill-up
 at the pump, photographing a receipt in a garage with no signal. Installed from
 Chrome's "Add to Home screen", it runs full-screen, works offline, and queues
 what you log until there is a connection again.
@@ -38,12 +38,12 @@ enough either — the phone has to trust it.
 Two approaches that work:
 
 - **Tailscale** (simplest for one household): install it on the server and the
-  phone, enable MagicDNS and HTTPS, and reach logby at
+  phone, enable MagicDNS and HTTPS, and reach LogB at
   `https://myserver.tailnet-name.ts.net`. Nothing is exposed to the internet.
 - **A reverse proxy with a real certificate**: Caddy or nginx with Let's
-  Encrypt on a domain you own, proxying to logby's port. Set
-  `LOGBY_TRUST_PROXY=true` so the login rate limiter sees the real client
-  address, and leave `LOGBY_SECURE_COOKIE=auto`.
+  Encrypt on a domain you own, proxying to LogB's port. Set
+  `LOGB_TRUST_PROXY=true` so the login rate limiter sees the real client
+  address, and leave `LOGB_SECURE_COOKIE=auto`.
 
 Over plain http on the LAN the app still runs and still saves — nothing depends
 on `crypto.randomUUID`, which browsers withhold there — but it is a website,
@@ -56,16 +56,16 @@ nobody else can see, send or discard it.
 ## Backup
 
 ```bash
-docker compose exec logby /logby --backup /data/snapshot.db
+docker compose exec logb /logb --backup /data/snapshot.db
 ```
 
 `--backup` runs SQLite's `VACUUM INTO`, so it is safe while the server is
-running — copying `logby.db` out from under a live instance can catch it
+running — copying `logb.db` out from under a live instance can catch it
 mid-write and miss the WAL. Blobs under `files/` are content-addressed and never
 rewritten, so `rsync` covers them. Settings → Export is the other route: one zip
 with the JSON and every file, importable into any instance.
 
-Set `LOGBY_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGBY_BACKUP_HOUR`
+Set `LOGB_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGB_BACKUP_HOUR`
 (default 3) and verified with `PRAGMA integrity_check` before it counts. The newest 14
 are kept. Point it at a volume that is itself backed up — a snapshot on the same disk
 protects you from your own mistakes, not from the disk's.
@@ -75,19 +75,19 @@ protects you from your own mistakes, not from the disk's.
 The server must be stopped, so run it as a one-shot container against the same volume:
 
 ```bash
-docker compose stop logby
-docker compose run --rm logby --restore /data/backups/logby-2026-09-01.db
-docker compose start logby
+docker compose stop logb
+docker compose run --rm logb --restore /data/backups/logb-2026-09-01.db
+docker compose start logb
 ```
 
-The database being replaced is kept as `logby.db.replaced-<timestamp>` in the same
+The database being replaced is kept as `logb.db.replaced-<timestamp>` in the same
 directory — restoring the wrong snapshot is recoverable.
 
 A restored database gets a new sync epoch, so every phone re-bootstraps instead of
 resuming from a cursor that now points at different history. That is deliberate and
 you do not need to do anything about it.
 
-Restoring only checks that the snapshot is a sound logby database, not that it came
+Restoring only checks that the snapshot is a sound LogB database, not that it came
 from this host, so moving a backup between hosts works on purpose: point a new
 instance's `--restore` at another instance's backup directory to migrate its data.
 The database only holds references to blobs by hash, not the blobs themselves, so
@@ -98,22 +98,22 @@ a database whose photos and documents all 404.
 
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
-| `LOGBY_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
-| `LOGBY_BIND`          | `0.0.0.0` |                                                                                                                              |
-| `LOGBY_PORT`          | `8080`    |                                                                                                                              |
-| `LOGBY_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
-| `LOGBY_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
-| `LOGBY_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
-| `LOGBY_NOTIFY_HOUR`   | `8`       | hour (in `LOGBY_TIMEZONE`) the digest goes out                                                                                |
-| `LOGBY_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
-| `LOGBY_TIMEZONE`      | `UTC`     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against                                                  |
-| `LOGBY_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
-| `LOGBY_LOG`           | `info`    | tracing filter                                                                                                               |
-| `LOGBY_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
-| `LOGBY_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address |
-| `LOGBY_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
+| `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
+| `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
+| `LOGB_PORT`          | `8080`    |                                                                                                                              |
+| `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
+| `LOGB_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
+| `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
+| `LOGB_NOTIFY_HOUR`   | `8`       | hour (in `LOGB_TIMEZONE`) the digest goes out                                                                                |
+| `LOGB_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
+| `LOGB_TIMEZONE`      | `UTC`     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against                                                  |
+| `LOGB_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
+| `LOGB_LOG`           | `info`    | tracing filter                                                                                                               |
+| `LOGB_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
+| `LOGB_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address |
+| `LOGB_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
 
-Put logby behind a reverse proxy with HTTPS when exposing it beyond your LAN.
+Put LogB behind a reverse proxy with HTTPS when exposing it beyond your LAN.
 
 ## Development
 
@@ -185,20 +185,20 @@ resource at all.
 
 ## Time
 
-Set `LOGBY_TIMEZONE` to the household's own zone. Reminder due dates are
+Set `LOGB_TIMEZONE` to the household's own zone. Reminder due dates are
 compared against today *there*: left at `UTC`, a household in UTC+13 sees a
 reminder come due most of a day late and one in UTC−8 sees it a day early. It
-also decides when `LOGBY_NOTIFY_HOUR` fires. Stored timestamps stay UTC and are
+also decides when `LOGB_NOTIFY_HOUR` fires. Stored timestamps stay UTC and are
 rendered in the reader's locale.
 
 ## Reminder notifications
 
-logby sends no mail of its own. Point `LOGBY_NOTIFY_URL` at a webhook you
-already run and it POSTs one digest a day, at `LOGBY_NOTIFY_HOUR` UTC, listing
+LogB sends no mail of its own. Point `LOGB_NOTIFY_URL` at a webhook you
+already run and it POSTs one digest a day, at `LOGB_NOTIFY_HOUR` UTC, listing
 every reminder that is due across all users:
 
 ```bash
-LOGBY_NOTIFY_URL=https://ntfy.sh/my-private-topic LOGBY_NOTIFY_FORMAT=text
+LOGB_NOTIFY_URL=https://ntfy.sh/my-private-topic LOGB_NOTIFY_FORMAT=text
 ```
 
 With `text` the body is the message and the summary rides in a `Title` header,
@@ -207,10 +207,10 @@ which is what ntfy and similar services render. The default `json` posts
 
 That `text` shape is exactly what [ntfy](https://ntfy.sh) expects, which makes
 it the path of least resistance to notifications on an Android phone: pick an
-unguessable topic name, point `LOGBY_NOTIFY_URL` at it, install the ntfy app
+unguessable topic name, point `LOGB_NOTIFY_URL` at it, install the ntfy app
 and subscribe to the same topic. A topic on the public server is readable by
 anyone who knows its name, so treat the name as the secret or self-host ntfy.
-logby has no push notifications of its own and asks for no notification
+LogB has no push notifications of its own and asks for no notification
 permission.
 
 The digest is a notification, not a queue: the day is marked as handled before
@@ -241,17 +241,17 @@ JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which
 `tests/openapi.rs` checks against the router — a route added, removed or
 renamed without updating it fails the build.
 
-Two credentials work everywhere except token management: the `logby_session`
+Two credentials work everywhere except token management: the `logb_session`
 cookie a browser gets from `POST /auth/login`, and an API token for clients
 that are not browsers.
 
 ```bash
 # Create one under Settings → API access, or over the API with a session:
-curl -sS -X POST https://logby.example/api/auth/tokens \
+curl -sS -X POST https://logb.example/api/auth/tokens \
   -H 'content-type: application/json' -b cookies.txt \
   -d '{"name":"laptop"}'
 
-curl -sS https://logby.example/api/objects -H 'authorization: Bearer logby_pat_...'
+curl -sS https://logb.example/api/objects -H 'authorization: Bearer logb_pat_...'
 ```
 
 The plaintext is shown once and stored only as a hash; there is no way to
@@ -267,7 +267,7 @@ response was lost resolves to the row already created rather than duplicating
 it. The bundled web client uses this for its offline queue, and any client that
 queues writes should do the same.
 
-`LOGBY_CORS_ORIGINS` (comma-separated) lets a web client on another origin call
+`LOGB_CORS_ORIGINS` (comma-separated) lets a web client on another origin call
 the API; unset, no CORS headers are sent at all. Credentials are never allowed
 cross-origin whatever is listed, so such a client must authenticate with a
 bearer token rather than the session cookie.

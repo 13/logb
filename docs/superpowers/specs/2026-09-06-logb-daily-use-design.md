@@ -1,11 +1,11 @@
-# logby: daily-use improvements
+# logb: daily-use improvements
 
 Date: 2026-09-06
 Branch base: `improvements` (feeb1d3)
 
 ## Goal
 
-logby works. What it does not yet do is get out of the way. This design targets the
+logb works. What it does not yet do is get out of the way. This design targets the
 friction of using it every day as its own owner — fewer taps and less typing to log
 something, answers to "what has this cost me", and a log that survives a garage with
 no signal.

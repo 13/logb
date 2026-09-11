@@ -402,8 +402,8 @@ function fakeLockManager() {
 describe('createLock across tabs', () => {
   it('never lets two tabs sharing one lock name run at the same time', async () => {
     const manager = fakeLockManager();
-    const tabA = createLock('logby-outbox', manager);
-    const tabB = createLock('logby-outbox', manager);
+    const tabA = createLock('logb-outbox', manager);
+    const tabB = createLock('logb-outbox', manager);
     const order: string[] = [];
     let releaseA!: () => void;
 
@@ -424,13 +424,13 @@ describe('createLock across tabs', () => {
   it('runs the callback anyway on a browser with no Web Locks', async () => {
     // Safari before 15.4, and any non-secure context. Losing cross-tab exclusion there is the
     // status quo; losing the replay pass entirely would not be.
-    const lock = createLock('logby-outbox', undefined);
+    const lock = createLock('logb-outbox', undefined);
     await expect(lock.run(async () => 42)).resolves.toBe(42);
   });
 
   it('runs the callback anyway when acquiring the cross-tab lock itself fails', async () => {
     let calls = 0;
-    const lock = createLock('logby-outbox', {
+    const lock = createLock('logb-outbox', {
       request: async () => { throw new Error('lock manager unavailable'); },
     });
     await expect(lock.run(async () => { calls++; return 42; })).resolves.toBe(42);
@@ -441,7 +441,7 @@ describe('createLock across tabs', () => {
     // The fallback above must key on the lock manager failing, not on any rejection: a send
     // that threw has already been attempted, and running it a second time would replay it.
     const manager = fakeLockManager();
-    const lock = createLock('logby-outbox', manager);
+    const lock = createLock('logb-outbox', manager);
     let calls = 0;
     await expect(lock.run(async () => { calls++; throw new Error('boom'); })).rejects.toThrow('boom');
     expect(calls).toBe(1);
@@ -449,7 +449,7 @@ describe('createLock across tabs', () => {
 
   it('keeps its own FIFO order across the cross-tab hop', async () => {
     const manager = fakeLockManager();
-    const lock = createLock('logby-outbox', manager);
+    const lock = createLock('logb-outbox', manager);
     const order: string[] = [];
     let releaseFirst!: () => void;
     lock.run(() => new Promise<void>((resolve) => { releaseFirst = resolve; }));

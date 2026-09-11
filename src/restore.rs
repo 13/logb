@@ -42,7 +42,7 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
             .read_only(true);
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
         // A row count, not just a successful query: the table existing but empty would answer
-        // `fetch_one` fine, yet is not "migration history" -- every real logby database has run
+        // `fetch_one` fine, yet is not "migration history" -- every real LogB database has run
         // at least one migration, so an empty table is exactly as suspect as a missing one.
         let count: Result<(i64,), _> =
             sqlx::query_as("SELECT count(*) FROM _sqlx_migrations").fetch_one(&pool).await;
@@ -66,28 +66,28 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
     }
 
     // 2. Move the live database aside, and its -wal/-shm with it. The sidecars are handled
-    //    whether or not `logby.db` itself exists: a restore that died between this step and the
+    //    whether or not `logb.db` itself exists: a restore that died between this step and the
     //    copy below leaves exactly that -- an orphaned -wal/-shm with no main file -- and if left
     //    in place it would sit beside the database the copy is about to create, with SQLite
     //    reading it as that database's journal. Both share one stamp so the set, main file or
     //    not, stays recoverable together.
-    let live = data_dir.join("logby.db");
+    let live = data_dir.join("logb.db");
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let replaced_to = if live.exists() {
-        let dest = data_dir.join(format!("logby.db.replaced-{stamp}"));
+        let dest = data_dir.join(format!("logb.db.replaced-{stamp}"));
         std::fs::rename(&live, &dest)?;
         Some(dest)
     } else {
         None
     };
     for suffix in ["-wal", "-shm"] {
-        let from = data_dir.join(format!("logby.db{suffix}"));
+        let from = data_dir.join(format!("logb.db{suffix}"));
         if from.exists() {
-            std::fs::rename(&from, data_dir.join(format!("logby.db.replaced-{stamp}{suffix}")))?;
+            std::fs::rename(&from, data_dir.join(format!("logb.db.replaced-{stamp}{suffix}")))?;
         }
     }
 
-    // From here on, `logby.db` has already been touched -- there is no "nothing happened"
+    // From here on, `logb.db` has already been touched -- there is no "nothing happened"
     // reading of a failure any more. A bare propagated error would let an operator assume a
     // failed `--restore` is a no-op, start the server, and run it on a restored database that
     // still advertises the old sync epoch (or isn't fully migrated) -- exactly what epoch

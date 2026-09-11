@@ -235,7 +235,7 @@ async function queueSnapshot(): Promise<string> {
  * interleaving between tabs that this lock closes within one. On a browser with no Web Locks
  * API the name is inert and the exclusion stays tab-local, as it was before (see `createLock`).
  */
-const outboxLock = createLock('logby-outbox');
+const outboxLock = createLock('logb-outbox');
 
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();

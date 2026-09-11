@@ -1,22 +1,22 @@
 use clap::Parser;
-use logby::config::Config;
+use logb::config::Config;
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), logby::db::BoxError> {
+async fn main() -> Result<(), logb::db::BoxError> {
     let config = Config::parse();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(config.log.clone()))
         .init();
     if let Some(dest) = config.backup.clone() {
-        let pool = logby::db::connect_existing(&config.data_dir).await?;
-        logby::db::backup_to(&pool, &dest).await?;
+        let pool = logb::db::connect_existing(&config.data_dir).await?;
+        logb::db::backup_to(&pool, &dest).await?;
         println!("database backed up to {}", dest.display());
         return Ok(());
     }
     if let Some(src) = config.restore.clone() {
-        let report = logby::restore::run(&config.data_dir, &src).await?;
+        let report = logb::restore::run(&config.data_dir, &src).await?;
         println!("restored {} into {}", src.display(), config.data_dir.display());
         if let Some(kept) = report.replaced_to {
             println!("the database it replaced is kept at {}", kept.display());
@@ -28,10 +28,10 @@ async fn main() -> Result<(), logby::db::BoxError> {
         return healthcheck(config.port).await;
     }
     let addr = format!("{}:{}", config.bind, config.port);
-    let (app, state) = logby::build_with_state(config).await?;
-    logby::tasks::spawn(state);
+    let (app, state) = logb::build_with_state(config).await?;
+    logb::tasks::spawn(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("logby listening on http://{addr}");
+    tracing::info!("LogB listening on http://{addr}");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -42,7 +42,7 @@ async fn main() -> Result<(), logby::db::BoxError> {
 
 /// Probes a running instance over loopback. Used as the container HEALTHCHECK, where there is
 /// no shell and no curl to run one with.
-async fn healthcheck(port: u16) -> Result<(), logby::db::BoxError> {
+async fn healthcheck(port: u16) -> Result<(), logb::db::BoxError> {
     let url = format!("http://127.0.0.1:{port}/api/health");
     let res = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

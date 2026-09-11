@@ -1,4 +1,4 @@
-# A bee for logby
+# A bee for logb
 
 Status: approved design, not yet implemented.
 
@@ -16,7 +16,7 @@ fields.
 ## Scope
 
 In scope: a bee, hand-authored as SVG; the icon and PWA assets rendered from it; the logo placed
-on Login and Setup; and a copy in the export archive so a backup is recognisably logby's.
+on Login and Setup; and a copy in the export archive so a backup is recognisably logb's.
 
 Out of scope: the top bar. On a phone that row already holds a back button, the title, and the
 pending/dead outbox chips, and a logo would compete with all three for the narrowest space in the

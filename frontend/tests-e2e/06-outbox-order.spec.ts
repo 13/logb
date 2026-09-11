@@ -4,7 +4,7 @@ import { signIn } from './helpers';
 /** Reads the queue straight out of IndexedDB, which is where the ordering actually lives. */
 async function queue(page: import('@playwright/test').Page) {
   return page.evaluate(() => new Promise<Array<{ id: string; seq?: number; path: string }>>((resolve, reject) => {
-    const req = indexedDB.open('logby-outbox');
+    const req = indexedDB.open('logb-outbox');
     req.onsuccess = () => {
       const tx = req.result.transaction('ops', 'readonly');
       const all = tx.objectStore('ops').getAll();
@@ -77,7 +77,7 @@ test('a newly queued op sorts after a record that predates seq', async ({ page, 
 
   // A legacy row: no `seq`, only the `queued_at` the old code ordered by.
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    const req = indexedDB.open('logby-outbox');
+    const req = indexedDB.open('logb-outbox');
     req.onsuccess = () => {
       const tx = req.result.transaction('ops', 'readwrite');
       tx.objectStore('ops').put({

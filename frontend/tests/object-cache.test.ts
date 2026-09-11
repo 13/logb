@@ -25,8 +25,8 @@ describe('clearObjectCache', () => {
     // microtask queued by the (unawaited) call a turn before asserting.
     await Promise.resolve();
 
-    expect(del).toHaveBeenCalledWith('logby-api');
-    expect(del).toHaveBeenCalledWith('logby-files');
+    expect(del).toHaveBeenCalledWith('logb-api');
+    expect(del).toHaveBeenCalledWith('logb-files');
     expect(del).toHaveBeenCalledTimes(2);
   });
 

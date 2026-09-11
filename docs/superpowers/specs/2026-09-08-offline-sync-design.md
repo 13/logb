@@ -5,7 +5,7 @@ See "What phase 1 actually built" at the end for how the implementation amended 
 
 ## Problem
 
-logby today is a PWA whose offline story stops at opportunistic caching. Workbox keeps the
+logb today is a PWA whose offline story stops at opportunistic caching. Workbox keeps the
 last 200 API GETs for a week and 300 file blobs for a month, so a screen the user happened to
 visit recently still renders on a dead connection — and nothing else does. Writes fare better
 but only just: `outbox.ts` queues three op kinds, all creates, and says why in its own header
@@ -138,9 +138,9 @@ task. Metadata syncs on any connection; blob transfer waits for unmetered.
 
 ## Authentication
 
-A Capacitor app is a separate origin and cannot use the `logby_session` cookie, so it
-authenticates with a `logby_pat_` bearer token — a path that already exists and is tested
-(`auth.rs:182`, `LOGBY_CORS_ORIGINS`).
+A Capacitor app is a separate origin and cannot use the `logb_session` cookie, so it
+authenticates with a `logb_pat_` bearer token — a path that already exists and is tested
+(`auth.rs:182`, `LOGB_CORS_ORIGINS`).
 
 The user logs in online once; the app mints a PAT via `/api/auth/tokens` and stores it in
 Capacitor secure storage backed by the Android Keystore, requiring biometric or PIN to decrypt.

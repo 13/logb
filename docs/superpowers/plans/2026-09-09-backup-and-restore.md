@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give logby a nightly verified database snapshot with retention, a `--restore` command that is safe for synced devices, and a health check that actually reads the database.
+**Goal:** Give logb a nightly verified database snapshot with retention, a `--restore` command that is safe for synced devices, and a health check that actually reads the database.
 
 **Architecture:** Backup runs from the existing background loop in `src/tasks.rs`, taking the hour as a parameter the way `notify::tick` already does. Restore is a CLI mode alongside `--backup`, and stamps a fresh `sync_epoch` so every device re-bootstraps rather than resuming on a cursor whose meaning changed. The health check asserts the applied migration count matches what the binary embeds.
 
@@ -13,7 +13,7 @@
 - Server-only. No file under `frontend/` changes.
 - `cargo clippy --all-targets --locked -- -D warnings` must pass; CI treats warnings as errors.
 - `tests/openapi.rs` compares routes declared in `src/api/**` against `docs/openapi.json` **in both directions**. This plan adds no route, but Task 2 changes two existing responses — update their schemas in the same task.
-- Automatic backup is **off unless `LOGBY_BACKUP_DIR` is set**, so an existing deployment behaves exactly as it does today until its operator opts in.
+- Automatic backup is **off unless `LOGB_BACKUP_DIR` is set**, so an existing deployment behaves exactly as it does today until its operator opts in.
 - Retention keeps the newest **14** snapshots.
 - Any new config field must also be added to `test_config` in `tests/common/mod.rs`, which constructs `Config` literally and will not compile otherwise.
 - Timestamps use `db::now()` / `db::today()`, matching every existing table.
@@ -224,7 +224,7 @@ async fn rotating_the_epoch_forces_every_device_to_re_bootstrap() {
     let epoch = body["epoch"].as_str().unwrap().to_string();
     let next = body["next_seq"].as_i64().unwrap();
 
-    let fresh = logby::sync::epoch::rotate(&app.state.db).await.unwrap();
+    let fresh = logb::sync::epoch::rotate(&app.state.db).await.unwrap();
     assert_ne!(fresh, epoch, "rotation produces a different epoch");
 
     let res = app.client.get(app.url(&format!("/sync/pull?since={next}&epoch={epoch}")))
@@ -353,7 +353,7 @@ git commit -m "feat: tie a sync cursor to the database it came from"
 - Produces:
   - `backup::tick(state: &App, hour_now: u32) -> Result<Option<std::path::PathBuf>, AppError>`
   - `backup::verify(path: &std::path::Path) -> Result<(), crate::db::BoxError>`
-  - `Config` gains `backup_dir: Option<PathBuf>` (`LOGBY_BACKUP_DIR`) and `backup_hour: u32` (`LOGBY_BACKUP_HOUR`, default 3).
+  - `Config` gains `backup_dir: Option<PathBuf>` (`LOGB_BACKUP_DIR`) and `backup_hour: u32` (`LOGB_BACKUP_HOUR`, default 3).
 
 Taking the hour as a parameter is what makes this testable in a second rather than a day — the same shape `notify::tick(&state, hour)` already uses.
 
@@ -375,16 +375,16 @@ async fn a_run_writes_and_verifies_a_snapshot() {
     app.setup("ben", "correct horse").await;
     app.create_object(&app.client, "Golf", Some("km")).await;
 
-    assert!(logby::backup::tick(&app.state, 2).await.unwrap().is_none(), "too early in the day");
+    assert!(logb::backup::tick(&app.state, 2).await.unwrap().is_none(), "too early in the day");
 
-    let made = logby::backup::tick(&app.state, 3).await.unwrap().expect("a snapshot was due");
+    let made = logb::backup::tick(&app.state, 3).await.unwrap().expect("a snapshot was due");
     assert!(made.exists());
-    assert_eq!(made.file_name().unwrap(), format!("logby-{}.db", logby::db::today()).as_str());
-    logby::backup::verify(&made).await.expect("the snapshot opens and passes integrity_check");
+    assert_eq!(made.file_name().unwrap(), format!("logb-{}.db", logb::db::today()).as_str());
+    logb::backup::verify(&made).await.expect("the snapshot opens and passes integrity_check");
 
     // The snapshot is the real database, not an empty file that happens to be valid SQLite.
-    let pool = logby::db::connect_existing(made.parent().unwrap()).await;
-    assert!(pool.is_err(), "connect_existing looks for logby.db, not a dated snapshot");
+    let pool = logb::db::connect_existing(made.parent().unwrap()).await;
+    assert!(pool.is_err(), "connect_existing looks for logb.db, not a dated snapshot");
     let count: i64 = {
         let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&made).read_only(true);
         let p = sqlx::SqlitePool::connect_with(opts).await.unwrap();
@@ -392,14 +392,14 @@ async fn a_run_writes_and_verifies_a_snapshot() {
     };
     assert_eq!(count, 1, "the object is in the snapshot");
 
-    assert!(logby::backup::tick(&app.state, 3).await.unwrap().is_none(), "already done today");
+    assert!(logb::backup::tick(&app.state, 3).await.unwrap().is_none(), "already done today");
 }
 
 #[tokio::test]
 async fn backup_is_off_unless_a_directory_is_configured() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    assert!(logby::backup::tick(&app.state, 23).await.unwrap().is_none());
+    assert!(logb::backup::tick(&app.state, 23).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -407,7 +407,7 @@ async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
-    let good = backups.join("logby-2020-01-01.db");
+    let good = backups.join("logb-2020-01-01.db");
     std::fs::write(&good, b"pretend this is yesterday's good snapshot").unwrap();
 
     let app = common::spawn_with(|c| {
@@ -417,12 +417,12 @@ async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
     app.setup("ben", "correct horse").await;
 
     // Today's slot already holds a file that is not a database at all.
-    let today = backups.join(format!("logby-{}.db", logby::db::today()));
+    let today = backups.join(format!("logb-{}.db", logb::db::today()));
     std::fs::write(&today, b"not a database").unwrap();
 
-    let made = logby::backup::tick(&app.state, 1).await.unwrap()
+    let made = logb::backup::tick(&app.state, 1).await.unwrap()
         .expect("an unverifiable snapshot must be replaced, not trusted");
-    logby::backup::verify(&made).await.expect("the replacement is sound");
+    logb::backup::verify(&made).await.expect("the replacement is sound");
     assert!(good.exists(), "an earlier snapshot is never touched by a failure");
 }
 
@@ -433,7 +433,7 @@ async fn retention_keeps_the_newest_fourteen() {
     std::fs::create_dir_all(&backups).unwrap();
     // Twenty days of history, oldest first.
     for day in 1..=20 {
-        std::fs::write(backups.join(format!("logby-2020-01-{day:02}.db")), b"old").unwrap();
+        std::fs::write(backups.join(format!("logb-2020-01-{day:02}.db")), b"old").unwrap();
     }
     // Something that is not a snapshot must survive untouched.
     std::fs::write(backups.join("notes.txt"), b"keep me").unwrap();
@@ -443,16 +443,16 @@ async fn retention_keeps_the_newest_fourteen() {
         c.backup_hour = 0;
     }).await;
     app.setup("ben", "correct horse").await;
-    logby::backup::tick(&app.state, 1).await.unwrap().expect("today's snapshot");
+    logb::backup::tick(&app.state, 1).await.unwrap().expect("today's snapshot");
 
     let mut names: Vec<String> = std::fs::read_dir(&backups).unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with("logby-"))
+        .filter(|n| n.starts_with("logb-"))
         .collect();
     names.sort();
     assert_eq!(names.len(), 14, "fourteen kept, the rest pruned: {names:?}");
-    assert_eq!(names[0], "logby-2020-01-08.db", "the oldest survivors are the newest of the old");
-    assert!(names.last().unwrap().contains(&logby::db::today()), "today's is kept");
+    assert_eq!(names[0], "logb-2020-01-08.db", "the oldest survivors are the newest of the old");
+    assert!(names.last().unwrap().contains(&logb::db::today()), "today's is kept");
     assert!(backups.join("notes.txt").exists(), "unrelated files are not ours to delete");
 }
 ```
@@ -460,7 +460,7 @@ async fn retention_keeps_the_newest_fourteen() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --test backup`
-Expected: FAIL to compile — `logby::backup` does not exist and `Config` has no `backup_dir`.
+Expected: FAIL to compile — `logb::backup` does not exist and `Config` has no `backup_dir`.
 
 - [ ] **Step 3: Add the configuration**
 
@@ -469,10 +469,10 @@ In `src/config.rs`, after the `backup` field:
 ```rust
     /// Directory for nightly database snapshots. Unset disables automatic backup entirely, so
     /// an instance that has not opted in behaves exactly as it did before this existed.
-    #[arg(long, env = "LOGBY_BACKUP_DIR")]
+    #[arg(long, env = "LOGB_BACKUP_DIR")]
     pub backup_dir: Option<PathBuf>,
-    /// Hour (0-23), in `LOGBY_TIMEZONE`, at which the nightly snapshot is written.
-    #[arg(long, env = "LOGBY_BACKUP_HOUR", default_value_t = 3)]
+    /// Hour (0-23), in `LOGB_TIMEZONE`, at which the nightly snapshot is written.
+    #[arg(long, env = "LOGB_BACKUP_HOUR", default_value_t = 3)]
     pub backup_hour: u32,
 ```
 
@@ -530,7 +530,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
         return Ok(None);
     }
     std::fs::create_dir_all(&dir)?;
-    let dest = dir.join(format!("logby-{}.db", db::today()));
+    let dest = dir.join(format!("logb-{}.db", db::today()));
 
     // An existing file only counts as done if it verifies. One that does not is worse than
     // nothing -- it occupies today's slot while being unrestorable -- so it is replaced.
@@ -564,7 +564,7 @@ fn prune(dir: &Path) -> std::io::Result<()> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("logby-") && n.ends_with(".db"))
+                .is_some_and(|n| n.starts_with("logb-") && n.ends_with(".db"))
         })
         .collect();
     ours.sort();
@@ -634,8 +634,8 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     app.setup("ben", "correct horse").await;
     app.create_object(&app.client, "Golf", Some("km")).await;
 
-    let snapshot = logby::backup::tick(&app.state, 1).await.unwrap().expect("a snapshot");
-    let epoch_before = logby::sync::epoch::current(&app.state.db).await.unwrap();
+    let snapshot = logb::backup::tick(&app.state, 1).await.unwrap().expect("a snapshot");
+    let epoch_before = logb::sync::epoch::current(&app.state.db).await.unwrap();
 
     // The mistake we are recovering from.
     app.create_object(&app.client, "Regrettable", None).await;
@@ -646,14 +646,14 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     // The running instance holds the database open, so restore has to happen against a stopped
     // one. Point it at a data directory of its own, seeded from this instance's snapshot.
     let target = tempfile::tempdir().unwrap();
-    std::fs::copy(&snapshot, target.path().join("logby.db")).unwrap();
-    let report = logby::restore::run(target.path(), &snapshot).await.unwrap();
+    std::fs::copy(&snapshot, target.path().join("logb.db")).unwrap();
+    let report = logb::restore::run(target.path(), &snapshot).await.unwrap();
 
     assert!(report.replaced_to.is_some(), "the database it replaced is kept, not deleted");
     assert!(report.replaced_to.as_ref().unwrap().exists());
     assert_ne!(report.epoch, epoch_before, "a restored database is a different database");
 
-    let pool = logby::db::connect_existing(target.path()).await.unwrap();
+    let pool = logb::db::connect_existing(target.path()).await.unwrap();
     let restored: i64 = sqlx::query_scalar("SELECT count(*) FROM objects").fetch_one(&pool).await.unwrap();
     assert_eq!(restored, 1, "the regrettable object is not in the restored database");
     let name: String = sqlx::query_scalar("SELECT name FROM objects").fetch_one(&pool).await.unwrap();
@@ -665,12 +665,12 @@ async fn restore_refuses_a_file_that_is_not_a_database() {
     let target = tempfile::tempdir().unwrap();
     let junk = target.path().join("not-a-snapshot.db");
     std::fs::write(&junk, b"absolutely not a database").unwrap();
-    std::fs::write(target.path().join("logby.db"), b"the live one").unwrap();
+    std::fs::write(target.path().join("logb.db"), b"the live one").unwrap();
 
-    let err = logby::restore::run(target.path(), &junk).await.unwrap_err();
+    let err = logb::restore::run(target.path(), &junk).await.unwrap_err();
     assert!(err.to_string().contains("not a usable snapshot"), "got: {err}");
     assert_eq!(
-        std::fs::read(target.path().join("logby.db")).unwrap(),
+        std::fs::read(target.path().join("logb.db")).unwrap(),
         b"the live one",
         "a refused restore must not have touched the live database"
     );
@@ -680,7 +680,7 @@ async fn restore_refuses_a_file_that_is_not_a_database() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --test backup restore`
-Expected: FAIL to compile — `logby::restore` does not exist.
+Expected: FAIL to compile — `logb::restore` does not exist.
 
 - [ ] **Step 3: Write the restore module**
 
@@ -725,15 +725,15 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
 
     // 2. Move the live database aside. Its -wal and -shm go with it: leaving them beside a
     //    different database would have SQLite reading another file's journal.
-    let live = data_dir.join("logby.db");
+    let live = data_dir.join("logb.db");
     let replaced_to = if live.exists() {
         let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-        let dest = data_dir.join(format!("logby.db.replaced-{stamp}"));
+        let dest = data_dir.join(format!("logb.db.replaced-{stamp}"));
         std::fs::rename(&live, &dest)?;
         for suffix in ["-wal", "-shm"] {
-            let from = data_dir.join(format!("logby.db{suffix}"));
+            let from = data_dir.join(format!("logb.db{suffix}"));
             if from.exists() {
-                std::fs::rename(&from, data_dir.join(format!("logby.db.replaced-{stamp}{suffix}")))?;
+                std::fs::rename(&from, data_dir.join(format!("logb.db.replaced-{stamp}{suffix}")))?;
             }
         }
         Some(dest)
@@ -774,7 +774,7 @@ In `src/main.rs`, immediately after the existing `--backup` block:
 
 ```rust
     if let Some(src) = config.restore.clone() {
-        let report = logby::restore::run(&config.data_dir, &src).await?;
+        let report = logb::restore::run(&config.data_dir, &src).await?;
         println!("restored {} into {}", src.display(), config.data_dir.display());
         if let Some(kept) = report.replaced_to {
             println!("the database it replaced is kept at {}", kept.display());
@@ -789,7 +789,7 @@ In `src/main.rs`, immediately after the existing `--backup` block:
 In `README.md`, extend the existing `## Backup` section with the automatic path, and add a `## Restore` section after it:
 
 ````markdown
-Set `LOGBY_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGBY_BACKUP_HOUR`
+Set `LOGB_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGB_BACKUP_HOUR`
 (default 3) and verified with `PRAGMA integrity_check` before it counts. The newest 14
 are kept. Point it at a volume that is itself backed up — a snapshot on the same disk
 protects you from your own mistakes, not from the disk's.
@@ -799,12 +799,12 @@ protects you from your own mistakes, not from the disk's.
 The server must be stopped, so run it as a one-shot container against the same volume:
 
 ```bash
-docker compose stop logby
-docker compose run --rm logby /logby --restore /data/backups/logby-2026-09-01.db
-docker compose start logby
+docker compose stop logb
+docker compose run --rm logb /logb --restore /data/backups/logb-2026-09-01.db
+docker compose start logb
 ```
 
-The database being replaced is kept as `logby.db.replaced-<timestamp>` in the same
+The database being replaced is kept as `logb.db.replaced-<timestamp>` in the same
 directory — restoring the wrong snapshot is recoverable.
 
 A restored database gets a new sync epoch, so every phone re-bootstraps instead of
@@ -828,7 +828,7 @@ git commit -m "feat: restore a snapshot, and tell every device the database chan
 
 ## Self-Review
 
-**Spec coverage.** Every section maps to a task: the health check (Task 1); the epoch, its migration, and the `410` rule (Task 2); `LOGBY_BACKUP_DIR`/`LOGBY_BACKUP_HOUR`, the dated filename, `integrity_check` verification, 14-day retention and the same-day no-op (Task 3); `--restore` with source validation before any mutation, the preserved replaced database, migration of an older snapshot, epoch rotation, and the README's Backup and Restore sections (Task 4).
+**Spec coverage.** Every section maps to a task: the health check (Task 1); the epoch, its migration, and the `410` rule (Task 2); `LOGB_BACKUP_DIR`/`LOGB_BACKUP_HOUR`, the dated filename, `integrity_check` verification, 14-day retention and the same-day no-op (Task 3); `--restore` with source validation before any mutation, the preserved replaced database, migration of an older snapshot, epoch rotation, and the README's Backup and Restore sections (Task 4).
 
 The spec's "out of scope" items stay out: nothing moves backups off the machine, and blobs are never archived.
 

@@ -12,7 +12,7 @@ async fn health_reports_ok_and_creates_database() {
 #[tokio::test]
 async fn migration_creates_all_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = logby::db::connect(dir.path()).await.unwrap();
+    let pool = logb::db::connect(dir.path()).await.unwrap();
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .fetch_all(&pool)
         .await
@@ -21,7 +21,7 @@ async fn migration_creates_all_tables() {
     for t in ["users", "sessions", "settings", "objects", "activities", "files", "attachments", "reminders"] {
         assert!(names.contains(&t), "missing table {t}: {names:?}");
     }
-    assert!(dir.path().join("logby.db").exists());
+    assert!(dir.path().join("logb.db").exists());
 }
 
 /// `--backup` has to produce a file a fresh instance can actually open and read.
@@ -33,13 +33,13 @@ async fn backup_writes_a_readable_snapshot() {
 
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("snapshot.db");
-    logby::db::backup_to(&app.state.db, &dest).await.unwrap();
+    logb::db::backup_to(&app.state.db, &dest).await.unwrap();
     assert!(dest.exists());
 
     // The snapshot opens on its own and carries the data.
-    let copied = dir.path().join("logby.db");
+    let copied = dir.path().join("logb.db");
     std::fs::rename(&dest, &copied).unwrap();
-    let pool = logby::db::connect_existing(dir.path()).await.unwrap();
+    let pool = logb::db::connect_existing(dir.path()).await.unwrap();
     let (objects,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM objects").fetch_one(&pool).await.unwrap();
     let (users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
     assert_eq!((objects, users), (1, 1));
@@ -51,11 +51,11 @@ async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
     app.setup("ben", "correct horse").await;
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("snapshot.db");
-    logby::db::backup_to(&app.state.db, &dest).await.unwrap();
-    assert!(logby::db::backup_to(&app.state.db, &dest).await.is_err(), "must not clobber an existing file");
+    logb::db::backup_to(&app.state.db, &dest).await.unwrap();
+    assert!(logb::db::backup_to(&app.state.db, &dest).await.is_err(), "must not clobber an existing file");
 
     let empty = tempfile::tempdir().unwrap();
-    assert!(logby::db::connect_existing(empty.path()).await.is_err(), "no database to back up");
+    assert!(logb::db::connect_existing(empty.path()).await.is_err(), "no database to back up");
 }
 
 #[tokio::test]

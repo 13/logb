@@ -100,7 +100,7 @@ fn the_spec_states_how_to_authenticate() {
     let spec: Value = serde_json::from_str(&raw).unwrap();
 
     let schemes = &spec["components"]["securitySchemes"];
-    assert_eq!(schemes["sessionCookie"]["name"], "logby_session");
+    assert_eq!(schemes["sessionCookie"]["name"], "logb_session");
     assert_eq!(schemes["bearerToken"]["scheme"], "bearer");
 
     // Token management refuses bearer credentials on purpose, and the spec has to say so or an

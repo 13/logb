@@ -1,5 +1,5 @@
 export default {
-  'app.name': 'logby',
+  'app.name': 'LogB',
   'nav.back': 'Zurück',
   'nav.settings': 'Einstellungen',
   'nav.save': 'Speichern',
@@ -12,7 +12,7 @@ export default {
   'error.generic': 'Etwas ist schiefgelaufen',
   'error.offline': 'Keine Verbindung',
 
-  'setup.title': 'Willkommen bei logby',
+  'setup.title': 'Willkommen bei LogB',
   'setup.intro': 'Lege den ersten Benutzer an. Er wird Administrator.',
   'setup.submit': 'Admin anlegen',
   'setup.not-reachable': 'Das Konto wurde angelegt, aber der Server war nicht erreichbar, um dich anzumelden. Prüfe deine Verbindung und lade die Seite neu.',
@@ -174,7 +174,7 @@ export default {
   'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen importiert',
   'settings.version': 'Version',
   'tokens.title': 'API-Zugriff',
-  'tokens.intro': 'Für Apps und Skripte, die ohne Browser auf logby zugreifen. Ein Token gilt als dein Konto — behandle es wie ein Passwort.',
+  'tokens.intro': 'Für Apps und Skripte, die ohne Browser auf LogB zugreifen. Ein Token gilt als dein Konto — behandle es wie ein Passwort.',
   'tokens.name': 'Wofür ist dieses Token?',
   'tokens.name-placeholder': 'z. B. Handy',
   'tokens.create': 'Token erstellen',

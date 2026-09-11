@@ -4,7 +4,7 @@ Status: approved design, not yet implemented.
 
 ## Problem
 
-logby holds records that cannot be reconstructed — a decade of a car's maintenance history is
+logb holds records that cannot be reconstructed — a decade of a car's maintenance history is
 not something anyone can retype. It has no automated backup. `--backup` exists and works, but
 runs only when a human remembers, and the README has never contained the word "restore": there
 is no documented, let alone tested, path from a snapshot back to a running instance.
@@ -25,7 +25,7 @@ while it ran against a database with no tables, logging `no such table: sessions
 In scope: a scheduled verified snapshot with retention, a `--restore` command, a sync epoch that
 makes restore safe for devices, and a health check that touches the database.
 
-Out of scope: moving backups off the machine. logby's job is to produce good snapshots in a
+Out of scope: moving backups off the machine. logb's job is to produce good snapshots in a
 directory the operator chooses; getting that directory onto other hardware is the operator's,
 and any file-level tool does it better than an app could.
 
@@ -35,14 +35,14 @@ nightly would copy gigabytes of provably unchanged bytes.
 
 ## Backup
 
-Off unless `LOGBY_BACKUP_DIR` is set, so an existing deployment behaves exactly as it does now
-until its operator opts in. `LOGBY_BACKUP_HOUR` (default 3) picks the hour.
+Off unless `LOGB_BACKUP_DIR` is set, so an existing deployment behaves exactly as it does now
+until its operator opts in. `LOGB_BACKUP_HOUR` (default 3) picks the hour.
 
 The job runs from the existing hourly block in `src/tasks.rs`, once per day, taking the hour as a
 parameter the way `notify::tick` already does — that is what makes it testable in a second
 rather than a day.
 
-Each run writes `logby-YYYY-MM-DD.db` through the existing `db::backup_to`, which is SQLite's
+Each run writes `logb-YYYY-MM-DD.db` through the existing `db::backup_to`, which is SQLite's
 `VACUUM INTO` and therefore safe against a live instance. It then **opens the finished file and
 runs `PRAGMA integrity_check`**. Only a snapshot that passes counts: a failure logs at error,
 removes the bad file, and leaves the previous night's snapshot in place. A backup nobody has
@@ -70,15 +70,15 @@ cursor with no warning.
 ## Restore
 
 ```
-logby --restore <snapshot>
+logb --restore <snapshot>
 ```
 
 Order matters, because each step protects the one after it:
 
-1. Validate the source read-only — `integrity_check`, and confirm it is actually a logby
+1. Validate the source read-only — `integrity_check`, and confirm it is actually a logb
    database (`_sqlx_migrations` present) rather than an unrelated file. Nothing is touched until
    this passes.
-2. Move the live database aside as `logby.db.replaced-<timestamp>`, not delete it. A restore is
+2. Move the live database aside as `logb.db.replaced-<timestamp>`, not delete it. A restore is
    destructive and operators do restore the wrong file; the previous state stays recoverable.
 3. Copy the snapshot into place.
 4. Run migrations, since a snapshot may predate the running binary.
@@ -93,9 +93,9 @@ Under Docker the service is down, so the command runs in a one-shot container ag
 volume:
 
 ```bash
-docker compose stop logby
-docker compose run --rm logby /logby --restore /data/backups/logby-2026-09-01.db
-docker compose start logby
+docker compose stop logb
+docker compose run --rm logb /logb --restore /data/backups/logb-2026-09-01.db
+docker compose start logb
 ```
 
 The README gains that as a Restore section, next to the Backup one it already has.

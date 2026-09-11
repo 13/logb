@@ -55,7 +55,7 @@ async fn login_logout_cycle() {
     assert_eq!(res.status(), 401);
     let res = app.login(&c, "BEN", "correct horse").await; // username is case-insensitive
     assert_eq!(res.status(), 200);
-    assert!(res.headers().get("set-cookie").unwrap().to_str().unwrap().contains("logby_session="));
+    assert!(res.headers().get("set-cookie").unwrap().to_str().unwrap().contains("logb_session="));
     assert_eq!(c.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
 
     assert_eq!(c.post(app.url("/auth/logout")).send().await.unwrap().status(), 204);
@@ -105,7 +105,7 @@ async fn logout_cookie_matches_session_cookie_attributes() {
     let res = app.client.post(app.url("/auth/logout")).send().await.unwrap();
     assert_eq!(res.status(), 204);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
-    assert!(cookie.contains("logby_session="), "{cookie}");
+    assert!(cookie.contains("logb_session="), "{cookie}");
     assert!(cookie.contains("HttpOnly"), "{cookie}");
     assert!(cookie.contains("SameSite=Lax"), "{cookie}");
     assert!(cookie.contains("Path=/"), "{cookie}");
@@ -138,7 +138,7 @@ async fn expired_sessions_are_pruned() {
     let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
     assert_eq!(before, 2);
 
-    assert_eq!(logby::tasks::prune_sessions(&app.state).await.unwrap(), 1);
+    assert_eq!(logb::tasks::prune_sessions(&app.state).await.unwrap(), 1);
     let (after,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
     assert_eq!(after, 1, "the live session survives");
     // The live session still works.

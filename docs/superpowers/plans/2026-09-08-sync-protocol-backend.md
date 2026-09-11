@@ -1642,7 +1642,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
         .bind(object_id).execute(&app.state.db).await.unwrap();
 
-    let removed = logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    let removed = logb::sync::feed::purge(&app.state, 90).await.unwrap();
     assert_eq!(removed, 1, "the ancient log row went");
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
@@ -1668,7 +1668,7 @@ async fn purge_keeps_recent_history() {
         "edited_at": "2026-01-01T00:00:00Z", "device_id": "phone"
     }]))).send().await.unwrap();
 
-    assert_eq!(logby::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
+    assert_eq!(logb::sync::feed::purge(&app.state, 90).await.unwrap(), 0);
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(rows, 1, "today's history is not history yet");
@@ -1708,7 +1708,7 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
 
     sqlx::query("UPDATE attachments SET deleted_at = '2000-01-01T00:00:00Z'")
         .execute(&app.state.db).await.unwrap();
-    logby::sync::feed::purge(&app.state, 90).await.unwrap();
+    logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
     assert!(!blob.exists(), "an expired tombstone finally frees the bytes");
     let files: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
@@ -1722,7 +1722,7 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --test sync purge`
-Expected: FAIL to compile — `logby::sync::feed::purge` does not exist.
+Expected: FAIL to compile — `logb::sync::feed::purge` does not exist.
 
 - [ ] **Step 3: Write the purge**
 
