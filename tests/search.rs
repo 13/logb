@@ -44,6 +44,46 @@ async fn finds_objects_and_activities() {
     assert_eq!(r["activities"].as_array().unwrap().len(), 0);
 }
 
+/// `type` holds an identifier -- `car`, `e_bike`, `other` -- not words anyone typed, and search
+/// used to match it. That made a search box that answered questions about the schema: a German
+/// user searching "Auto" found nothing while "car" found their Golf, "other" returned every
+/// unclassified object at once, and "bike" dragged in every e-bike alongside the bicycles.
+///
+/// Unmapped legacy text was preserved into the description by the migration, so an object whose
+/// old free-text category meant something to its owner is still found by those words.
+#[tokio::test]
+async fn objects_are_found_by_their_words_not_their_type() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let golf = app.create_object(&app.client, "Golf", Some("km")).await;
+    assert_eq!(golf["type"], "car", "the fixture files this one as a car");
+
+    let r: serde_json::Value = app.client.get(app.url("/search?q=car")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(
+        r["objects"].as_array().unwrap().len(), 0,
+        "`car` is a stored identifier, not something the user typed: {r}",
+    );
+
+    let r: serde_json::Value = app.client.get(app.url("/search?q=Golf")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["objects"].as_array().unwrap().len(), 1, "the name the user chose still finds it: {r}");
+    assert_eq!(r["objects"][0]["id"], golf["id"]);
+
+    // What the migration preserved is what a legacy owner will search for: an object whose old
+    // free-text category did not map carries those words in its description.
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Odd one", "type": "other", "counter_unit": null,
+                       "description": "Gravelbike Custom", "purchase_date": null,
+                       "purchase_price_cents": null }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let r: serde_json::Value = app.client.get(app.url("/search?q=gravelbike")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["objects"].as_array().unwrap().len(), 1, "text kept in the description stays findable: {r}");
+
+    // And the type of the object that carries it is still not a search term.
+    let r: serde_json::Value = app.client.get(app.url("/search?q=other")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["objects"].as_array().unwrap().len(), 0, "`other` must not return every unclassified object: {r}");
+}
+
 #[tokio::test]
 async fn wildcards_in_the_query_are_literal() {
     let app = common::spawn().await;

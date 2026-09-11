@@ -1157,7 +1157,7 @@
     },
     "/search": {
       "get": {
-        "summary": "Objects and activities matching `q`.",
+        "summary": "Objects (by name and description) and activities (by title and notes) matching `q`. An object's `type` is an identifier, not searchable text.",
         "parameters": [
           {
             "name": "q",
