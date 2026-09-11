@@ -75,6 +75,26 @@ async fn unmapped_text_in_an_old_archive_reaches_the_description() {
     assert_eq!(objs[0]["description"], "Gravelbike Custom");
 }
 
+/// The migration's description `CASE` trims only `category`, never `description` -- a
+/// description with surrounding whitespace keeps it, the same way `description || char(10) ||
+/// trim(category)` does in SQL. Import must match: trimming `description` here would make a
+/// restored backup disagree with a migrated database about the same row.
+#[tokio::test]
+async fn unmapped_category_preserves_padding_already_in_the_description() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({
+        "name": "Odd", "category": "Gravelbike Custom", "description": "  padded desc  "
+    }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "other");
+    assert_eq!(objs[0]["description"], "  padded desc  \nGravelbike Custom");
+}
+
 /// An archive that carries both fields at once (a hand edit, or a future export format that
 /// grew a new field this app also still writes) trusts the valid `type` and ignores `category`
 /// entirely -- `type` is what describes this app's current schema, `category` is a fallback for
@@ -93,10 +113,12 @@ async fn a_valid_type_wins_over_a_conflicting_category() {
 }
 
 /// A `type` this build does not recognise (a typo, or a future value) is not guessed at either
-/// -- it falls back to `other`, same as an unmapped legacy word, but the description is left
-/// alone: an illegal `type` string is not free text worth preserving.
+/// -- it falls back to `other`, same as an unmapped legacy word. Unlike the previous behaviour,
+/// the string itself is not discarded: an unrecognised descriptor is preserved the same way
+/// whichever field it arrived in, so it is appended to the description on its own line, exactly
+/// like an unmapped `category`.
 #[tokio::test]
-async fn an_illegal_type_falls_back_to_other_and_leaves_the_description_alone() {
+async fn an_illegal_type_falls_back_to_other_and_its_text_reaches_the_description() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let zip = archive_with_object_json(json!({ "type": "spaceship", "category": null, "description": "kept as is" }));
@@ -106,7 +128,25 @@ async fn an_illegal_type_falls_back_to_other_and_leaves_the_description_alone() 
 
     let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs[0]["type"], "other");
-    assert_eq!(objs[0]["description"], "kept as is");
+    assert_eq!(objs[0]["description"], "kept as is\nspaceship");
+}
+
+/// `type` and `category` both present, and `type` illegal: `type`'s mere presence still wins
+/// outright over `category` -- the same rule as when `type` is legal -- so the illegal `type`
+/// text is what reaches the description, and `category` ("Auto", which would otherwise map to
+/// `car`) is silently discarded rather than consulted as a second source.
+#[tokio::test]
+async fn an_illegal_type_wins_over_category_and_only_its_text_is_preserved() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "type": "spaceship", "category": "Auto", "description": "kept as is" }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "other");
+    assert_eq!(objs[0]["description"], "kept as is\nspaceship");
 }
 
 fn png() -> Vec<u8> {
@@ -120,8 +160,16 @@ fn png() -> Vec<u8> {
 async fn export_import_round_trip() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let id = car["id"].as_i64().unwrap();
+    // A non-default type ("bike", not "car") so the type assertion below can actually fail --
+    // a broken round trip that always lands on the first `OBJECT_TYPES` entry would otherwise
+    // pass it by accident.
+    let obj: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({
+            "name": "Golf", "type": "bike", "counter_unit": "km",
+            "description": "", "purchase_date": null, "purchase_price_cents": null
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    let id = obj["id"].as_i64().unwrap();
     let act: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/activities")))
         .json(&json!({ "date": "2024-01-01", "category": "repair", "title": "Brakes", "cost_cents": 12345, "counter_value": 100 }))
         .send().await.unwrap().json().await.unwrap();
@@ -155,6 +203,7 @@ async fn export_import_round_trip() {
 
     let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs[0]["name"], "Golf");
+    assert_eq!(objs[0]["type"], "bike");
     assert_eq!(objs[0]["stats"]["total_cost_cents"], 12345);
     let nid = objs[0]["id"].as_i64().unwrap();
     let acts: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{nid}/activities"))).send().await.unwrap().json().await.unwrap();

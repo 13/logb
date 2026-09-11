@@ -254,38 +254,60 @@ pub struct ImportCounts {
     pub reminders: usize,
 }
 
+/// Appends `extra` to `description` on its own line, exactly the way the migration's second
+/// `CASE` joins an unmapped `category` onto the row's `description`:
+///
+/// ```sql
+/// WHEN trim(category) = '' THEN description            -- raw
+/// WHEN trim(description) = '' THEN trim(category)      -- category trimmed, description discarded
+/// ELSE description || char(10) || trim(category)       -- description RAW, category trimmed
+/// ```
+///
+/// `description` is used raw everywhere -- `.trim()` is only ever consulted to test for
+/// emptiness, never to change what gets stored -- and `extra` is trimmed before either being
+/// used alone or appended. Getting this backwards (trimming `description`) is exactly the bug
+/// this helper exists to not repeat: it would silently strip whitespace the migration leaves
+/// alone, so a restored backup and a migrated database would disagree about the same row.
+fn join_unmapped(description: &str, extra: &str) -> String {
+    let extra = extra.trim();
+    if extra.is_empty() {
+        description.to_string()
+    } else if description.trim().is_empty() {
+        extra.to_string()
+    } else {
+        format!("{description}\n{extra}")
+    }
+}
+
 /// Resolves an imported object's type and description from whichever of `type`/`category` the
 /// archive carries, applying the same rule `migrations/0009_object_types.sql` applied to
 /// existing rows when it did this once for the whole database:
 ///
-/// - A present, legal `type` wins outright, `category` (if also present) is ignored. This is an
-///   archive written by a current LogB, or a hand-edited one that supplied both -- either way
-///   `type` is the field that describes the schema this app now has, so it is authoritative.
-/// - A present but illegal `type` (a typo, or a future value this build does not know) falls
-///   back to `other` rather than being guessed at -- exactly how an illegal `category` word is
-///   handled below. `description` is left untouched: unlike an unmapped legacy word, an illegal
-///   `type` string is not free text worth preserving in the description.
+/// - A present `type` wins outright, `category` (if also present) is ignored, whether or not
+///   `type` is legal. Presence of `type` at all -- even a typo or a future value this build
+///   does not know -- means this archive understands the current schema (or is a hand-edit of
+///   one written by it), so `category`, the pre-`type` fallback, is consulted only when `type`
+///   is missing entirely.
+///   - Legal: the type is used as-is, `description` untouched.
+///   - Illegal: falls back to `other`, and the string itself is not discarded -- it is joined
+///     onto the description by [`join_unmapped`], the same rule an unmapped legacy `category`
+///     uses below. An unrecognised descriptor is treated the same whichever field it arrived
+///     in.
 /// - No `type` at all means a pre-object-types archive; `category` is looked up the same way the
 ///   migration's first `CASE` did. Text that maps is silently translated (`object_type::LEGACY`
 ///   agrees with the migration's word list). Text that does not map is appended to the
-///   description on its own line, so nothing the user typed is destroyed by an import they did
-///   not know would touch this field -- the same rule the migration's second `CASE` applied.
+///   description on its own line via [`join_unmapped`], so nothing the user typed is destroyed
+///   by an import they did not know would touch this field -- the same rule the migration's
+///   second `CASE` applied.
 /// - Neither field present is a corrupt or hand-written archive; `other` with the description
-///   untouched, same as an illegal `type`.
+///   untouched, same as a legal `type`.
 fn resolve_type(o: &ObjectExport) -> (String, String) {
     match (o.type_.as_deref(), o.category.as_deref()) {
         (Some(t), _) if object_type::is_valid(t) => (t.to_string(), o.description.clone()),
-        (Some(_), _) => ("other".to_string(), o.description.clone()),
+        (Some(t), _) => ("other".to_string(), join_unmapped(&o.description, t)),
         (None, Some(c)) => match object_type::from_legacy(c) {
             Legacy::Mapped(t) => (t.to_string(), o.description.clone()),
-            Legacy::Unmapped => {
-                let c = c.trim();
-                let d = o.description.trim();
-                let joined = if c.is_empty() { d.to_string() }
-                    else if d.is_empty() { c.to_string() }
-                    else { format!("{d}\n{c}") };
-                ("other".to_string(), joined)
-            }
+            Legacy::Unmapped => ("other".to_string(), join_unmapped(&o.description, c)),
         },
         (None, None) => ("other".to_string(), o.description.clone()),
     }
