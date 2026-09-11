@@ -30,8 +30,8 @@ docker pull ghcr.io/13/logb:latest
 ```
 
 `0.2.0` pins exactly, `0.2` follows patches, `latest` follows releases. To use one instead of
-building locally, replace the `build: .` line in `docker-compose.yml` with
-`image: ghcr.io/13/logb:latest`.
+building locally, edit `docker-compose.yml`: delete the `build: .` line and change
+`image: logb:latest` to `image: ghcr.io/13/logb:latest`.
 
 Upgrading is a pull and a restart:
 

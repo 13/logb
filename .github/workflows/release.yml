@@ -4,6 +4,9 @@ name: Release
 # single source of the version. ci.yml still guards every commit.
 on:
   push:
+    # Matches any tag starting with "v", not only version tags — the version check below fails
+    # non-version "v*" tags safely (Cargo.toml's version will not match) rather than silently
+    # skipping them.
     tags: ['v*']
 
 jobs:
@@ -24,6 +27,10 @@ jobs:
       - name: The tag must match Cargo.toml
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          # ^version only matches a crate's own version key because dependency versions are
+          # indented under [dependencies]. This would misbehave if Cargo.toml ever grew a
+          # [workspace.package] version at column 0 (grep -m1 would then match whichever comes
+          # first in the file, not necessarily the crate's own).
           crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           if [ "$tag" != "$crate" ]; then
             echo "tag $GITHUB_REF_NAME says $tag, Cargo.toml says $crate" >&2
@@ -44,15 +51,20 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           # 0.2.0 pins exactly, 0.2 follows patches without editing compose, latest is for
-          # trying it out.
+          # trying it out. metadata-action already withholds {{major}}.{{minor}} for a
+          # pre-release version on its own; the raw "latest" tag needs the same treatment
+          # spelled out explicitly, since type=raw is not semver-aware and would otherwise
+          # publish a release candidate (e.g. v0.2.0-rc1, which passes the plain-string version
+          # check above) as :latest, silently replacing the current stable image.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       # Built and loaded locally first: a tag can point at any commit, including one ci.yml
       # never ran against, so the image is booted before anyone can pull it.
       - name: Build
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -72,21 +84,51 @@ jobs:
           echo "health check never succeeded"; docker logs logb-release; exit 1
 
       # Re-runs the build, but every layer is a cache hit from the step above, so this pushes
-      # the image that was just smoke-tested rather than building a second one.
+      # the image that was just smoke-tested rather than building a second one. That is an
+      # assumption, not a guarantee — proven below by comparing image ids.
+      #
+      # provenance/sbom are explicitly disabled here on purpose, not left out by oversight:
+      # setup-buildx-action defaults to the docker-container driver, and buildx defaults that
+      # driver to provenance=mode=min on any push:true build, which would attach an attestation
+      # manifest this project deliberately does not want on the published image.
       - name: Push
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Prove the assumption above rather than trust it: the Build step's image id is the
+      # content-addressed id of the image that was actually booted and health-checked; the Push
+      # step reports the same "imageid" output (docker/build-push-action@v6 exposes imageid,
+      # digest and metadata — imageid is used here, not digest, because digest is the pushed
+      # manifest's digest and is not directly comparable to a load-only build that was never
+      # given a registry destination). If a cache miss or anything else caused the second build
+      # to diverge from the first, the ids differ and the job fails before anyone can pull the
+      # untested image.
+      - name: The pushed image must be the one that was tested
+        run: |
+          if [ "${{ steps.build.outputs.imageid }}" != "${{ steps.push.outputs.imageid }}" ]; then
+            echo "built image ${{ steps.build.outputs.imageid }} but pushed ${{ steps.push.outputs.imageid }}" >&2
+            exit 1
+          fi
+          echo "confirmed: pushed image matches the one that was health-checked"
+
+      # If the Push above succeeded and this step then fails, the image is already live on
+      # ghcr.io with no Release page describing it. That is recoverable, not a wedged state:
+      # re-running the job re-pushes identical cache-hit layers (a no-op) and this action is
+      # idempotent per tag (it updates the existing release rather than duplicating it), so
+      # just re-running the workflow run is the fix.
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           body: |
             ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
             ```
