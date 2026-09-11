@@ -1,6 +1,9 @@
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
-export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other'] as const;
+export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
+  'symptom', 'treatment', 'appointment', 'medication'] as const;
 export type Category = (typeof CATEGORIES)[number];
+export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
+export type ObjectType = (typeof OBJECT_TYPES)[number];
 export type Kind = 'photo' | 'document';
 
 export interface User { id: number; username: string; is_admin: boolean; lang: string; created_at?: string }
@@ -9,12 +12,12 @@ export interface Settings { currency: string }
 export interface ObjectStats { total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number }
 export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {
-  id: number; user_id: number; name: string; category: string; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
+  id: number; user_id: number; name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null;
   cover_attachment_id: number | null; cover_file_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
 }
 export interface ObjectInput {
-  name: string; category: string; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
+  name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
 }
 

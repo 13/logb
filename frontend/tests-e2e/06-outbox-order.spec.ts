@@ -27,7 +27,7 @@ test('two tabs queueing at once never hand out the same seq', async ({ context }
   await signIn(a);
   await a.getByRole('button', { name: /New object/ }).click();
   await a.getByLabel('Name').fill('Workshop');
-  await a.getByLabel('Category').fill('place');
+  await a.getByLabel('Type').selectOption('other');
   await a.getByRole('button', { name: 'Save' }).click();
   await expect(a.getByRole('heading', { name: 'Workshop' })).toBeVisible();
   const objectId = a.url().match(/\/objects\/(\d+)/)?.[1];
@@ -71,7 +71,7 @@ test('a newly queued op sorts after a record that predates seq', async ({ page, 
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Shed');
-  await page.getByLabel('Category').fill('place');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Shed' })).toBeVisible();
 

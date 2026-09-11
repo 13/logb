@@ -121,3 +121,58 @@ fn the_spec_states_how_to_authenticate() {
         assert_eq!(op["security"], serde_json::json!([]), "{path} should be documented as public");
     }
 }
+
+/// The activity categories the document lists must be the ones the API accepts.
+///
+/// This enum was stale before anyone noticed: it named `insurance` and `tax`, which no version
+/// of this app has ever accepted, and omitted `modification`, which it always has. A spec that
+/// invents values is worse than one that omits them, because a second client written against it
+/// sends something the server rejects.
+#[test]
+fn the_documented_activity_categories_are_the_real_ones() {
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
+    )
+    .expect("docs/openapi.json should be valid JSON");
+    let documented = find_enum_containing(&doc, "maintenance")
+        .expect("the document should describe activity categories");
+    let real: Vec<String> = logb::api::activities::CATEGORIES.iter().map(|c| c.to_string()).collect();
+    assert_eq!(documented, real, "docs/openapi.json disagrees with api::activities::CATEGORIES");
+}
+
+/// The object types the document lists must be the ones the API accepts.
+///
+/// `Category` was guarded from the day it was found stale; its sibling `ObjectType`, added a
+/// release later, was not -- removing `body` from it failed nothing. A type missing from the
+/// spec is a client that never offers it, and one invented in the spec is a client whose POST
+/// is rejected by a CHECK.
+#[test]
+fn the_documented_object_types_are_the_real_ones() {
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
+    )
+    .expect("docs/openapi.json should be valid JSON");
+    let documented = find_enum_containing(&doc, "e_bike")
+        .expect("the document should describe object types");
+    let real: Vec<String> = logb::object_type::OBJECT_TYPES.iter().map(|t| t.to_string()).collect();
+    assert_eq!(documented, real, "docs/openapi.json disagrees with object_type::OBJECT_TYPES");
+}
+
+/// The first `enum` whose members include `marker` -- how a list is found without hard-coding
+/// where in the document it happens to live.
+fn find_enum_containing(node: &Value, marker: &str) -> Option<Vec<String>> {
+    match node {
+        Value::Object(map) => {
+            if let Some(Value::Array(values)) = map.get("enum") {
+                let members: Vec<String> =
+                    values.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                if members.iter().any(|m| m == marker) {
+                    return Some(members);
+                }
+            }
+            map.values().find_map(|v| find_enum_containing(v, marker))
+        }
+        Value::Array(items) => items.iter().find_map(|v| find_enum_containing(v, marker)),
+        _ => None,
+    }
+}

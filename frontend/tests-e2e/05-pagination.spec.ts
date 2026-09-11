@@ -13,7 +13,7 @@ test('returning to the tab keeps the extra pages the user loaded', async ({ page
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Fleet');
-  await page.getByLabel('Category').fill('vehicle');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Fleet' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -69,7 +69,7 @@ test('an ordinary object loads its timeline in one request', async ({ page }) =>
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Kettle');
-  await page.getByLabel('Category').fill('appliance');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Kettle' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];

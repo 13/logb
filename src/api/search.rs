@@ -62,6 +62,14 @@ fn like_pattern(q: &str) -> String {
 /// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
 /// SQLite's `LIKE` folds case for ASCII only, so a query for "olwechsel" will not match
 /// "Ölwechsel"; that is the trade for not carrying an index.
+///
+/// `type` is deliberately not matched. It used to be, back when the column held whatever the
+/// user had typed -- so a German user searching "Auto" found their car. It now holds `car`, an
+/// identifier no user ever wrote, and matching it searches the schema rather than the data:
+/// "Auto" finds nothing, "other" returns every unclassified object, and "bike" drags in every
+/// e-bike. Name and description are the words the user chose, and the migration preserved
+/// unmapped legacy text into the description, so those objects stay findable by the words
+/// their owner actually used. Finding an object by its type is a filter, not a search term.
 async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<SearchQuery>) -> Result<Json<SearchResults>, AppError> {
     let term = q.q.trim();
     if term.is_empty() {
@@ -71,10 +79,10 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let pattern = like_pattern(term);
 
     let objects = sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
          FROM objects WHERE user_id = ?1 AND deleted_at IS NULL AND ( \
-           name LIKE ?2 ESCAPE '\\' OR category LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
+           name LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
          ORDER BY archived_at IS NOT NULL, name COLLATE NOCASE LIMIT ?3",
     )
     .bind(user.id).bind(&pattern).bind(limit)

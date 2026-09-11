@@ -17,7 +17,7 @@ async fn crud_and_stats() {
     assert_eq!(list.len(), 1);
 
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
-        "name": "Golf VII", "category": "car", "counter_unit": "km", "description": "grey",
+        "name": "Golf VII", "type": "car", "counter_unit": "km", "description": "grey",
         "purchase_date": "2020-03-01", "purchase_price_cents": 1500000, "archived": true
     })).send().await.unwrap();
     assert_eq!(res.status(), 200);
@@ -39,11 +39,11 @@ async fn validation() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     for body in [
-        json!({ "name": " ", "category": "car" }),
-        json!({ "name": "x", "category": "" }),
-        json!({ "name": "x", "category": "car", "counter_unit": "furlongs" }),
-        json!({ "name": "x", "category": "car", "purchase_date": "01.03.2020" }),
-        json!({ "name": "x", "category": "car", "purchase_price_cents": -1 }),
+        json!({ "name": " ", "type": "car" }),
+        json!({ "name": "x", "type": "" }),
+        json!({ "name": "x", "type": "car", "counter_unit": "furlongs" }),
+        json!({ "name": "x", "type": "car", "purchase_date": "01.03.2020" }),
+        json!({ "name": "x", "type": "car", "purchase_price_cents": -1 }),
     ] {
         let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
         assert_eq!(res.status(), 400, "{body}");
@@ -60,7 +60,7 @@ async fn other_users_objects_are_invisible() {
     let list: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert!(list.is_empty());
     assert_eq!(anna.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 404);
-    assert_eq!(anna.patch(app.url(&format!("/objects/{id}"))).json(&json!({ "name": "pwned", "category": "car" })).send().await.unwrap().status(), 404);
+    assert_eq!(anna.patch(app.url(&format!("/objects/{id}"))).json(&json!({ "name": "pwned", "type": "car" })).send().await.unwrap().status(), 404);
     assert_eq!(anna.delete(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 404);
     assert_eq!(app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().status(), 200);
 }
@@ -76,14 +76,14 @@ async fn fuel_unit_round_trips_and_is_validated() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let res = app.client.post(app.url("/objects")).json(&json!({
-        "name": "E-bike", "category": "bike", "counter_unit": "km", "fuel_unit": "kwh"
+        "name": "E-bike", "type": "bike", "counter_unit": "km", "fuel_unit": "kwh"
     })).send().await.unwrap();
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     let bike: serde_json::Value = res.json().await.unwrap();
     assert_eq!(bike["fuel_unit"], "kwh");
 
     let res = app.client.post(app.url("/objects")).json(&json!({
-        "name": "Car", "category": "car", "fuel_unit": "barrels"
+        "name": "Car", "type": "car", "fuel_unit": "barrels"
     })).send().await.unwrap();
     assert_eq!(res.status(), 400);
 }
@@ -254,7 +254,7 @@ async fn a_patch_that_omits_a_field_clears_it() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let res = app.client.post(app.url("/objects")).json(&json!({
-        "name": "E-bike", "category": "vehicle", "counter_unit": "km", "fuel_unit": "kwh"
+        "name": "E-bike", "type": "e_bike", "counter_unit": "km", "fuel_unit": "kwh"
     })).send().await.unwrap();
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     let o: serde_json::Value = res.json().await.unwrap();
@@ -262,7 +262,7 @@ async fn a_patch_that_omits_a_field_clears_it() {
     assert_eq!(o["fuel_unit"], "kwh");
 
     let res = app.client.patch(app.url(&format!("/objects/{id}")))
-        .json(&json!({ "name": "E-bike", "category": "vehicle", "counter_unit": "km" }))
+        .json(&json!({ "name": "E-bike", "type": "e_bike", "counter_unit": "km" }))
         .send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
@@ -270,8 +270,29 @@ async fn a_patch_that_omits_a_field_clears_it() {
 
     // The whole object round-trips unchanged when the client does send it back whole.
     let res = app.client.patch(app.url(&format!("/objects/{id}")))
-        .json(&json!({ "name": "E-bike", "category": "vehicle", "counter_unit": "km", "fuel_unit": "kwh" }))
+        .json(&json!({ "name": "E-bike", "type": "e_bike", "counter_unit": "km", "fuel_unit": "kwh" }))
         .send().await.unwrap();
     let out: serde_json::Value = res.json().await.unwrap();
     assert_eq!(out["fuel_unit"], "kwh");
+}
+
+#[tokio::test]
+async fn an_object_is_created_with_a_type() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car" })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let o: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(o["type"], "car");
+    assert!(o.get("category").is_none(), "the old field must be gone from the response");
+}
+
+#[tokio::test]
+async fn an_unknown_type_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "spaceship" })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "the CHECK would catch it, but a 400 says which field is wrong");
 }

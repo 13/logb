@@ -5,6 +5,8 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { MemObject } from './types';
+  import { typeIcon } from './object-types';
+  import Icon from './Icon.svelte';
   let { object }: { object: MemObject } = $props();
 </script>
 
@@ -21,8 +23,9 @@
           <span class="chip due">{object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}</span>
         {/if}
       </div>
-      <div class="muted tnum">
-        {object.category}
+      <div class="muted tnum type-row">
+        <Icon name={typeIcon(object.type)} size={16} />
+        {$t(`type.${object.type}`)}
         {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
         {#if object.stats.total_cost_cents > 0} · {money(object.stats.total_cost_cents, $currency, $locale)}{/if}
       </div>
@@ -41,4 +44,6 @@
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row > b { flex: none; }
+  .type-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .type-row :global(svg) { flex: none; }
 </style>

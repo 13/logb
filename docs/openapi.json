@@ -327,7 +327,7 @@
         }
       },
       "patch": {
-        "summary": "Replace an object. Every field except `cover_attachment_id` is a full replace: a field left out is written as null, so send the object whole. `cover_attachment_id` is three-state \u2014 absent keeps the cover, null clears it, an id sets it.",
+        "summary": "Replace an object. Every field except `cover_attachment_id` is a full replace: a field left out is written as null, so send the object whole. `cover_attachment_id` is three-state — absent keeps the cover, null clears it, an id sets it.",
         "parameters": [
           {
             "name": "id",
@@ -1157,7 +1157,7 @@
     },
     "/search": {
       "get": {
-        "summary": "Objects and activities matching `q`.",
+        "summary": "Objects (by name and description) and activities (by title and notes) matching `q`. An object's `type` is an identifier, not searchable text.",
         "parameters": [
           {
             "name": "q",
@@ -1619,13 +1619,30 @@
       "Category": {
         "type": "string",
         "enum": [
-          "fuel",
           "maintenance",
           "repair",
           "purchase",
           "inspection",
-          "insurance",
-          "tax",
+          "modification",
+          "fuel",
+          "other",
+          "symptom",
+          "treatment",
+          "appointment",
+          "medication"
+        ]
+      },
+      "ObjectType": {
+        "type": "string",
+        "enum": [
+          "car",
+          "e_bike",
+          "bike",
+          "motorcycle",
+          "home",
+          "appliance",
+          "tool",
+          "body",
           "other"
         ]
       },
@@ -1643,8 +1660,8 @@
           "name": {
             "type": "string"
           },
-          "category": {
-            "type": "string"
+          "type": {
+            "$ref": "#/components/schemas/ObjectType"
           },
           "counter_unit": {
             "type": [
@@ -1749,14 +1766,14 @@
         "type": "object",
         "required": [
           "name",
-          "category"
+          "type"
         ],
         "properties": {
           "name": {
             "type": "string"
           },
-          "category": {
-            "type": "string"
+          "type": {
+            "$ref": "#/components/schemas/ObjectType"
           },
           "counter_unit": {
             "type": [

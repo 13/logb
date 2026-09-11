@@ -5,21 +5,32 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
-  import { CATEGORIES, type Activity, type Category, type CounterUnit } from './types';
+  import { categoriesFor } from './object-types';
+  import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
 
-  let { objectId, activities, total, loadingMore = false, onmore, unit, category = $bindable('') }:
+  let { objectId, type, activities, total, loadingMore = false, onmore, unit, category = $bindable('') }:
     {
-      objectId: number; activities: Activity[]; total: number; loadingMore?: boolean;
+      objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
       onmore?: () => void; unit: CounterUnit; category?: Category | '';
     } = $props();
   const groups = $derived(groupByYear(activities));
   const hasMore = $derived(activities.length < total);
+  // The type's vocabulary, plus any category the loaded entries actually use. The second half
+  // matters after a re-type: without it, an entry logged as `fuel` on an object that is now a
+  // `body` has no chip and cannot be filtered to at all. `activities` is only the page(s)
+  // loaded so far, not necessarily every entry the object has -- acceptable here since this is
+  // presentation, not the source of truth for what exists.
+  const present = $derived(new Set(activities.map((a) => a.category)));
+  const chipCategories = $derived(
+    [...categoriesFor(type), ...CATEGORIES.filter((c) => present.has(c))]
+      .filter((c, i, all) => all.indexOf(c) === i),
+  );
 </script>
 
 <div class="chips">
   <button class:active={category === ''} class="chip" onclick={() => (category = '')}>{$t('timeline.filter-all')}</button>
-  {#each CATEGORIES as c}
+  {#each chipCategories as c}
     <button class:active={category === c} class="chip" onclick={() => (category = c)}>{$t(`cat.${c}`)}</button>
   {/each}
 </div>

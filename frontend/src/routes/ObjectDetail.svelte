@@ -6,6 +6,7 @@
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
   import Icon from '../lib/Icon.svelte';
+  import { typeIcon } from '../lib/object-types';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -159,7 +160,7 @@
 <main>
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
-    <TopBar title={object.name} backTo="/">
+    <TopBar title={object.name} icon={typeIcon(object.type)} backTo="/">
       <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
 
@@ -186,7 +187,7 @@
     </nav>
 
     {#if tab === 'timeline'}
-      <Timeline objectId={oid} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
+      <Timeline objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
       <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
@@ -194,7 +195,7 @@
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
-      <p class="muted">{object.category}</p>
+      <p class="muted">{$t(`type.${object.type}`)}</p>
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
       <h3>{$t('insights.title')}</h3>

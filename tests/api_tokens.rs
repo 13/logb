@@ -35,7 +35,7 @@ async fn a_token_authenticates_a_client_with_no_cookies_at_all() {
 
     // And it can write, not merely read.
     let res = anon.post(app.url("/objects")).bearer_auth(&token)
-        .json(&json!({ "name": "Golf", "category": "vehicle" })).send().await.unwrap();
+        .json(&json!({ "name": "Golf", "type": "car" })).send().await.unwrap();
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
 }
 
