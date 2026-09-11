@@ -19,7 +19,7 @@ async fn a_run_writes_and_verifies_a_snapshot() {
     logb::backup::verify(&made).await.expect("the snapshot opens and passes integrity_check");
 
     // The snapshot is the real database, not an empty file that happens to be valid SQLite.
-    let pool = logb::db::connect_existing(&logb::db::sqlite_url(made.parent().unwrap())).await;
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(made.parent().unwrap()).unwrap()).await;
     assert!(pool.is_err(), "connect_existing looks for logb.db, not a dated snapshot");
     let count: i64 = {
         let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&made).read_only(true);
@@ -228,7 +228,7 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     assert!(report.replaced_to.as_ref().unwrap().exists());
     assert_ne!(report.epoch, epoch_before, "a restored database is a different database");
 
-    let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path())).await.unwrap();
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path()).unwrap()).await.unwrap();
     let restored: i64 = sqlx::query_scalar("SELECT count(*) FROM objects").fetch_one(&pool).await.unwrap();
     assert_eq!(restored, 1, "the regrettable object is not in the restored database");
     let name: String = sqlx::query_scalar("SELECT name FROM objects").fetch_one(&pool).await.unwrap();
@@ -346,7 +346,7 @@ async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoc
     assert_ne!(report.epoch, epoch_before, "the epoch must be rotated even on this path");
 
     let epoch_on_disk: String = {
-        let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path())).await.unwrap();
+        let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path()).unwrap()).await.unwrap();
         let v = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")
             .fetch_one(&pool).await.unwrap();
         pool.close().await;

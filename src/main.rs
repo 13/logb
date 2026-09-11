@@ -10,7 +10,7 @@ async fn main() -> Result<(), logb::db::BoxError> {
         .with_env_filter(EnvFilter::new(config.log.clone()))
         .init();
     if let Some(dest) = config.backup.clone() {
-        let pool = logb::db::connect_existing(&config.database_url()).await?;
+        let pool = logb::db::connect_existing(&config.database_url()?).await?;
         logb::db::backup_to(&pool, &dest).await?;
         println!("database backed up to {}", dest.display());
         return Ok(());

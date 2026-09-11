@@ -12,7 +12,7 @@ async fn health_reports_ok_and_creates_database() {
 #[tokio::test]
 async fn migration_creates_all_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = logb::db::connect(&logb::db::sqlite_url(dir.path())).await.unwrap();
+    let pool = logb::db::connect(&logb::db::sqlite_url(dir.path()).unwrap()).await.unwrap();
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .fetch_all(&pool)
         .await
@@ -39,7 +39,7 @@ async fn backup_writes_a_readable_snapshot() {
     // The snapshot opens on its own and carries the data.
     let copied = dir.path().join("logb.db");
     std::fs::rename(&dest, &copied).unwrap();
-    let pool = logb::db::connect_existing(&logb::db::sqlite_url(dir.path())).await.unwrap();
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(dir.path()).unwrap()).await.unwrap();
     let (objects,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM objects").fetch_one(&pool).await.unwrap();
     let (users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
     assert_eq!((objects, users), (1, 1));
@@ -55,7 +55,7 @@ async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
     assert!(logb::db::backup_to(&app.state.db, &dest).await.is_err(), "must not clobber an existing file");
 
     let empty = tempfile::tempdir().unwrap();
-    assert!(logb::db::connect_existing(&logb::db::sqlite_url(empty.path())).await.is_err(), "no database to back up");
+    assert!(logb::db::connect_existing(&logb::db::sqlite_url(empty.path()).unwrap()).await.is_err(), "no database to back up");
 }
 
 #[tokio::test]

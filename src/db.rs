@@ -12,8 +12,20 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 ///
 /// `LOGB_DATA_DIR` keeps its meaning -- it is where blobs live, and it is still where the
 /// database goes when `LOGB_DATABASE_URL` says nothing else.
-pub fn sqlite_url(data_dir: &Path) -> String {
-    format!("sqlite://{}/logb.db?mode=rwc", data_dir.display())
+pub fn sqlite_url(data_dir: &Path) -> Result<String, BoxError> {
+    // `?` and `#` are legal in a Linux path and are structural in a URL: a data directory
+    // containing either would be silently truncated at that character, and LogB would open a
+    // database somewhere other than where it was told. Refusing is the only honest answer --
+    // encoding them would depend on the driver decoding them back the same way.
+    let dir = data_dir.display().to_string();
+    if let Some(bad) = dir.chars().find(|c| matches!(c, '?' | '#')) {
+        return Err(format!(
+            "the data directory {dir} contains {bad:?}, which cannot appear in a database URL. \
+             Move the data somewhere without it, or set LOGB_DATABASE_URL yourself."
+        )
+        .into());
+    }
+    Ok(format!("sqlite://{dir}/logb.db?mode=rwc"))
 }
 
 /// The file a SQLite URL points at, or `None` for any other backend.
@@ -245,5 +257,27 @@ mod tests {
     #[test]
     fn the_local_hour_is_in_range() {
         assert!(local_hour() < 24);
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn a_data_directory_with_url_punctuation_is_refused_rather_than_truncated() {
+        // `?` and `#` are legal in a Linux path. Silently cutting the path there would open a
+        // database somewhere other than where the operator said, which is the kind of failure
+        // that looks like data loss.
+        for bad in ["/data/we?rd", "/data/we#rd"] {
+            let err = sqlite_url(Path::new(bad)).unwrap_err().to_string();
+            assert!(err.contains(bad), "the message must name the directory: {err}");
+            assert!(err.contains("LOGB_DATABASE_URL"), "and say what to do about it: {err}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_data_directory_still_produces_the_url_it_always_did() {
+        assert_eq!(sqlite_url(Path::new("/data")).unwrap(), "sqlite:///data/logb.db?mode=rwc");
     }
 }

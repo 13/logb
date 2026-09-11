@@ -316,7 +316,7 @@ mod tests {
 
     async fn test_state(trust_proxy: bool) -> App {
         let dir = tempfile::tempdir().unwrap();
-        let db = db::connect(&db::sqlite_url(dir.path())).await.unwrap();
+        let db = db::connect(&db::sqlite_url(dir.path()).unwrap()).await.unwrap();
         let storage = crate::files::Storage::new(dir.path()).unwrap();
         let config = Config {
             data_dir: dir.path().to_path_buf(),

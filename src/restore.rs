@@ -110,7 +110,7 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
         )
         .into()
     })?;
-    let url = db::sqlite_url(data_dir);
+    let url = db::sqlite_url(data_dir)?;
     let pool = match db::connect(&url).await {
         Ok(pool) => pool,
         Err(e) => match ahead_schema_version(&e) {

@@ -96,9 +96,9 @@ impl Config {
     /// directory -- which is where LogB has always kept it. `LOGB_DATA_DIR` is unchanged
     /// either way: it still decides where blobs live, and it is still the default database
     /// location.
-    pub fn database_url(&self) -> String {
+    pub fn database_url(&self) -> Result<String, crate::db::BoxError> {
         match std::env::var("LOGB_DATABASE_URL") {
-            Ok(url) if !url.trim().is_empty() => url,
+            Ok(url) if !url.trim().is_empty() => Ok(url),
             _ => crate::db::sqlite_url(&self.data_dir),
         }
     }
