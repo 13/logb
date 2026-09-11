@@ -1,7 +1,7 @@
 <script lang="ts">
   /** Inline SVG rather than a sprite or a library: there are four of them, they must take the
    *  theme's colour through `currentColor`, and the project has no runtime dependencies. */
-  let { name, size = 20 }: { name: 'back' | 'settings' | 'search' | 'document'; size?: number } = $props();
+  let { name, size = 20 }: { name: 'back' | 'settings' | 'search' | 'document' | 'camera'; size?: number } = $props();
 </script>
 
 <svg
@@ -17,8 +17,11 @@
   {:else if name === 'search'}
     <circle cx="11" cy="11" r="7" />
     <path d="M21 21l-4.3-4.3" />
-  {:else}
+  {:else if name === 'document'}
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <path d="M14 2v6h6" />
+  {:else}
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
   {/if}
 </svg>

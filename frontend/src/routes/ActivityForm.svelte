@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
+  import Icon from '../lib/Icon.svelte';
   import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueuedActivity } from '../lib/api';
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
@@ -304,7 +305,7 @@
             {#if a.kind === 'photo'}
               <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" />
             {:else}
-              <span class="doc-chip">📄</span>
+              <span class="doc-chip"><Icon name="document" size={28} /></span>
             {/if}
             {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
           </div>

@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import { uploadQueued } from './api';
   import { t } from '../i18n';
+  import Icon from './Icon.svelte';
   import type { Attachment, Kind } from './types';
 
   let { objectId, activityId = null, onuploaded }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void } = $props();
@@ -70,7 +71,7 @@
     <button type="button" class="ghost" disabled={busy} onclick={() => el.click()}>
       {busy ? $t('activity.uploading') : `+ ${$t('activity.add-files')}`}
     </button>
-    <button type="button" class="ghost" disabled={busy} onclick={() => cam.click()}>📷 {$t('activity.take-photo')}</button>
+    <button type="button" class="ghost camera-btn" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</button>
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 </div>
@@ -78,4 +79,5 @@
 <style>
   .picker input { display: none; }
   .picker button { border: 1px dashed var(--border); width: 100%; }
+  .camera-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); }
 </style>
