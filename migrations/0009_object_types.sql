@@ -42,11 +42,18 @@ CREATE TABLE objects_new (
 
 -- The CASE below is mirrored by `object_type::from_legacy`; `the_sql_mapping_matches_the_rust_one`
 -- fails if the two drift. Exact matches only -- no substring guessing.
+--
+-- `lower()` in SQLite is ASCII-only: it leaves 'Ä' and 'Ö' untouched, while Rust's
+-- `to_lowercase()` folds them to 'ä'/'ö'. `gerät` and `körper` are the only two legacy words
+-- that contain either umlaut, so `category_key` folds just those two characters, once, and both
+-- CASE expressions below key off it instead of off `lower(trim(category))` directly -- one
+-- decides the type, the other decides whether the original text is preserved, and they must
+-- keep agreeing on what counts as a match.
 INSERT INTO objects_new (id, user_id, name, type, counter_unit, description, purchase_date,
                          purchase_price_cents, archived_at, cover_attachment_id, created_at,
                          updated_at, fuel_unit, client_uuid, deleted_at)
 SELECT id, user_id, name,
-       CASE lower(trim(category))
+       CASE category_key
          WHEN 'car' THEN 'car' WHEN 'auto' THEN 'car' WHEN 'pkw' THEN 'car' WHEN 'wagen' THEN 'car'
          WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike'
          WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike'
@@ -61,7 +68,7 @@ SELECT id, user_id, name,
        -- Nothing the user typed is destroyed by a migration they did not ask for: text that did
        -- not map is appended to the description, on its own line.
        CASE
-         WHEN lower(trim(category)) IN
+         WHEN category_key IN
            ('car','auto','pkw','wagen','e-bike','ebike','e bike','pedelec','bike','fahrrad','velo','rad',
             'motorcycle','motorrad','motorbike','home','haus','wohnung','appliance','gerät','tool','werkzeug',
             'body','körper')
@@ -72,7 +79,7 @@ SELECT id, user_id, name,
        END,
        purchase_date, purchase_price_cents, archived_at, cover_attachment_id,
        created_at, updated_at, fuel_unit, client_uuid, deleted_at
-FROM objects;
+FROM (SELECT *, REPLACE(REPLACE(lower(trim(category)), 'Ä', 'ä'), 'Ö', 'ö') AS category_key FROM objects);
 
 DROP TABLE objects;
 ALTER TABLE objects_new RENAME TO objects;

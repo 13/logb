@@ -33,7 +33,10 @@ async fn old_schema_with_rows() -> SqlitePool {
          INSERT INTO attachments (id, object_id, activity_id, file_id, kind, caption, created_at) \
            VALUES (1, 1, 1, 1, 'photo', 'a.png', '2026-02-01T00:00:00Z');
          INSERT INTO reminders (id, object_id, title, due_date, done_activity_id, created_at) \
-           VALUES (1, 1, 'Service', '2026-06-01', 1, '2026-02-01T00:00:00Z');",
+           VALUES (1, 1, 'Service', '2026-06-01', 1, '2026-02-01T00:00:00Z');\
+         INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) VALUES \
+           ('object', 'uuid-1', 'category', '2026-02-01T00:00:00Z', 'device-1'), \
+           ('object', 'uuid-1', 'name', '2026-02-01T00:00:00Z', 'device-1');",
     ).execute(&pool).await.unwrap();
     pool
 }
@@ -142,28 +145,54 @@ async fn the_sync_epoch_is_rotated() {
 
 /// The migration's SQL repeats the mapping that `object_type::from_legacy` holds in Rust. Two
 /// copies drift. This runs every word in the Rust table through the migration's own CASE
-/// expression and demands they agree.
+/// expression -- as written, uppercased, and with just its first letter capitalised -- and
+/// demands SQL and Rust agree on all three. The uppercased form is what catches an umlaut left
+/// unfolded: SQLite's `lower()` is ASCII-only, so 'GERÄT' stays 'GERÄT' rather than becoming
+/// 'gerät', while Rust's `to_lowercase()` folds it either way.
 #[tokio::test]
 async fn the_sql_mapping_matches_the_rust_one() {
     let pool = old_schema_with_rows().await;
     run_0009(&pool).await;
     for (word, expected) in logb::object_type::LEGACY.iter() {
-        sqlx::query("INSERT INTO objects (user_id, name, type, description, created_at, updated_at) \
-                     VALUES (1, 'probe', 'other', '', 'x', 'x')").execute(&pool).await.unwrap();
-        let mapped: String = sqlx::query_scalar(
-            "SELECT CASE lower(trim(?1)) \
-               WHEN 'car' THEN 'car' WHEN 'auto' THEN 'car' WHEN 'pkw' THEN 'car' WHEN 'wagen' THEN 'car' \
-               WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike' \
-               WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike' \
-               WHEN 'motorcycle' THEN 'motorcycle' WHEN 'motorrad' THEN 'motorcycle' WHEN 'motorbike' THEN 'motorcycle' \
-               WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' \
-               WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' \
-               WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' \
-               WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' \
-               ELSE 'other' END")
-            .bind(word).fetch_one(&pool).await.unwrap();
-        assert_eq!(&mapped, expected, "SQL and Rust disagree on {word}");
+        let mut chars = word.chars();
+        let capitalized = match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        };
+        for variant in [word.to_string(), word.to_uppercase(), capitalized] {
+            let mapped: String = sqlx::query_scalar(
+                "SELECT CASE REPLACE(REPLACE(lower(trim(?1)), 'Ä', 'ä'), 'Ö', 'ö') \
+                   WHEN 'car' THEN 'car' WHEN 'auto' THEN 'car' WHEN 'pkw' THEN 'car' WHEN 'wagen' THEN 'car' \
+                   WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike' \
+                   WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike' \
+                   WHEN 'motorcycle' THEN 'motorcycle' WHEN 'motorrad' THEN 'motorcycle' WHEN 'motorbike' THEN 'motorcycle' \
+                   WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' \
+                   WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' \
+                   WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' \
+                   WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' \
+                   ELSE 'other' END")
+                .bind(&variant).fetch_one(&pool).await.unwrap();
+            assert_eq!(&mapped, expected, "SQL and Rust disagree on {variant:?} (from {word})");
+        }
     }
+}
+
+/// `DELETE FROM field_clock WHERE entity = 'object' AND field = 'category'` targets a column
+/// that no longer exists. A statement that deleted the whole table would also pass a check that
+/// only confirms the `category` clock is gone, so this seeds a `name` clock for the same object
+/// too and demands it survives.
+#[tokio::test]
+async fn field_clocks_for_the_dropped_column_are_removed_and_others_survive() {
+    let pool = old_schema_with_rows().await;
+    run_0009(&pool).await;
+    let category_clock: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM field_clock WHERE entity = 'object' AND field = 'category'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(category_clock, 0, "the clock for the dropped column must be gone");
+    let name_clock: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM field_clock WHERE entity = 'object' AND field = 'name'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(name_clock, 1, "a clock for a surviving column must not be swept up with it");
 }
 
 /// A rebuild that omits a column drops it from live data with nothing reporting an error. This
