@@ -51,15 +51,15 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           # 0.2.0 pins exactly, 0.2 follows patches without editing compose, latest is for
-          # trying it out. metadata-action already withholds {{major}}.{{minor}} for a
-          # pre-release version on its own; the raw "latest" tag needs the same treatment
-          # spelled out explicitly, since type=raw is not semver-aware and would otherwise
-          # publish a release candidate (e.g. v0.2.0-rc1, which passes the plain-string version
-          # check above) as :latest, silently replacing the current stable image.
+          # trying it out. All three are semver-aware: metadata-action withholds both
+          # {{major}}.{{minor}} and (via latest=auto) :latest for a pre-release, so a tag like
+          # v0.2.0-rc1 publishes only 0.2.0-rc1 and cannot displace the current stable image.
+          # `latest` is stated through the flavor rather than a type=raw entry: raw is not
+          # semver-aware, and adding it alongside the automatic one emitted :latest twice.
+          flavor: latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       # Built and loaded locally first: a tag can point at any commit, including one ci.yml
       # never ran against, so the image is booted before anyone can pull it.
@@ -71,6 +71,10 @@ jobs:
           push: false
           load: true
           tags: logb:release-candidate
+          # The same labels the Push step applies. They land in the image config, which is what
+          # `imageid` hashes -- omitting them here made the two builds differ by construction,
+          # so the digest comparison below could never pass. It failed on the first real tag.
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
