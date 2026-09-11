@@ -46,9 +46,16 @@ CREATE TABLE objects_new (
 -- `lower()` in SQLite is ASCII-only: it leaves 'Ä' and 'Ö' untouched, while Rust's
 -- `to_lowercase()` folds them to 'ä'/'ö'. `gerät`, `haushaltsgerät` and `körper` are the only
 -- legacy words that contain either umlaut, so `category_key` folds just those two characters,
--- once, and both CASE expressions below key off it instead of off `lower(trim(category))` -- one
--- decides the type, the other decides whether the original text is preserved, and they must
--- keep agreeing on what counts as a match.
+-- once, and both CASE expressions below key off it rather than recomputing it -- one decides
+-- the type, the other decides whether the original text is preserved, and they must keep
+-- agreeing on what counts as a match.
+--
+-- Every trim below names its characters. Bare `trim(x)` in SQLite strips U+0020 and nothing
+-- else, while Rust's `.trim()` strips every whitespace character -- so a category of tab-auto-
+-- newline migrated to `other` here and imported as `car` through `api::export`, and the same
+-- data arriving two ways produced two different objects. Tab, newline and carriage return are
+-- what a keyboard or a pasted spreadsheet cell actually produces; the exotic Unicode spaces
+-- Rust also strips are not worth a longer expression.
 INSERT INTO objects_new (id, user_id, name, type, counter_unit, description, purchase_date,
                          purchase_price_cents, archived_at, cover_attachment_id, created_at,
                          updated_at, fuel_unit, client_uuid, deleted_at)
@@ -74,13 +81,14 @@ SELECT id, user_id, name,
             'appliance','gerät','geraet','haushaltsgerät','tool','werkzeug','maschine',
             'body','körper','koerper','health','gesundheit')
            THEN description
-         WHEN trim(category) = '' THEN description
-         WHEN trim(description) = '' THEN trim(category)
-         ELSE description || char(10) || trim(category)
+         WHEN trim(category, char(9)||char(10)||char(13)||' ') = '' THEN description
+         WHEN trim(description, char(9)||char(10)||char(13)||' ') = '' THEN trim(category, char(9)||char(10)||char(13)||' ')
+         ELSE description || char(10) || trim(category, char(9)||char(10)||char(13)||' ')
        END,
        purchase_date, purchase_price_cents, archived_at, cover_attachment_id,
        created_at, updated_at, fuel_unit, client_uuid, deleted_at
-FROM (SELECT *, REPLACE(REPLACE(lower(trim(category)), 'Ä', 'ä'), 'Ö', 'ö') AS category_key FROM objects);
+FROM (SELECT *, REPLACE(REPLACE(lower(trim(category, char(9)||char(10)||char(13)||' ')), 'Ä', 'ä'), 'Ö', 'ö') AS category_key
+        FROM objects);
 
 DROP TABLE objects;
 ALTER TABLE objects_new RENAME TO objects;

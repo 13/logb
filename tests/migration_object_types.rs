@@ -216,7 +216,7 @@ async fn every_legacy_word_maps_through_the_real_migration() {
             id += 1;
         }
     }
-    assert_eq!(seeded.len(), 4 * logb::object_type::LEGACY.len(), "every word gets every spelling");
+    assert_eq!(seeded.len(), 5 * logb::object_type::LEGACY.len(), "every word gets every spelling");
 
     run_0009(&pool).await;
 
@@ -236,14 +236,24 @@ async fn every_legacy_word_maps_through_the_real_migration() {
     }
 }
 
-/// The spellings one legacy word can arrive in: as written, shouted, sentence-cased, padded.
+/// The spellings one legacy word can arrive in: as written, shouted, sentence-cased, and
+/// padded -- with spaces, and with the tab and newline a pasted spreadsheet cell brings along.
+/// The last one is the one that separates SQLite's `trim()` from Rust's: bare `trim()` strips
+/// only U+0020, so without the character set the migration names, `\tauto\n` would migrate to
+/// `other` while importing the same text through `api::export` made it a `car`.
 fn spellings(word: &str) -> Vec<String> {
     let mut chars = word.chars();
     let capitalized = match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     };
-    vec![word.to_string(), word.to_uppercase(), capitalized, format!("  {word}  ")]
+    vec![
+        word.to_string(),
+        word.to_uppercase(),
+        capitalized,
+        format!("  {word}  "),
+        format!("\t{word}\r\n"),
+    ]
 }
 
 /// `DELETE FROM field_clock WHERE entity = 'object' AND field = 'category'` targets a column

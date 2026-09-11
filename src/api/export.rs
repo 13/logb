@@ -258,9 +258,11 @@ pub struct ImportCounts {
 /// `CASE` joins an unmapped `category` onto the row's `description`:
 ///
 /// ```sql
-/// WHEN trim(category) = '' THEN description            -- raw
-/// WHEN trim(description) = '' THEN trim(category)      -- category trimmed, description discarded
-/// ELSE description || char(10) || trim(category)       -- description RAW, category trimmed
+/// -- `ws` below is `char(9)||char(10)||char(13)||' '`, the character set the migration names
+/// -- so that SQLite's trim strips what Rust's `.trim()` strips.
+/// WHEN trim(category, ws) = '' THEN description           -- raw
+/// WHEN trim(description, ws) = '' THEN trim(category, ws) -- category trimmed, description dropped
+/// ELSE description || char(10) || trim(category, ws)      -- description RAW, category trimmed
 /// ```
 ///
 /// `description` is used raw everywhere -- `.trim()` is only ever consulted to test for
