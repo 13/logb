@@ -245,7 +245,13 @@ test('a queued write survives somebody else signing in on the same device', asyn
 
   // The admin's session ends with the entry unsaved, so the write is queued under their id.
   await context.clearCookies();
-  await page.getByRole('button', { name: 'Save' }).click();
+  // `dispatchEvent` rather than `click`, because this click destroys the thing being clicked:
+  // the save 401s, the unauthorized handler navigates to /login, and the button is detached
+  // mid-action. `click` re-checks that the element is attached and stable, sees it vanish,
+  // retries against a page that no longer has the button, and reports a 30s timeout for what
+  // was actually a success. That race is rare -- it failed once in CI and once locally out of
+  // dozens of runs -- and it is entirely an artefact of the assertion, not of the app.
+  await page.getByRole('button', { name: 'Save' }).dispatchEvent('click');
   await expect(page).toHaveURL(/\/login/);
 
   // Somebody else signs in on the same device. Their login flushes the outbox -- which must

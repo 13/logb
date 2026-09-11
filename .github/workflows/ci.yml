@@ -74,6 +74,12 @@ jobs:
   audit:
     name: dependency advisories
     runs-on: ubuntu-latest
+    # The action reports findings by creating a check run, which the default read-only
+    # GITHUB_TOKEN cannot do -- it fails with "Resource not accessible by integration" even
+    # when the audit itself found nothing, so the job's result says nothing about the audit.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v5
       - uses: rustsec/audit-check@v2
