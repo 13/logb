@@ -19,10 +19,15 @@ describe('object types', () => {
     expect(categoriesFor('car', 'fuel').filter((c) => c === 'fuel')).toHaveLength(1);
   });
 
-  it('every type has an icon and every category is reachable from some type', () => {
+  // `other` is defined as [...CATEGORIES], so scanning it made this assertion true by
+  // construction: a bogus member added to CATEGORIES left it green. Excluding it means the
+  // per-type tables are what gets tested -- a category no real type offers is unreachable from
+  // the UI, and this is the only thing that says so.
+  it('every type has an icon and every category is reachable from a real type', () => {
     for (const t of OBJECT_TYPES) expect(typeIcon(t)).toBeTruthy();
-    const reachable = new Set(OBJECT_TYPES.flatMap((t) => categoriesFor(t)));
-    for (const c of CATEGORIES) expect(reachable).toContain(c);
+    const specific = OBJECT_TYPES.filter((t) => t !== 'other');
+    const reachable = new Set(specific.flatMap((t) => categoriesFor(t)));
+    for (const c of CATEGORIES) expect(reachable, `no type but 'other' offers ${c}`).toContain(c);
   });
 
   // A key in one language and not the other ships a screen with a raw key on it.
