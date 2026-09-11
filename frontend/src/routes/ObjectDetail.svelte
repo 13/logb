@@ -5,6 +5,7 @@
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
+  import Icon from '../lib/Icon.svelte';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -159,7 +160,7 @@
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
     <TopBar title={object.name} backTo="/">
-      <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}>✎</button>
+      <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
 
     {#if object.cover_file_id}
@@ -209,9 +210,9 @@
 </main>
 
 <style>
-  .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius); }
+  .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
   .desc { white-space: pre-wrap; margin: 8px 0; }
   .info-actions { margin-top: 16px; }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius); background: var(--surface-2); color: var(--text); text-decoration: none; }
+  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
   .tabs .chip { margin-left: 4px; }
 </style>

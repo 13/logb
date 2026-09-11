@@ -21,7 +21,7 @@
           <span class="chip due">{object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}</span>
         {/if}
       </div>
-      <div class="muted">
+      <div class="muted tnum">
         {object.category}
         {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
         {#if object.stats.total_cost_cents > 0} · {money(object.stats.total_cost_cents, $currency, $locale)}{/if}
@@ -35,7 +35,7 @@
 <style>
   .card-row { display: flex; gap: 8px; align-items: stretch; }
   .card-row > .list-card { flex: 1; min-width: 0; }
-  .quicklog { flex: none; width: 48px; font-size: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius); }
+  .quicklog { flex: none; width: 48px; font-size: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius-md); }
   .list-card { display: flex; gap: 12px; align-items: center; text-align: left; width: 100%; background: var(--surface); border: 1px solid var(--border); }
   .cover { width: 64px; height: 64px; flex: none; }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }

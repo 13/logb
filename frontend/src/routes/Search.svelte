@@ -67,7 +67,7 @@
         {#each results.activities as a (a.id)}
           <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
             <span class="hit-title">{a.title}</span>
-            <span class="muted small">
+            <span class="muted small tnum">
               {a.object_name} · {fmtDate(a.date, $locale)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}
             </span>
           </button>

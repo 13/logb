@@ -4,6 +4,7 @@
   import { counter, fmtDate } from './format';
   import { locale, t } from '../i18n';
   import { splitReminders } from './reminder-form';
+  import Icon from './Icon.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
   let { objectId, unit, activities, onchanged }:
@@ -76,7 +77,7 @@
           {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
         </span>
       </div>
-      <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · ↻{/if}</div>
+      <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
       {#if !r.due && r.snoozed_until}
         <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so
              `when(r)` above can still read as overdue while the reminder is suppressed -- this
@@ -137,6 +138,7 @@
   .snoozed-until span { flex: 1; }
   .snoozed-until button { flex: none; }
   .notes { font-size: .9rem; white-space: pre-wrap; margin-top: 4px; }
+  .repeat-icon { display: inline-flex; vertical-align: -2px; }
   .actions { margin-top: 8px; }
   .more { margin-top: 16px; width: 100%; text-align: left; color: var(--muted); }
   .done { opacity: .7; }

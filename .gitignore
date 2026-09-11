@@ -4,6 +4,11 @@
 /.e2e-data
 frontend/node_modules
 frontend/dist/*
+# Tracked placeholder: src/spa.rs embeds frontend/dist/ with rust-embed, so the directory
+# must exist for the backend to compile -- a fresh clone that has never run a frontend
+# build still has to build. Vite empties dist/ on every build, which deleted this file and
+# let a `git add -A` commit the deletion (it happened once, in 6ed9399); frontend/public/
+# now carries a copy so each build puts it straight back.
 !frontend/dist/.gitkeep
 frontend/test-results
 frontend/playwright-report

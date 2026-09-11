@@ -251,6 +251,6 @@
   .row > button { flex: none; }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .danger-text { color: var(--danger); }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius); background: var(--surface-2); color: var(--text); text-decoration: none; }
+  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
   .version { margin-top: 24px; }
 </style>

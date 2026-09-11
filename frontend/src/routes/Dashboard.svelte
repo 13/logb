@@ -5,6 +5,7 @@
   import { go } from '../lib/router';
   import { t } from '../i18n';
   import type { MemObject, Reminder } from '../lib/types';
+  import Icon from '../lib/Icon.svelte';
 
   let objects = $state<MemObject[]>([]);
   let due = $state<Reminder[]>([]);
@@ -33,7 +34,7 @@
 
 <main>
   <TopBar title={$t('dash.title')} showSettings>
-    <button class="ghost" aria-label={$t('search.title')} onclick={() => go('/search')}>🔍</button>
+    <button class="ghost" aria-label={$t('search.title')} onclick={() => go('/search')}><Icon name="search" /></button>
   </TopBar>
 
   {#if due.length > 0}

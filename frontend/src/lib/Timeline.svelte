@@ -6,6 +6,7 @@
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
   import { CATEGORIES, type Activity, type Category, type CounterUnit } from './types';
+  import Icon from './Icon.svelte';
 
   let { objectId, activities, total, loadingMore = false, onmore, unit, category = $bindable('') }:
     {
@@ -41,7 +42,7 @@
             <span class="chip">{$t(`cat.${a.category}`)}</span>
             {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
           </div>
-          <div class="muted">
+          <div class="muted tnum">
             {fmtDate(a.date, $locale)}
             {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
             {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
@@ -50,7 +51,7 @@
           {#if a.attachments.length > 0}
             <div class="thumb-strip">
               {#each a.attachments.slice(0, 6) as att (att.id)}
-                {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip">📄</span>{/if}
+                {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
               {/each}
             </div>
           {/if}

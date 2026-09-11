@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api, fileUrl } from './api';
   import FilePicker from './FilePicker.svelte';
+  import Icon from './Icon.svelte';
   import { t } from '../i18n';
   import { toInput } from './object-form';
   import type { Attachment, MemObject, ObjectInput } from './types';
@@ -48,7 +49,7 @@
         {#if a.kind === 'photo'}
           <a href={fileUrl(a.file_id)} target="_blank" rel="noopener"><img class="thumb" src={fileUrl(a.file_id, true)} alt={a.caption || a.original_name} loading="lazy" /></a>
         {:else}
-          <a class="doc-icon" href={fileUrl(a.file_id)} target="_blank" rel="noopener">📄</a>
+          <a class="doc-icon" href={fileUrl(a.file_id)} target="_blank" rel="noopener" aria-label={a.caption || a.original_name}><Icon name="document" size={32} /></a>
         {/if}
         <figcaption>
           <span class="name">{a.caption || a.original_name}</span>
