@@ -1,4 +1,4 @@
-# PostgreSQL, part 2: the sync cursor must not skip
+# PostgreSQL, part 2: what SQLite's single writer was hiding
 
 Status: approved design, not yet implemented. Second of five. Depends on part one.
 
@@ -20,7 +20,24 @@ that refuses to save it.
 
 ## Scope
 
-The ordering guarantee for `changes` on PostgreSQL, and the test that proves it. Nothing else.
+The ordering guarantee for `changes` on PostgreSQL, and every other place the code assumes one
+writer. Implementing part one surfaced a second instance before this spec was revisited, so the
+scope is the class of defect, not the one example.
+
+**First-run setup can be raced.** `src/api/auth.rs:140` creates the first admin with
+`INSERT … SELECT … WHERE NOT EXISTS (SELECT 1 FROM users)`. That re-check inside the statement
+is atomic on SQLite because there is one writer. Under PostgreSQL's READ COMMITTED, two
+concurrent setup requests both see an empty table and **both succeed**, leaving two admin
+accounts — proven by the existing `concurrent_setup_creates_exactly_one_admin` test, which
+passes on SQLite and fails on PostgreSQL. On an instance reachable before it is set up, that is
+a way in.
+
+The fix is the same mechanism as the cursor's: serialise the operation with a
+transaction-scoped advisory lock on PostgreSQL, leaving SQLite untouched.
+
+Before implementing, **audit for the rest of the class** rather than fixing these two: every
+check-then-act that relies on the check and the act being one writer's work. Report what the
+audit found, including the places judged safe and why.
 
 ## Approach
 
