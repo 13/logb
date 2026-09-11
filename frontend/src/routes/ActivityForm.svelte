@@ -9,8 +9,9 @@
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { categoriesFor } from '../lib/object-types';
   import { locale, t } from '../i18n';
-  import { CATEGORIES, type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
+  import { type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -27,6 +28,10 @@
   let busy = $state(false);
   let allSuggestions = $state<TitleSuggestion[]>([]);
   const suggestions = $derived(suggestionsFor(allSuggestions, input.category));
+  // The object's vocabulary, plus whatever this entry already says. An entry logged before its
+  // object was re-typed must keep its own category in the list, or saving an untouched form
+  // would quietly re-file it.
+  const offered = $derived(categoriesFor(object?.type ?? 'other', input.category));
   /** True when `saved` exists only because the user attached a file, never because they saved. */
   let autoDraft = $state(false);
   /** False only while editing an existing activity whose GET hasn't resolved yet — blocks the
@@ -53,6 +58,13 @@
       const cached = isRejection(e) ? undefined : getCachedObject(oid);
       if (cached) object = cached;
       else error = (e as Error).message;
+    }
+    // A new entry's default category (`emptyActivity`'s 'maintenance') isn't offered by every
+    // type -- a `body` object offers no `maintenance` at all -- so the select would silently
+    // sit on an option that isn't in its own list. Editing overwrites `input` wholesale below,
+    // so this only ever matters for a genuinely new entry.
+    if (!aid && object && !categoriesFor(object.type).includes(input.category)) {
+      input.category = categoriesFor(object.type)[0];
     }
     try {
       allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
@@ -258,7 +270,7 @@
       <div class="field">
         <label for="c">{$t('activity.category')}</label>
         <select id="c" bind:value={input.category}>
-          {#each CATEGORIES as c}<option value={c}>{$t(`cat.${c}`)}</option>{/each}
+          {#each offered as c}<option value={c}>{$t(`cat.${c}`)}</option>{/each}
         </select>
       </div>
     </div>

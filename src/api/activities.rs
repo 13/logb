@@ -13,8 +13,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-pub const CATEGORIES: [&str; 7] =
-    ["maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other"];
+// Kept in sync with migration 0009's widened CHECK on activities.category, and with
+// frontend/src/lib/types.ts's CATEGORIES: four health categories alongside the original seven,
+// so a `body` object can log a symptom, treatment, appointment or medication.
+pub const CATEGORIES: [&str; 11] = [
+    "maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other",
+    "symptom", "treatment", "appointment", "medication",
+];
 
 pub fn router() -> Router<App> {
     Router::new()
