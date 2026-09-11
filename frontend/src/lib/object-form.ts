@@ -1,7 +1,7 @@
-import { OBJECT_TYPES, type MemObject, type ObjectInput } from './types';
+import type { MemObject, ObjectInput } from './types';
 
 export function emptyInput(): ObjectInput {
-  return { name: '', type: OBJECT_TYPES[0], counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false };
+  return { name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false };
 }
 
 export function toInput(o: MemObject): ObjectInput {

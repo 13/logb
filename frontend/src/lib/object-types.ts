@@ -1,7 +1,8 @@
 import { CATEGORIES, OBJECT_TYPES, type Category, type ObjectType } from './types';
+import type { IconName } from './Icon.svelte';
 
 /** What each type is, in one place: the icon a row shows, and what its entries can be. */
-const TABLE: Record<ObjectType, { icon: string; categories: Category[] }> = {
+const TABLE: Record<ObjectType, { icon: IconName; categories: Category[] }> = {
   car:        { icon: 'car',        categories: ['maintenance', 'repair', 'inspection', 'fuel', 'modification', 'purchase', 'other'] },
   e_bike:     { icon: 'e-bike',     categories: ['maintenance', 'repair', 'inspection', 'fuel', 'modification', 'purchase', 'other'] },
   bike:       { icon: 'bike',       categories: ['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'other'] },
@@ -14,7 +15,7 @@ const TABLE: Record<ObjectType, { icon: string; categories: Category[] }> = {
 };
 
 export { OBJECT_TYPES };
-export function typeIcon(t: ObjectType): string { return TABLE[t].icon; }
+export function typeIcon(t: ObjectType): IconName { return TABLE[t].icon; }
 
 /**
  * What the category select offers for this type -- plus `current`, always.

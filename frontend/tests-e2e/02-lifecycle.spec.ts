@@ -7,7 +7,7 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   // create the object
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Golf');
-  await page.getByLabel('Category').fill('car');
+  await page.getByLabel('Type').selectOption('car');
   await page.getByLabel('Counter').selectOption('km');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Golf' })).toBeVisible();
@@ -58,8 +58,9 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await expect(page.getByText(/Next reminder created/)).toBeVisible();
   await expect(page.getByText('119,500 km').first()).toBeVisible();
 
-  // the dashboard is clean again
+  // the dashboard is clean again, and shows the object's type icon
   await page.getByRole('button', { name: 'Back' }).click();
   await expect(page.getByText('Golf').first()).toBeVisible();
   await expect(page.getByText(/reminders? due/)).toHaveCount(0);
+  await expect(page.locator('.card-row svg').first()).toBeVisible();
 });

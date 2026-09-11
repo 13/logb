@@ -1,11 +1,9 @@
 <script lang="ts">
   /** Inline SVG rather than a sprite or a library: there are only a handful of them, they must
    *  take the theme's colour through `currentColor`, and the project has no runtime dependencies. */
-  let { name, size = 20 }: {
-    name: 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
-      | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object';
-    size?: number;
-  } = $props();
+  export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
+    | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object';
+  let { name, size = 20 }: { name: IconName; size?: number } = $props();
 </script>
 
 <svg

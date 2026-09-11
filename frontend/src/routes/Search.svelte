@@ -6,6 +6,8 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { SearchResults } from '../lib/types';
+  import { typeIcon } from '../lib/object-types';
+  import Icon from '../lib/Icon.svelte';
 
   let q = $state(new URLSearchParams(location.search).get('q') ?? '');
   let results = $state<SearchResults | null>(null);
@@ -56,7 +58,10 @@
         {#each results.objects as o (o.id)}
           <button class="hit" onclick={() => go(`/objects/${o.id}`)}>
             <span class="hit-title">{o.name}</span>
-            <span class="muted small">{o.category}{o.archived_at ? ` · ${$t('search.archived')}` : ''}</span>
+            <span class="muted small type-row">
+              <Icon name={typeIcon(o.type)} size={14} />
+              {$t(`type.${o.type}`)}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
+            </span>
           </button>
         {/each}
       </div>
@@ -83,4 +88,6 @@
   .hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--surface-2); }
   .hit-title { font-weight: 600; }
   .small { font-size: .8rem; }
+  .type-row { display: flex; align-items: center; gap: 4px; }
+  .type-row :global(svg) { flex: none; }
 </style>

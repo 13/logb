@@ -6,6 +6,7 @@
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
   import Icon from '../lib/Icon.svelte';
+  import { typeIcon } from '../lib/object-types';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -159,7 +160,7 @@
 <main>
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
-    <TopBar title={object.name} backTo="/">
+    <TopBar title={object.name} icon={typeIcon(object.type)} backTo="/">
       <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
 

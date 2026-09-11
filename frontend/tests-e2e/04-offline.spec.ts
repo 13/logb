@@ -7,7 +7,7 @@ test('an activity logged offline is replayed to the server exactly once', async 
   // create the object
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Trailer');
-  await page.getByLabel('Category').fill('trailer');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Trailer' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -60,7 +60,7 @@ test('an activity logged offline with an attachment replays both exactly once', 
   // create the object
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Generator');
-  await page.getByLabel('Category').fill('generator');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Generator' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -139,7 +139,7 @@ test('an activity edited offline never turns into a second activity', async ({ p
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Van');
-  await page.getByLabel('Category').fill('vehicle');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Van' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -187,7 +187,7 @@ test('a write made with an expired session is kept and sent after logging back i
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Mower');
-  await page.getByLabel('Category').fill('garden');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Mower' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -228,7 +228,7 @@ test('a queued write survives somebody else signing in on the same device', asyn
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Tractor');
-  await page.getByLabel('Category').fill('vehicle');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Tractor' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
@@ -300,7 +300,7 @@ test('a write queued before an offline boot still sends when the connection retu
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Chainsaw');
-  await page.getByLabel('Category').fill('tool');
+  await page.getByLabel('Type').selectOption('other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Chainsaw' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];

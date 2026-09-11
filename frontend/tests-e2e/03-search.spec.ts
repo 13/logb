@@ -9,7 +9,7 @@ import { signIn } from './helpers';
  */
 async function seed(page: import('@playwright/test').Page) {
   const object = await page.request.post('/api/objects', {
-    data: { name: 'Saab', category: 'vehicle', counter_unit: 'km' },
+    data: { name: 'Saab', type: 'car', counter_unit: 'km' },
   });
   expect(object.ok()).toBe(true);
   const { id } = (await object.json()) as { id: number };

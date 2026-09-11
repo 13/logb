@@ -6,7 +6,7 @@
   import { t } from '../i18n';
   import { centsToInput, parseMoney } from '../lib/format';
   import { emptyInput, toInput, validate } from '../lib/object-form';
-  import type { MemObject, ObjectInput } from '../lib/types';
+  import { OBJECT_TYPES, type MemObject, type ObjectInput } from '../lib/types';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
@@ -49,10 +49,10 @@
   <form onsubmit={submit}>
     <div class="field"><label for="n">{$t('object.name')}</label><input id="n" bind:value={input.name} required /></div>
     <div class="field">
-      <label for="c">{$t('object.category')}</label>
-      <input id="c" bind:value={input.category} list="cats" required />
-      <datalist id="cats"><option value="car"></option><option value="e-bike"></option><option value="bike"></option><option value="home"></option><option value="tool"></option><option value="motorcycle"></option></datalist>
-      <span class="hint">{$t('object.category-hint')}</span>
+      <label for="c">{$t('object.type')}</label>
+      <select id="c" bind:value={input.type}>
+        {#each OBJECT_TYPES as ty}<option value={ty}>{$t(`type.${ty}`)}</option>{/each}
+      </select>
     </div>
     <div class="field">
       <label for="u">{$t('object.counter')}</label>

@@ -18,8 +18,8 @@ describe('object form', () => {
     expect(toInput({ ...obj, archived_at: '2024-01-01T00:00:00Z' }).archived).toBe(true);
   });
 
-  it('starts empty', () => {
-    expect(emptyInput()).toEqual({ name: '', type: 'car', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false });
+  it('starts empty, defaulting to the catch-all type rather than the first in the list', () => {
+    expect(emptyInput()).toEqual({ name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false });
   });
 
   it('requires a name', () => {

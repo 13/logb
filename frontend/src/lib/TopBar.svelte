@@ -2,8 +2,10 @@
   import { back, go } from './router';
   import { onOutboxFlushed, outboxDeadCount, outboxPending } from './api';
   import { t } from '../i18n';
-  import Icon from './Icon.svelte';
-  let { title, backTo = null, showSettings = false, children }: { title: string; backTo?: string | null; showSettings?: boolean; children?: import('svelte').Snippet } = $props();
+  import Icon, { type IconName } from './Icon.svelte';
+  let { title, backTo = null, showSettings = false, icon = null, children }: {
+    title: string; backTo?: string | null; showSettings?: boolean; icon?: IconName | null; children?: import('svelte').Snippet;
+  } = $props();
 
   let pending = $state(0);
   let dead = $state(0);
@@ -33,7 +35,7 @@
   {#if backTo !== null}
     <button class="ghost" aria-label={$t('nav.back')} onclick={() => (backTo ? go(backTo) : back())}><Icon name="back" /></button>
   {/if}
-  <h1>{title}</h1>
+  <h1>{#if icon}<Icon name={icon} />{/if}{title}</h1>
   {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
   {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}
@@ -41,3 +43,7 @@
     <button class="ghost" aria-label={$t('nav.settings')} onclick={() => go('/settings')}><Icon name="settings" /></button>
   {/if}
 </header>
+
+<style>
+  h1 :global(svg) { vertical-align: -3px; margin-right: 6px; flex: none; }
+</style>
