@@ -1629,6 +1629,20 @@
           "other"
         ]
       },
+      "ObjectType": {
+        "type": "string",
+        "enum": [
+          "car",
+          "e_bike",
+          "bike",
+          "motorcycle",
+          "home",
+          "appliance",
+          "tool",
+          "body",
+          "other"
+        ]
+      },
       "Object": {
         "type": "object",
         "properties": {
@@ -1643,8 +1657,8 @@
           "name": {
             "type": "string"
           },
-          "category": {
-            "type": "string"
+          "type": {
+            "$ref": "#/components/schemas/ObjectType"
           },
           "counter_unit": {
             "type": [
@@ -1749,14 +1763,14 @@
         "type": "object",
         "required": [
           "name",
-          "category"
+          "type"
         ],
         "properties": {
           "name": {
             "type": "string"
           },
-          "category": {
-            "type": "string"
+          "type": {
+            "$ref": "#/components/schemas/ObjectType"
           },
           "counter_unit": {
             "type": [

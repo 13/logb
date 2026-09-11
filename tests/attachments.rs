@@ -47,7 +47,7 @@ async fn upload_photo_dedup_thumb_and_serve() {
     assert_eq!((t.width(), t.height()), (400, 300));
 
     // cover
-    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({ "name": "Golf", "category": "car", "counter_unit": "km", "cover_attachment_id": a1["id"] })).send().await.unwrap();
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({ "name": "Golf", "type": "car", "counter_unit": "km", "cover_attachment_id": a1["id"] })).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let obj: serde_json::Value = res.json().await.unwrap();
     assert_eq!(obj["cover_attachment_id"], a1["id"]);
@@ -118,7 +118,7 @@ async fn activity_delete_clears_stale_cover() {
 
     // set as cover
     let res = app.client.patch(app.url(&format!("/objects/{id}")))
-        .json(&json!({ "name": "Golf", "category": "car", "counter_unit": "km", "cover_attachment_id": photo["id"] }))
+        .json(&json!({ "name": "Golf", "type": "car", "counter_unit": "km", "cover_attachment_id": photo["id"] }))
         .send().await.unwrap();
     assert_eq!(res.status(), 200);
     let obj: serde_json::Value = res.json().await.unwrap();
@@ -172,7 +172,7 @@ async fn cover_must_belong_to_the_patched_object() {
         .send().await.unwrap().json().await.unwrap();
 
     let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
-        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": photo["id"] }))
+        .json(&json!({ "name": "Bike", "type": "car", "cover_attachment_id": photo["id"] }))
         .send().await.unwrap();
     assert_eq!(res.status(), 400, "another object's photo must not become this object's cover");
 
@@ -182,7 +182,7 @@ async fn cover_must_belong_to_the_patched_object() {
         .multipart(form(b"manual".to_vec(), "m.txt", "text/plain"))
         .send().await.unwrap().json().await.unwrap();
     let res = app.client.patch(app.url(&format!("/objects/{b_id}")))
-        .json(&json!({ "name": "Bike", "category": "car", "cover_attachment_id": doc["id"] }))
+        .json(&json!({ "name": "Bike", "type": "car", "cover_attachment_id": doc["id"] }))
         .send().await.unwrap();
     assert_eq!(res.status(), 400);
 }
@@ -201,20 +201,20 @@ async fn cover_can_be_set_kept_and_cleared() {
 
     let url = app.url(&format!("/objects/{id}"));
     let set: serde_json::Value = app.client.patch(&url)
-        .json(&json!({ "name": "Golf", "category": "car", "cover_attachment_id": photo["id"] }))
+        .json(&json!({ "name": "Golf", "type": "car", "cover_attachment_id": photo["id"] }))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(set["cover_attachment_id"], photo["id"]);
     assert_eq!(set["cover_file_id"], photo["file_id"]);
 
     // Field omitted: the cover survives an unrelated edit.
     let kept: serde_json::Value = app.client.patch(&url)
-        .json(&json!({ "name": "Golf GTI", "category": "car" }))
+        .json(&json!({ "name": "Golf GTI", "type": "car" }))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(kept["cover_attachment_id"], photo["id"]);
 
     // Explicit null: cleared.
     let cleared: serde_json::Value = app.client.patch(&url)
-        .json(&json!({ "name": "Golf GTI", "category": "car", "cover_attachment_id": null }))
+        .json(&json!({ "name": "Golf GTI", "type": "car", "cover_attachment_id": null }))
         .send().await.unwrap().json().await.unwrap();
     assert!(cleared["cover_attachment_id"].is_null(), "{cleared}");
     assert!(cleared["cover_file_id"].is_null(), "{cleared}");

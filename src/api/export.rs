@@ -134,7 +134,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+            "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
@@ -164,7 +164,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             None => None,
         };
         out.push(ObjectExport {
-            name: o.name, category: o.category, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
+            name: o.name, category: o.type_, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
             activities: acts.iter().map(|a| Ok(ActivityExport {
@@ -302,7 +302,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let now = db::now();
         let object_uuid = uuid::Uuid::new_v4().to_string();
         let (object_id,): (i64,) = sqlx::query_as(
-            "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
+            "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
              archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
@@ -384,7 +384,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
     for (oi, o) in data.objects.iter().enumerate() {
         let mut obj_input = ObjectInput {
             name: o.name.clone(),
-            category: o.category.clone(),
+            type_: o.category.clone(),
             counter_unit: o.counter_unit.clone(),
             fuel_unit: o.fuel_unit.clone(),
             description: o.description.clone(),
@@ -398,7 +398,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         // `ActivityInput::validate` only reads `object.counter_unit`; the rest of this
         // stand-in row is never inspected, since the real object doesn't exist yet.
         let object_stub = ObjectRow {
-            id: 0, user_id: 0, name: o.name.clone(), category: o.category.clone(),
+            id: 0, user_id: 0, name: o.name.clone(), type_: o.category.clone(),
             counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description: o.description.clone(),
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None,

@@ -150,7 +150,7 @@ async fn import_trims_padded_strings() {
 
     let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs[0]["name"], "Golf");
-    assert_eq!(objs[0]["category"], "car");
+    assert_eq!(objs[0]["type"], "car");
     let id = objs[0]["id"].as_i64().unwrap();
     let acts: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/activities"))).send().await.unwrap().json().await.unwrap();
     assert_eq!(acts[0]["title"], "Brakes");
@@ -294,7 +294,7 @@ async fn export_round_trips_fuel_quantity() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let res = app.client.post(app.url("/objects")).json(&json!({
-        "name": "Golf", "category": "car", "counter_unit": "km", "fuel_unit": "l"
+        "name": "Golf", "type": "car", "counter_unit": "km", "fuel_unit": "l"
     })).send().await.unwrap();
     let car: serde_json::Value = res.json().await.unwrap();
     let id = car["id"].as_i64().unwrap();

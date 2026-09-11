@@ -22,7 +22,9 @@ pub struct ObjectRow {
     pub id: i64,
     pub user_id: i64,
     pub name: String,
-    pub category: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "type")]
+    pub type_: String,
     pub counter_unit: Option<String>,
     pub fuel_unit: Option<String>,
     pub description: String,
@@ -54,7 +56,8 @@ pub struct ObjectOut {
 #[derive(Deserialize)]
 pub struct ObjectInput {
     pub name: String,
-    pub category: String,
+    #[serde(rename = "type")]
+    pub type_: String,
     #[serde(default)]
     pub counter_unit: Option<String>,
     #[serde(default)]
@@ -93,9 +96,11 @@ pub fn validate_date(s: &str) -> Result<(), AppError> {
 impl ObjectInput {
     pub(crate) fn validate(&mut self) -> Result<(), AppError> {
         self.name = self.name.trim().to_string();
-        self.category = self.category.trim().to_string();
         if self.name.is_empty() { return Err(AppError::BadRequest("name is required".into())); }
-        if self.category.is_empty() { return Err(AppError::BadRequest("category is required".into())); }
+        self.type_ = self.type_.trim().to_lowercase();
+        if !crate::object_type::is_valid(&self.type_) {
+            return Err(AppError::BadRequest("type is not one of the known object types".into()));
+        }
         if let Some(u) = &self.counter_unit {
             if !matches!(u.as_str(), "km" | "mi" | "h") {
                 return Err(AppError::BadRequest("counter_unit must be km, mi, h or null".into()));
@@ -117,7 +122,7 @@ impl ObjectInput {
 /// The object with `id` if it belongs to `user_id`; otherwise 404.
 pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<ObjectRow, AppError> {
     sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
          FROM objects WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
     )
@@ -209,13 +214,13 @@ pub struct ListQuery {
 async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ObjectOut>>, AppError> {
     let rows = if q.archived {
         sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+            "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
     } else {
         sqlx::query_as::<_, ObjectRow>(
-            "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+            "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
              FROM objects WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL ORDER BY name COLLATE NOCASE")
             .bind(user.id).fetch_all(&state.db).await?
@@ -236,13 +241,13 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
     let row = sqlx::query_as::<_, ObjectRow>(
-        "INSERT INTO objects (user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+        "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at, client_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) \
-         RETURNING id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+         RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at",
     )
-    .bind(user.id).bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
+    .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(&now).bind(&now)
     .bind(&object_uuid)
     .fetch_one(&mut *tx).await?;
@@ -281,7 +286,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // so a PATCH that rewrites a field with its existing value produces no `changes` row.
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
     if body.name != existing.name { changed.push(("name", json!(body.name))); }
-    if body.category != existing.category { changed.push(("category", json!(body.category))); }
+    if body.type_ != existing.type_ { changed.push(("type", json!(body.type_))); }
     if body.counter_unit != existing.counter_unit { changed.push(("counter_unit", json!(body.counter_unit))); }
     if body.fuel_unit != existing.fuel_unit { changed.push(("fuel_unit", json!(body.fuel_unit))); }
     if body.description != existing.description { changed.push(("description", json!(body.description))); }
@@ -296,10 +301,10 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "UPDATE objects SET name = ?, category = ?, counter_unit = ?, fuel_unit = ?, description = ?, purchase_date = ?, \
+        "UPDATE objects SET name = ?, type = ?, counter_unit = ?, fuel_unit = ?, description = ?, purchase_date = ?, \
          purchase_price_cents = ?, archived_at = ?, cover_attachment_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
     )
-    .bind(&body.name).bind(&body.category).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
+    .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
     .bind(cover_attachment_id).bind(db::now()).bind(id)
     .execute(&mut *tx).await?;

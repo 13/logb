@@ -112,7 +112,7 @@ impl TestApp {
         let res = client
             .post(self.url("/objects"))
             .json(&serde_json::json!({
-                "name": name, "category": "car", "counter_unit": unit,
+                "name": name, "type": "car", "counter_unit": unit,
                 "description": "", "purchase_date": null, "purchase_price_cents": null
             }))
             .send()

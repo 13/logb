@@ -71,10 +71,10 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let pattern = like_pattern(term);
 
     let objects = sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, category, counter_unit, fuel_unit, description, purchase_date, \
+        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
          FROM objects WHERE user_id = ?1 AND deleted_at IS NULL AND ( \
-           name LIKE ?2 ESCAPE '\\' OR category LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
+           name LIKE ?2 ESCAPE '\\' OR type LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
          ORDER BY archived_at IS NOT NULL, name COLLATE NOCASE LIMIT ?3",
     )
     .bind(user.id).bind(&pattern).bind(limit)

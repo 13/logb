@@ -89,9 +89,9 @@ fn binding(
 /// which says nothing about whether the value itself makes sense: `name = ""`,
 /// `purchase_price_cents = -999` and `purchase_date = "not-a-date"` are all shaped correctly and
 /// would sail through `binding` untouched. Only a handful of columns happen to carry a SQLite
-/// CHECK that catches this by accident (`counter_unit`, `fuel_unit`, `activities.category`,
-/// `attachments.kind`); everything else has nothing standing between a client and the row
-/// without this.
+/// CHECK that catches this by accident (`counter_unit`, `fuel_unit`, `objects.type`,
+/// `activities.category`, `attachments.kind`); everything else has nothing standing between a
+/// client and the row without this.
 ///
 /// Null is always left alone: it means "clear the field", exactly as `binding` already treats
 /// it, and whether a given column tolerates it is the schema's NOT NULL constraint to answer.
@@ -119,7 +119,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
     };
 
     match (entity, field) {
-        (Entity::Object, "name" | "category")
+        (Entity::Object, "name" | "type")
         | (Entity::Activity, "title")
         | (Entity::Reminder, "title") => {
             if text.trim().is_empty() {

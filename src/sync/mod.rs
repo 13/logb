@@ -104,7 +104,7 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
     use FieldType::{Integer, Text};
     match entity {
         Entity::Object => &[
-            ("name", Text), ("category", Text), ("counter_unit", Text), ("fuel_unit", Text),
+            ("name", Text), ("type", Text), ("counter_unit", Text), ("fuel_unit", Text),
             ("description", Text), ("purchase_date", Text),
             ("purchase_price_cents", Integer), ("archived_at", Text),
             ("cover_attachment_id", Integer),

@@ -496,6 +496,32 @@ async fn a_field_outside_the_whitelist_is_rejected() {
     assert_eq!(body["results"][0]["outcome"], "rejected");
 }
 
+/// A device that was offline across the upgrade arrives with an operation naming a column that
+/// no longer exists. It must be rejected on its own -- a batch that 500s is retried identically
+/// forever, which is how one bad operation once wedged a client permanently.
+#[tokio::test]
+async fn an_operation_naming_the_removed_field_is_rejected_not_fatal() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db).await.unwrap();
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-1", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "category", "value": "auto",
+          "edited_at": after_now(60), "device_id": "phone" },
+        { "client_op_id": "op-2", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "name", "value": "Golf VII",
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "one bad op must not fail the batch: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected");
+    assert_eq!(body["results"][1]["outcome"], "accepted", "the good op in the same batch applies");
+}
+
 #[tokio::test]
 async fn a_foreign_key_field_cannot_point_at_another_users_row() {
     let app = common::spawn().await;
@@ -944,7 +970,7 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
           "op": "set", "field": "counter_unit", "value": "furlongs",
           "edited_at": after_now(7776060), "device_id": "phone" },
         { "client_op_id": "ok-after", "entity": "object", "entity_uuid": uuid,
-          "op": "set", "field": "category", "value": "boat",
+          "op": "set", "field": "type", "value": "motorcycle",
           "edited_at": after_now(7776060), "device_id": "phone" }
     ]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
@@ -974,11 +1000,11 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
     // The transaction stayed usable: the ops either side of the failures really committed, and
     // the failing statements changed nothing.
     let row: (String, String, Option<String>, String) = sqlx::query_as(
-        "SELECT name, category, counter_unit, description FROM objects WHERE client_uuid = ?")
+        "SELECT name, type, counter_unit, description FROM objects WHERE client_uuid = ?")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(
         row,
-        ("Golf".into(), "boat".into(), Some("km".into()), "Mine".into()),
+        ("Golf".into(), "motorcycle".into(), Some("km".into()), "Mine".into()),
         "accepted ops committed; rejected ops wrote nothing"
     );
 
@@ -1909,7 +1935,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
         match legacy_table {
             "objects" => {
                 sqlx::query(
-                    "INSERT INTO objects (user_id, name, category, created_at, updated_at) \
+                    "INSERT INTO objects (user_id, name, type, created_at, updated_at) \
                      VALUES (?, 'Legacy', 'car', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
                     .bind(user_id).execute(&app.state.db).await.unwrap();
             }
@@ -2033,8 +2059,8 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
         { "client_op_id": "v-obj-name", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "name", "value": "   ",
           "edited_at": after_now(13046460), "device_id": "phone" },
-        { "client_op_id": "v-obj-category", "entity": "object", "entity_uuid": object_uuid,
-          "op": "set", "field": "category", "value": "",
+        { "client_op_id": "v-obj-type", "entity": "object", "entity_uuid": object_uuid,
+          "op": "set", "field": "type", "value": "",
           "edited_at": after_now(13046460), "device_id": "phone" },
         { "client_op_id": "v-obj-date", "entity": "object", "entity_uuid": object_uuid,
           "op": "set", "field": "purchase_date", "value": "not-a-date",
@@ -2088,11 +2114,11 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
 
     // None of it landed: the object, activity and reminder still hold what the REST creates
     // put there.
-    let (name, category, purchase_date, price): (String, String, Option<String>, Option<i64>) =
+    let (name, obj_type, purchase_date, price): (String, String, Option<String>, Option<i64>) =
         sqlx::query_as(
-            "SELECT name, category, purchase_date, purchase_price_cents FROM objects WHERE client_uuid = ?")
+            "SELECT name, type, purchase_date, purchase_price_cents FROM objects WHERE client_uuid = ?")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!((name.as_str(), category.as_str(), purchase_date, price), ("Golf", "car", None, None));
+    assert_eq!((name.as_str(), obj_type.as_str(), purchase_date, price), ("Golf", "car", None, None));
 
     let (date, title, cost, counter, qty): (String, String, Option<i64>, Option<i64>, Option<i64>) =
         sqlx::query_as(
@@ -2241,7 +2267,7 @@ async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     // instant, regardless of the phone's on-paper-later stamp -- a REST write always reflects
     // what just happened.
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
-        "name": "Browser Golf", "category": "car", "counter_unit": "km", "description": "",
+        "name": "Browser Golf", "type": "car", "counter_unit": "km", "description": "",
         "purchase_date": null, "purchase_price_cents": null
     })).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
@@ -2272,7 +2298,7 @@ async fn a_browser_create_edit_and_delete_are_all_visible_on_pull() {
         .bind(id).fetch_one(&app.state.db).await.unwrap();
 
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
-        "name": "Golf VII", "category": "car", "counter_unit": "km", "description": "",
+        "name": "Golf VII", "type": "car", "counter_unit": "km", "description": "",
         "purchase_date": null, "purchase_price_cents": null
     })).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
@@ -2315,7 +2341,7 @@ async fn rewriting_a_field_with_its_existing_value_logs_nothing() {
     assert_eq!(before, 1, "the create itself is logged");
 
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
-        "name": "Golf", "category": "car", "counter_unit": "km", "description": "",
+        "name": "Golf", "type": "car", "counter_unit": "km", "description": "",
         "purchase_date": null, "purchase_price_cents": null
     })).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
