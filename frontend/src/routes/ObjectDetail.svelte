@@ -194,7 +194,7 @@
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
-      <p class="muted">{object.category}</p>
+      <p class="muted">{object.type}</p>
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
       <h3>{$t('insights.title')}</h3>
