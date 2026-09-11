@@ -29,9 +29,10 @@ The pool becomes `sqlx::any::AnyPool`, with drivers installed at startup and the
 the backend. `AnyRow` covers every type this app stores — `i64`, `String`, their `Option`s —
 because dates, money and identifiers are already TEXT and INTEGER.
 
-**Placeholders.** Statements are written Postgres-style (`$1`) and rewritten to `?1` for SQLite.
-SQLite accepts numbered placeholders, so this is a textual mapping with no parsing, applied in
-one helper that every statement goes through.
+**Placeholders.** Statements are written Postgres-style (`$1`) and need no rewriting at all:
+SQLite's parameter syntax includes `$AAAA`, and sqlx binds them positionally, so one style
+serves both backends. Verified in this repository before this spec was written -- an insert and
+a select with `$1`/`$2` bind correctly on SQLite through sqlx 0.9.
 
 **The rest of the gap**, in full:
 
@@ -42,8 +43,16 @@ one helper that every statement goes through.
 | seeded rows using `randomblob` | — | the sync epoch is written by the app on first start |
 | `LIKE` for case-insensitive search | `ILIKE` | adapter |
 | `ORDER BY … COLLATE NOCASE` | `ORDER BY lower(…)` | adapter |
-| `PRAGMA foreign_keys` | always enforced | SQLite-only startup path |
+| `PRAGMA foreign_keys` | always enforced | SQLite-only after-connect hook |
 | `VACUUM INTO` | — | part five |
+
+**SQLite's pragmas cannot be expressed in a URL.** sqlx 0.9's SQLite URL parser accepts only
+`mode`, `cache`, `immutable` and `vfs`, and `AnyPool` connects by URL alone -- so `foreign_keys`,
+`journal_mode` and `busy_timeout` are applied by an after-connect hook to every connection the
+pool opens. This is the sharpest edge in the port: losing `foreign_keys` raises no error and
+fails no test, it just stops `ON DELETE CASCADE` from happening, and the first symptom is an
+attachment that outlived the object it belonged to. It gets its own test, asserting a real
+cascade rather than the pragma's value.
 
 ## Schema
 
@@ -79,8 +88,9 @@ SQLite, and a port that does not run them against PostgreSQL is an assumption.
 - One test asserts the two schemas agree on table and column names, so a migration written for
   one backend and forgotten on the other fails immediately rather than at runtime on somebody's
   instance.
-- The placeholder rewrite is a pure function and gets unit tests, including a statement
-  containing a `$` inside a string literal, which must not be rewritten.
+- No placeholder rewrite exists to test. The conversion of the 135 existing statements from
+  `?` to `$n` is a one-time edit, and the suite is what proves each bind is still numbered
+  correctly.
 - **Search returns the same rows on both backends.** SQLite's `LIKE` is case-insensitive for
   ASCII only; PostgreSQL's `ILIKE` follows the server's locale, so `Ölwechsel` and `ölwechsel`
   can match on one and not the other. A test searches for mixed-case and accented terms seeded
