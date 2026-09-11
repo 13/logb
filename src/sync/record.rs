@@ -224,7 +224,7 @@ pub(crate) async fn cascade_object(
 ) -> Result<Vec<(Entity, String)>, AppError> {
     let mut cascaded = Vec::new();
     // Of the three cascaded tables, only `activities` carries `updated_at`
-    // (migrations/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
+    // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
     // bump on those two.
     for (entity, has_updated_at) in
         [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]

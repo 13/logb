@@ -15,7 +15,7 @@ async fn old_schema_with_rows() -> SqlitePool {
         "0004_reminder_snooze.sql", "0005_client_op_id.sql", "0006_api_tokens.sql",
         "0007_sync.sql", "0008_sync_epoch.sql",
     ] {
-        let sql = std::fs::read_to_string(format!("migrations/{file}")).unwrap();
+        let sql = std::fs::read_to_string(format!("migrations/sqlite/{file}")).unwrap();
         sqlx::raw_sql(AssertSqlSafe(sql)).execute(&pool).await.unwrap();
     }
     sqlx::raw_sql(
@@ -42,7 +42,7 @@ async fn old_schema_with_rows() -> SqlitePool {
 }
 
 async fn run_0009(pool: &SqlitePool) {
-    let sql = std::fs::read_to_string("migrations/0009_object_types.sql").unwrap();
+    let sql = std::fs::read_to_string("migrations/sqlite/0009_object_types.sql").unwrap();
     sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await.unwrap();
 }
 

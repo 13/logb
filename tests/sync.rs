@@ -1770,7 +1770,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
 
 /// `apply_op`'s own-row tombstone `UPDATE` set only `deleted_at`, while the REST delete
 /// handlers also stamp `updated_at`. Only `objects` and `activities` carry that column
-/// (`reminders`, `attachments` and `files` do not -- see `migrations/0001_init.sql`), so this
+/// (`reminders`, `attachments` and `files` do not -- see `migrations/sqlite/0001_init.sql`), so this
 /// bumps the object's own row and, through `cascade_object`, the cascaded activity's row too.
 #[tokio::test]
 async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_activities() {

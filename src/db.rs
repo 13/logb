@@ -89,9 +89,7 @@ pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
     let pool = pool_options(url, if url.starts_with("sqlite:") { 4 } else { 16 }, 5_000)
         .connect(url)
         .await?;
-    // Task 3 replaces this with `migrator(url)`, choosing between the SQLite and PostgreSQL
-    // migration sets at runtime. Until then there is one set, and it is SQLite's.
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    migrator(url).run(&pool).await?;
     Ok(pool)
 }
 
@@ -214,12 +212,28 @@ pub fn local_hour() -> u32 {
     Utc::now().with_timezone(&timezone()).hour()
 }
 
-/// How many migrations this binary carries.
+/// Which set of migrations this URL needs.
 ///
-/// `sqlx::migrate!` embeds the directory at compile time, so this is what the running code
-/// believes the schema should be -- the number the health check compares the database against.
-pub fn expected_migrations() -> usize {
-    sqlx::migrate!("./migrations").iter().count()
+/// `migrate!` embeds the files at compile time, so both directories ship in the binary and the
+/// only choice made here is which embedded set to run. The two sets are not translations of
+/// each other: SQLite keeps its nine historical steps because existing databases have to be
+/// moved forward one at a time, while a fresh PostgreSQL database has no history to replay and
+/// gets today's schema in a single file. `tests/schema_parity.rs` is what keeps them agreeing.
+pub fn migrator(url: &str) -> sqlx::migrate::Migrator {
+    if url.starts_with("sqlite:") {
+        sqlx::migrate!("./migrations/sqlite")
+    } else {
+        sqlx::migrate!("./migrations/postgres")
+    }
+}
+
+/// How many migrations this binary carries for `url`'s backend.
+///
+/// Backend-dependent because the two sets have different lengths on purpose -- nine steps of
+/// SQLite history against one PostgreSQL schema file -- so the health check must compare a
+/// database against its own set, not the other one's.
+pub fn expected_migrations(url: &str) -> usize {
+    migrator(url).iter().count()
 }
 
 #[cfg(test)]

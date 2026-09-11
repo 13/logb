@@ -189,7 +189,7 @@ pub fn new_api_token() -> String {
     format!("{TOKEN_PREFIX}{}", new_token())
 }
 
-/// Only the hash is stored (see migrations/0006_api_tokens.sql). SHA-256 rather than a password
+/// Only the hash is stored (see migrations/sqlite/0006_api_tokens.sql). SHA-256 rather than a password
 /// hash: this is a 256-bit random value, not something a user chose, so there is nothing for a
 /// dictionary to attack and no reason to make verification -- which happens on every single
 /// request -- deliberately slow.

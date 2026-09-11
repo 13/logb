@@ -28,7 +28,7 @@ pub enum Legacy {
 /// `geraet` and `koerper` sit beside `gerät` and `körper` on purpose: a phone keyboard set to
 /// English has no umlauts, which is the likeliest way this data was typed in the first place.
 ///
-/// `migrations/0009_object_types.sql` repeats this table in SQL and
+/// `migrations/sqlite/0009_object_types.sql` repeats this table in SQL and
 /// `tests/migration_object_types.rs` runs every word here through the real migration, so the
 /// two cannot drift.
 pub const LEGACY: [(&str, &str); 32] = [

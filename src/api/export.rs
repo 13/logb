@@ -282,7 +282,7 @@ fn join_unmapped(description: &str, extra: &str) -> String {
 }
 
 /// Resolves an imported object's type and description from whichever of `type`/`category` the
-/// archive carries, applying the same rule `migrations/0009_object_types.sql` applied to
+/// archive carries, applying the same rule `migrations/sqlite/0009_object_types.sql` applied to
 /// existing rows when it did this once for the whole database:
 ///
 /// - A present `type` wins outright, `category` (if also present) is ignored, whether or not

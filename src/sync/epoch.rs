@@ -1,4 +1,4 @@
-//! The identity of the database a cursor refers to. See `migrations/0008_sync_epoch.sql`.
+//! The identity of the database a cursor refers to. See `migrations/sqlite/0008_sync_epoch.sql`.
 
 use crate::error::AppError;
 

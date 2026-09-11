@@ -255,7 +255,7 @@ pub async fn apply_op(
             }
 
             let now = crate::db::now();
-            // Only `objects` and `activities` carry `updated_at` (migrations/0001_init.sql);
+            // Only `objects` and `activities` carry `updated_at` (migrations/sqlite/0001_init.sql);
             // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
             // alongside `deleted_at` wherever the column exists, so this has to too, or a row
             // tombstoned over sync keeps whatever `updated_at` it had before the delete.

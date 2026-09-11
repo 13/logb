@@ -76,7 +76,7 @@ but before that row is written leaves the migration applied but unrecorded, and 
 tries to run it again and fails on tables that already exist. Recovering from that is a manual
 insert of the one missing row (`version` 9, `description` "object types", `success` 1,
 `execution_time`, and a `checksum`) — the checksum has to be the exact SHA-384 hash of
-`migrations/0009_object_types.sql`'s contents, since sqlx compares it against the file it ships
+`migrations/sqlite/0009_object_types.sql`'s contents, since sqlx compares it against the file it ships
 with and refuses to start on a mismatch. This is rare and narrow, but if it happens, restoring
 the backup you just took is simpler than reconstructing the row by hand.
 
