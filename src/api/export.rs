@@ -121,6 +121,15 @@ pub struct ExportQuery {
     pub object_id: Option<i64>,
 }
 
+/// The app icon, taken from the embedded SPA build rather than a second copy in the tree.
+///
+/// Absent in a backend-only build (`frontend/dist/` empty, as in a plain `cargo test` before
+/// the frontend has ever been built), which is not a reason to fail an export -- the archive is
+/// simply without it, the same way a blob missing from disk is skipped below.
+fn icon_bytes() -> Option<Vec<u8>> {
+    crate::spa::Assets::get("icon.svg").map(|f| f.data.into_owned())
+}
+
 async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<ExportQuery>) -> Result<Response, AppError> {
     let objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
@@ -191,6 +200,10 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
         w.write_all(&json)?;
+        if let Some(icon) = icon_bytes() {
+            w.start_file("icon.svg", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
+            w.write_all(&icon)?;
+        }
         for sha in &blobs {
             // A blob missing from disk is storage corruption, not a reason to fail the whole
             // export; the entry is simply absent from the archive, as it was before.

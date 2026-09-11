@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[derive(Embed)]
 #[folder = "frontend/dist/"]
-struct Assets;
+pub(crate) struct Assets;
 
 /// The result of canonicalising a request path.
 struct NormalizedPath {

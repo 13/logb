@@ -59,7 +59,10 @@ async fn export_import_round_trip() {
     let zip_bytes = res.bytes().await.unwrap().to_vec();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes.clone())).unwrap();
     assert!(z.by_name("data.json").is_ok());
-    assert_eq!(z.len(), 3, "data.json + 2 blobs");
+    // The icon rides along so an archive is recognisable as logby's at a glance. It is the
+    // embedded SPA asset, not a second copy -- see `export::icon_bytes`.
+    assert!(z.by_name("icon.svg").is_ok(), "the archive carries the logo");
+    assert_eq!(z.len(), 4, "data.json + icon.svg + 2 blobs");
 
     // import into a different user
     let anna = app.create_user_client("anna", "password123").await;
