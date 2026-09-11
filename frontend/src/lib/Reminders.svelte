@@ -77,7 +77,7 @@
           {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
         </span>
       </div>
-      <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon"><Icon name="repeat" size={14} /></span>{/if}</div>
+      <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
       {#if !r.due && r.snoozed_until}
         <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so
              `when(r)` above can still read as overdue while the reminder is suppressed -- this
