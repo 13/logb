@@ -41,3 +41,26 @@ test('an entry keeps its own category after its object is re-typed', async ({ pa
   await expect(page.getByLabel('Category')).toHaveValue('fuel');
   await expect(page.getByLabel('Category').locator('option')).toContainText(['Fuel / charge']);
 });
+
+test('a car is not offered health filters, and keeps a chip for what it actually has', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Chip test wagon');
+  await page.getByLabel('Type').selectOption('car');
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  const chips = page.locator('.chips button');
+  await expect(chips).not.toContainText(['Symptom']);
+  await expect(chips).toContainText(['Fuel / charge']);
+
+  // An entry whose category the type no longer offers still has a chip, or its rows become
+  // unreachable by filtering.
+  await page.getByRole('button', { name: /Log activity/ }).click();
+  await page.getByLabel('Category').selectOption('fuel');
+  await page.getByLabel('Title').fill('Filter probe');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByLabel('Type').selectOption('body');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.locator('.chips button')).toContainText(['Fuel / charge']);
+});
