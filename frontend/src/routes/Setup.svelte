@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { go } from '../lib/router';
+  import Logo from '../lib/Logo.svelte';
   import { t } from '../i18n';
   import { loadSession } from '../stores/session';
   let username = $state('');
@@ -27,6 +28,7 @@
 </script>
 
 <main>
+  <Logo />
   <h1>{$t('setup.title')}</h1>
   <p class="muted">{$t('setup.intro')}</p>
   <form onsubmit={submit}>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { go } from '../lib/router';
+  import Logo from '../lib/Logo.svelte';
   import { t } from '../i18n';
   import { login } from '../stores/session';
   let username = $state('');
@@ -20,6 +21,7 @@
 </script>
 
 <main>
+  <Logo />
   <h1>{$t('login.title')}</h1>
   <form onsubmit={submit}>
     <div class="field"><label for="u">{$t('login.username')}</label><input id="u" bind:value={username} autocomplete="username" required /></div>
