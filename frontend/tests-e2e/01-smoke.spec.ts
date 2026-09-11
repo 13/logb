@@ -4,7 +4,11 @@ import { signIn } from './helpers';
 test('first run leads to setup, then the dashboard', async ({ page }) => {
   await page.goto('/');
   await expect(page).toHaveTitle('logby');
-  await expect(page.getByRole('img', { name: 'logby' })).toBeVisible();
+  const logo = page.getByRole('img', { name: 'logby' });
+  await expect(logo).toBeVisible();
+  // A broken <img> is still "visible" at its attribute size; naturalWidth is 0 only when the
+  // bytes never decoded, which is what catches /icon.svg falling out of the build.
+  await expect.poll(() => logo.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole('heading', { name: /Welcome to logby/ })).toBeVisible();
   await signIn(page);
   await expect(page.getByRole('heading', { name: /My objects/ })).toBeVisible();

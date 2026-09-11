@@ -18,6 +18,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # rust-embed needs frontend/dist/ at compile time, and tests/export.rs expects the app
+      # icon in it. Cheaper than a node toolchain, and exercises the real code path.
+      - run: mkdir -p frontend/dist && cp frontend/public/icon.svg frontend/dist/
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
