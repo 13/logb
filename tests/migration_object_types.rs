@@ -94,6 +94,45 @@ async fn the_new_categories_are_accepted_and_nonsense_is_not() {
     assert!(bad.is_err(), "the CHECK must still reject an unknown category");
 }
 
+/// The two `CHECK` lists in the migration are the schema's copy of `object_type::OBJECT_TYPES`
+/// and `api::activities::CATEGORIES`, and nothing paired them: deleting `'body'` from the
+/// objects CHECK, or `'medication'` from the activities one, left all 287 tests green. A type
+/// or category the constants offer but the schema rejects is not a stale list -- it is a 500
+/// the moment a user picks it from a select the app itself built.
+///
+/// So this puts every member of both constants through an actual INSERT against a migrated
+/// database, which is the only thing that exercises a CHECK.
+#[tokio::test]
+async fn the_schema_accepts_every_type_and_category_the_code_offers() {
+    let pool = old_schema_with_rows().await;
+    run_0009(&pool).await;
+
+    for t in logb::object_type::OBJECT_TYPES.iter() {
+        sqlx::query(
+            "INSERT INTO objects (user_id, name, type, created_at, updated_at) \
+             VALUES (1, ?1, ?2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
+            .bind(format!("a {t}")).bind(t)
+            .execute(&pool).await
+            .unwrap_or_else(|e| panic!("the objects CHECK rejects the type {t:?} the picker offers: {e}"));
+    }
+
+    for c in logb::api::activities::CATEGORIES.iter() {
+        sqlx::query(
+            "INSERT INTO activities (object_id, date, category, title, created_at, updated_at) \
+             VALUES (1, '2026-03-01', ?1, ?2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
+            .bind(c).bind(format!("an {c}"))
+            .execute(&pool).await
+            .unwrap_or_else(|e| panic!("the activities CHECK rejects the category {c:?} the form offers: {e}"));
+    }
+
+    // And the CHECKs are still CHECKs, not columns that accept anything.
+    assert!(
+        sqlx::query("INSERT INTO objects (user_id, name, type, created_at, updated_at) VALUES (1, 'x', 'vehicle', 'x', 'x')")
+            .execute(&pool).await.is_err(),
+        "the objects CHECK must still reject a type nobody defined",
+    );
+}
+
 #[tokio::test]
 async fn the_indexes_survive() {
     let pool = old_schema_with_rows().await;
