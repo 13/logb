@@ -50,8 +50,18 @@ test('a car is not offered health filters, and keeps a chip for what it actually
   await page.getByRole('button', { name: 'Save' }).click();
 
   const chips = page.locator('.chips button');
-  await expect(chips).not.toContainText(['Symptom']);
+  // Order matters here, and both lines are load-bearing.
+  //
+  // The presence assertion comes FIRST because it is the one that waits: a bare
+  // `toHaveCount(0)` is satisfied while the row simply has not rendered yet, so it passes
+  // during navigation and never retries -- it cannot fail. Asserting a chip that must exist
+  // forces the row to be there before absence means anything.
+  //
+  // And absence is counted, not negated: `expect(locator).not.toContainText([...])` passes even
+  // when the text IS present, because the array form negates a list-wide comparison rather than
+  // membership.
   await expect(chips).toContainText(['Fuel / charge']);
+  await expect(chips.filter({ hasText: 'Symptom' })).toHaveCount(0);
 
   // An entry whose category the type no longer offers still has a chip, or its rows become
   // unreachable by filtering.
