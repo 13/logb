@@ -3,9 +3,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 
-// The four that were there originally, plus the variation selector that often trails an emoji
-// in source, plus the arrow/dingbat blocks a couple of icon-like emoji (📷, 📄, ...) don't cover
-// on their own but that earlier sweeps still used loosely as "emoji".
+// Wider than "emoji" strictly means, deliberately: the pictographic block covers 📷 and 📄,
+// and the arrow and dingbat blocks are here for ← and ⚙, which are not emoji by any Unicode
+// property but were standing in for icons all the same. The working definition is "a glyph used
+// as an icon", and the pattern matches that rather than Emoji_Presentation.
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{FE0F}]/u;
 
 const SRC_ROOT = fileURLToPath(new URL('../src', import.meta.url));
@@ -27,11 +28,13 @@ function svelteFiles(dir: string): string[] {
 // Files that legitimately contain a character the EMOJI pattern matches, but that isn't an
 // emoji standing in for an icon -- excluded explicitly rather than narrowing the pattern.
 //
-// `char` names the EXACT known glyph the exception is for. The main test below only skips that
-// one occurrence, not the whole file, and the self-check confirms `char` specifically is still
-// there (not just that *something* EMOJI-shaped is) -- so a file that stops needing its
-// exception fails loudly, and a *different* glyph later added to an excluded file isn't
-// silently covered by someone else's exemption.
+// `char` names the EXACT known glyph the exception is for, and the exemption is scoped to that
+// character rather than to the file: every occurrence of `char` is stripped before scanning, so
+// a *different* glyph later added to an excluded file still fails. (A second, genuinely rendered
+// `→` in App.svelte would be excused -- accepted, because the alternative is pinning a line
+// number that ordinary edits would churn.) The self-check then confirms `char` specifically is
+// still present, so a file that stops needing its exception fails loudly instead of sitting
+// there unused.
 const EXCLUSIONS: Record<string, { char: string; reason: string }> = {
   'App.svelte': {
     char: '→',
