@@ -7,6 +7,7 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
 use crate::files;
+use crate::object_type::{self, Legacy};
 use crate::state::App;
 use crate::sync::{record, Entity};
 use axum::body::{Body, Bytes};
@@ -73,7 +74,14 @@ struct ReminderExport {
 #[derive(Serialize, Deserialize)]
 struct ObjectExport {
     name: String,
-    category: String,
+    /// Archives written before object types carry `category` instead. Both are optional (and
+    /// omitted from an archive this app writes today, via `skip_serializing_if`) so one archive
+    /// format does not become two structs; on import, exactly one is expected to be present --
+    /// see `resolve_type`, which decides what happens otherwise.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    type_: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
     counter_unit: Option<String>,
     #[serde(default)]
     fuel_unit: Option<String>,
@@ -164,7 +172,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             None => None,
         };
         out.push(ObjectExport {
-            name: o.name, category: o.type_, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
+            name: o.name, type_: Some(o.type_), category: None, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
             activities: acts.iter().map(|a| Ok(ActivityExport {
@@ -246,6 +254,43 @@ pub struct ImportCounts {
     pub reminders: usize,
 }
 
+/// Resolves an imported object's type and description from whichever of `type`/`category` the
+/// archive carries, applying the same rule `migrations/0009_object_types.sql` applied to
+/// existing rows when it did this once for the whole database:
+///
+/// - A present, legal `type` wins outright, `category` (if also present) is ignored. This is an
+///   archive written by a current LogB, or a hand-edited one that supplied both -- either way
+///   `type` is the field that describes the schema this app now has, so it is authoritative.
+/// - A present but illegal `type` (a typo, or a future value this build does not know) falls
+///   back to `other` rather than being guessed at -- exactly how an illegal `category` word is
+///   handled below. `description` is left untouched: unlike an unmapped legacy word, an illegal
+///   `type` string is not free text worth preserving in the description.
+/// - No `type` at all means a pre-object-types archive; `category` is looked up the same way the
+///   migration's first `CASE` did. Text that maps is silently translated (`object_type::LEGACY`
+///   agrees with the migration's word list). Text that does not map is appended to the
+///   description on its own line, so nothing the user typed is destroyed by an import they did
+///   not know would touch this field -- the same rule the migration's second `CASE` applied.
+/// - Neither field present is a corrupt or hand-written archive; `other` with the description
+///   untouched, same as an illegal `type`.
+fn resolve_type(o: &ObjectExport) -> (String, String) {
+    match (o.type_.as_deref(), o.category.as_deref()) {
+        (Some(t), _) if object_type::is_valid(t) => (t.to_string(), o.description.clone()),
+        (Some(_), _) => ("other".to_string(), o.description.clone()),
+        (None, Some(c)) => match object_type::from_legacy(c) {
+            Legacy::Mapped(t) => (t.to_string(), o.description.clone()),
+            Legacy::Unmapped => {
+                let c = c.trim();
+                let d = o.description.trim();
+                let joined = if c.is_empty() { d.to_string() }
+                    else if d.is_empty() { c.to_string() }
+                    else { format!("{d}\n{c}") };
+                ("other".to_string(), joined)
+            }
+        },
+        (None, None) => ("other".to_string(), o.description.clone()),
+    }
+}
+
 /// Reads one archive entry into `out`, drawing from a decompression budget shared by the whole
 /// archive and failing with 413 the moment it would be exceeded.
 ///
@@ -301,10 +346,11 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     for o in data.objects {
         let now = db::now();
         let object_uuid = uuid::Uuid::new_v4().to_string();
+        let (ty, description) = resolve_type(&o);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
              archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id")
-            .bind(user.id).bind(o.name.trim()).bind(o.category.trim()).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&o.description)
+            .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
             .bind(&object_uuid)
             .fetch_one(&mut *tx).await?;
@@ -382,12 +428,16 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
 /// what `POST /objects`, `POST .../activities` and `POST .../reminders` already enforce.
 fn validate_import(data: &Export) -> Result<(), AppError> {
     for (oi, o) in data.objects.iter().enumerate() {
+        // `resolve_type` is pure, so calling it again at insert time (the loop in `import`)
+        // reaches the same answer; computed once here so `obj_input` and `object_stub` below
+        // -- both stand-ins for the same object -- can't disagree with each other.
+        let (ty, description) = resolve_type(o);
         let mut obj_input = ObjectInput {
             name: o.name.clone(),
-            type_: o.category.clone(),
+            type_: ty.clone(),
             counter_unit: o.counter_unit.clone(),
             fuel_unit: o.fuel_unit.clone(),
-            description: o.description.clone(),
+            description: description.clone(),
             purchase_date: o.purchase_date.clone(),
             purchase_price_cents: o.purchase_price_cents,
             archived: None,
@@ -398,8 +448,8 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         // `ActivityInput::validate` only reads `object.counter_unit`; the rest of this
         // stand-in row is never inspected, since the real object doesn't exist yet.
         let object_stub = ObjectRow {
-            id: 0, user_id: 0, name: o.name.clone(), type_: o.category.clone(),
-            counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description: o.description.clone(),
+            id: 0, user_id: 0, name: o.name.clone(), type_: ty,
+            counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description,
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),

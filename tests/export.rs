@@ -30,6 +30,85 @@ fn export_shell(object: serde_json::Value) -> serde_json::Value {
     json!({ "version": 1, "exported_at": "2024-01-01T00:00:00Z", "currency": "EUR", "objects": [object] })
 }
 
+/// Zips a version-1 archive holding one object: `fields` overlaid onto `base_object()`, the
+/// same skeleton the tests below already mutate in place. A caller names only what is special
+/// about the archive it wants -- a legacy `category`, say -- rather than every field
+/// `ObjectExport` requires.
+fn archive_with_object_json(fields: serde_json::Value) -> Vec<u8> {
+    let mut object = base_object();
+    let serde_json::Value::Object(map) = fields else { panic!("fields must be a JSON object") };
+    for (k, v) in map {
+        object[k] = v;
+    }
+    zip_data_json(&export_shell(object))
+}
+
+/// An archive written before object types exists on someone's disk. Importing it must apply the
+/// same mapping the migration did -- otherwise every object in a year-old backup lands on
+/// `other` and the restore quietly loses what kind of thing each one was.
+#[tokio::test]
+async fn an_archive_written_before_types_still_imports() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "category": "Auto" }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "car");
+}
+
+/// Text that never mapped to a type is not discarded -- it is appended to the description on
+/// its own line, exactly what the migration's `CASE` did for the rows already on disk.
+#[tokio::test]
+async fn unmapped_text_in_an_old_archive_reaches_the_description() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "name": "Odd", "category": "Gravelbike Custom" }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "other");
+    assert_eq!(objs[0]["description"], "Gravelbike Custom");
+}
+
+/// An archive that carries both fields at once (a hand edit, or a future export format that
+/// grew a new field this app also still writes) trusts the valid `type` and ignores `category`
+/// entirely -- `type` is what describes this app's current schema, `category` is a fallback for
+/// when it is absent, not a second vote.
+#[tokio::test]
+async fn a_valid_type_wins_over_a_conflicting_category() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "type": "bike", "category": "Auto" }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "bike");
+}
+
+/// A `type` this build does not recognise (a typo, or a future value) is not guessed at either
+/// -- it falls back to `other`, same as an unmapped legacy word, but the description is left
+/// alone: an illegal `type` string is not free text worth preserving.
+#[tokio::test]
+async fn an_illegal_type_falls_back_to_other_and_leaves_the_description_alone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "type": "spaceship", "category": null, "description": "kept as is" }));
+
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs[0]["type"], "other");
+    assert_eq!(objs[0]["description"], "kept as is");
+}
+
 fn png() -> Vec<u8> {
     let img = image::DynamicImage::new_rgb8(64, 32);
     let mut out = std::io::Cursor::new(Vec::new());
