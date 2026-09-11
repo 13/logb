@@ -92,7 +92,11 @@ button:disabled { opacity: .5; cursor: default; }
 .chip.due { background: var(--danger); color: #fff; }
 .chip.pending { background: var(--warn); color: #fff; flex: none; white-space: nowrap; }
 .chip.dead { background: var(--danger); color: #fff; flex: none; white-space: nowrap; }
-.chips { display: flex; gap: var(--space-2); overflow-x: auto; padding-bottom: var(--space-1); }
+/* Horizontal padding equal to the ring's bleed (2px outline + 2px offset = 4px = --space-1):
+   `overflow-x: auto` clips paint at its own edge, so without this the focus ring on the
+   first/last chip is cut off on the side facing the container edge. Keep this padding if this
+   rule is ever rewritten (e.g. to add a scroll-fade mask) -- a mask clips paint too. */
+.chips { display: flex; gap: var(--space-2); overflow-x: auto; padding: 0 var(--space-1) var(--space-1); }
 .chips button { min-height: 32px; padding: var(--space-1) var(--space-3); white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
 .topbar h1 { flex: 1; font-size: var(--text-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

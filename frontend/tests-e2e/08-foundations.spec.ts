@@ -28,4 +28,39 @@ test('keyboard focus is visible', async ({ page }) => {
   expect(ring!.offset, `${ring!.tag} outline offset should be the app's 2px, not the browser default 0px`).toBe(
     '2px'
   );
+
+  // A regression that drops `var(--focus)` -- leaving bare `outline: 2px solid` -- resolves to
+  // `currentColor` and would still pass all three assertions above. On the plain-text control
+  // focused above that's not even a visible regression, since `--focus` and the inherited text
+  // colour are, by design, the same token (see app.css) -- so `currentColor` would coincidentally
+  // match there regardless of whether the rule is right. The one place that coincidence doesn't
+  // hold is a filled accent button, whose own text colour (`--accent-text`) is deliberately far
+  // from `--focus`: that's also exactly the control the offset exists to keep legible (see the
+  // comment above `:focus-visible` in app.css), so it's the right place to pin the ring colour.
+  // Keep tabbing (real presses, not .focus()) until reaching it.
+  let onAccentButton = false;
+  for (let i = 0; i < 40 && !onAccentButton; i++) {
+    await page.keyboard.press('Tab');
+    onAccentButton = await page.evaluate(
+      () => (document.activeElement as HTMLElement | null)?.classList.contains('primary') ?? false
+    );
+  }
+  expect(onAccentButton, 'expected to reach a filled accent (.primary) button by tabbing').toBe(true);
+
+  const colors = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement;
+    // Resolve the expected colour from the live `--focus` custom property at runtime, via a
+    // scratch element, rather than hardcoding a hex -- so a deliberate palette change doesn't
+    // fail this test, while an accidental loss of the variable still does.
+    const probe = document.createElement('div');
+    probe.style.color = 'var(--focus)';
+    document.body.appendChild(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
+    return { outline: getComputedStyle(el).outlineColor, expected };
+  });
+  expect(
+    colors.outline,
+    `accent button outline colour should be the app's --focus token (${colors.expected}), not currentColor`
+  ).toBe(colors.expected);
 });
