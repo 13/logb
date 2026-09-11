@@ -136,7 +136,7 @@ awkward to redo. Parse it locally first:
 
 Run: `python3 -c "import yaml,sys; d=yaml.safe_load(open('.github/workflows/release.yml')); print(sorted(d['jobs']['release']['permissions'].items())); print(len(d['jobs']['release']['steps']), 'steps')"`
 
-Expected: `[('contents', 'write'), ('packages', 'write')]` and `8 steps`.
+Expected: `[('contents', 'write'), ('packages', 'write')]` and `9 steps`.
 
 If `yaml` is not installed, `pip install pyyaml` or fall back to
 `docker run --rm -v "$PWD":/repo rhysd/actionlint:latest -color`.
