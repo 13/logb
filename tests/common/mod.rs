@@ -30,6 +30,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         trust_proxy: false,
         login_max_attempts: 10,
         cors_origins: String::new(),
+        database_url: None,
     }
 }
 

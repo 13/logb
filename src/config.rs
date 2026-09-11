@@ -76,6 +76,11 @@ pub struct Config {
     /// to attach it.
     #[arg(long, env = "LOGB_CORS_ORIGINS", default_value = "")]
     pub cors_origins: String,
+    /// Full database connection URL. Unset (the default) uses the SQLite file inside
+    /// `LOGB_DATA_DIR`, which is where LogB has always kept it. Set this to point at
+    /// PostgreSQL instead; `LOGB_DATA_DIR` still decides where blobs live either way.
+    #[arg(long, env = "LOGB_DATABASE_URL")]
+    pub database_url: Option<String>,
 }
 
 impl Config {
@@ -92,13 +97,13 @@ impl Config {
 
     /// The database to open.
     ///
-    /// `LOGB_DATABASE_URL` when it is set, otherwise the SQLite file inside the data
-    /// directory -- which is where LogB has always kept it. `LOGB_DATA_DIR` is unchanged
-    /// either way: it still decides where blobs live, and it is still the default database
-    /// location.
+    /// The `database_url` field (`LOGB_DATABASE_URL`) when it is set and non-blank, otherwise
+    /// the SQLite file inside the data directory -- which is where LogB has always kept it.
+    /// `LOGB_DATA_DIR` is unchanged either way: it still decides where blobs live, and it is
+    /// still the default database location.
     pub fn database_url(&self) -> Result<String, crate::db::BoxError> {
-        match std::env::var("LOGB_DATABASE_URL") {
-            Ok(url) if !url.trim().is_empty() => Ok(url),
+        match &self.database_url {
+            Some(url) if !url.trim().is_empty() => Ok(url.clone()),
             _ => crate::db::sqlite_url(&self.data_dir),
         }
     }
@@ -117,5 +122,69 @@ impl Config {
     /// hostile archive can force the process to allocate.
     pub fn max_import_inflated_bytes(&self) -> usize {
         self.max_import_bytes().saturating_mul(2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config(data_dir: PathBuf) -> Config {
+        Config {
+            data_dir,
+            bind: "127.0.0.1".into(),
+            port: 0,
+            max_upload_mb: 2,
+            max_import_mb: 4,
+            notify_url: None,
+            notify_hour: 8,
+            notify_format: "json".into(),
+            timezone: chrono_tz::Tz::UTC,
+            backup: None,
+            backup_dir: None,
+            backup_hour: 3,
+            restore: None,
+            healthcheck: false,
+            secure_cookie: "false".into(),
+            log: "warn".into(),
+            trust_proxy: false,
+            login_max_attempts: 10,
+            cors_origins: String::new(),
+            database_url: None,
+        }
+    }
+
+    /// `LOGB_DATABASE_URL` used to be read straight from the process environment, bypassing
+    /// the `Config` value entirely -- a `Config` a test built around its own temporary
+    /// directory was overridden by whatever happened to be exported in the shell. `database_url`
+    /// is now a clap field: a `Config` with `database_url: None` must fall back to its own
+    /// `data_dir` regardless of what `LOGB_DATABASE_URL` says in the environment, because
+    /// nothing in this path reads the environment directly any more.
+    #[test]
+    fn a_config_with_no_database_url_field_uses_its_own_data_dir_even_if_the_environment_has_one() {
+        // SAFETY: no other test in this process reads or writes LOGB_DATABASE_URL, and this
+        // test restores whatever was there before it returns.
+        let previous = std::env::var("LOGB_DATABASE_URL").ok();
+        unsafe {
+            std::env::set_var("LOGB_DATABASE_URL", "sqlite://somewhere/else/logb.db?mode=rwc");
+        }
+
+        let config = base_config(PathBuf::from("/this/tests/own/data/dir"));
+        let url = config.database_url();
+
+        match previous {
+            Some(v) => unsafe { std::env::set_var("LOGB_DATABASE_URL", v) },
+            None => unsafe { std::env::remove_var("LOGB_DATABASE_URL") },
+        }
+
+        assert_eq!(url.unwrap(), "sqlite:///this/tests/own/data/dir/logb.db?mode=rwc");
+    }
+
+    /// The field, not a bare environment read, is what wins when it is set.
+    #[test]
+    fn a_config_with_a_database_url_field_uses_it_regardless_of_data_dir() {
+        let mut config = base_config(PathBuf::from("/unused"));
+        config.database_url = Some("postgres://localhost/logb".into());
+        assert_eq!(config.database_url().unwrap(), "postgres://localhost/logb");
     }
 }
