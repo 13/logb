@@ -83,7 +83,7 @@ test('an activity logged offline with an attachment replays both exactly once', 
   // because there was no signal at the fuel pump is the exact failure this feature exists to
   // prevent. Dimmed-plus-a-chip is the same "still queued" treatment Timeline gives a pending
   // activity.
-  await expect(page.locator('.thumb-strip .thumb.pending')).toHaveCount(1);
+  await expect(page.locator('.thumb-strip .strip-item.pending')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Save' }).click();
   // Visible immediately from the local outbox queue -- before either write has ever reached

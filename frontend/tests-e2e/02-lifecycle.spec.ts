@@ -20,6 +20,16 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await page.getByRole('button', { name: /Add photos or files/ }).click();
   await page.setInputFiles('input[type=file]', pngPayload());
   await expect(page.locator('.thumb-strip img')).toHaveCount(1);
+
+  // The wrapper must fit its image. It used to carry the global `.thumb` rule, which is
+  // written for grid images (`width: 100%; aspect-ratio: 1`), so it inflated to a 388-wide
+  // square around a 64px thumbnail and pushed Save below the fold. Comparing the two widths
+  // states the requirement; asserting a literal 64 would pin an unrelated decoration value.
+  const item = page.locator('.thumb-strip > *').first();
+  const img = page.locator('.thumb-strip img').first();
+  const itemBox = await item.boundingBox();
+  const imgBox = await img.boundingBox();
+  expect(itemBox!.width).toBeCloseTo(imgBox!.width, 0);
   await page.getByRole('button', { name: 'Save' }).click();
 
   // the timeline and the stats reflect it

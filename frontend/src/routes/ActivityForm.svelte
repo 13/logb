@@ -301,7 +301,7 @@
     {#if attachments.length > 0}
       <div class="thumb-strip">
         {#each attachments as a (a.id)}
-          <div class="thumb" class:pending={a.pending}>
+          <div class="strip-item" class:pending={a.pending}>
             {#if a.kind === 'photo'}
               <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" />
             {:else}
@@ -336,7 +336,10 @@
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
   .actions { margin-top: 8px; }
-  .thumb { position: relative; flex: none; }
-  .thumb.pending { opacity: .55; }
-  .thumb .pending-chip { position: absolute; left: 2px; right: 2px; bottom: 2px; text-align: center; font-size: .6rem; padding: 1px 2px; line-height: 1.2; }
+  /* A positioning context for the pending badge, not a thumbnail. It was called `thumb`, which
+     collided with the global grid-image rule in app.css and inflated it to a full-width square
+     around a 64px image. */
+  .strip-item { position: relative; flex: none; }
+  .strip-item.pending { opacity: .55; }
+  .strip-item .pending-chip { position: absolute; left: 2px; right: 2px; bottom: 2px; text-align: center; font-size: .6rem; padding: 1px 2px; line-height: 1.2; }
 </style>
