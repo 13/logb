@@ -123,7 +123,7 @@ pub async fn backup_to(pool: &AnyPool, dest: &Path) -> Result<(), BoxError> {
         return Err(format!("{} already exists", dest.display()).into());
     }
     let dest = dest.to_str().ok_or("backup path must be valid UTF-8")?;
-    sqlx::query("VACUUM INTO ?").bind(dest).execute(pool).await?;
+    sqlx::query("VACUUM INTO $1").bind(dest).execute(pool).await?;
     Ok(())
 }
 

@@ -321,7 +321,7 @@ async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoc
         sqlx::query(
             "INSERT INTO _sqlx_migrations \
              (version, description, installed_on, success, checksum, execution_time) \
-             VALUES (?, 'from-the-future', CURRENT_TIMESTAMP, 1, ?, 0)")
+             VALUES ($1, 'from-the-future', CURRENT_TIMESTAMP, 1, $2, 0)")
             .bind(99_999_999_i64)
             .bind(vec![0u8; 32])
             .execute(&pool)

@@ -50,7 +50,7 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
          f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
-         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = ? AND a.deleted_at IS NULL \
+         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = $1 AND a.deleted_at IS NULL \
          ORDER BY a.created_at DESC, a.id DESC",
     )
     .bind(object_id).fetch_all(&state.db).await?)
@@ -61,7 +61,7 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
          f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
          FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
-         WHERE a.id = ? AND o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
+         WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -85,7 +85,7 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
     let mut orphans: Vec<(i64, String)> = Vec::new();
     for &file_id in candidates {
         let row: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, sha256 FROM files WHERE id = ? AND id NOT IN (SELECT file_id FROM attachments)",
+            "SELECT id, sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
         )
         .bind(file_id).fetch_optional(&state.db).await?;
         if let Some(r) = row {
@@ -93,7 +93,7 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
         }
     }
     for (id, sha) in orphans {
-        sqlx::query("DELETE FROM files WHERE id = ?").bind(id).execute(&state.db).await?;
+        sqlx::query("DELETE FROM files WHERE id = $1").bind(id).execute(&state.db).await?;
         discard_blob(state, id, &sha).await?;
     }
     Ok(())
@@ -103,7 +103,7 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
 /// always, and the blob only once no other row still points at that content hash (two users
 /// uploading the same photo share one blob, and each has their own `files` row).
 pub async fn discard_blob(state: &App, file_id: i64, sha: &str) -> Result<(), AppError> {
-    let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = ? LIMIT 1")
+    let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = $1 LIMIT 1")
         .bind(sha).fetch_optional(&state.db).await?;
     if still_used.is_none() {
         state.storage.remove(sha, file_id).await;
@@ -192,7 +192,7 @@ async fn upload(
     // not skip the upload itself; what it skips is the hash computation and the blob and
     // thumbnail writes below.
     if let Some(op) = client_op_id.as_deref() {
-        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ? AND deleted_at IS NULL")
+        let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = $1 AND deleted_at IS NULL")
             .bind(op)
             .fetch_optional(&state.db)
             .await?;
@@ -212,7 +212,7 @@ async fn upload(
         None => if image.is_some() { "photo".to_string() } else { "document".to_string() },
     };
 
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
         .bind(user.id).bind(&sha).fetch_optional(&state.db).await?;
     let file_id = match existing {
         Some((id,)) => id,
@@ -228,7 +228,7 @@ async fn upload(
             let mut tx = state.db.begin().await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
             )
             .bind(user.id).bind(&sha).bind(&name).bind(&mime).bind(bytes.len() as i64)
             .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
@@ -249,7 +249,7 @@ async fn upload(
                 // not an error -- reuse the row the winner just created.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
                     tx.rollback().await?;
-                    let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
+                    let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
                         .bind(user.id).bind(&sha).fetch_one(&state.db).await?;
                     id
                 }
@@ -263,7 +263,7 @@ async fn upload(
     let mut tx = state.db.begin().await?;
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at, client_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(object_id).bind(activity_id).bind(file_id).bind(&kind).bind(caption.trim())
     .bind(&client_op_id).bind(db::now())
@@ -284,7 +284,7 @@ async fn upload(
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
             tx.rollback().await?;
             let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
-            let winner: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = ? AND deleted_at IS NULL")
+            let winner: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = $1 AND deleted_at IS NULL")
                 .bind(op)
                 .fetch_optional(&state.db).await?;
             // As on the activity path: the row holding this op id may be a tombstone, which
@@ -332,7 +332,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let existing = load_owned(&state, user.id, id).await?;
     let caption = body.caption.trim();
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE attachments SET caption = ? WHERE id = ? AND deleted_at IS NULL").bind(caption).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE attachments SET caption = $1 WHERE id = $2 AND deleted_at IS NULL").bind(caption).bind(id).execute(&mut *tx).await?;
     if existing.caption != caption {
         let uuid = record::uuid_of(&mut tx, Entity::Attachment, id).await?;
         record::record_update(
@@ -354,7 +354,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     let now = db::now();
     let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
-    let affected = sqlx::query("UPDATE attachments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+    let affected = sqlx::query("UPDATE attachments SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
@@ -383,7 +383,7 @@ struct FileRow {
 async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, AppError> {
     sqlx::query_as::<_, FileRow>(
         "SELECT f.id, f.sha256, f.original_name, f.mime FROM files f \
-         WHERE f.id = ? AND f.user_id = ? AND EXISTS ( \
+         WHERE f.id = $1 AND f.user_id = $2 AND EXISTS ( \
            SELECT 1 FROM attachments a JOIN objects o ON o.id = a.object_id \
            WHERE a.file_id = f.id AND a.deleted_at IS NULL AND o.deleted_at IS NULL)",
     )

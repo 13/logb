@@ -113,7 +113,7 @@ pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<A
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
          a.quantity_milli, a.client_op_id, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE a.id = ? AND o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
+         WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -141,8 +141,8 @@ pub struct ListQuery {
 /// know whether a "load more" button belongs on screen.
 pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
     let (n,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM activities WHERE object_id = ?1 AND deleted_at IS NULL \
-         AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4)",
+        "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
     )
     .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
     .fetch_one(&state.db).await?;
@@ -156,9 +156,9 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
-         FROM activities WHERE object_id = ?1 AND deleted_at IS NULL \
-         AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR date >= ?3) AND (?4 IS NULL OR date <= ?4) \
-         ORDER BY date DESC, id DESC LIMIT ?5 OFFSET ?6",
+         FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
+         ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
     )
     .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(limit).bind(offset)
     .fetch_all(&state.db).await?)
@@ -208,8 +208,8 @@ async fn recent_titles(
            (SELECT x.counter_value FROM activities x WHERE x.object_id = a.object_id \
               AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
               ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter \
-         FROM activities a WHERE a.object_id = ?1 AND a.deleted_at IS NULL \
-         GROUP BY a.title, a.category ORDER BY last_date DESC LIMIT ?2",
+         FROM activities a WHERE a.object_id = $1 AND a.deleted_at IS NULL \
+         GROUP BY a.title, a.category ORDER BY last_date DESC LIMIT $2",
     )
     .bind(object_id)
     .bind(SUGGESTION_LIMIT)
@@ -232,7 +232,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
              quantity_milli, client_op_id, created_at, updated_at \
-             FROM activities WHERE client_op_id = ? AND deleted_at IS NULL",
+             FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
         )
         .bind(op)
         .fetch_optional(&state.db)
@@ -247,7 +247,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     let mut tx = state.db.begin().await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
          RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
@@ -267,7 +267,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
                  quantity_milli, client_op_id, created_at, updated_at \
-                 FROM activities WHERE client_op_id = ? AND deleted_at IS NULL",
+                 FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
             )
             .bind(op)
             .fetch_optional(&state.db).await?;
@@ -317,7 +317,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "UPDATE activities SET date = ?, category = ?, title = ?, notes = ?, counter_value = ?, cost_cents = ?, quantity_milli = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8 WHERE id = $9 AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(id)
@@ -344,7 +344,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     let now = db::now();
     let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
-    let affected = sqlx::query("UPDATE activities SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+    let affected = sqlx::query("UPDATE activities SET deleted_at = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL")
         .bind(&now).bind(&now).bind(id)
         .execute(&mut *tx).await?.rows_affected();
     if affected == 0 {

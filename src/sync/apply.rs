@@ -190,22 +190,22 @@ pub async fn apply_op(
     // Does this uuid exist, and does it belong to the caller?
     let owner: Option<i64> = match op.entity {
         Entity::Object => sqlx::query_scalar(
-            "SELECT user_id FROM objects WHERE client_uuid = ?")
+            "SELECT user_id FROM objects WHERE client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Activity => sqlx::query_scalar(
             "SELECT o.user_id FROM activities a JOIN objects o ON o.id = a.object_id \
-             WHERE a.client_uuid = ?")
+             WHERE a.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Reminder => sqlx::query_scalar(
             "SELECT o.user_id FROM reminders r JOIN objects o ON o.id = r.object_id \
-             WHERE r.client_uuid = ?")
+             WHERE r.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Attachment => sqlx::query_scalar(
             "SELECT o.user_id FROM attachments t JOIN objects o ON o.id = t.object_id \
-             WHERE t.client_uuid = ?")
+             WHERE t.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::File => sqlx::query_scalar(
-            "SELECT user_id FROM files WHERE client_uuid = ?")
+            "SELECT user_id FROM files WHERE client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
     };
     match owner {
@@ -262,13 +262,13 @@ pub async fn apply_op(
             let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity);
             let sql = if has_updated_at {
                 format!(
-                    "UPDATE {} SET deleted_at = ?, updated_at = ? \
-                     WHERE client_uuid = ? AND deleted_at IS NULL",
+                    "UPDATE {} SET deleted_at = $1, updated_at = $2 \
+                     WHERE client_uuid = $3 AND deleted_at IS NULL",
                     op.entity.table()
                 )
             } else {
                 format!(
-                    "UPDATE {} SET deleted_at = ? WHERE client_uuid = ? AND deleted_at IS NULL",
+                    "UPDATE {} SET deleted_at = $1 WHERE client_uuid = $2 AND deleted_at IS NULL",
                     op.entity.table()
                 )
             };
@@ -328,7 +328,7 @@ pub async fn apply_op(
                         let is_cover: Option<(i64,)> = sqlx::query_as(
                             "SELECT o.id FROM objects o \
                              JOIN attachments a ON a.id = o.cover_attachment_id \
-                             WHERE a.client_uuid = ? AND o.deleted_at IS NULL")
+                             WHERE a.client_uuid = $1 AND o.deleted_at IS NULL")
                             .bind(&op.entity_uuid)
                             .fetch_optional(&mut *tx).await?;
                         if is_cover.is_some() {
@@ -355,13 +355,13 @@ pub async fn apply_op(
                 let permitted: Option<i64> = match (op.entity, field) {
                     (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
                         "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
-                         WHERE a.id = ? AND o.client_uuid = ? AND a.deleted_at IS NULL")
+                         WHERE a.id = $1 AND o.client_uuid = $2 AND a.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
                     (Entity::Reminder, "done_activity_id") => sqlx::query_scalar(
                         "SELECT act.id FROM activities act \
                          JOIN reminders r ON r.object_id = act.object_id \
-                         WHERE act.id = ? AND r.client_uuid = ? AND act.deleted_at IS NULL")
+                         WHERE act.id = $1 AND r.client_uuid = $2 AND act.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
                     _ => Some(*referenced),
@@ -375,7 +375,7 @@ pub async fn apply_op(
 
             let stored: Option<(String, String)> = sqlx::query_as(
                 "SELECT edited_at, device_id FROM field_clock \
-                 WHERE entity = ? AND entity_uuid = ? AND field = ?")
+                 WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
                 .bind(op.entity.as_str()).bind(&op.entity_uuid).bind(field)
                 .fetch_optional(&mut *tx).await?;
 
@@ -391,7 +391,7 @@ pub async fn apply_op(
             // is exactly what `AssertSqlSafe` asks the author to have made before sqlx will
             // take a `String` as SQL.
             let sql = format!(
-                "UPDATE {} SET {field} = ? WHERE client_uuid = ?",
+                "UPDATE {} SET {field} = $1 WHERE client_uuid = $2",
                 op.entity.table()
             );
             let query = sqlx::query(sqlx::AssertSqlSafe(sql));

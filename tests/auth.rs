@@ -132,7 +132,7 @@ async fn logout_all_ends_every_session() {
 async fn expired_sessions_are_pruned() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
         .bind("stale-token").bind(1).bind("2020-01-01T00:00:00Z")
         .execute(&app.state.db).await.unwrap();
     let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();

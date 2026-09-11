@@ -144,10 +144,10 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-             FROM objects WHERE user_id = ? AND deleted_at IS NULL ORDER BY id")
+             FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
-    let sha_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = ?")
+    let sha_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
         .bind(user.id).fetch_all(&state.db).await?;
     let sha_by_file: HashMap<i64, String> = sha_rows.into_iter().collect();
 
@@ -156,14 +156,14 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
-             FROM activities WHERE object_id = ? AND deleted_at IS NULL ORDER BY date, id")
+             FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(
             "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
              r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
              NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id \
-             WHERE r.object_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")
+             WHERE r.object_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")
             .bind(o.id).fetch_all(&state.db).await?;
         for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
         let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
@@ -373,7 +373,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let (ty, description) = resolve_type(&o);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id")
+             archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
             .bind(&object_uuid)
@@ -386,7 +386,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let activity_uuid = uuid::Uuid::new_v4().to_string();
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .bind(&activity_uuid)
@@ -409,13 +409,13 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             if let Some(sha) = &o.cover_sha256 {
                 let row: Option<(i64,)> = sqlx::query_as(
                     "SELECT a.id FROM attachments a JOIN files f ON f.id = a.file_id \
-                     WHERE a.object_id = ? AND f.sha256 = ? AND a.kind = 'photo' AND a.deleted_at IS NULL LIMIT 1")
+                     WHERE a.object_id = $1 AND f.sha256 = $2 AND a.kind = 'photo' AND a.deleted_at IS NULL LIMIT 1")
                     .bind(object_id).bind(sha).fetch_optional(&mut *tx).await?;
                 cover = row.map(|r| r.0);
             }
         }
         if let Some(c) = cover {
-            sqlx::query("UPDATE objects SET cover_attachment_id = ? WHERE id = ? AND deleted_at IS NULL").bind(c).bind(object_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE objects SET cover_attachment_id = $1 WHERE id = $2 AND deleted_at IS NULL").bind(c).bind(object_id).execute(&mut *tx).await?;
             // A real change from the create above's NULL, so it gets its own `set` -- not
             // folded into `record_create`, which only ever describes the row as it was
             // when it was first written.
@@ -430,7 +430,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let reminder_uuid = uuid::Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .bind(&r.snoozed_until)
@@ -533,7 +533,7 @@ async fn import_attachment(
     x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>, edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
     let (object_id, activity_id) = parent;
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
         .bind(user_id).bind(&x.sha256).fetch_optional(&mut **tx).await?;
     let file_id = match existing {
         Some((id,)) => id,
@@ -547,7 +547,7 @@ async fn import_attachment(
             let file_uuid = uuid::Uuid::new_v4().to_string();
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
                 .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
                 .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
                 .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
@@ -564,7 +564,7 @@ async fn import_attachment(
                 // not an error -- reuse the row the winner just created, which was (or will
                 // be) logged by whichever request actually inserted it.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
-                    let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = ? AND sha256 = ?")
+                    let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
                         .bind(user_id).bind(&x.sha256).fetch_one(&mut **tx).await?;
                     id
                 }
@@ -575,7 +575,7 @@ async fn import_attachment(
     };
     let attachment_uuid = uuid::Uuid::new_v4().to_string();
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")
+        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id")
         .bind(object_id).bind(activity_id).bind(file_id).bind(&x.kind).bind(&x.caption).bind(&x.created_at)
         .bind(&attachment_uuid)
         .fetch_one(&mut **tx).await?;

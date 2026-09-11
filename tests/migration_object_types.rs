@@ -110,7 +110,7 @@ async fn the_schema_accepts_every_type_and_category_the_code_offers() {
     for t in logb::object_type::OBJECT_TYPES.iter() {
         sqlx::query(
             "INSERT INTO objects (user_id, name, type, created_at, updated_at) \
-             VALUES (1, ?1, ?2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
+             VALUES (1, $1, $2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
             .bind(format!("a {t}")).bind(t)
             .execute(&pool).await
             .unwrap_or_else(|e| panic!("the objects CHECK rejects the type {t:?} the picker offers: {e}"));
@@ -119,7 +119,7 @@ async fn the_schema_accepts_every_type_and_category_the_code_offers() {
     for c in logb::api::activities::CATEGORIES.iter() {
         sqlx::query(
             "INSERT INTO activities (object_id, date, category, title, created_at, updated_at) \
-             VALUES (1, '2026-03-01', ?1, ?2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
+             VALUES (1, '2026-03-01', $1, $2, '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')")
             .bind(c).bind(format!("an {c}"))
             .execute(&pool).await
             .unwrap_or_else(|e| panic!("the activities CHECK rejects the category {c:?} the form offers: {e}"));
@@ -209,7 +209,7 @@ async fn every_legacy_word_maps_through_the_real_migration() {
         for variant in spellings(word) {
             sqlx::query(
                 "INSERT INTO objects (id, user_id, name, category, description, created_at, updated_at) \
-                 VALUES (?1, 1, ?2, ?3, 'keep', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+                 VALUES ($1, 1, $2, $3, 'keep', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
                 .bind(id).bind(format!("row {id}")).bind(&variant)
                 .execute(&pool).await.unwrap();
             seeded.push((id, variant, expected));
@@ -221,7 +221,7 @@ async fn every_legacy_word_maps_through_the_real_migration() {
     run_0009(&pool).await;
 
     for (id, variant, expected) in seeded {
-        let row = sqlx::query("SELECT type, description FROM objects WHERE id = ?1")
+        let row = sqlx::query("SELECT type, description FROM objects WHERE id = $1")
             .bind(id).fetch_one(&pool).await.unwrap();
         assert_eq!(
             row.get::<String, _>("type"),

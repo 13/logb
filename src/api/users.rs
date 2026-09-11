@@ -44,13 +44,13 @@ async fn create(
 ) -> Result<(StatusCode, Json<UserOut>), AppError> {
     auth::validate_username(&body.username)?;
     auth::validate_password(&body.password)?;
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = $1")
         .bind(&body.username).fetch_optional(&state.db).await?;
     if exists.is_some() {
         return Err(AppError::Conflict("username already taken".into()));
     }
     let user = sqlx::query_as::<_, UserOut>(
-        "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES (?, ?, ?, 'en', ?) \
+        "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES ($1, $2, $3, 'en', $4) \
          RETURNING id, username, is_admin, lang, created_at",
     )
     .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(body.is_admin).bind(db::now())
@@ -83,7 +83,7 @@ async fn update(
     if body.is_admin.is_some() && !me.is_admin.0 {
         return Err(AppError::Forbidden);
     }
-    let _ = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")
+    let _ = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = $1")
         .bind(id).fetch_optional(&state.db).await?.ok_or(AppError::NotFound)?;
 
     // Validate every field before writing anything, so a later-rejected field
@@ -104,7 +104,7 @@ async fn update(
 
     let mut jar = jar;
     if let Some(p) = &body.password {
-        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
             .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
         // The new password only means anything if the sessions opened with the old one stop
         // working. Someone changing their own password keeps this browser signed in, on a
@@ -116,12 +116,12 @@ async fn update(
         }
     }
     if let Some(a) = body.is_admin {
-        sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(a).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(a).bind(id).execute(&state.db).await?;
     }
     if let Some(l) = &body.lang {
-        sqlx::query("UPDATE users SET lang = ? WHERE id = ?").bind(l).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&state.db).await?;
     }
-    let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")
+    let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = $1")
         .bind(id).fetch_one(&state.db).await?;
     Ok((jar, Json(user)))
 }
@@ -137,21 +137,21 @@ async fn delete(AdminUser(me): AdminUser, State(state): State<App>, Path(id): Pa
     if me.id == id {
         return Err(AppError::BadRequest("cannot delete yourself".into()));
     }
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
         .bind(id).fetch_optional(&state.db).await?;
     if exists.is_none() {
         return Err(AppError::NotFound);
     }
     // Read the blobs to clean up before the rows that name them are gone.
-    let blobs: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = ?")
+    let blobs: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
         .bind(id).fetch_all(&state.db).await?;
 
     let mut tx = state.db.begin().await?;
-    sqlx::query("DELETE FROM attachments WHERE object_id IN (SELECT id FROM objects WHERE user_id = ?)")
+    sqlx::query("DELETE FROM attachments WHERE object_id IN (SELECT id FROM objects WHERE user_id = $1)")
         .bind(id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM objects WHERE user_id = ?").bind(id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM files WHERE user_id = ?").bind(id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM users WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM objects WHERE user_id = $1").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM files WHERE user_id = $1").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM users WHERE id = $1").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
 
     for (file_id, sha) in blobs {

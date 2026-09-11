@@ -201,7 +201,7 @@ async fn snooze_suppresses_a_counter_due_reminder_and_lapses() {
     // Lapse the snooze by writing an already-past date directly through the pool, the way
     // the domain-level tests cover "on or before today resumes normal rules" -- there is no
     // time-travel helper in this test harness, so this is the integration-level equivalent.
-    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(rid)
         .execute(&app.state.db)
         .await
@@ -418,7 +418,7 @@ async fn snoozing_a_future_reminder_takes_it_out_of_the_lookahead_too() {
     );
 
     // ...and come back once the snooze lapses, so this suppresses rather than deletes.
-    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(rid).execute(&app.state.db).await.unwrap();
     let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
         .send().await.unwrap().json().await.unwrap();

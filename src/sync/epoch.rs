@@ -24,7 +24,7 @@ pub async fn current(db: &sqlx::AnyPool) -> Result<String, AppError> {
 pub async fn rotate(db: &sqlx::AnyPool) -> Result<String, AppError> {
     let fresh = uuid::Uuid::new_v4().to_string();
     let result = sqlx::query(
-        "INSERT INTO settings (key, value) VALUES ('sync_epoch', ?) \
+        "INSERT INTO settings (key, value) VALUES ('sync_epoch', $1) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(&fresh)
         .execute(db)

@@ -20,7 +20,7 @@ const RETENTION_DAYS: i64 = 90;
 /// Logging in used to be the only thing that ever pruned, so an instance nobody signed into
 /// -- or one used from a single long-lived session -- kept every expired row forever.
 pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> {
-    let n = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+    let n = sqlx::query("DELETE FROM sessions WHERE expires_at <= $1")
         .bind(db::now())
         .execute(&state.db)
         .await?

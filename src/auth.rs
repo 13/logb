@@ -75,8 +75,8 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     let token = new_token();
     let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    sqlx::query("DELETE FROM sessions WHERE expires_at <= ?").bind(db::now()).execute(&state.db).await?;
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1").bind(db::now()).execute(&state.db).await?;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
         .bind(&token).bind(user_id).bind(expires)
         .execute(&state.db).await?;
     Ok(token)
@@ -93,13 +93,13 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
 /// attacker actually took. The cost is that a password change signs the phone out of the API
 /// too, which is why the README says so and the Settings screen says so next to the button.
 pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
-    sqlx::query("DELETE FROM api_tokens WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM api_tokens WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
     Ok(())
 }
 
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE token = ?").bind(token).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE token = $1").bind(token).execute(&state.db).await?;
     Ok(())
 }
 
@@ -221,7 +221,7 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     let hash = hash_api_token(token);
     let row = sqlx::query_as::<_, AuthUser>(
         "SELECT u.id, u.username, u.is_admin, u.lang FROM api_tokens t \
-         JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+         JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -229,8 +229,8 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     if row.is_some() {
         let today = db::today();
         sqlx::query(
-            "UPDATE api_tokens SET last_used_at = ? \
-             WHERE token_hash = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+            "UPDATE api_tokens SET last_used_at = $1 \
+             WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
         )
         .bind(db::now()).bind(&hash).bind(&today)
         .execute(&state.db).await?;
@@ -253,7 +253,7 @@ impl FromRequestParts<App> for SessionUser {
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         let user = sqlx::query_as::<_, AuthUser>(
             "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
-             JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?",
+             JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
         .bind(db::now())
@@ -280,7 +280,7 @@ impl FromRequestParts<App> for AuthUser {
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         sqlx::query_as::<_, AuthUser>(
             "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
-             JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?",
+             JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
         .bind(db::now())

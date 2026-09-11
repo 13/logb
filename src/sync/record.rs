@@ -64,7 +64,7 @@ pub(crate) async fn uuid_of(
     entity: Entity,
     id: i64,
 ) -> Result<String, AppError> {
-    let sql = format!("SELECT client_uuid FROM {} WHERE id = ?", entity.table());
+    let sql = format!("SELECT client_uuid FROM {} WHERE id = $1", entity.table());
     let uuid: Option<String> =
         sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(id).fetch_one(&mut *tx).await?;
     Ok(uuid.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
@@ -95,7 +95,7 @@ async fn insert_change(
         "INSERT INTO changes \
          (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
           device_id, client_op_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
         .bind(entity.as_str())
         .bind(entity_uuid)
         .bind(op.as_str())
@@ -126,7 +126,7 @@ pub(crate) async fn stamp_field_clock(
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
-         VALUES (?, ?, ?, ?, ?) \
+         VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT(entity, entity_uuid, field) \
          DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id")
         .bind(entity.as_str())
@@ -233,17 +233,24 @@ pub(crate) async fn cascade_object(
         // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
         // the author to have made.
         let table = entity.table();
-        const MINE: &str =
-            "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ?)";
+        // `{MINE}` carries one placeholder for `object_uuid`. Its number depends on how many
+        // placeholders precede it in the statement it's spliced into, so it takes that number
+        // as a parameter rather than fixing one -- the three call sites below bind `object_uuid`
+        // last, after zero, one or two earlier binds.
+        fn mine(placeholder: u8) -> String {
+            format!(
+                "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ${placeholder})"
+            )
+        }
         // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
         // rows this cascade is about to claim.
-        let select = format!("SELECT client_uuid FROM {table} WHERE {MINE}");
+        let select = format!("SELECT client_uuid FROM {table} WHERE {}", mine(1));
         let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
             .bind(object_uuid).fetch_all(&mut *tx).await?;
         let update = if has_updated_at {
-            format!("UPDATE {table} SET deleted_at = ?, updated_at = ? WHERE {MINE}")
+            format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 WHERE {}", mine(3))
         } else {
-            format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}")
+            format!("UPDATE {table} SET deleted_at = $1 WHERE {}", mine(2))
         };
         let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
         let query = if has_updated_at { query.bind(now) } else { query };
@@ -264,7 +271,7 @@ pub(crate) async fn clear_cover_of(
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
-         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = ?)")
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
         .bind(attachment_uuid).execute(&mut *tx).await?;
     Ok(())
 }
@@ -289,21 +296,21 @@ pub(crate) async fn cascade_activity(
         "UPDATE objects SET cover_attachment_id = NULL \
          WHERE deleted_at IS NULL AND cover_attachment_id IN (\
            SELECT id FROM attachments \
-           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = ?))")
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
         .bind(activity_uuid).execute(&mut *tx).await?;
     sqlx::query(
         "UPDATE reminders SET done_activity_id = NULL \
          WHERE deleted_at IS NULL \
-         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
         .bind(activity_uuid).execute(&mut *tx).await?;
 
     let uuids: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
         .bind(activity_uuid).fetch_all(&mut *tx).await?;
     sqlx::query(
-        "UPDATE attachments SET deleted_at = ? WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+        "UPDATE attachments SET deleted_at = $1 WHERE deleted_at IS NULL \
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $2)")
         .bind(now).bind(activity_uuid).execute(&mut *tx).await?;
     Ok(nameable(uuids).map(|uuid| (Entity::Attachment, uuid)).collect())
 }

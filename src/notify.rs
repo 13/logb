@@ -92,13 +92,13 @@ pub async fn send(state: &App, digest: &Digest) -> Result<(), AppError> {
 }
 
 async fn last_sent(state: &App) -> Result<Option<String>, AppError> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
         .bind(LAST_SENT_KEY).fetch_optional(&state.db).await?;
     Ok(row.map(|r| r.0))
 }
 
 async fn mark_sent(state: &App, date: &str) -> Result<(), AppError> {
-    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
+    sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
         .bind(LAST_SENT_KEY).bind(date).execute(&state.db).await?;
     Ok(())
 }

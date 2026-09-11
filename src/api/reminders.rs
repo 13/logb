@@ -85,7 +85,7 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<ReminderRow, A
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE r.id = ? AND o.user_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
+         WHERE r.id = $1 AND o.user_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
     .fetch_optional(&state.db).await?
@@ -135,7 +135,7 @@ async fn insert(
     let uuid = uuid::Uuid::new_v4().to_string();
     let (id,): (i64,) = sqlx::query_as(
         "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
     )
     .bind(object_id).bind(&b.title).bind(&b.notes).bind(&b.due_date).bind(b.due_counter)
     .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(&uuid)
@@ -150,7 +150,7 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE r.object_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
+         WHERE r.object_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.done_at IS NOT NULL, r.due_date IS NULL, r.due_date, r.due_counter, r.id",
     )
     .bind(object_id).fetch_all(&state.db).await?;
@@ -165,7 +165,7 @@ pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE o.user_id = ? AND r.done_at IS NULL AND o.archived_at IS NULL \
+         WHERE o.user_id = $1 AND r.done_at IS NULL AND o.archived_at IS NULL \
            AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )
@@ -222,7 +222,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "UPDATE reminders SET title = ?, notes = ?, due_date = ?, due_counter = ?, repeat_months = ?, repeat_counter = ? WHERE id = ? AND deleted_at IS NULL",
+        "UPDATE reminders SET title = $1, notes = $2, due_date = $3, due_counter = $4, repeat_months = $5, repeat_counter = $6 WHERE id = $7 AND deleted_at IS NULL",
     )
     .bind(&body.title).bind(&body.notes).bind(&body.due_date).bind(body.due_counter)
     .bind(body.repeat_months).bind(body.repeat_counter).bind(id)
@@ -241,7 +241,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     load_owned(&state, user.id, id).await?;
     let edited_at = record::edited_at_now();
     let mut tx = state.db.begin().await?;
-    let affected = sqlx::query("UPDATE reminders SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+    let affected = sqlx::query("UPDATE reminders SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(db::now()).bind(id).execute(&mut *tx).await?.rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
@@ -303,7 +303,7 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
     let next_plan = next_due(base_date, base_counter, r.due_counter, repeat);
 
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE reminders SET done_at = ?, done_activity_id = ? WHERE id = ? AND deleted_at IS NULL")
+    sqlx::query("UPDATE reminders SET done_at = $1, done_activity_id = $2 WHERE id = $3 AND deleted_at IS NULL")
         .bind(&done_at).bind(body.activity_id).bind(id)
         .execute(&mut *tx).await?;
     // `done_at` always changes: `r.done_at.is_some()` was already rejected above, so the old
@@ -364,7 +364,7 @@ async fn snooze(
     }
     let until = snoozed_date(today(), r.due_date.as_deref().and_then(parse_date), body.days).to_string();
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ? AND deleted_at IS NULL")
+    sqlx::query("UPDATE reminders SET snoozed_until = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(&until)
         .bind(id)
         .execute(&mut *tx)
@@ -397,7 +397,7 @@ async fn snooze(
 async fn unsnooze(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ReminderOut>, AppError> {
     let r = load_owned(&state, user.id, id).await?;
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = ? AND deleted_at IS NULL")
+    sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)
         .execute(&mut *tx)
         .await?;

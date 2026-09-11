@@ -23,7 +23,7 @@ pub async fn pull(
 ) -> Result<Vec<ChangeRow>, AppError> {
     Ok(sqlx::query_as::<_, ChangeRow>(
         "SELECT seq, entity, entity_uuid, op, field, value, edited_at, device_id \
-         FROM changes WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?")
+         FROM changes WHERE user_id = $1 AND seq > $2 ORDER BY seq LIMIT $3")
         .bind(user_id)
         .bind(since)
         .bind(limit)
@@ -36,7 +36,7 @@ pub async fn pull(
 /// A client whose cursor sits below this has missed ops that were purged, so an incremental
 /// pull would silently skip them -- it has to re-bootstrap instead.
 pub async fn horizon(db: &sqlx::AnyPool, user_id: i64) -> Result<i64, AppError> {
-    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = ?")
+    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(db)
         .await?;
@@ -53,22 +53,22 @@ pub async fn snapshot(
     db: &sqlx::AnyPool,
     user_id: i64,
 ) -> Result<(i64, serde_json::Value), AppError> {
-    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = ?")
+    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(db)
         .await?;
 
-    let objects = rows(db, "SELECT * FROM objects WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+    let objects = rows(db, "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
     let activities = rows(db,
         "SELECT a.* FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
     let reminders = rows(db,
         "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE o.user_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
     let attachments = rows(db,
         "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
-         WHERE o.user_id = ? AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
-    let files = rows(db, "SELECT * FROM files WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+    let files = rows(db, "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
 
     Ok((seq, serde_json::json!({
         "objects": objects,
@@ -134,7 +134,7 @@ pub async fn purge(
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < ?")
+    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
         .bind(&cutoff)
         .execute(db)
         .await?
@@ -144,7 +144,7 @@ pub async fn purge(
     // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
     let pinned: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT file_id FROM attachments \
-         WHERE deleted_at IS NOT NULL AND deleted_at < ?")
+         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
         .bind(&cutoff)
         .fetch_all(db)
         .await?;
@@ -188,7 +188,7 @@ pub async fn purge(
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
         // accept it.
         let sql =
-            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < ? {guard}");
+            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
         sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(db).await?;
     }
 

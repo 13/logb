@@ -58,7 +58,7 @@ async fn the_plaintext_is_returned_once_and_never_stored() {
     assert!(prefix.len() < token.len(), "and must not be the whole thing");
 
     // Nor is it in the database: a leaked backup must not hand over the account.
-    let (hash,): (String,) = sqlx::query_as("SELECT token_hash FROM api_tokens WHERE id = ?")
+    let (hash,): (String,) = sqlx::query_as("SELECT token_hash FROM api_tokens WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert_ne!(hash, token);
     assert_eq!(hash, logb::files::sha256_hex(token.as_bytes()));
@@ -188,7 +188,7 @@ async fn use_is_recorded_so_a_forgotten_token_can_be_recognised() {
 
     bare_client().get(app.url("/objects")).bearer_auth(&token).send().await.unwrap();
 
-    let (used,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = ?")
+    let (used,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert!(used.is_some(), "using a token should record that it was used");
 }
