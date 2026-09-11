@@ -1,0 +1,92 @@
+name: Release
+
+# Deliberate releases only: nothing reaches the registry that was not named, and the tag is the
+# single source of the version. ci.yml still guards every commit.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    name: publish image and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+      packages: write   # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # release notes are generated from the commits since the last tag
+
+      # Before anything is built. An image whose /api/health reports a version it is not gets
+      # believed, and the tag would disagree with the binary inside it. Everything else in this
+      # workflow is recoverable by re-running; that is not.
+      - name: The tag must match Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$crate" ]; then
+            echo "tag $GITHUB_REF_NAME says $tag, Cargo.toml says $crate" >&2
+            exit 1
+          fi
+          echo "version $crate"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # 0.2.0 pins exactly, 0.2 follows patches without editing compose, latest is for
+          # trying it out.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      # Built and loaded locally first: a tag can point at any commit, including one ci.yml
+      # never ran against, so the image is booted before anyone can pull it.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: logb:release-candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot the image
+        run: |
+          docker run -d --name logb-release -p 8080:8080 -v logb-release-data:/data logb:release-candidate
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/health; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "health check never succeeded"; docker logs logb-release; exit 1
+
+      # Re-runs the build, but every layer is a cache hit from the step above, so this pushes
+      # the image that was just smoke-tested rather than building a second one.
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```

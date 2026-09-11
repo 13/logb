@@ -21,6 +21,33 @@ a host directory to 65532 before bind-mounting one.
 Everything lives in `./data`: `logb.db` (SQLite), `files/` (originals,
 content-addressed), `thumbs/`.
 
+### Released images
+
+Tagged releases are published to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/13/logb:latest
+```
+
+`0.2.0` pins exactly, `0.2` follows patches, `latest` follows releases. To use one instead of
+building locally, replace the `build: .` line in `docker-compose.yml` with
+`image: ghcr.io/13/logb:latest`.
+
+Upgrading is a pull and a restart:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+A new image applies any pending database migrations when it starts. Take a snapshot first if the
+release notes mention a schema change — see [Backup](#backup).
+
+> The first release has to be made public by hand: GHCR creates packages private, and nothing
+> can change that for a package that does not exist yet. After the first publish, open the
+> package on GitHub → Package settings → Change visibility → Public. Until then `docker pull`
+> fails with `denied`, which does not hint at the cause.
+
 ## On a phone
 
 LogB is a PWA and the phone is the case it is designed for: logging a fill-up
