@@ -41,7 +41,7 @@
             <span class="chip">{$t(`cat.${a.category}`)}</span>
             {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
           </div>
-          <div class="muted">
+          <div class="muted tnum">
             {fmtDate(a.date, $locale)}
             {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
             {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
