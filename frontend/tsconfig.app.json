@@ -4,11 +4,12 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "es2023",
     "module": "esnext",
-    "types": ["svelte", "vite/client", "node"],
+    "types": ["svelte", "vite/client"],
     "allowArbitraryExtensions": true,
     "noEmit": true,
     "strict": true,
     "moduleDetection": "force"
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"],
+  "exclude": ["tests/pwa-icons.test.ts"]
 }

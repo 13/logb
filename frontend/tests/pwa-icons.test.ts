@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { pwaIcons } from '../src/pwa-icons';
+import { pwaIcons } from '../scripts/pwa-icons.ts';
 
 const publicDir = new URL('../public/', import.meta.url);
 

@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
-import { pwaIcons } from './src/pwa-icons.ts';
+import { pwaIcons } from './scripts/pwa-icons.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
