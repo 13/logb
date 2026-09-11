@@ -15,10 +15,14 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub fn sqlite_url(data_dir: &Path) -> Result<String, BoxError> {
     // `?` and `#` are legal in a Linux path and are structural in a URL: a data directory
     // containing either would be silently truncated at that character, and LogB would open a
-    // database somewhere other than where it was told. Refusing is the only honest answer --
-    // encoding them would depend on the driver decoding them back the same way.
+    // database somewhere other than where it was told. `%` is legal in a Linux path too, and
+    // is how a URL escapes other characters: `AnyPool` percent-decodes the path it is given,
+    // but this function does not encode it and `sqlite_file` does not decode it back, so a
+    // directory such as `pct%41` would be opened as `pctA` -- a *different* directory, chosen
+    // silently. Refusing all three is the only honest answer -- encoding them would depend on
+    // the driver decoding them back the same way.
     let dir = data_dir.display().to_string();
-    if let Some(bad) = dir.chars().find(|c| matches!(c, '?' | '#')) {
+    if let Some(bad) = dir.chars().find(|c| matches!(c, '?' | '#' | '%')) {
         return Err(format!(
             "the data directory {dir} contains {bad:?}, which cannot appear in a database URL. \
              Move the data somewhere without it, or set LOGB_DATABASE_URL yourself."
@@ -268,8 +272,12 @@ mod url_tests {
     fn a_data_directory_with_url_punctuation_is_refused_rather_than_truncated() {
         // `?` and `#` are legal in a Linux path. Silently cutting the path there would open a
         // database somewhere other than where the operator said, which is the kind of failure
-        // that looks like data loss.
-        for bad in ["/data/we?rd", "/data/we#rd"] {
+        // that looks like data loss. `%` is legal too, and is how a URL escapes other bytes --
+        // `AnyPool` percent-decodes the path it connects to, so a directory containing a
+        // `%XX` sequence would silently resolve to a *different* directory instead of being
+        // truncated. See `a_percent_escape_in_the_data_directory_cannot_open_a_neighbours_database`
+        // below for the concrete case that motivated adding it here.
+        for bad in ["/data/we?rd", "/data/we#rd", "/data/we%rd"] {
             let err = sqlite_url(Path::new(bad)).unwrap_err().to_string();
             assert!(err.contains(bad), "the message must name the directory: {err}");
             assert!(err.contains("LOGB_DATABASE_URL"), "and say what to do about it: {err}");
@@ -279,5 +287,45 @@ mod url_tests {
     #[test]
     fn an_ordinary_data_directory_still_produces_the_url_it_always_did() {
         assert_eq!(sqlite_url(Path::new("/data")).unwrap(), "sqlite:///data/logb.db?mode=rwc");
+    }
+
+    /// The character check above proves `%` is refused; this proves *why* that matters.
+    ///
+    /// `AnyPool` percent-decodes the URL path it is given. `sqlite_url` does not encode a data
+    /// directory on the way in, and `sqlite_file` does not decode one on the way out, so before
+    /// the guard above existed, a directory literally named `pct%41` and a sibling literally
+    /// named `pctA` were the same database as far as `connect` was concerned: the `%41` in the
+    /// URL decodes to `A`, and `AnyPool` opened `pctA`'s file instead. `--backup` would have
+    /// snapshotted the neighbour and reported success; the directory actually named would never
+    /// get a database of its own.
+    #[tokio::test]
+    async fn a_percent_escape_in_the_data_directory_cannot_open_a_neighbours_database() {
+        let parent = tempfile::tempdir().unwrap();
+        let real_dir = parent.path().join("pctA");
+        let escaped_dir = parent.path().join("pct%41"); // decodes, byte-for-byte, to "pctA"
+        std::fs::create_dir_all(&real_dir).unwrap();
+
+        // Put a marker in the directory that percent-decoding would silently redirect to.
+        let real_url = sqlite_url(&real_dir).unwrap();
+        let marker_pool = connect(&real_url).await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at) \
+             VALUES (999, 'marker', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&marker_pool)
+        .await
+        .unwrap();
+        marker_pool.close().await;
+
+        // Asking for `pct%41` must fail outright -- not succeed by silently decoding onto
+        // `pctA` and handing back a pool that can read its marker row.
+        let opened = match sqlite_url(&escaped_dir) {
+            Err(e) => Err(e),
+            Ok(url) => connect(&url).await,
+        };
+        assert!(
+            opened.is_err(),
+            "a '%' in the data directory must not silently open a neighbouring database"
+        );
     }
 }
