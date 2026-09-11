@@ -92,11 +92,23 @@ button:disabled { opacity: .5; cursor: default; }
 .chip.due { background: var(--danger); color: #fff; }
 .chip.pending { background: var(--warn); color: #fff; flex: none; white-space: nowrap; }
 .chip.dead { background: var(--danger); color: #fff; flex: none; white-space: nowrap; }
-/* Horizontal padding equal to the ring's bleed (2px outline + 2px offset = 4px = --space-1):
-   `overflow-x: auto` clips paint at its own edge, so without this the focus ring on the
-   first/last chip is cut off on the side facing the container edge. Keep this padding if this
-   rule is ever rewritten (e.g. to add a scroll-fade mask) -- a mask clips paint too. */
-.chips { display: flex; gap: var(--space-2); overflow-x: auto; padding: 0 var(--space-1) var(--space-1); }
+/* The row scrolls; without the mask it just looks cut off. The fade is the affordance -- a
+   scrollbar is invisible on a touch device, and an arrow would need a tap target for something
+   a swipe already does. Horizontal padding equal to the ring's bleed (2px outline + 2px offset
+   = 4px = --space-1) keeps the focus ring on the first/last chip from being cut off by
+   `overflow-x: auto`, which clips paint at its own edge -- and the mask below clips paint too,
+   which is why :focus-within removes it. */
+.chips {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: 0 var(--space-1) var(--space-1);
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.chips::-webkit-scrollbar { display: none; }
+/* The fade is a scroll affordance; it has no business dimming a focus ring. */
+.chips:focus-within { mask-image: none; }
 .chips button { min-height: 32px; padding: var(--space-1) var(--space-3); white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
 .topbar h1 { flex: 1; font-size: var(--text-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -110,7 +122,17 @@ button:disabled { opacity: .5; cursor: default; }
 .thumb-strip { display: flex; gap: var(--space-2); overflow-x: auto; margin-top: var(--space-2); }
 .thumb-strip img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; }
 .stat { display: flex; flex-direction: column; } .stat b { font-size: var(--text-data); } .stat span { font-size: var(--text-xs); color: var(--muted); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: var(--space-2); margin: var(--space-3) 0; }
+/* Two columns on a phone, four when there is room -- never three-then-one, which is what
+   auto-fit produced and which reads as a layout that broke rather than one that wrapped. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+@media (min-width: 480px) {
+  .stats { grid-template-columns: repeat(4, 1fr); }
+}
 /* Figures line up when stacked. A column of costs in proportional numerals does not, and this
    app is mostly costs, odometer readings and dates read down a list. Tabular figures are a
    property of the existing family, not a second typeface. */
