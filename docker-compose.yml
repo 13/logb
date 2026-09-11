@@ -13,3 +13,7 @@ services:
       LOGB_SECURE_COOKIE: "auto"
       LOGB_LOG: "info"
       LOGB_TRUST_PROXY: "false"
+      # Nightly snapshot of the database, kept beside it. Unset means no automatic backup at
+      # all, which is how this instance ran until now. Blobs under files/ are content-addressed
+      # and never rewritten, so a plain copy of that directory pairs with any snapshot.
+      LOGB_BACKUP_DIR: "/data/backups"
