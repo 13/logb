@@ -44,9 +44,9 @@ CREATE TABLE objects_new (
 -- fails if the two drift. Exact matches only -- no substring guessing.
 --
 -- `lower()` in SQLite is ASCII-only: it leaves 'Ä' and 'Ö' untouched, while Rust's
--- `to_lowercase()` folds them to 'ä'/'ö'. `gerät` and `körper` are the only two legacy words
--- that contain either umlaut, so `category_key` folds just those two characters, once, and both
--- CASE expressions below key off it instead of off `lower(trim(category))` directly -- one
+-- `to_lowercase()` folds them to 'ä'/'ö'. `gerät`, `haushaltsgerät` and `körper` are the only
+-- legacy words that contain either umlaut, so `category_key` folds just those two characters,
+-- once, and both CASE expressions below key off it instead of off `lower(trim(category))` -- one
 -- decides the type, the other decides whether the original text is preserved, and they must
 -- keep agreeing on what counts as a match.
 INSERT INTO objects_new (id, user_id, name, type, counter_unit, description, purchase_date,
@@ -58,10 +58,10 @@ SELECT id, user_id, name,
          WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike'
          WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike'
          WHEN 'motorcycle' THEN 'motorcycle' WHEN 'motorrad' THEN 'motorcycle' WHEN 'motorbike' THEN 'motorcycle'
-         WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home'
-         WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance'
-         WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool'
-         WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body'
+         WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' WHEN 'flat' THEN 'home' WHEN 'apartment' THEN 'home'
+         WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' WHEN 'geraet' THEN 'appliance' WHEN 'haushaltsgerät' THEN 'appliance'
+         WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' WHEN 'maschine' THEN 'tool'
+         WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' WHEN 'koerper' THEN 'body' WHEN 'health' THEN 'body' WHEN 'gesundheit' THEN 'body'
          ELSE 'other'
        END,
        counter_unit,
@@ -70,8 +70,9 @@ SELECT id, user_id, name,
        CASE
          WHEN category_key IN
            ('car','auto','pkw','wagen','e-bike','ebike','e bike','pedelec','bike','fahrrad','velo','rad',
-            'motorcycle','motorrad','motorbike','home','haus','wohnung','appliance','gerät','tool','werkzeug',
-            'body','körper')
+            'motorcycle','motorrad','motorbike','home','haus','wohnung','flat','apartment',
+            'appliance','gerät','geraet','haushaltsgerät','tool','werkzeug','maschine',
+            'body','körper','koerper','health','gesundheit')
            THEN description
          WHEN trim(category) = '' THEN description
          WHEN trim(description) = '' THEN trim(category)

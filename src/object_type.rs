@@ -24,15 +24,24 @@ pub enum Legacy {
 /// Matching is exact on the lowercased, trimmed text -- never substring. `Gravelbike Custom`
 /// becoming a `bike` by accident is a silent mis-filing with no record that a guess was made;
 /// landing on `other` with the words preserved is visible and fixed in one edit.
-pub const LEGACY: [(&str, &str); 24] = [
+///
+/// `geraet` and `koerper` sit beside `gerät` and `körper` on purpose: a phone keyboard set to
+/// English has no umlauts, which is the likeliest way this data was typed in the first place.
+///
+/// `migrations/0009_object_types.sql` repeats this table in SQL and
+/// `tests/migration_object_types.rs` runs every word here through the real migration, so the
+/// two cannot drift.
+pub const LEGACY: [(&str, &str); 32] = [
     ("car", "car"), ("auto", "car"), ("pkw", "car"), ("wagen", "car"),
     ("e-bike", "e_bike"), ("ebike", "e_bike"), ("e bike", "e_bike"), ("pedelec", "e_bike"),
     ("bike", "bike"), ("fahrrad", "bike"), ("velo", "bike"), ("rad", "bike"),
     ("motorcycle", "motorcycle"), ("motorrad", "motorcycle"), ("motorbike", "motorcycle"),
-    ("home", "home"), ("haus", "home"), ("wohnung", "home"),
-    ("appliance", "appliance"), ("gerät", "appliance"),
-    ("tool", "tool"), ("werkzeug", "tool"),
-    ("body", "body"), ("körper", "body"),
+    ("home", "home"), ("haus", "home"), ("wohnung", "home"), ("flat", "home"), ("apartment", "home"),
+    ("appliance", "appliance"), ("gerät", "appliance"), ("geraet", "appliance"),
+    ("haushaltsgerät", "appliance"),
+    ("tool", "tool"), ("werkzeug", "tool"), ("maschine", "tool"),
+    ("body", "body"), ("körper", "body"), ("koerper", "body"), ("health", "body"),
+    ("gesundheit", "body"),
 ];
 
 pub fn from_legacy(text: &str) -> Legacy {
@@ -55,6 +64,13 @@ mod tests {
         assert_eq!(from_legacy("fahrrad"), Legacy::Mapped("bike"));
         assert_eq!(from_legacy("Werkzeug"), Legacy::Mapped("tool"));
         assert_eq!(from_legacy("körper"), Legacy::Mapped("body"));
+        // A phone keyboard without umlauts is the likeliest source of this data.
+        assert_eq!(from_legacy("Koerper"), Legacy::Mapped("body"));
+        assert_eq!(from_legacy("GERAET"), Legacy::Mapped("appliance"));
+        assert_eq!(from_legacy("Haushaltsgerät"), Legacy::Mapped("appliance"));
+        assert_eq!(from_legacy("Apartment"), Legacy::Mapped("home"));
+        assert_eq!(from_legacy("Maschine"), Legacy::Mapped("tool"));
+        assert_eq!(from_legacy("Gesundheit"), Legacy::Mapped("body"));
     }
 
     /// The ordering trap: every e-bike spelling contains a bike spelling. Matching is exact

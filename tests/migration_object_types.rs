@@ -166,10 +166,10 @@ async fn the_sql_mapping_matches_the_rust_one() {
                    WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike' \
                    WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike' \
                    WHEN 'motorcycle' THEN 'motorcycle' WHEN 'motorrad' THEN 'motorcycle' WHEN 'motorbike' THEN 'motorcycle' \
-                   WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' \
-                   WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' \
-                   WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' \
-                   WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' \
+                   WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' WHEN 'flat' THEN 'home' WHEN 'apartment' THEN 'home' \
+                   WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' WHEN 'geraet' THEN 'appliance' WHEN 'haushaltsgerät' THEN 'appliance' \
+                   WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' WHEN 'maschine' THEN 'tool' \
+                   WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' WHEN 'koerper' THEN 'body' WHEN 'health' THEN 'body' WHEN 'gesundheit' THEN 'body' \
                    ELSE 'other' END")
                 .bind(&variant).fetch_one(&pool).await.unwrap();
             assert_eq!(&mapped, expected, "SQL and Rust disagree on {variant:?} (from {word})");
