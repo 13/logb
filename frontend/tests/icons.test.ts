@@ -26,16 +26,19 @@ function svelteFiles(dir: string): string[] {
 
 // Files that legitimately contain a character the EMOJI pattern matches, but that isn't an
 // emoji standing in for an icon -- excluded explicitly rather than narrowing the pattern.
-const EXCLUSIONS: Record<string, string> = {
-  'App.svelte':
-    "the arrow in `// Route table: pattern → [component, param names]` is inside a source " +
-    'comment, not rendered UI.',
-  'lib/Reminders.svelte':
-    'the ↻ after a due date is a plain-text repeat-indicator glyph (no emoji presentation, ' +
-    'renders in currentColor like any other character) -- not a decorative emoji needing an SVG icon.',
-  'routes/ObjectDetail.svelte':
-    'the ✎ in the edit button is the same kind of plain-text symbol as the ↻ above, already ' +
-    'consistent across platforms and themes.',
+//
+// `char` names the EXACT known glyph the exception is for. The main test below only skips that
+// one occurrence, not the whole file, and the self-check confirms `char` specifically is still
+// there (not just that *something* EMOJI-shaped is) -- so a file that stops needing its
+// exception fails loudly, and a *different* glyph later added to an excluded file isn't
+// silently covered by someone else's exemption.
+const EXCLUSIONS: Record<string, { char: string; reason: string }> = {
+  'App.svelte': {
+    char: '→',
+    reason:
+      "the arrow in `// Route table: pattern → [component, param names]` is inside a source " +
+      'comment, not rendered UI.',
+  },
 };
 
 describe('icons', () => {
@@ -49,8 +52,13 @@ describe('icons', () => {
     // They render differently on every platform and ignore the theme colour. This is the test
     // that stops one creeping back in the next time somebody wants a quick glyph.
     for (const { abs, rel } of files) {
-      if (rel in EXCLUSIONS) continue;
-      const src = readFileSync(abs, 'utf8');
+      let src = readFileSync(abs, 'utf8');
+      const exclusion = EXCLUSIONS[rel];
+      if (exclusion) {
+        // Strip only the exact excused occurrence(s) before scanning, so a *different* emoji
+        // added anywhere in this file -- including right next to the excused one -- still fails.
+        src = src.split(exclusion.char).join('');
+      }
       const hit = src.match(EMOJI);
       expect(hit, `${rel} contains ${hit?.[0]}`).toBeNull();
     }
@@ -58,12 +66,14 @@ describe('icons', () => {
 
   it('every exclusion still exists and still needs its exception', () => {
     // Guards against the exclusion list going stale: a file that got fixed (or removed) should
-    // come out of EXCLUSIONS, not sit there unused.
+    // come out of EXCLUSIONS, not sit there unused -- and this checks for the SPECIFIC excused
+    // character, not merely that the file still matches the general EMOJI pattern (which a
+    // brand-new, unrelated glyph-as-icon would also satisfy, masking a real regression).
     const relPaths = new Set(files.map((f) => f.rel));
-    for (const rel of Object.keys(EXCLUSIONS)) {
+    for (const [rel, { char }] of Object.entries(EXCLUSIONS)) {
       expect(relPaths.has(rel), `${rel} is excluded but no longer exists`).toBe(true);
       const src = readFileSync(join(SRC_ROOT, rel), 'utf8');
-      expect(src.match(EMOJI), `${rel} is excluded but no longer matches EMOJI -- remove the exception`).not.toBeNull();
+      expect(src.includes(char), `${rel} is excluded for ${char} but no longer contains it -- remove the exception`).toBe(true);
     }
   });
 });

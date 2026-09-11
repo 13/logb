@@ -1,7 +1,7 @@
 <script lang="ts">
-  /** Inline SVG rather than a sprite or a library: there are four of them, they must take the
-   *  theme's colour through `currentColor`, and the project has no runtime dependencies. */
-  let { name, size = 20 }: { name: 'back' | 'settings' | 'search' | 'document' | 'camera'; size?: number } = $props();
+  /** Inline SVG rather than a sprite or a library: there are only a handful of them, they must
+   *  take the theme's colour through `currentColor`, and the project has no runtime dependencies. */
+  let { name, size = 20 }: { name: 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'; size?: number } = $props();
 </script>
 
 <svg
@@ -20,8 +20,18 @@
   {:else if name === 'document'}
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <path d="M14 2v6h6" />
-  {:else}
+  {:else if name === 'camera'}
     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
     <circle cx="12" cy="13" r="4" />
+  {:else if name === 'edit'}
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+  {:else if name === 'repeat'}
+    <path d="m17 2 4 4-4 4" />
+    <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+    <path d="m7 22-4-4 4-4" />
+    <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+  {:else}
+    {(name satisfies never)}
   {/if}
 </svg>

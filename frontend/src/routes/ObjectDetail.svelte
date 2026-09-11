@@ -5,6 +5,7 @@
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
+  import Icon from '../lib/Icon.svelte';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -159,7 +160,7 @@
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
     <TopBar title={object.name} backTo="/">
-      <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}>✎</button>
+      <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
 
     {#if object.cover_file_id}
