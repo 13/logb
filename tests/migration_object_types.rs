@@ -143,38 +143,68 @@ async fn the_sync_epoch_is_rotated() {
     assert_eq!(after.len(), 32);
 }
 
-/// The migration's SQL repeats the mapping that `object_type::from_legacy` holds in Rust. Two
-/// copies drift. This runs every word in the Rust table through the migration's own CASE
-/// expression -- as written, uppercased, and with just its first letter capitalised -- and
-/// demands SQL and Rust agree on all three. The uppercased form is what catches an umlaut left
-/// unfolded: SQLite's `lower()` is ASCII-only, so 'GERÄT' stays 'GERÄT' rather than becoming
-/// 'gerät', while Rust's `to_lowercase()` folds it either way.
+/// The migration's SQL repeats the mapping that `object_type::from_legacy` holds in Rust, and
+/// two copies drift.
+///
+/// This used to re-type the migration's `CASE` inline and run *that* against the Rust table,
+/// which tests the test rather than the migration: changing `WHEN 'werkzeug'` in the real file
+/// to `WHEN 'werkzeugXX'` left the whole suite green, because only `Auto` and `E-Bike` -- the
+/// two rows the fixture happens to seed -- ever reached the shipped SQL. So this seeds one
+/// object per `LEGACY` word instead, in several spellings each, and runs the real migration
+/// file over them.
+///
+/// The uppercased spelling is what catches an umlaut left unfolded: SQLite's `lower()` is
+/// ASCII-only, so 'GERÄT' stays 'GERÄT' rather than becoming 'gerät', while Rust's
+/// `to_lowercase()` folds it either way.
+///
+/// The description is checked too, not just the type. The migration holds the word list twice
+/// -- a `CASE` that picks the type, and an `IN` list that decides whether the original text is
+/// preserved -- and a word added to one alone would file the object correctly and then append
+/// a word that had already been understood.
 #[tokio::test]
-async fn the_sql_mapping_matches_the_rust_one() {
+async fn every_legacy_word_maps_through_the_real_migration() {
     let pool = old_schema_with_rows().await;
-    run_0009(&pool).await;
+    let mut seeded: Vec<(i64, String, &str)> = Vec::new();
+    let mut id = 100;
     for (word, expected) in logb::object_type::LEGACY.iter() {
-        let mut chars = word.chars();
-        let capitalized = match chars.next() {
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            None => String::new(),
-        };
-        for variant in [word.to_string(), word.to_uppercase(), capitalized] {
-            let mapped: String = sqlx::query_scalar(
-                "SELECT CASE REPLACE(REPLACE(lower(trim(?1)), 'Ä', 'ä'), 'Ö', 'ö') \
-                   WHEN 'car' THEN 'car' WHEN 'auto' THEN 'car' WHEN 'pkw' THEN 'car' WHEN 'wagen' THEN 'car' \
-                   WHEN 'e-bike' THEN 'e_bike' WHEN 'ebike' THEN 'e_bike' WHEN 'e bike' THEN 'e_bike' WHEN 'pedelec' THEN 'e_bike' \
-                   WHEN 'bike' THEN 'bike' WHEN 'fahrrad' THEN 'bike' WHEN 'velo' THEN 'bike' WHEN 'rad' THEN 'bike' \
-                   WHEN 'motorcycle' THEN 'motorcycle' WHEN 'motorrad' THEN 'motorcycle' WHEN 'motorbike' THEN 'motorcycle' \
-                   WHEN 'home' THEN 'home' WHEN 'haus' THEN 'home' WHEN 'wohnung' THEN 'home' WHEN 'flat' THEN 'home' WHEN 'apartment' THEN 'home' \
-                   WHEN 'appliance' THEN 'appliance' WHEN 'gerät' THEN 'appliance' WHEN 'geraet' THEN 'appliance' WHEN 'haushaltsgerät' THEN 'appliance' \
-                   WHEN 'tool' THEN 'tool' WHEN 'werkzeug' THEN 'tool' WHEN 'maschine' THEN 'tool' \
-                   WHEN 'body' THEN 'body' WHEN 'körper' THEN 'body' WHEN 'koerper' THEN 'body' WHEN 'health' THEN 'body' WHEN 'gesundheit' THEN 'body' \
-                   ELSE 'other' END")
-                .bind(&variant).fetch_one(&pool).await.unwrap();
-            assert_eq!(&mapped, expected, "SQL and Rust disagree on {variant:?} (from {word})");
+        for variant in spellings(word) {
+            sqlx::query(
+                "INSERT INTO objects (id, user_id, name, category, description, created_at, updated_at) \
+                 VALUES (?1, 1, ?2, ?3, 'keep', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+                .bind(id).bind(format!("row {id}")).bind(&variant)
+                .execute(&pool).await.unwrap();
+            seeded.push((id, variant, expected));
+            id += 1;
         }
     }
+    assert_eq!(seeded.len(), 4 * logb::object_type::LEGACY.len(), "every word gets every spelling");
+
+    run_0009(&pool).await;
+
+    for (id, variant, expected) in seeded {
+        let row = sqlx::query("SELECT type, description FROM objects WHERE id = ?1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            row.get::<String, _>("type"),
+            expected,
+            "the migration should file {variant:?} as {expected}",
+        );
+        assert_eq!(
+            row.get::<String, _>("description"),
+            "keep",
+            "{variant:?} was understood, so its text must not also land in the description",
+        );
+    }
+}
+
+/// The spellings one legacy word can arrive in: as written, shouted, sentence-cased, padded.
+fn spellings(word: &str) -> Vec<String> {
+    let mut chars = word.chars();
+    let capitalized = match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    vec![word.to_string(), word.to_uppercase(), capitalized, format!("  {word}  ")]
 }
 
 /// `DELETE FROM field_clock WHERE entity = 'object' AND field = 'category'` targets a column
