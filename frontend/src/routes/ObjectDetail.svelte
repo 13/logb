@@ -209,9 +209,9 @@
 </main>
 
 <style>
-  .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius); }
+  .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
   .desc { white-space: pre-wrap; margin: 8px 0; }
   .info-actions { margin-top: 16px; }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius); background: var(--surface-2); color: var(--text); text-decoration: none; }
+  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
   .tabs .chip { margin-left: 4px; }
 </style>
