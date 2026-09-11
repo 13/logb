@@ -327,7 +327,7 @@
         }
       },
       "patch": {
-        "summary": "Replace an object. Every field except `cover_attachment_id` is a full replace: a field left out is written as null, so send the object whole. `cover_attachment_id` is three-state \u2014 absent keeps the cover, null clears it, an id sets it.",
+        "summary": "Replace an object. Every field except `cover_attachment_id` is a full replace: a field left out is written as null, so send the object whole. `cover_attachment_id` is three-state — absent keeps the cover, null clears it, an id sets it.",
         "parameters": [
           {
             "name": "id",
@@ -1619,14 +1619,17 @@
       "Category": {
         "type": "string",
         "enum": [
-          "fuel",
           "maintenance",
           "repair",
           "purchase",
           "inspection",
-          "insurance",
-          "tax",
-          "other"
+          "modification",
+          "fuel",
+          "other",
+          "symptom",
+          "treatment",
+          "appointment",
+          "medication"
         ]
       },
       "ObjectType": {

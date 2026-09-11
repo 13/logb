@@ -121,3 +121,38 @@ fn the_spec_states_how_to_authenticate() {
         assert_eq!(op["security"], serde_json::json!([]), "{path} should be documented as public");
     }
 }
+
+/// The activity categories the document lists must be the ones the API accepts.
+///
+/// This enum was stale before anyone noticed: it named `insurance` and `tax`, which no version
+/// of this app has ever accepted, and omitted `modification`, which it always has. A spec that
+/// invents values is worse than one that omits them, because a second client written against it
+/// sends something the server rejects.
+#[test]
+fn the_documented_activity_categories_are_the_real_ones() {
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
+    )
+    .expect("docs/openapi.json should be valid JSON");
+    let documented = find_category_enum(&doc).expect("the document should describe activity categories");
+    let real: Vec<String> = logb::api::activities::CATEGORIES.iter().map(|c| c.to_string()).collect();
+    assert_eq!(documented, real, "docs/openapi.json disagrees with api::activities::CATEGORIES");
+}
+
+/// The first `enum` whose members include `maintenance` -- the activity category list.
+fn find_category_enum(node: &Value) -> Option<Vec<String>> {
+    match node {
+        Value::Object(map) => {
+            if let Some(Value::Array(values)) = map.get("enum") {
+                let members: Vec<String> =
+                    values.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                if members.iter().any(|m| m == "maintenance") {
+                    return Some(members);
+                }
+            }
+            map.values().find_map(find_category_enum)
+        }
+        Value::Array(items) => items.iter().find_map(find_category_enum),
+        _ => None,
+    }
+}
