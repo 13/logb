@@ -68,7 +68,10 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: frontend/playwright-report
+          # test-results/, not playwright-report/: the reporter is `list`, which writes no HTML
+          # report, so this step has been silently uploading nothing. Traces and screenshots
+          # land in test-results/.
+          path: frontend/test-results
           retention-days: 7
 
   audit:

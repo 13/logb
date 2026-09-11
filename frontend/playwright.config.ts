@@ -13,7 +13,14 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: 'list',
-  use: { baseURL: 'http://127.0.0.1:8099' },
+  // A trace and a screenshot on failure only. This suite has had a failure that reproduces on
+  // CI and not locally, and a one-line "waiting for locator" message says nothing about what
+  // the page was actually showing at the time -- which is the only question worth answering.
+  use: {
+    baseURL: 'http://127.0.0.1:8099',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+  },
   projects: [{ name: 'mobile', use: { ...devices['Pixel 7'] } }],
   webServer: {
     // The scratch data directory is wiped by the server command itself: this config is
