@@ -67,10 +67,11 @@ The package is **public**. GHCR defaults new packages to private, which would me
 deployment host needs a stored token and a `docker login` to pull its own image. The repository
 is already public, so the image exposes nothing the source does not.
 
-This requires one manual step after the first publish — flipping the package to public in its
-GitHub settings, which no workflow can do for a package that does not yet exist. The README says
-so, next to the pull command, because otherwise the first pull from another machine fails with a
-confusing `denied` and the reason is not discoverable from the error.
+This was expected to need a manual step after the first publish — flipping the package to
+public — but it did not: a package published by Actions from a public repository inherits that
+repository's visibility. Verified on the first release by pulling all three tags with
+`docker logout ghcr.io` first. The README records the anonymous pull, and what to check if one
+ever does fail with `denied`.
 
 ## Documentation
 

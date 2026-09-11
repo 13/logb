@@ -43,10 +43,10 @@ docker compose up -d
 A new image applies any pending database migrations when it starts. Take a snapshot first if the
 release notes mention a schema change — see [Backup](#backup).
 
-> The first release has to be made public by hand: GHCR creates packages private, and nothing
-> can change that for a package that does not exist yet. After the first publish, open the
-> package on GitHub → Package settings → Change visibility → Public. Until then `docker pull`
-> fails with `denied`, which does not hint at the cause.
+> No login is needed: a package published by Actions from a public repository inherits that
+> repository's visibility, so `docker pull` works anonymously. If a pull ever fails with
+> `denied`, check the package's visibility under Package settings on GitHub — that is the only
+> thing which makes this private, and the error does not hint at the cause.
 
 ## On a phone
 
