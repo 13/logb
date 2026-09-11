@@ -90,6 +90,19 @@ impl Config {
             .collect()
     }
 
+    /// The database to open.
+    ///
+    /// `LOGB_DATABASE_URL` when it is set, otherwise the SQLite file inside the data
+    /// directory -- which is where LogB has always kept it. `LOGB_DATA_DIR` is unchanged
+    /// either way: it still decides where blobs live, and it is still the default database
+    /// location.
+    pub fn database_url(&self) -> String {
+        match std::env::var("LOGB_DATABASE_URL") {
+            Ok(url) if !url.trim().is_empty() => url,
+            _ => crate::db::sqlite_url(&self.data_dir),
+        }
+    }
+
     pub fn max_upload_bytes(&self) -> usize {
         self.max_upload_mb * 1024 * 1024
     }

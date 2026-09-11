@@ -1,42 +1,100 @@
 use chrono::{SecondsFormat, Utc};
 use chrono_tz::Tz;
+use sqlx::any::AnyPoolOptions;
+use sqlx::AnyPool;
+use sqlx::Executor;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::SqlitePool;
-use std::path::Path;
-use std::time::Duration;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-pub async fn connect(data_dir: &Path) -> Result<SqlitePool, BoxError> {
-    std::fs::create_dir_all(data_dir)?;
-    let opts = SqliteConnectOptions::new()
-        .filename(data_dir.join("logb.db"))
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5));
-    let pool = SqlitePoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
+/// The default database for a data directory: the SQLite file LogB has always kept there.
+///
+/// `LOGB_DATA_DIR` keeps its meaning -- it is where blobs live, and it is still where the
+/// database goes when `LOGB_DATABASE_URL` says nothing else.
+pub fn sqlite_url(data_dir: &Path) -> String {
+    format!("sqlite://{}/logb.db?mode=rwc", data_dir.display())
+}
+
+/// The file a SQLite URL points at, or `None` for any other backend.
+///
+/// Used only to keep the two things a URL cannot say: that a data directory has to exist
+/// before SQLite can create a file in it, and that `connect_existing` must find a database
+/// rather than make one.
+fn sqlite_file(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("sqlite://").or_else(|| url.strip_prefix("sqlite:"))?;
+    let path = rest.split(['?', '#']).next().unwrap_or("");
+    (!path.is_empty() && path != ":memory:").then(|| PathBuf::from(path))
+}
+
+/// SQLite needs three settings that a connection URL cannot carry: sqlx 0.9's URL parser accepts
+/// only `mode`, `cache`, `immutable` and `vfs`. `AnyPool` connects by URL, so they are applied
+/// to every connection as it is opened instead.
+///
+/// `foreign_keys` is the one that matters. Without it nothing fails -- `ON DELETE CASCADE`
+/// simply stops happening, and the first sign is an attachment that outlived its object.
+/// PostgreSQL enforces foreign keys always and has no equivalent to set.
+///
+/// The busy timeout is a parameter only because the two callers have always differed: the
+/// server waits five seconds for a writer, while the one-shot `--backup` connection waits
+/// thirty, since it is competing with a live instance and has nothing else to do.
+fn after_connect(url: &str, busy_timeout_ms: u32) -> Option<String> {
+    url.starts_with("sqlite:").then(|| {
+        format!(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = {busy_timeout_ms}"
+        )
+    })
+}
+
+/// Builds a pool for `url`, applying the SQLite pragmas to every connection it opens.
+fn pool_options(url: &str, max_connections: u32, busy_timeout_ms: u32) -> AnyPoolOptions {
+    let pragmas = after_connect(url, busy_timeout_ms);
+    AnyPoolOptions::new().max_connections(max_connections).after_connect(move |conn, _meta| {
+        let pragmas = pragmas.clone();
+        Box::pin(async move {
+            if let Some(sql) = pragmas {
+                conn.execute(sqlx::AssertSqlSafe(sql)).await?;
+            }
+            Ok(())
+        })
+    })
+}
+
+pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
+    sqlx::any::install_default_drivers();
+    // SQLite will create the database file, but not the directory holding it.
+    if let Some(file) = sqlite_file(url) {
+        if let Some(dir) = file.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+    }
+    let pool = pool_options(url, if url.starts_with("sqlite:") { 4 } else { 16 }, 5_000)
+        .connect(url)
         .await?;
+    // Task 3 replaces this with `migrator(url)`, choosing between the SQLite and PostgreSQL
+    // migration sets at runtime. Until then there is one set, and it is SQLite's.
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
 
 /// Opens an existing database without running migrations, for read-only side commands such
 /// as `--backup` that must not touch the schema of a running instance.
-pub async fn connect_existing(data_dir: &Path) -> Result<SqlitePool, BoxError> {
-    let path = data_dir.join("logb.db");
-    if !path.exists() {
-        return Err(format!("no database at {}", path.display()).into());
-    }
-    let opts = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(30));
-    Ok(SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?)
+pub async fn connect_existing(url: &str) -> Result<AnyPool, BoxError> {
+    sqlx::any::install_default_drivers();
+    // A `mode=rwc` URL would quietly create an empty database where the operator expected to
+    // find one, and `--backup` would then report success over nothing.
+    let url = match sqlite_file(url) {
+        Some(file) => {
+            if !file.exists() {
+                return Err(format!("no database at {}", file.display()).into());
+            }
+            url.replace("mode=rwc", "mode=rw")
+        },
+        None => url.to_string(),
+    };
+    Ok(pool_options(&url, 1, 30_000).connect(&url).await?)
 }
 
 /// Writes a consistent snapshot of the database to `dest`.
@@ -44,13 +102,61 @@ pub async fn connect_existing(data_dir: &Path) -> Result<SqlitePool, BoxError> {
 /// `VACUUM INTO` is the reason this exists: copying `logb.db` out from under a running
 /// instance can catch it mid-write and miss the WAL entirely, while this runs inside a read
 /// transaction and produces a compacted, self-consistent file.
-pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> Result<(), BoxError> {
+pub async fn backup_to(pool: &AnyPool, dest: &Path) -> Result<(), BoxError> {
     if dest.exists() {
         return Err(format!("{} already exists", dest.display()).into());
     }
     let dest = dest.to_str().ok_or("backup path must be valid UTF-8")?;
     sqlx::query("VACUUM INTO ?").bind(dest).execute(pool).await?;
     Ok(())
+}
+
+/// A boolean that survives the trip through `AnyRow`.
+///
+/// SQLite has no boolean type -- `is_admin` is a 0 or a 1 in an INTEGER column -- so sqlx's
+/// `Any` driver reports that column as `BIGINT`, while PostgreSQL would report a real
+/// `BOOLEAN`. Plain `bool` decodes from only the second, so a row struct shared by both
+/// backends cannot use it. This accepts either shape and is transparent to serde, so the JSON
+/// a client sees is still `true`/`false`.
+///
+/// NOTE FOR THE PLAN: this is the one type `AnyRow` could not carry unchanged, and it is why
+/// Task 4 is free to declare the PostgreSQL column either `BOOLEAN` or an integer -- both
+/// decode here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Bool(pub bool);
+
+impl From<Bool> for bool {
+    fn from(b: Bool) -> Self {
+        b.0
+    }
+}
+
+impl From<bool> for Bool {
+    fn from(b: bool) -> Self {
+        Bool(b)
+    }
+}
+
+impl sqlx::Type<sqlx::Any> for Bool {
+    fn type_info() -> sqlx::any::AnyTypeInfo {
+        <bool as sqlx::Type<sqlx::Any>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::any::AnyTypeInfo) -> bool {
+        use sqlx::any::AnyTypeInfoKind::*;
+        matches!(ty.kind(), Bool | SmallInt | Integer | BigInt)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Any> for Bool {
+    fn decode(value: sqlx::any::AnyValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        // PostgreSQL answers with a real boolean; SQLite answers with the integer it stored.
+        match <bool as sqlx::Decode<sqlx::Any>>::decode(value.clone()) {
+            Ok(b) => Ok(Bool(b)),
+            Err(_) => Ok(Bool(<i64 as sqlx::Decode<sqlx::Any>>::decode(value)? != 0)),
+        }
+    }
 }
 
 /// The instance's wall-clock timezone, set once from `LOGB_TIMEZONE` at startup.

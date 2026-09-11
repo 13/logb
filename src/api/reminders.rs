@@ -128,7 +128,7 @@ impl ReminderInput {
 /// Inserts a reminder row inside the caller's transaction and returns `(id, client_uuid)`, so
 /// every caller can log the create in the same transaction as the write (see `sync::record`).
 async fn insert(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     object_id: i64,
     b: &ReminderInput,
 ) -> Result<(i64, String), AppError> {

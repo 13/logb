@@ -179,7 +179,7 @@ const SQLITE_CONSTRAINT: i32 = 19;
 /// Ownership is resolved by joining back to `objects.user_id` rather than trusting anything in
 /// the op, so a uuid belonging to another account cannot be written through.
 pub async fn apply_op(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     op: &Op,
 ) -> Result<Outcome, AppError> {

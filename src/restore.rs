@@ -110,7 +110,8 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
         )
         .into()
     })?;
-    let pool = match db::connect(data_dir).await {
+    let url = db::sqlite_url(data_dir);
+    let pool = match db::connect(&url).await {
         Ok(pool) => pool,
         Err(e) => match ahead_schema_version(&e) {
             // A snapshot may instead be ahead of this binary -- an older binary restoring a
@@ -129,7 +130,7 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
                      not recognise; treating the schema as ahead (additive-only, per the \
                      health check's own rule) instead of aborting the restore"
                 );
-                db::connect_existing(data_dir).await.map_err(|e| -> BoxError {
+                db::connect_existing(&url).await.map_err(|e| -> BoxError {
                     format!(
                         "restore placed an ahead-schema snapshot but reopening it read-write \
                          failed ({e}). {recovery}. do not start the server against it until \

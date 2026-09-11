@@ -736,7 +736,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
 }
 
 /// The uuid a client knows a row by. Table names here are literals in this file, never input.
-async fn client_uuid(db: &sqlx::SqlitePool, table: &str, id: i64) -> String {
+async fn client_uuid(db: &sqlx::AnyPool, table: &str, id: i64) -> String {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT client_uuid FROM {table} WHERE id = ?"
     )))

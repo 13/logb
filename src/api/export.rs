@@ -18,7 +18,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::Sqlite;
+use sqlx::Any;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
@@ -529,7 +529,7 @@ fn tag(e: AppError, location: &str) -> AppError {
 /// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
 /// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
 async fn import_attachment(
-    state: &App, tx: &mut sqlx::Transaction<'_, Sqlite>, user_id: i64, parent: (i64, Option<i64>),
+    state: &App, tx: &mut sqlx::Transaction<'_, Any>, user_id: i64, parent: (i64, Option<i64>),
     x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>, edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
     let (object_id, activity_id) = parent;

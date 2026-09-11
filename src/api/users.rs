@@ -19,7 +19,7 @@ pub fn router() -> Router<App> {
 pub struct UserOut {
     pub id: i64,
     pub username: String,
-    pub is_admin: bool,
+    pub is_admin: crate::db::Bool,
     pub lang: String,
     pub created_at: String,
 }
@@ -77,10 +77,10 @@ async fn update(
     jar: CookieJar,
     Json(body): Json<UpdateUser>,
 ) -> Result<(CookieJar, Json<UserOut>), AppError> {
-    if !me.is_admin && me.id != id {
+    if !me.is_admin.0 && me.id != id {
         return Err(AppError::Forbidden);
     }
-    if body.is_admin.is_some() && !me.is_admin {
+    if body.is_admin.is_some() && !me.is_admin.0 {
         return Err(AppError::Forbidden);
     }
     let _ = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = ?")

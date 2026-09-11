@@ -2,7 +2,7 @@
 
 use crate::error::AppError;
 
-pub async fn current(db: &sqlx::SqlitePool) -> Result<String, AppError> {
+pub async fn current(db: &sqlx::AnyPool) -> Result<String, AppError> {
     let (v,): (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = 'sync_epoch'")
         .fetch_one(db)
         .await?;
@@ -21,7 +21,7 @@ pub async fn current(db: &sqlx::SqlitePool) -> Result<String, AppError> {
 /// makes every pull 500 through `current`'s `fetch_one`. The `rows_affected` assertion is the
 /// invariant this relies on: for a single primary-keyed row, insert-or-update always affects
 /// exactly one row, so anything else means the write did not do what it claims.
-pub async fn rotate(db: &sqlx::SqlitePool) -> Result<String, AppError> {
+pub async fn rotate(db: &sqlx::AnyPool) -> Result<String, AppError> {
     let fresh = uuid::Uuid::new_v4().to_string();
     let result = sqlx::query(
         "INSERT INTO settings (key, value) VALUES ('sync_epoch', ?) \

@@ -60,7 +60,7 @@ pub(crate) fn edited_at_now() -> String {
 /// treat a cascaded CHILD's uuid as possibly absent -- that row's existence is not this
 /// function's to guarantee, only its own.)
 pub(crate) async fn uuid_of(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     entity: Entity,
     id: i64,
 ) -> Result<String, AppError> {
@@ -78,7 +78,7 @@ pub(crate) async fn uuid_of(
 /// names, and `edited_at` never travels without the `device_id` that clock reading belongs to
 /// -- which is also what keeps this under clippy's argument-count limit.
 async fn insert_change(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -117,7 +117,7 @@ async fn insert_change(
 /// Upserts one `field_clock` row. Shared by `record_create`/`record_update` and by
 /// `apply_op`'s `set` handling, which used to carry its own copy of this exact statement.
 pub(crate) async fn stamp_field_clock(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     entity: Entity,
     entity_uuid: &str,
     field: &str,
@@ -150,7 +150,7 @@ pub(crate) async fn stamp_field_clock(
 /// an absent `field_clock` row loses to nothing (see `apply_op`'s `set` handling: no stored row
 /// means the incoming op is accepted unconditionally).
 pub(crate) async fn record_create(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -174,7 +174,7 @@ pub(crate) async fn record_create(
 /// the log say something happened that didn't -- a no-op edit did not happen, and the log
 /// should not claim it did.
 pub(crate) async fn record_update(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -196,7 +196,7 @@ pub(crate) async fn record_update(
 /// reminders and attachments; an activity's attachments -- are a separate op each, logged by
 /// `log_cascade`; this call only ever accounts for the row the caller actually tombstoned.
 pub(crate) async fn record_delete(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -218,7 +218,7 @@ pub(crate) async fn record_delete(
 /// carries the object it belongs to whether or not it also names an activity. That is the same
 /// column both callers use, so neither can reach a row the other misses.
 pub(crate) async fn cascade_object(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     object_uuid: &str,
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
@@ -259,7 +259,7 @@ pub(crate) async fn cascade_object(
 /// between a deleted attachment and a stale id sitting in `objects`, and in every sync
 /// snapshot, indefinitely.
 pub(crate) async fn clear_cover_of(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     attachment_uuid: &str,
 ) -> Result<(), AppError> {
     sqlx::query(
@@ -279,7 +279,7 @@ pub(crate) async fn clear_cover_of(
 /// function, the two delete paths cannot leave different databases behind for what is meant to
 /// be the same op.
 pub(crate) async fn cascade_activity(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     activity_uuid: &str,
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
@@ -334,7 +334,7 @@ fn nameable(uuids: Vec<Option<String>>) -> impl Iterator<Item = String> {
 /// `edited_at` and `device_id` are the parent's: the cascade is that write's edit at that
 /// moment, and a child carrying a different clock would compete with the parent's op.
 pub(crate) async fn log_cascade(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     edited_at: &str,
     device_id: &str,

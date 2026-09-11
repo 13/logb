@@ -20,7 +20,7 @@ const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 pub struct AuthUser {
     pub id: i64,
     pub username: String,
-    pub is_admin: bool,
+    pub is_admin: crate::db::Bool,
     pub lang: String,
 }
 
@@ -295,7 +295,7 @@ impl FromRequestParts<App> for AdminUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
         let user = AuthUser::from_request_parts(parts, state).await?;
-        if user.is_admin { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
+        if user.is_admin.0 { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
     }
 }
 
@@ -316,7 +316,7 @@ mod tests {
 
     async fn test_state(trust_proxy: bool) -> App {
         let dir = tempfile::tempdir().unwrap();
-        let db = db::connect(dir.path()).await.unwrap();
+        let db = db::connect(&db::sqlite_url(dir.path())).await.unwrap();
         let storage = crate::files::Storage::new(dir.path()).unwrap();
         let config = Config {
             data_dir: dir.path().to_path_buf(),

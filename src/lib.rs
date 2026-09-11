@@ -81,7 +81,7 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
 /// against it (the reminder digest scheduler). Tests use `build`, so they never start it.
 pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxError> {
     db::set_timezone(config.timezone);
-    let db = db::connect(&config.data_dir).await?;
+    let db = db::connect(&config.database_url()).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();
