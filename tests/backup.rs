@@ -442,7 +442,16 @@ async fn restore_refuses_a_file_that_is_not_a_database() {
 /// nothing the operator can act on.
 #[tokio::test]
 async fn backup_and_restore_refuse_on_postgresql() {
-    let Some(url) = common::test_server_url() else { return };
+    // A skipped test is not a passing test: said out loud, the way every other stand-down in
+    // this suite is, so a SQLite-only run's "all green" does not quietly include a test that
+    // did nothing.
+    let Some(url) = common::test_server_url() else {
+        eprintln!(
+            "SKIPPED: backup_and_restore_refuse_on_postgresql -- \
+             set LOGB_TEST_DATABASE_URL to a PostgreSQL server to run it"
+        );
+        return;
+    };
 
     let dest = std::env::temp_dir().join(format!("logb-backup-refuse-{}.db", common::unique_suffix()));
     let err = logb::backup::run_once(&url, &dest).await.unwrap_err().to_string();

@@ -28,7 +28,15 @@ const IN_USE: &str = "the source database is still in use by something else -- s
                       (and anything else connected to it) before copying, so the copy is taken \
                       from a database nobody is writing to";
 
-/// Shown when the destination already holds data.
+/// Shown when the destination is already somebody's database.
+///
+/// The question actually asked is whether it has users, and the message says so rather than
+/// claiming a general emptiness check: `users` is the table every LogB instance fills first and
+/// the only one that means "this database belongs to someone". Rows anywhere else, in a
+/// database with no users, are not refused here -- the verification below finds the destination
+/// holding rows the source does not have, names the table, and rolls the whole copy back. That
+/// is a worse message for a case an operator has to work at to produce, and it is deliberately
+/// not worth a second query per table on every copy to improve it.
 ///
 /// There is deliberately no flag to override this. Both databases number their rows from 1, so
 /// copying into a populated destination collides on the first primary key it writes; and even
@@ -85,6 +93,8 @@ async fn copy(
     // Everything below runs on `tx`, never on `dest` itself. On PostgreSQL that transaction
     // holds the application's advisory lock, so a helper that opened a connection of its own
     // here would block against it and hang rather than fail.
+    // Whether the destination is somebody's database, which is what `users` answers -- not
+    // whether it is empty in general. See `NOT_EMPTY` for what happens to the rest.
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
     if users > 0 {
         return Err(NOT_EMPTY.into());
@@ -143,10 +153,16 @@ async fn copy(
 ///
 /// What is compared is the row count, and -- where the table has the columns -- the sum of its
 /// primary keys and the newest `updated_at`. It is a cheap check rather than a byte-for-byte
-/// one: it catches a table that lost or gained rows, and rows that arrived under different
-/// identifiers, which is what a copy can plausibly get wrong. Column values it does not read
-/// are the copy's own `INSERT ... SELECT *` round trip, which either works for every row or
-/// none.
+/// one: it catches a table that lost or gained rows, and one whose ids are not the ids the
+/// source had -- a destination that renumbered from 1, say, which is the way a copy plausibly
+/// loses identifiers.
+///
+/// What a sum cannot see is a *permutation*: the same ids dealt out to different rows sum to
+/// the same number. Nothing in `copy_table` can produce that -- every row is written with the
+/// id it was read with, in one statement -- and the value-by-value comparison in
+/// `tests/copy.rs` is what actually proves it, table by table, across a change of engine.
+/// Column values this does not read at all are the copy's own `INSERT ... SELECT *` round
+/// trip, which either works for every row or none.
 pub async fn verify(source_url: &str, dest_url: &str) -> Result<(), BoxError> {
     let source = db::connect_existing(source_url).await?;
     let dest = match db::connect_existing(dest_url).await {
