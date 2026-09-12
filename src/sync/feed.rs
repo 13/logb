@@ -140,15 +140,6 @@ pub async fn purge(
         .await?
         .rows_affected();
 
-    // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
-    // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
-    let pinned: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT file_id FROM attachments \
-         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
-        .bind(&cutoff)
-        .fetch_all(db)
-        .await?;
-
     // `files` is absent deliberately: `files.deleted_at` is never set, because
     // `sync::apply::apply_op`'s Delete arm refuses a `delete` op on `Entity::File` outright, so
     // no code path ever produces a file tombstone for this loop to find. A file is
@@ -183,18 +174,31 @@ pub async fn purge(
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
     ];
-    // One transaction around the whole loop, and every delete against it. Run as four separate
-    // autocommit statements they were four separate answers to "has this parent any children
-    // left", each taken at its own moment: on PostgreSQL a `NOT EXISTS` subquery answers from
-    // the snapshot its statement began with, so a child committing while the statement waited
-    // on the parent's row lock was invisible to the guard and still taken by the cascade --
-    // hard-deleted with no tombstone and no `changes` row, which is precisely the silent loss
-    // the guards are here to prevent. Inside `begin_write` the guards and their deletes see one
-    // state, and no other writer can interleave: on PostgreSQL because the advisory lock it
-    // takes is the one every write path takes, on SQLite because `BEGIN IMMEDIATE` holds the
-    // only write lock the database has for the length of the loop rather than for one statement
-    // at a time.
+    // One transaction around the whole purge, and every guarded read or delete against it. Run
+    // as separate autocommit statements they were separate answers to "has this parent any
+    // children left" or "what does this attachment still pin", each taken at its own moment: on
+    // PostgreSQL a `NOT EXISTS` subquery answers from the snapshot its statement began with, so
+    // a child committing while the statement waited on the parent's row lock was invisible to
+    // the guard and still taken by the cascade -- hard-deleted with no tombstone and no
+    // `changes` row, which is precisely the silent loss the guards are here to prevent. The same
+    // gap between an autocommit read and a later autocommit delete could let an attachment cross
+    // the cutoff after `pinned` was read but before its row (or its parent's) is removed, leaking
+    // its blob until the next run. Inside `begin_write` the read, the guards and their deletes
+    // all see one state, and no other writer can interleave: on PostgreSQL because the advisory
+    // lock it takes is the one every write path takes, on SQLite because `BEGIN IMMEDIATE` holds
+    // the only write lock the database has for the length of the transaction rather than for one
+    // statement at a time.
     let mut tx = crate::db::begin_write(db, state.backend).await?;
+
+    // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
+    // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
+    let pinned: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT file_id FROM attachments \
+         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
+        .bind(&cutoff)
+        .fetch_all(&mut *tx)
+        .await?;
+
     for (table, guard) in guards {
         // `table` and `guard` only ever come from the fixed list above, never from user input
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
@@ -203,6 +207,32 @@ pub async fn purge(
             format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
         sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(&mut *tx).await?;
     }
+
+    // A field clock for a row nobody can name any more is dead weight.
+    //
+    // A correlated `NOT EXISTS` per table, not `entity_uuid NOT IN (SELECT client_uuid ...)`.
+    // `client_uuid` is nullable on all five tables, and `x NOT IN (subquery)` evaluates to
+    // UNKNOWN -- never true -- for EVERY row the moment that subquery yields a single NULL. So
+    // one row anywhere in the database without a uuid disabled this sweep entirely, for every
+    // genuinely orphaned clock, permanently and with nothing to show for it. `NOT EXISTS` asks
+    // the only question that matters, "does any row still carry this uuid", and a NULL uuid
+    // simply never matches -- which is right, since a row with no uuid is not one a
+    // `field_clock` row could have been naming.
+    //
+    // Run in the same transaction as the guarded deletes above, not against the pool afterwards:
+    // the same guard-then-delete shape, straddled by a concurrent write, would otherwise lose a
+    // field clock instead of a row -- the next edit to that field would then win on an empty
+    // comparison instead of on its timestamp.
+    sqlx::query(
+        "DELETE FROM field_clock WHERE \
+           NOT EXISTS (SELECT 1 FROM objects WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM activities WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid)")
+        .execute(&mut *tx)
+        .await?;
+
     tx.commit().await?;
 
     // Now that no attachment references them, the unreferenced ones can give up their blob and
@@ -221,26 +251,6 @@ pub async fn purge(
     // which no rollback can put back, so the honest order is rows gone for good first, bytes
     // after.
     crate::api::attachments::purge_orphan_files(state, &pinned).await?;
-
-    // A field clock for a row nobody can name any more is dead weight.
-    //
-    // A correlated `NOT EXISTS` per table, not `entity_uuid NOT IN (SELECT client_uuid ...)`.
-    // `client_uuid` is nullable on all five tables, and `x NOT IN (subquery)` evaluates to
-    // UNKNOWN -- never true -- for EVERY row the moment that subquery yields a single NULL. So
-    // one row anywhere in the database without a uuid disabled this sweep entirely, for every
-    // genuinely orphaned clock, permanently and with nothing to show for it. `NOT EXISTS` asks
-    // the only question that matters, "does any row still carry this uuid", and a NULL uuid
-    // simply never matches -- which is right, since a row with no uuid is not one a
-    // `field_clock` row could have been naming.
-    sqlx::query(
-        "DELETE FROM field_clock WHERE \
-           NOT EXISTS (SELECT 1 FROM objects WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM activities WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid)")
-        .execute(db)
-        .await?;
 
     Ok(removed)
 }
