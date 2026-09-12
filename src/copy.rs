@@ -11,7 +11,12 @@ use sqlx::pool::PoolConnection;
 use sqlx::{Any, AnyPool, AssertSqlSafe, Column, Row, ValueRef};
 
 /// The tables, in an order where every foreign key's target is written before it is.
-const TABLES: [&str; 11] = [
+///
+/// Public because it is the copy's one hand-written list, and a list nothing checks goes stale
+/// silently: a table missing from it is copied nowhere *and* invisible to the verification
+/// below, which reads the same list. `tests/schema_parity.rs` asserts it names exactly the
+/// tables the schema has.
+pub const TABLES: [&str; 11] = [
     "users", "settings", "api_tokens", "sessions", "objects", "activities", "files",
     "attachments", "reminders", "changes", "field_clock",
 ];
@@ -421,9 +426,12 @@ fn identifier(name: &str) -> Result<&str, BoxError> {
 mod tests {
     use super::*;
 
-    /// Every table the schema has must be in `TABLES`: one left out would be copied nowhere,
-    /// silently, and the report would not mention it. The order is the other half -- a foreign
-    /// key's target has to be written before the row pointing at it.
+    /// The order, and that nothing is listed twice: a foreign key's target has to be written
+    /// before the row pointing at it, and a table copied twice would collide on its own keys.
+    ///
+    /// That the list is *complete* is not checkable from here -- it takes a real database to
+    /// say what tables the schema has -- and is asserted in `tests/schema_parity.rs`, against
+    /// both backends' catalogues.
     #[test]
     fn the_table_list_has_no_duplicates_and_puts_targets_before_their_references() {
         let mut seen: Vec<&str> = Vec::new();

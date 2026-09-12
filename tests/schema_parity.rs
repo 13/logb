@@ -30,6 +30,15 @@ struct Schema {
     indexes: BTreeSet<String>,
 }
 
+impl Schema {
+    /// Just the table names, taken from the `table.column` set rather than asked for with a
+    /// query of their own -- so the exclusions made there (`sqlite_%`, `_sqlx_migrations`) hold
+    /// here too, instead of being written out a second time and kept in step by hand.
+    fn tables(&self) -> BTreeSet<String> {
+        self.columns.iter().filter_map(|c| c.split_once('.')).map(|(t, _)| t.to_string()).collect()
+    }
+}
+
 async fn rows(pool: &AnyPool, sql: &'static str) -> BTreeSet<String> {
     let found: Vec<String> = sqlx::query_scalar(sql).fetch_all(pool).await.unwrap();
     found.into_iter().collect()
@@ -171,6 +180,47 @@ fn diff(dimension: &str, sqlite: &BTreeSet<String>, postgres: &BTreeSet<String>)
     })
 }
 
+/// Compares one database's tables with the list `--copy-to` walks, naming what is on each side
+/// and not the other.
+///
+/// `_sqlx_migrations` is excluded from the schema side (by `schema()` above, on both backends)
+/// and is deliberately absent from `TABLES`: it is the migrator's own bookkeeping, and the
+/// destination writes its own copy of it when `--copy-to` migrates it before copying anything.
+/// Carrying the source's across would either collide with that or leave the destination
+/// claiming migrations it never ran.
+fn unlisted_tables(backend: &str, schema: &Schema) -> Option<String> {
+    let listed: BTreeSet<String> = logb::copy::TABLES.iter().map(|t| (*t).to_string()).collect();
+    let tables = schema.tables();
+    let uncopied: Vec<_> = tables.difference(&listed).collect();
+    let unknown: Vec<_> = listed.difference(&tables).collect();
+    (!uncopied.is_empty() || !unknown.is_empty()).then(|| {
+        format!(
+            "`logb::copy::TABLES` and the {backend} schema disagree.\
+             \n  in the schema, copied nowhere:   {uncopied:?}\
+             \n  in the list, not in the schema:  {unknown:?}"
+        )
+    })
+}
+
+/// `--copy-to` walks one hand-written list of tables, and so does the verification that proves
+/// the copy arrived -- so a table missing from it is copied nowhere *and* never compared. The
+/// copy reports success, the operator deletes the source, and the table is gone.
+///
+/// Nothing in `src/copy.rs` can catch that: it takes a real database to say what tables the
+/// schema has. This is that database. SQLite alone, so it runs on every suite run rather than
+/// only where a PostgreSQL server is configured; the same check is made against the PostgreSQL
+/// catalogue in the parity test below, which is also what fails if a table is ever added to one
+/// backend's schema and not the other's.
+#[tokio::test]
+async fn the_copy_lists_exactly_the_tables_the_schema_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = schema(&format!("sqlite://{}/logb.db?mode=rwc", dir.path().display())).await;
+    if let Some(failure) = unlisted_tables("SQLite", &sqlite) {
+        panic!("{failure}\n\n`TABLES` in src/copy.rs has to name every one of them, and only \
+                them, with each table after the ones its foreign keys point at");
+    }
+}
+
 #[tokio::test]
 async fn the_two_schemas_describe_the_same_tables_and_columns() {
     // `LOGB_TEST_DATABASE_URL` is the test harness's own variable, separate from the app's
@@ -194,6 +244,9 @@ async fn the_two_schemas_describe_the_same_tables_and_columns() {
         diff("column nullability", &sqlite.nullable, &postgres.nullable),
         diff("column types", &sqlite.types, &postgres.types),
         diff("indexes", &sqlite.indexes, &postgres.indexes),
+        // Against the catalogue of the backend `--copy-to` exists to move data into, rather
+        // than only inferring it from the SQLite check above and the tables diff.
+        unlisted_tables("PostgreSQL", &postgres),
     ]
     .into_iter()
     .flatten()
