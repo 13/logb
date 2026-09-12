@@ -108,14 +108,20 @@ impl Config {
 
     /// The database to open.
     ///
-    /// The `database_url` field (`LOGB_DATABASE_URL`) when it is set and non-blank, otherwise
-    /// the SQLite file inside the data directory -- which is where LogB has always kept it.
-    /// `LOGB_DATA_DIR` is unchanged either way: it still decides where blobs live, and it is
-    /// still the default database location.
+    /// Consults, in order: the `database_url` field (`LOGB_DATABASE_URL`) when it is set and
+    /// non-blank; then the pointer file written by Settings, if one exists in the data
+    /// directory; then the SQLite file inside the data directory, which is where LogB has
+    /// always kept it. The environment always wins over the file, so an operator who sets it
+    /// cannot have their choice changed from a browser. `LOGB_DATA_DIR` is unchanged in every
+    /// case: it still decides where blobs live, and it is still where the pointer file itself
+    /// lives.
     pub fn database_url(&self) -> Result<String, crate::db::BoxError> {
         match &self.database_url {
             Some(url) if !url.trim().is_empty() => Ok(url.clone()),
-            _ => crate::db::sqlite_url(&self.data_dir),
+            _ => match crate::pointer::read(&self.data_dir) {
+                Some(url) => Ok(url),
+                None => crate::db::sqlite_url(&self.data_dir),
+            },
         }
     }
 
