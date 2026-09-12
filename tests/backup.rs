@@ -8,14 +8,29 @@ mod common;
 /// backend has, not about behaviour that should hold on both, and part five of the PostgreSQL
 /// port is where PostgreSQL gets a backup of its own.
 ///
-/// Only the tests that actually take or restore a snapshot stand down. The two that are about
-/// the surrounding policy -- that backup stays off unless a directory is configured, and that
-/// a file which is not a database is refused -- hold on both backends and still run on both.
-/// `backup_and_restore_refuse_on_postgresql`, below, is the mirror image: it is the one test in
-/// this file that runs only *with* a PostgreSQL URL, and it is what pins the refusal itself.
+/// Only the tests that actually take or restore a snapshot stand down. One that is about the
+/// surrounding policy -- that a file which is not a database is refused -- holds on both
+/// backends and still runs on both. `backup_and_restore_refuse_on_postgresql`, below, is the
+/// mirror image: it is the one test in this file that runs only *with* a PostgreSQL URL, and
+/// it is what pins the refusal itself.
 const VACUUM_INTO_IS_SQLITE: &str =
     "the backup is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of its own \
      in part five of the port";
+
+/// Why `backup_is_off_unless_a_directory_is_configured` also stands down on PostgreSQL, even
+/// though it never calls `VACUUM INTO`.
+///
+/// `tick`'s backend guard (`src/backup.rs`) returns `Ok(None)` for any non-SQLite backend
+/// before it ever reads `backup_dir` -- belt and braces alongside `tasks::spawn`, which is what
+/// actually keeps `tick` from running on PostgreSQL in production. Run this test there and its
+/// one assertion still holds, but for that reason instead of the one its name claims: it would
+/// pass without `backup_dir` gating anything. A test that passes for the wrong reason is worse
+/// than one that stands down, so it stands down, with its own stated reason rather than
+/// borrowing `VACUUM_INTO_IS_SQLITE`, since `VACUUM INTO` is not actually why.
+const BACKEND_GUARD_ALREADY_COVERS_POSTGRES: &str =
+    "tick's backend guard returns None for any non-SQLite backend before backup_dir is even \
+     read, so this test's assertion would hold on PostgreSQL for a different reason than the \
+     one it names";
 
 
 #[tokio::test]
@@ -54,6 +69,12 @@ async fn a_run_writes_and_verifies_a_snapshot() {
 
 #[tokio::test]
 async fn backup_is_off_unless_a_directory_is_configured() {
+    if common::skipped_on_postgres(
+        "backup_is_off_unless_a_directory_is_configured",
+        BACKEND_GUARD_ALREADY_COVERS_POSTGRES,
+    ) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     assert!(logb::backup::tick(&app.state, 23).await.unwrap().is_none());
