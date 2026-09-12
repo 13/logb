@@ -118,10 +118,28 @@ impl Config {
     pub fn database_url(&self) -> Result<String, crate::db::BoxError> {
         match &self.database_url {
             Some(url) if !url.trim().is_empty() => Ok(url.clone()),
-            _ => match crate::pointer::read(&self.data_dir) {
+            // One definition of "the pointer is in force", shared with `pointed_database_url`,
+            // so startup cannot decide the pointer applies while this decides it does not.
+            _ => match self.pointed_database_url() {
                 Some(url) => Ok(url),
                 None => crate::db::sqlite_url(&self.data_dir),
             },
+        }
+    }
+
+    /// The URL when, and only when, it came from the pointer file: the environment is unset and
+    /// Settings has written a database to open.
+    ///
+    /// Startup treats that case more harshly than the other two. A pointer file exists only
+    /// because somebody migrated onto the database it names, so a database that cannot be
+    /// opened, or one that is reachable but holds no users, is a failure rather than a first
+    /// run -- and falling back to the SQLite default would serve the pre-migration data under a
+    /// healthy-looking instance. With no pointer file, nothing here applies and nothing about
+    /// startup changes.
+    pub fn pointed_database_url(&self) -> Option<String> {
+        match &self.database_url {
+            Some(url) if !url.trim().is_empty() => None,
+            _ => crate::pointer::read(&self.data_dir),
         }
     }
 

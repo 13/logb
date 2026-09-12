@@ -21,6 +21,7 @@ use axum::Router;
 use config::Config;
 use state::{App, AppState};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use axum::http::{header, HeaderName, HeaderValue, Request};
 use axum::middleware::Next;
@@ -75,6 +76,63 @@ async fn request_id(mut req: Request<axum::body::Body>, next: Next) -> Response 
     next.run(req).await
 }
 
+/// Opens a single connection, purely so a pointer that names an unreachable database fails
+/// immediately and says why.
+///
+/// `db::connect_with_pool_size` builds a pool, and a pool retries a refused connection until its
+/// acquire timeout: what comes back, thirty seconds later, is "pool timed out while waiting for
+/// an open connection" -- which names neither the database nor the reason. One direct connection
+/// fails at once with the driver's own error.
+async fn probe(url: &str, data_dir: &Path) -> Result<(), db::BoxError> {
+    use sqlx::Connection;
+    sqlx::any::install_default_drivers();
+    match sqlx::AnyConnection::connect(url).await {
+        Ok(conn) => {
+            let _ = conn.close().await;
+            Ok(())
+        },
+        Err(e) => Err(refuse_unreachable(data_dir, url, &e.to_string())),
+    }
+}
+
+/// The pointer names a database that will not open.
+///
+/// Falling back to the SQLite file beside the data would start the instance on whatever it was
+/// moved *off*, which is indistinguishable from having lost everything -- this project has
+/// already served an empty database for nineteen hours without anyone noticing.
+///
+/// The URL is redacted and the driver's own text is scrubbed against it, because this string is
+/// printed to a terminal and written to a log, and the pointer file holds a password.
+fn refuse_unreachable(data_dir: &Path, url: &str, reason: &str) -> db::BoxError {
+    format!(
+        "{} names a database that cannot be opened: {} -- {}. LogB will not start on the SQLite \
+         file beside the data instead: an instance serving the database it was moved off looks \
+         exactly like one that has lost everything. Fix that database, or delete the pointer \
+         file to go back to the default.",
+        pointer::path(data_dir).display(),
+        db::redacted(url),
+        db::scrub(reason, url),
+    )
+    .into()
+}
+
+/// The pointer names a database that opens and holds no users.
+///
+/// A first run has no users either, which is why this applies only when a pointer file exists:
+/// that file is written after a move, so an empty database means the move did not land here.
+fn refuse_empty(data_dir: &Path, url: &str) -> db::BoxError {
+    format!(
+        "{} names a database with no users: {}. The pointer file exists, so LogB was already \
+         moved onto that database -- one with no users in it means the move did not land, or \
+         this is not the database it landed in. Starting anyway would come up healthy and \
+         blank. Point the file at the right database, or delete it to go back to the SQLite \
+         file beside the data.",
+        pointer::path(data_dir).display(),
+        db::redacted(url),
+    )
+    .into()
+}
+
 /// Build the application router with all state initialised (database created and migrated).
 pub async fn build(config: Config) -> Result<Router, db::BoxError> {
     Ok(build_with_state(config).await?.0)
@@ -99,7 +157,28 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
              PostgreSQL's own tooling"
         );
     }
-    let db = db::connect_with_pool_size(&url, config.db_pool_size).await?;
+    // A pointer file means somebody migrated onto the database it names. From here on a
+    // database that will not open, or one that opens with nothing in it, stops the server
+    // instead of quietly becoming a fresh SQLite instance -- see `refuse_unreachable` and
+    // `refuse_empty`. Nothing below runs for an instance with no pointer file, which is every
+    // instance that has not used Settings to move.
+    let pointed = config.pointed_database_url().is_some();
+    if pointed {
+        probe(&url, &config.data_dir).await?;
+    }
+    let db = db::connect_with_pool_size(&url, config.db_pool_size).await.map_err(|e| {
+        if pointed { refuse_unreachable(&config.data_dir, &url, &e.to_string()) } else { e }
+    })?;
+    if pointed {
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .map_err(|e| refuse_unreachable(&config.data_dir, &url, &e.to_string()))?;
+        if users == 0 {
+            db.close().await;
+            return Err(refuse_empty(&config.data_dir, &url));
+        }
+    }
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();
