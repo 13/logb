@@ -35,6 +35,7 @@ pub fn router() -> Router<App> {
         .route("/database/test", post(test))
         .route("/database/switch", post(switch))
         .route("/database/restart", post(restart))
+        .route("/database/backup", get(backup_status))
 }
 
 /// How long the process waits before exiting, so the 202 is on the wire first. See `restart`.
@@ -346,6 +347,65 @@ async fn restart(AdminUser(_): AdminUser) -> (StatusCode, Json<serde_json::Value
                         names. If nothing supervises it, start it yourself.",
         })),
     )
+}
+
+/// Whether LogB is taking automatic backups of the database it is serving, and where.
+#[derive(Serialize)]
+struct BackupStatus {
+    /// `scheduled` on SQLite with a directory configured, `off` on SQLite without one,
+    /// `not_ours` on PostgreSQL -- where `crate::backup` never runs at all (see `backup::tick`
+    /// and `NOT_ON_POSTGRES`), regardless of whether `LOGB_BACKUP_DIR` happens to be set.
+    state: &'static str,
+    /// The configured directory, or `null` for `off` and `not_ours`.
+    directory: Option<String>,
+    /// The newest snapshot's timestamp, or `null` when the directory has none yet -- including
+    /// a directory that does not exist yet, which is what a fresh `scheduled` instance looks
+    /// like before its first run.
+    last_at: Option<String>,
+    /// The configured hour, or `null` for `off` and `not_ours`.
+    hour: Option<u32>,
+}
+
+const NOT_OURS: &str = "not_ours";
+const OFF: &str = "off";
+const SCHEDULED: &str = "scheduled";
+
+/// The modified time of the newest file `crate::backup::tick` would have written
+/// (`logb-*.db`), formatted the way the rest of the API formats timestamps. `None` for a
+/// directory with no snapshot yet, or one that does not exist at all -- neither is an error
+/// here, since `tick` creates the directory itself on its first run.
+fn newest_snapshot(dir: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let newest = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name().to_str().is_some_and(|n| n.starts_with("logb-") && n.ends_with(".db"))
+        })
+        .filter_map(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+        .max()?;
+    let secs = newest.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let at = chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0)?;
+    Some(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// Reports who is responsible for backing up this database up: LogB itself (SQLite, with the
+/// schedule it runs on), nobody through LogB (SQLite with no directory configured), or somebody
+/// else entirely (PostgreSQL). The backend decides `not_ours` before anything else is looked at
+/// -- `LOGB_BACKUP_DIR` may well be set on an instance that was migrated to PostgreSQL, left
+/// over from the compose file it started life on, and it means nothing there.
+async fn backup_status(AdminUser(_): AdminUser, State(state): State<App>) -> Json<BackupStatus> {
+    if state.backend != Backend::Sqlite {
+        return Json(BackupStatus { state: NOT_OURS, directory: None, last_at: None, hour: None });
+    }
+    let Some(dir) = state.config.backup_dir.clone() else {
+        return Json(BackupStatus { state: OFF, directory: None, last_at: None, hour: None });
+    };
+    Json(BackupStatus {
+        state: SCHEDULED,
+        last_at: newest_snapshot(&dir),
+        directory: Some(dir.display().to_string()),
+        hour: Some(state.config.backup_hour),
+    })
 }
 
 #[cfg(test)]

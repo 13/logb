@@ -350,3 +350,56 @@ impl Drop for Spawned {
         let _ = self.0.wait();
     }
 }
+
+/// The answer an operator needs before they need it. On PostgreSQL, LogB is not the thing that
+/// backs this database up -- and someone who migrated through the Settings screen has every
+/// reason to assume otherwise.
+#[tokio::test]
+async fn backup_status_says_who_is_responsible() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let body: serde_json::Value = app.get_json("/database/backup").await;
+
+    match app.state.backend {
+        logb::dialect::Backend::Postgres => {
+            assert_eq!(body["state"], "not_ours");
+            assert!(body["directory"].is_null(), "there is no directory to name: {body}");
+        }
+        logb::dialect::Backend::Sqlite => {
+            // The harness sets no backup directory, so this instance is not taking any.
+            assert_eq!(body["state"], "off");
+        }
+    }
+}
+
+/// With a directory configured, the status names it and the schedule -- a reader should be able
+/// to check the path themselves without going to the compose file.
+#[tokio::test]
+async fn a_configured_backup_directory_is_reported_with_its_hour() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(dir.path().to_path_buf());
+        c.backup_hour = 4;
+    })
+    .await;
+    if app.state.backend != logb::dialect::Backend::Sqlite {
+        eprintln!("SKIPPED: automatic backup is a SQLite mechanism");
+        return;
+    }
+    app.setup("ben", "correct horse").await;
+    let body: serde_json::Value = app.get_json("/database/backup").await;
+    assert_eq!(body["state"], "scheduled");
+    assert_eq!(body["directory"], dir.path().display().to_string());
+    assert_eq!(body["hour"], 4);
+}
+
+/// Reading backup status is not an admin-only secret, but it is not public either: it names a
+/// filesystem path.
+#[tokio::test]
+async fn a_plain_user_cannot_read_backup_status() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let plain = app.create_user_client("anna", "password123").await;
+    let res = plain.get(app.url("/database/backup")).send().await.unwrap();
+    assert_eq!(res.status(), 403);
+}
