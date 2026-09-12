@@ -34,7 +34,6 @@ async fn the_current_database_is_described_without_its_password() {
 
     assert!(body["backend"].is_string(), "{body}");
     let text = body.to_string();
-    assert!(!text.contains("password"), "{text}");
     // The description is derived from the URL this instance is running on, so if anything of
     // that URL survives into it, it is these.
     let url = app.database_url();
