@@ -92,7 +92,7 @@ async fn only_an_admin_may_switch_the_database() {
     let plain = app.create_user_client("anna", "password123").await;
 
     let res = plain
-        .post(app.url("/database/test"))
+        .post(app.url("/database/switch"))
         .json(&json!({ "url": "sqlite::memory:" }))
         .send()
         .await
