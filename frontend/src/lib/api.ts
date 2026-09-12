@@ -42,8 +42,18 @@ async function handle<T>(res: Response, path: string): Promise<T> {
   return body as T;
 }
 
-export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * `timeoutMs` is for the rare request that is *meant* to hold its connection open for a long
+ * time -- today only the database switch, which answers once the whole copy has been made and
+ * verified. `fetch` imposes no deadline of its own, so the default stays "as long as the
+ * network allows"; a caller that passes one is choosing a ceiling far above the work, not a
+ * normal request timeout. Setting it too low is the expensive mistake: the copy would keep
+ * running server-side after the client gave up, and the operator would be told a migration
+ * failed that in fact succeeded.
+ */
+export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
+  if (timeoutMs !== undefined) init.signal = AbortSignal.timeout(timeoutMs);
   if (body !== undefined) {
     init.headers = { 'content-type': 'application/json' };
     init.body = JSON.stringify(body);
