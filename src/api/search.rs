@@ -60,8 +60,15 @@ fn like_pattern(q: &str) -> String {
 ///
 /// Deliberately `LIKE` rather than FTS5: at the scale LogB is built for -- one household's
 /// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
-/// SQLite's `LIKE` folds case for ASCII only, so a query for "olwechsel" will not match
-/// "Ölwechsel"; that is the trade for not carrying an index.
+///
+/// The operator is the one thing the two backends spell differently: PostgreSQL's `LIKE` does
+/// not fold case at all, so it needs `ILIKE`. That is not a pure translation, and it is the
+/// one place a user can tell the two apart. SQLite's `LIKE` folds only the 26 ASCII letters,
+/// so "ÖLWECHSEL" finds "Ölwechsel" but "ölwechsel" does not; PostgreSQL's `ILIKE` folds by the
+/// server's collation, so on a UTF-8 database it finds it. Closing that gap would mean an ICU
+/// build of SQLite or a shadow column of folded text -- a cost out of all proportion to a
+/// search box over one household's belongings. `tests/dialect.rs` pins both halves so the
+/// difference stays a known one rather than a surprise.
 ///
 /// `type` is deliberately not matched. It used to be, back when the column held whatever the
 /// user had typed -- so a German user searching "Auto" found their car. It now holds `car`, an
@@ -78,24 +85,25 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let pattern = like_pattern(term);
 
-    let objects = sqlx::query_as::<_, ObjectRow>(
+    let like = state.backend.case_insensitive_like();
+    let order = state.backend.name_order("name");
+
+    let objects = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-         FROM objects WHERE user_id = ?1 AND deleted_at IS NULL AND ( \
-           name LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\') \
-         ORDER BY archived_at IS NOT NULL, name COLLATE NOCASE LIMIT ?3",
-    )
+         FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND ( \
+           name {like} $2 ESCAPE '\\' OR description {like} $2 ESCAPE '\\') \
+         ORDER BY archived_at IS NOT NULL, {order} LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
 
-    let activities = sqlx::query_as::<_, ActivityHit>(
+    let activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
          a.counter_value, a.cost_cents \
          FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = ?1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND (a.title LIKE ?2 ESCAPE '\\' OR a.notes LIKE ?2 ESCAPE '\\') \
-         ORDER BY a.date DESC, a.id DESC LIMIT ?3",
-    )
+         WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
+           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\') \
+         ORDER BY a.date DESC, a.id DESC LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
 

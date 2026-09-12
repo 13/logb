@@ -1,4 +1,4 @@
-# PostgreSQL, part 2: the sync cursor must not skip
+# PostgreSQL, part 2: what SQLite's single writer was hiding
 
 Status: approved design, not yet implemented. Second of five. Depends on part one.
 
@@ -20,7 +20,39 @@ that refuses to save it.
 
 ## Scope
 
-The ordering guarantee for `changes` on PostgreSQL, and the test that proves it. Nothing else.
+The ordering guarantee for `changes` on PostgreSQL, and every other place the code assumes one
+writer. Implementing part one surfaced a second instance before this spec was revisited, so the
+scope is the class of defect, not the one example.
+
+**First-run setup can be raced.** `src/api/auth.rs:140` creates the first admin with
+`INSERT … SELECT … WHERE NOT EXISTS (SELECT 1 FROM users)`. That re-check inside the statement
+is atomic on SQLite because there is one writer. Under PostgreSQL's READ COMMITTED, two
+concurrent setup requests both see an empty table and **both succeed**, leaving two admin
+accounts — proven by the existing `concurrent_setup_creates_exactly_one_admin` test, which
+passes on SQLite and fails on PostgreSQL. On an instance reachable before it is set up, that is
+a way in.
+
+The fix is the same mechanism as the cursor's: serialise the operation with a
+transaction-scoped advisory lock on PostgreSQL, leaving SQLite untouched.
+
+**The audit has been done**, during part one's final review: seventeen read-then-write sites,
+of which these are unsafe without a single writer. Part two's scope is all of them.
+
+| Site | What breaks |
+|---|---|
+| `src/api/auth.rs:140` | first-run setup: two concurrent setups both succeed, two admins |
+| `src/api/sync.rs:95` | push idempotency is SELECT-then-INSERT on `changes`; a concurrent duplicate hits `idx_changes_user_op` and 500s instead of answering idempotently. The SAVEPOINT at `apply.rs:455` does not cover that INSERT |
+| `src/sync/apply.rs:396-425` | `field_clock` read-compare-write: commit order rather than `edited_at` decides the last-write-wins winner, so the older edit can win |
+| `src/sync/feed.rs:180-193` | purge's `NOT EXISTS` parent guards run as separate autocommit statements. A child created in the gap is hard-deleted by `ON DELETE CASCADE`, with no tombstone — exactly the loss that code's own comment warns about |
+| `changes.seq` | the cursor, described above |
+
+Judged safe, with reasons: `users::create`, the `client_op_id` creates and identical-bytes
+uploads (a unique index plus a winner re-lookup — their `concurrent_*` tests pass on
+PostgreSQL), `auth.rs:239`'s conditional `last_used_at`, `epoch::rotate`'s upsert, and
+`record::cascade_*`, which are single statements.
+
+Racy on SQLite too, so pre-existing rather than introduced by the port, and out of scope here:
+`users::update` demotion, and `purge_orphan_files` blob deletion.
 
 ## Approach
 

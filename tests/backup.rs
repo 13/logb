@@ -1,7 +1,43 @@
 mod common;
 
+/// Why the snapshot tests in this file do not run on PostgreSQL.
+///
+/// LogB's backup is `VACUUM INTO`, and its restore is moving the resulting file back into
+/// place: both are SQLite mechanisms, and PostgreSQL has neither -- its snapshots are
+/// `pg_dump`, taken outside the process. These tests are therefore about a mechanism only one
+/// backend has, not about behaviour that should hold on both, and part five of the PostgreSQL
+/// port is where PostgreSQL gets a backup of its own.
+///
+/// Only the tests that actually take or restore a snapshot stand down. One that is about the
+/// surrounding policy -- that a file which is not a database is refused -- holds on both
+/// backends and still runs on both. `backup_and_restore_refuse_on_postgresql`, below, is the
+/// mirror image: it is the one test in this file that runs only *with* a PostgreSQL URL, and
+/// it is what pins the refusal itself.
+const VACUUM_INTO_IS_SQLITE: &str =
+    "the backup is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of its own \
+     in part five of the port";
+
+/// Why `backup_is_off_unless_a_directory_is_configured` also stands down on PostgreSQL, even
+/// though it never calls `VACUUM INTO`.
+///
+/// `tick`'s backend guard (`src/backup.rs`) returns `Ok(None)` for any non-SQLite backend
+/// before it ever reads `backup_dir` -- belt and braces alongside `tasks::spawn`, which is what
+/// actually keeps `tick` from running on PostgreSQL in production. Run this test there and its
+/// one assertion still holds, but for that reason instead of the one its name claims: it would
+/// pass without `backup_dir` gating anything. A test that passes for the wrong reason is worse
+/// than one that stands down, so it stands down, with its own stated reason rather than
+/// borrowing `VACUUM_INTO_IS_SQLITE`, since `VACUUM INTO` is not actually why.
+const BACKEND_GUARD_ALREADY_COVERS_POSTGRES: &str =
+    "tick's backend guard returns None for any non-SQLite backend before backup_dir is even \
+     read, so this test's assertion would hold on PostgreSQL for a different reason than the \
+     one it names";
+
+
 #[tokio::test]
 async fn a_run_writes_and_verifies_a_snapshot() {
+    if common::skipped_on_postgres("a_run_writes_and_verifies_a_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -19,7 +55,7 @@ async fn a_run_writes_and_verifies_a_snapshot() {
     logb::backup::verify(&made).await.expect("the snapshot opens and passes integrity_check");
 
     // The snapshot is the real database, not an empty file that happens to be valid SQLite.
-    let pool = logb::db::connect_existing(made.parent().unwrap()).await;
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(made.parent().unwrap()).unwrap()).await;
     assert!(pool.is_err(), "connect_existing looks for logb.db, not a dated snapshot");
     let count: i64 = {
         let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&made).read_only(true);
@@ -33,6 +69,12 @@ async fn a_run_writes_and_verifies_a_snapshot() {
 
 #[tokio::test]
 async fn backup_is_off_unless_a_directory_is_configured() {
+    if common::skipped_on_postgres(
+        "backup_is_off_unless_a_directory_is_configured",
+        BACKEND_GUARD_ALREADY_COVERS_POSTGRES,
+    ) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     assert!(logb::backup::tick(&app.state, 23).await.unwrap().is_none());
@@ -40,6 +82,9 @@ async fn backup_is_off_unless_a_directory_is_configured() {
 
 #[tokio::test]
 async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
+    if common::skipped_on_postgres("a_corrupt_snapshot_is_rejected_and_the_previous_one_survives", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -64,6 +109,9 @@ async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
 
 #[tokio::test]
 async fn a_zero_length_file_in_todays_slot_is_replaced() {
+    if common::skipped_on_postgres("a_zero_length_file_in_todays_slot_is_replaced", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -89,6 +137,9 @@ async fn a_zero_length_file_in_todays_slot_is_replaced() {
 
 #[tokio::test]
 async fn a_prune_failure_does_not_mask_a_successful_backup() {
+    if common::skipped_on_postgres("a_prune_failure_does_not_mask_a_successful_backup", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -124,6 +175,9 @@ async fn a_prune_failure_does_not_mask_a_successful_backup() {
 
 #[tokio::test]
 async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
+    if common::skipped_on_postgres("prune_matches_by_name_only_not_by_being_a_real_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -170,6 +224,9 @@ async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
 
 #[tokio::test]
 async fn retention_keeps_the_newest_fourteen() {
+    if common::skipped_on_postgres("retention_keeps_the_newest_fourteen", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -200,6 +257,9 @@ async fn retention_keeps_the_newest_fourteen() {
 
 #[tokio::test]
 async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
+    if common::skipped_on_postgres("restore_brings_back_the_snapshot_and_changes_the_epoch", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -222,13 +282,13 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     // one. Point it at a data directory of its own, seeded from this instance's snapshot.
     let target = tempfile::tempdir().unwrap();
     std::fs::copy(&snapshot, target.path().join("logb.db")).unwrap();
-    let report = logb::restore::run(target.path(), &snapshot).await.unwrap();
+    let report = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await.unwrap();
 
     assert!(report.replaced_to.is_some(), "the database it replaced is kept, not deleted");
     assert!(report.replaced_to.as_ref().unwrap().exists());
     assert_ne!(report.epoch, epoch_before, "a restored database is a different database");
 
-    let pool = logb::db::connect_existing(target.path()).await.unwrap();
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path()).unwrap()).await.unwrap();
     let restored: i64 = sqlx::query_scalar("SELECT count(*) FROM objects").fetch_one(&pool).await.unwrap();
     assert_eq!(restored, 1, "the regrettable object is not in the restored database");
     let name: String = sqlx::query_scalar("SELECT name FROM objects").fetch_one(&pool).await.unwrap();
@@ -241,6 +301,9 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
 /// to; SQLite would read them as that database's journal.
 #[tokio::test]
 async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
+    if common::skipped_on_postgres("restore_moves_aside_an_orphaned_wal_with_no_live_database", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -257,7 +320,7 @@ async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
     std::fs::write(target.path().join("logb.db-wal"), orphan_wal).unwrap();
     std::fs::write(target.path().join("logb.db-shm"), orphan_shm).unwrap();
 
-    logb::restore::run(target.path(), &snapshot).await.unwrap();
+    logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await.unwrap();
 
     // The exact live path must not hold the orphan. This alone is not proof of a fix: SQLite's
     // own close-time checkpoint clears a `-wal` beside a database it just opened regardless of
@@ -303,6 +366,9 @@ async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
 /// prevent.
 #[tokio::test]
 async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoch() {
+    if common::skipped_on_postgres("restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoch", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -321,7 +387,7 @@ async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoc
         sqlx::query(
             "INSERT INTO _sqlx_migrations \
              (version, description, installed_on, success, checksum, execution_time) \
-             VALUES (?, 'from-the-future', CURRENT_TIMESTAMP, 1, ?, 0)")
+             VALUES ($1, 'from-the-future', CURRENT_TIMESTAMP, 1, $2, 0)")
             .bind(99_999_999_i64)
             .bind(vec![0u8; 32])
             .execute(&pool)
@@ -341,12 +407,12 @@ async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoc
     let target = tempfile::tempdir().unwrap();
     std::fs::copy(&snapshot, target.path().join("logb.db")).unwrap();
 
-    let report = logb::restore::run(target.path(), &snapshot).await
+    let report = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await
         .expect("an ahead schema is additive and safe to use as-is, per the health check's own rule");
     assert_ne!(report.epoch, epoch_before, "the epoch must be rotated even on this path");
 
     let epoch_on_disk: String = {
-        let pool = logb::db::connect_existing(target.path()).await.unwrap();
+        let pool = logb::db::connect_existing(&logb::db::sqlite_url(target.path()).unwrap()).await.unwrap();
         let v = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'sync_epoch'")
             .fetch_one(&pool).await.unwrap();
         pool.close().await;
@@ -362,11 +428,31 @@ async fn restore_refuses_a_file_that_is_not_a_database() {
     std::fs::write(&junk, b"absolutely not a database").unwrap();
     std::fs::write(target.path().join("logb.db"), b"the live one").unwrap();
 
-    let err = logb::restore::run(target.path(), &junk).await.unwrap_err();
+    let err = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &junk).await.unwrap_err();
     assert!(err.to_string().contains("not a usable snapshot"), "got: {err}");
     assert_eq!(
         std::fs::read(target.path().join("logb.db")).unwrap(),
         b"the live one",
         "a refused restore must not have touched the live database"
+    );
+}
+
+/// `VACUUM INTO` and replacing the database file are SQLite mechanisms. On PostgreSQL they must
+/// say so and stop, rather than failing somewhere inside sqlx with a syntax error that names
+/// nothing the operator can act on.
+#[tokio::test]
+async fn backup_and_restore_refuse_on_postgresql() {
+    let Some(url) = common::test_server_url() else { return };
+
+    let dest = std::env::temp_dir().join(format!("logb-backup-refuse-{}.db", common::unique_suffix()));
+    let err = logb::backup::run_once(&url, &dest).await.unwrap_err().to_string();
+    assert!(err.contains("PostgreSQL"), "the message must name the reason: {err}");
+    assert!(!dest.exists(), "a refusal must never attempt VACUUM INTO in the first place");
+
+    let err = logb::restore::run(&url, std::path::Path::new("/tmp/whatever.db")).await.unwrap_err().to_string();
+    assert!(err.contains("PostgreSQL"), "the message must name the reason: {err}");
+    assert!(
+        err.contains("copy-to"),
+        "restore's refusal must point at the tool that will move data between databases: {err}"
     );
 }

@@ -51,9 +51,11 @@ async fn read(
 ) -> Result<Json<InsightsOut>, AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
 
+    // Every `SUM` here is cast back to BIGINT: PostgreSQL widens a sum over a BIGINT column to
+    // NUMERIC, which sqlx's `Any` driver cannot decode. SQLite is unaffected by the cast.
     let by_year = sqlx::query_as::<_, Bucket>(
-        "SELECT substr(date, 1, 4) AS bucket, COALESCE(SUM(cost_cents), 0) AS cost_cents, \
-         COUNT(*) AS count FROM activities WHERE object_id = ? AND deleted_at IS NULL \
+        "SELECT substr(date, 1, 4) AS bucket, COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) AS cost_cents, \
+         COUNT(*) AS count FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          GROUP BY bucket ORDER BY bucket DESC",
     )
     .bind(object_id)
@@ -61,8 +63,8 @@ async fn read(
     .await?;
 
     let by_category = sqlx::query_as::<_, Bucket>(
-        "SELECT category AS bucket, COALESCE(SUM(cost_cents), 0) AS cost_cents, \
-         COUNT(*) AS count FROM activities WHERE object_id = ? AND deleted_at IS NULL \
+        "SELECT category AS bucket, COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) AS cost_cents, \
+         COUNT(*) AS count FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          GROUP BY category ORDER BY cost_cents DESC",
     )
     .bind(object_id)
@@ -70,8 +72,8 @@ async fn read(
     .await?;
 
     let (min_counter, max_counter, total_cost): (Option<i64>, Option<i64>, i64) = sqlx::query_as(
-        "SELECT MIN(counter_value), MAX(counter_value), COALESCE(SUM(cost_cents), 0) \
-         FROM activities WHERE object_id = ? AND deleted_at IS NULL",
+        "SELECT MIN(counter_value), MAX(counter_value), COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) \
+         FROM activities WHERE object_id = $1 AND deleted_at IS NULL",
     )
     .bind(object_id)
     .fetch_one(&state.db)
@@ -83,7 +85,7 @@ async fn read(
 
     let fill_rows: Vec<(i64, i64, Option<i64>)> = sqlx::query_as(
         "SELECT counter_value, quantity_milli, cost_cents FROM activities \
-         WHERE object_id = ? AND deleted_at IS NULL AND category = 'fuel' AND counter_value IS NOT NULL \
+         WHERE object_id = $1 AND deleted_at IS NULL AND category = 'fuel' AND counter_value IS NOT NULL \
          AND quantity_milli IS NOT NULL ORDER BY counter_value",
     )
     .bind(object_id)

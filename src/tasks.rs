@@ -20,7 +20,7 @@ const RETENTION_DAYS: i64 = 90;
 /// Logging in used to be the only thing that ever pruned, so an instance nobody signed into
 /// -- or one used from a single long-lived session -- kept every expired row forever.
 pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> {
-    let n = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+    let n = sqlx::query("DELETE FROM sessions WHERE expires_at <= $1")
         .bind(db::now())
         .execute(&state.db)
         .await?
@@ -31,6 +31,17 @@ pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> 
 pub fn spawn(state: App) {
     if state.config.notify_url.is_some() {
         tracing::info!(hour = state.config.notify_hour, timezone = %state.config.timezone, "reminder digest enabled");
+    }
+    // `backup::tick` is `VACUUM INTO`, a SQLite mechanism -- calling it every tick against
+    // PostgreSQL would mean running and failing every night instead of never running. Decided
+    // once here, from the same `state.backend` the rest of the app already trusts, rather than
+    // inside the loop, so the nightly job truly does not run rather than running and failing.
+    let backup_enabled = state.backend == crate::dialect::Backend::Sqlite;
+    if !backup_enabled {
+        tracing::info!(
+            "automatic backup is off: the database is PostgreSQL, and backing it up is the \
+             operator's own responsibility"
+        );
     }
     tokio::spawn(async move {
         let mut since_prune = PRUNE_EVERY;
@@ -55,10 +66,12 @@ pub fn spawn(state: App) {
                 Ok(None) => {}
                 Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
             }
-            match crate::backup::tick(&state, db::local_hour()).await {
-                Ok(Some(path)) => tracing::info!(path = %path.display(), "wrote database snapshot"),
-                Ok(None) => {}
-                Err(e) => tracing::error!(error = %e, "database snapshot failed"),
+            if backup_enabled {
+                match crate::backup::tick(&state, db::local_hour()).await {
+                    Ok(Some(path)) => tracing::info!(path = %path.display(), "wrote database snapshot"),
+                    Ok(None) => {}
+                    Err(e) => tracing::error!(error = %e, "database snapshot failed"),
+                }
             }
         }
     });

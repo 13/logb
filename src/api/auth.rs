@@ -46,7 +46,7 @@ pub struct NewToken {
 async fn list_tokens(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ApiTokenRow>>, AppError> {
     Ok(Json(
         sqlx::query_as::<_, ApiTokenRow>(
-            "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens              WHERE user_id = ? ORDER BY id DESC",
+            "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens              WHERE user_id = $1 ORDER BY id DESC",
         )
         .bind(user.id)
         .fetch_all(&state.db)
@@ -70,7 +70,7 @@ async fn create_token(
     }
     let token = auth::new_api_token();
     let id: (i64,) = sqlx::query_as(
-        "INSERT INTO api_tokens (user_id, name, token_hash, prefix, created_at)          VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO api_tokens (user_id, name, token_hash, prefix, created_at)          VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(user.id)
     .bind(name)
@@ -95,7 +95,7 @@ async fn revoke_token(
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let done = sqlx::query("DELETE FROM api_tokens WHERE id = ? AND user_id = ?")
+    let done = sqlx::query("DELETE FROM api_tokens WHERE id = $1 AND user_id = $2")
         .bind(id).bind(user.id)
         .execute(&state.db).await?;
     // Someone else's token is reported as absent rather than forbidden: whether an id exists is
@@ -137,7 +137,7 @@ async fn setup(
     // pass the check and both become admin — the loser inserts nothing and gets a 409.
     let user = sqlx::query_as::<_, AuthUser>(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) \
-         SELECT ?, ?, 1, 'en', ? WHERE NOT EXISTS (SELECT 1 FROM users) \
+         SELECT $1, $2, 1, 'en', $3 WHERE NOT EXISTS (SELECT 1 FROM users) \
          RETURNING id, username, is_admin, lang",
     )
     .bind(&body.username).bind(hash).bind(db::now())
@@ -156,7 +156,10 @@ async fn login(
     Json(body): Json<Credentials>,
 ) -> Result<(CookieJar, Json<AuthUser>), AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
-    let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE username = ?")
+    // Case-insensitive by `lower(...)` on both sides rather than by the column's collation:
+    // SQLite declares `UNIQUE COLLATE NOCASE`, PostgreSQL carries a unique index on
+    // `lower(username)`, and only this spelling signs "bEn" in as "Ben" on both.
+    let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE lower(username) = lower($1)")
         .bind(&body.username)
         .fetch_optional(&state.db).await?;
     let Some((id, hash)) = row else {
@@ -168,7 +171,7 @@ async fn login(
     if !auth::verify_password(&body.password, &hash) {
         return Err(AppError::Unauthorized);
     }
-    let user = sqlx::query_as::<_, AuthUser>("SELECT id, username, is_admin, lang FROM users WHERE id = ?")
+    let user = sqlx::query_as::<_, AuthUser>("SELECT id, username, is_admin, lang FROM users WHERE id = $1")
         .bind(id).fetch_one(&state.db).await?;
     let token = auth::create_session(&state, user.id).await?;
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));

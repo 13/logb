@@ -30,6 +30,6 @@ async fn write(AdminUser(_): AdminUser, State(state): State<App>, Json(body): Js
     if c.len() != 3 || !c.chars().all(|ch| ch.is_ascii_uppercase()) {
         return Err(AppError::BadRequest("currency must be a 3-letter ISO code like EUR".into()));
     }
-    sqlx::query("UPDATE settings SET value = ? WHERE key = 'currency'").bind(c).execute(&state.db).await?;
+    sqlx::query("UPDATE settings SET value = $1 WHERE key = 'currency'").bind(c).execute(&state.db).await?;
     Ok(Json(Settings { currency: c.to_string() }))
 }

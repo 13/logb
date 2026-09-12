@@ -5,7 +5,16 @@
 //! destructive and operators do sometimes restore the wrong file.
 
 use crate::db::{self, BoxError};
+use crate::dialect::Backend;
 use std::path::{Path, PathBuf};
+
+/// Shown when `--restore` is asked to run against PostgreSQL: replacing a database *file* is a
+/// SQLite mechanism, and PostgreSQL has no file to replace.
+const NOT_ON_POSTGRES: &str =
+    "restore is a SQLite mechanism (it replaces the database file); on PostgreSQL, restore with \
+     PostgreSQL's own tooling. Moving data between a SQLite snapshot and a PostgreSQL database \
+     is a separate operation -- `logb --copy-to` -- that this project will provide separately; \
+     it does not exist yet";
 
 /// Picks out the one `sqlx::migrate!` failure that is not a real migration failure: a snapshot
 /// carrying a migration version this binary's embedded set does not contain. That is the ahead-
@@ -23,6 +32,11 @@ fn ahead_schema_version(err: &BoxError) -> Option<i64> {
 
 #[derive(Debug)]
 pub struct Report {
+    /// The directory the restore actually wrote into -- derived from `url`, which need not
+    /// match any `--data-dir`/`LOGB_DATA_DIR` a caller has configured (see the comment on
+    /// `live`, below). Callers report this rather than their own configured directory, so what
+    /// they print is what happened, not what they assumed.
+    pub data_dir: PathBuf,
     /// Where the replaced database was moved, if there was one.
     pub replaced_to: Option<PathBuf>,
     /// The identity the restored database now advertises. Every device holding the old one is
@@ -30,7 +44,13 @@ pub struct Report {
     pub epoch: String,
 }
 
-pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
+pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
+    // 0. PostgreSQL has no database file to replace -- refuse before touching the snapshot at
+    //    all, rather than failing partway through a SQLite-only file dance.
+    if Backend::of(url) != Backend::Sqlite {
+        return Err(NOT_ON_POSTGRES.into());
+    }
+
     // 1. Prove the source before risking anything.
     crate::backup::verify(snapshot)
         .await
@@ -71,7 +91,16 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
     //    in place it would sit beside the database the copy is about to create, with SQLite
     //    reading it as that database's journal. Both share one stamp so the set, main file or
     //    not, stays recoverable together.
-    let live = data_dir.join("logb.db");
+    // The URL is handed in rather than re-derived from a data directory: `url` is what the
+    // caller actually configured (`LOGB_DATABASE_URL` included, were it ever pointed somewhere
+    // other than the default `logb.db`), so the file this replaces is the one `db::connect`
+    // below will actually open.
+    let live = db::sqlite_file(url)
+        .ok_or_else(|| -> BoxError { format!("{url} does not name a SQLite database file").into() })?;
+    let data_dir = live
+        .parent()
+        .ok_or_else(|| -> BoxError { format!("{} has no parent directory", live.display()).into() })?
+        .to_path_buf();
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let replaced_to = if live.exists() {
         let dest = data_dir.join(format!("logb.db.replaced-{stamp}"));
@@ -110,7 +139,7 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
         )
         .into()
     })?;
-    let pool = match db::connect(data_dir).await {
+    let pool = match db::connect(url).await {
         Ok(pool) => pool,
         Err(e) => match ahead_schema_version(&e) {
             // A snapshot may instead be ahead of this binary -- an older binary restoring a
@@ -129,7 +158,7 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
                      not recognise; treating the schema as ahead (additive-only, per the \
                      health check's own rule) instead of aborting the restore"
                 );
-                db::connect_existing(data_dir).await.map_err(|e| -> BoxError {
+                db::connect_existing(url).await.map_err(|e| -> BoxError {
                     format!(
                         "restore placed an ahead-schema snapshot but reopening it read-write \
                          failed ({e}). {recovery}. do not start the server against it until \
@@ -165,5 +194,5 @@ pub async fn run(data_dir: &Path, snapshot: &Path) -> Result<Report, BoxError> {
     })?;
     pool.close().await;
 
-    Ok(Report { replaced_to, epoch })
+    Ok(Report { data_dir, replaced_to, epoch })
 }

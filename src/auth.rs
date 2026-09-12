@@ -20,7 +20,7 @@ const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 pub struct AuthUser {
     pub id: i64,
     pub username: String,
-    pub is_admin: bool,
+    pub is_admin: crate::db::Bool,
     pub lang: String,
 }
 
@@ -75,8 +75,8 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     let token = new_token();
     let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    sqlx::query("DELETE FROM sessions WHERE expires_at <= ?").bind(db::now()).execute(&state.db).await?;
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1").bind(db::now()).execute(&state.db).await?;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
         .bind(&token).bind(user_id).bind(expires)
         .execute(&state.db).await?;
     Ok(token)
@@ -93,13 +93,13 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
 /// attacker actually took. The cost is that a password change signs the phone out of the API
 /// too, which is why the README says so and the Settings screen says so next to the button.
 pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
-    sqlx::query("DELETE FROM api_tokens WHERE user_id = ?").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM api_tokens WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
     Ok(())
 }
 
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE token = ?").bind(token).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE token = $1").bind(token).execute(&state.db).await?;
     Ok(())
 }
 
@@ -189,7 +189,7 @@ pub fn new_api_token() -> String {
     format!("{TOKEN_PREFIX}{}", new_token())
 }
 
-/// Only the hash is stored (see migrations/0006_api_tokens.sql). SHA-256 rather than a password
+/// Only the hash is stored (see migrations/sqlite/0006_api_tokens.sql). SHA-256 rather than a password
 /// hash: this is a 256-bit random value, not something a user chose, so there is nothing for a
 /// dictionary to attack and no reason to make verification -- which happens on every single
 /// request -- deliberately slow.
@@ -221,7 +221,7 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     let hash = hash_api_token(token);
     let row = sqlx::query_as::<_, AuthUser>(
         "SELECT u.id, u.username, u.is_admin, u.lang FROM api_tokens t \
-         JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+         JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -229,8 +229,8 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     if row.is_some() {
         let today = db::today();
         sqlx::query(
-            "UPDATE api_tokens SET last_used_at = ? \
-             WHERE token_hash = ? AND (last_used_at IS NULL OR last_used_at < ?)",
+            "UPDATE api_tokens SET last_used_at = $1 \
+             WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
         )
         .bind(db::now()).bind(&hash).bind(&today)
         .execute(&state.db).await?;
@@ -253,7 +253,7 @@ impl FromRequestParts<App> for SessionUser {
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         let user = sqlx::query_as::<_, AuthUser>(
             "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
-             JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?",
+             JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
         .bind(db::now())
@@ -280,7 +280,7 @@ impl FromRequestParts<App> for AuthUser {
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         sqlx::query_as::<_, AuthUser>(
             "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
-             JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?",
+             JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
         .bind(db::now())
@@ -295,7 +295,7 @@ impl FromRequestParts<App> for AdminUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
         let user = AuthUser::from_request_parts(parts, state).await?;
-        if user.is_admin { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
+        if user.is_admin.0 { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
     }
 }
 
@@ -316,7 +316,7 @@ mod tests {
 
     async fn test_state(trust_proxy: bool) -> App {
         let dir = tempfile::tempdir().unwrap();
-        let db = db::connect(dir.path()).await.unwrap();
+        let db = db::connect(&db::sqlite_url(dir.path()).unwrap()).await.unwrap();
         let storage = crate::files::Storage::new(dir.path()).unwrap();
         let config = Config {
             data_dir: dir.path().to_path_buf(),
@@ -338,8 +338,16 @@ mod tests {
             trust_proxy,
             login_max_attempts: 10,
             cors_origins: String::new(),
+            database_url: None,
+            db_pool_size: None,
         };
-        Arc::new(AppState { db, storage, config, login_attempts: Mutex::new(HashMap::new()) })
+        Arc::new(AppState {
+            db,
+            backend: crate::dialect::Backend::Sqlite,
+            storage,
+            config,
+            login_attempts: Mutex::new(HashMap::new()),
+        })
     }
 
     fn peer() -> SocketAddr {

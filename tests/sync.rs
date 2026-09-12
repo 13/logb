@@ -26,14 +26,14 @@ async fn every_created_row_gets_a_client_uuid() {
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
 
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(id)
         .fetch_one(&app.state.db)
         .await
         .unwrap();
     assert_eq!(uuid.len(), 36, "a v4 uuid in hyphenated form: {uuid}");
 
-    let deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = ?")
+    let deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = $1")
         .bind(id)
         .fetch_one(&app.state.db)
         .await
@@ -72,17 +72,17 @@ async fn deleting_an_object_tombstones_it_and_its_children() {
         204
     );
 
-    let object_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = ?")
+    let object_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(object_rows, 1, "the row survives; only deleted_at is set");
 
     let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM objects WHERE id = ? AND deleted_at IS NULL")
+        "SELECT count(*) FROM objects WHERE id = $1 AND deleted_at IS NULL")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(live, 0, "the object is tombstoned");
 
     let live_children: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM activities WHERE object_id = ? AND deleted_at IS NULL")
+        "SELECT count(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(live_children, 0, "children are tombstoned with the parent");
 
@@ -330,7 +330,7 @@ async fn a_set_op_updates_the_row_and_is_logged() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -344,7 +344,7 @@ async fn a_set_op_updates_the_row_and_is_logged() {
     assert_eq!(body["results"][0]["outcome"], "accepted");
     assert!(body["server_time"].is_string());
 
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Golf VII");
 
@@ -358,7 +358,7 @@ async fn an_older_edit_is_superseded_but_still_recorded() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -377,7 +377,7 @@ async fn an_older_edit_is_superseded_but_still_recorded() {
     let body: serde_json::Value = res.json().await.unwrap();
 
     assert_eq!(body["results"][0]["outcome"], "superseded");
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Newer", "the loser must not overwrite the winner");
     let logged: i64 = sqlx::query_scalar("SELECT count(*) FROM changes WHERE client_op_id = 'op-old'")
@@ -390,7 +390,7 @@ async fn a_replayed_push_is_idempotent() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -412,7 +412,7 @@ async fn a_replayed_push_is_idempotent() {
         let body: serde_json::Value = res.json().await.unwrap();
         assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
     }
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Once", "the op actually applied, not merely logged");
 
@@ -426,7 +426,7 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -452,7 +452,7 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
         assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
     }
 
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Later", "the chronologically later edit must win");
 
@@ -473,7 +473,7 @@ async fn timestamps_are_compared_chronologically_not_lexically() {
     }]))).send().await.unwrap();
     assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "rejected");
 
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Later");
 }
@@ -483,7 +483,7 @@ async fn a_field_outside_the_whitelist_is_rejected() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -504,7 +504,7 @@ async fn an_operation_naming_the_removed_field_is_rejected_not_fatal() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -544,7 +544,7 @@ async fn a_foreign_key_field_cannot_point_at_another_users_row() {
     // attachment as its cover image.
     let mallory = app.create_user_client("mallory", "another password").await;
     let theirs = app.create_object(&mallory, "Bike", None).await;
-    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(theirs["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -557,7 +557,7 @@ async fn a_foreign_key_field_cannot_point_at_another_users_row() {
     assert_eq!(body["results"][0]["outcome"], "rejected");
 
     let cover: Option<i64> = sqlx::query_scalar(
-        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = $1")
         .bind(&their_uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(cover.is_none(), "the cross-account reference must not have landed");
 }
@@ -567,7 +567,7 @@ async fn one_user_cannot_push_at_another_users_row() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -580,7 +580,7 @@ async fn one_user_cannot_push_at_another_users_row() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected");
 
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Golf", "an unrelated user changed nothing");
 }
@@ -590,7 +590,7 @@ async fn results_stay_in_the_order_the_ops_were_sent() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -640,13 +640,13 @@ async fn two_users_can_use_the_same_client_op_id() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let mine = app.create_object(&app.client, "Golf", Some("km")).await;
-    let my_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let my_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(mine["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
     let other = app.create_user_client("mallory", "another password").await;
     let theirs = app.create_object(&other, "Bike", None).await;
-    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let their_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(theirs["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -669,7 +669,7 @@ async fn two_users_can_use_the_same_client_op_id() {
     }
 
     for (uuid, expected) in [(&my_uuid, "Golf VII"), (&their_uuid, "Brompton")] {
-        let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = ?")
+        let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
             .bind(uuid).fetch_one(&app.state.db).await.unwrap();
         assert_eq!(&name, expected, "each account's own write must land");
     }
@@ -686,7 +686,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let object_id = car["id"].as_i64().unwrap();
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
 
     let form = reqwest::multipart::Form::new().part(
@@ -717,7 +717,7 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
 
     let cover: Option<i64> = sqlx::query_scalar(
-        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(cover, Some(attachment_id), "the column must be untouched by the rejected op");
 
@@ -730,15 +730,15 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
     let cover: Option<i64> = sqlx::query_scalar(
-        "SELECT cover_attachment_id FROM objects WHERE client_uuid = ?")
+        "SELECT cover_attachment_id FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(cover.is_none(), "null clears the reference");
 }
 
 /// The uuid a client knows a row by. Table names here are literals in this file, never input.
-async fn client_uuid(db: &sqlx::SqlitePool, table: &str, id: i64) -> String {
+async fn client_uuid(db: &sqlx::AnyPool, table: &str, id: i64) -> String {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT client_uuid FROM {table} WHERE id = ?"
+        "SELECT client_uuid FROM {table} WHERE id = $1"
     )))
     .bind(id)
     .fetch_one(db)
@@ -829,7 +829,7 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
         [("activity", activity_id), ("reminder", reminder_id), ("attachment", attachment_id)]
     {
         assert_ne!(child_id, object_id, "the {label} id must not equal its own object_id");
-        let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = ?")
+        let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = $1")
             .bind(child_id).fetch_optional(&app.state.db).await.unwrap();
         assert_eq!(
             owner,
@@ -859,13 +859,13 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
         assert_eq!(body["results"][i]["reason"], "unknown entity_uuid", "{body}");
     }
 
-    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = $1")
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(title, "Timing belt", "another account's activity is untouched");
-    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = ?")
+    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = $1")
         .bind(reminder_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(title, "Service", "another account's reminder is untouched");
-    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = ?")
+    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(caption, "", "another account's attachment is untouched");
 
@@ -895,13 +895,13 @@ async fn one_user_cannot_push_at_another_users_activity_reminder_or_attachment()
         assert_eq!(body["results"][i]["outcome"], "accepted", "{body}");
     }
 
-    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+    let title: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = $1")
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(title, "Timing belt done", "the owner's own write must land");
-    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = ?")
+    let title: String = sqlx::query_scalar("SELECT title FROM reminders WHERE id = $1")
         .bind(reminder_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(title, "Service booked", "the owner's own write must land");
-    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = ?")
+    let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(caption, "The old belt", "the owner's own write must land");
 }
@@ -927,10 +927,10 @@ async fn a_delete_op_tombstones_the_row_and_the_api_stops_serving_it() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
 
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE id = ?")
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE id = $1")
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(rows, 1, "the row survives; only deleted_at is set");
-    let deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM activities WHERE id = ?")
+    let deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM activities WHERE id = $1")
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert!(deleted.is_some(), "the delete op tombstones the row");
 
@@ -1000,7 +1000,7 @@ async fn a_constraint_violating_op_is_rejected_without_poisoning_the_batch() {
     // The transaction stayed usable: the ops either side of the failures really committed, and
     // the failing statements changed nothing.
     let row: (String, String, Option<String>, String) = sqlx::query_as(
-        "SELECT name, type, counter_unit, description FROM objects WHERE client_uuid = ?")
+        "SELECT name, type, counter_unit, description FROM objects WHERE client_uuid = $1")
         .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(
         row,
@@ -1048,11 +1048,11 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
 
     // Neither column was written -- the old code stored NULL and called it success.
     let price: Option<i64> = sqlx::query_scalar(
-        "SELECT purchase_price_cents FROM objects WHERE client_uuid = ?")
+        "SELECT purchase_price_cents FROM objects WHERE client_uuid = $1")
         .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(price.is_none(), "the row still holds what the REST create put there");
     let counter: Option<i64> = sqlx::query_scalar(
-        "SELECT counter_value FROM activities WHERE client_uuid = ?")
+        "SELECT counter_value FROM activities WHERE client_uuid = $1")
         .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(counter, Some(1000), "the good value the REST create wrote must survive");
 
@@ -1067,7 +1067,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the client can still repair: {body}");
     let price: Option<i64> = sqlx::query_scalar(
-        "SELECT purchase_price_cents FROM objects WHERE client_uuid = ?")
+        "SELECT purchase_price_cents FROM objects WHERE client_uuid = $1")
         .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(price, Some(1250));
 
@@ -1080,7 +1080,7 @@ async fn a_number_that_is_not_an_integer_is_rejected_and_leaves_the_clock_alone(
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
     let cost: Option<i64> = sqlx::query_scalar(
-        "SELECT cost_cents FROM activities WHERE client_uuid = ?")
+        "SELECT cost_cents FROM activities WHERE client_uuid = $1")
         .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(cost, Some(9900));
 }
@@ -1121,11 +1121,26 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
     }
 
     // The columns still hold what they held, in the storage class they are declared with.
-    let stored: (String, Option<i64>) = sqlx::query_as(
-        "SELECT typeof(counter_value), counter_value FROM activities WHERE id = ?")
-        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(stored, ("integer".into(), Some(1000)), "the integer column is still an integer");
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = ?")
+    //
+    // `typeof` is SQLite's function, and so is the question behind it: only SQLite would have
+    // stored the string `"abc"` in an INTEGER column in the first place, so only there is
+    // "is this column still holding an integer?" something a test can ask. PostgreSQL cannot
+    // put anything but a bigint in a bigint column -- a wrongly typed write is an error, not a
+    // silently different storage class -- so the value is the whole of what is left to check.
+    let counter: Option<i64> = match app.state.backend {
+        logb::dialect::Backend::Sqlite => {
+            let stored: (String, Option<i64>) = sqlx::query_as(
+                "SELECT typeof(counter_value), counter_value FROM activities WHERE id = $1")
+                .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+            assert_eq!(stored.0, "integer", "the integer column is still an integer");
+            stored.1
+        },
+        logb::dialect::Backend::Postgres => sqlx::query_scalar(
+            "SELECT counter_value FROM activities WHERE id = $1")
+            .bind(activity_id).fetch_one(&app.state.db).await.unwrap(),
+    };
+    assert_eq!(counter, Some(1000), "the integer column still holds the value it held");
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Golf", "the text column is untouched");
 
@@ -1147,7 +1162,7 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "the rejected op left no clock: {body}");
-    let counter: Option<i64> = sqlx::query_scalar("SELECT counter_value FROM activities WHERE id = ?")
+    let counter: Option<i64> = sqlx::query_scalar("SELECT counter_value FROM activities WHERE id = $1")
         .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(counter, Some(2000));
 }
@@ -1157,7 +1172,7 @@ async fn pull_returns_ops_after_the_cursor_and_advances_it() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -1191,7 +1206,7 @@ async fn pull_pages_and_reports_incompleteness() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -1220,7 +1235,7 @@ async fn a_pulled_change_rows_fields_match_the_op_that_produced_it() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf VI", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -1260,7 +1275,7 @@ async fn pull_pages_chain_to_deliver_every_row_exactly_once_in_seq_order() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
 
@@ -1310,7 +1325,7 @@ async fn pull_never_leaks_another_users_changes() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1330,7 +1345,7 @@ async fn a_cursor_before_the_horizon_is_gone() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1372,7 +1387,7 @@ async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1501,16 +1516,16 @@ async fn bootstrap_scopes_every_child_table_and_hides_a_live_child_of_a_tombston
     // to catch since the child rows here are otherwise ordinary and live.
     let (orphan_object, orphan_activity, orphan_reminder, orphan_attachment) =
         object_with_children(&app, &app.client, "Orphaned").await;
-    sqlx::query("UPDATE objects SET deleted_at = ? WHERE id = ?")
+    sqlx::query("UPDATE objects SET deleted_at = $1 WHERE id = $2")
         .bind(logb::db::now()).bind(orphan_object).execute(&app.state.db).await.unwrap();
-    let object_deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = ?")
+    let object_deleted: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = $1")
         .bind(orphan_object).fetch_one(&app.state.db).await.unwrap();
     assert!(object_deleted.is_some(), "fixture setup: the object must be tombstoned");
     for (table, id) in [
         ("activities", orphan_activity), ("reminders", orphan_reminder), ("attachments", orphan_attachment),
     ] {
         let deleted: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT deleted_at FROM {table} WHERE id = ?"
+            "SELECT deleted_at FROM {table} WHERE id = $1"
         )))
         .bind(id).fetch_one(&app.state.db).await.unwrap();
         assert!(deleted.is_none(), "fixture setup: the {table} row must still be live");
@@ -1532,7 +1547,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let object_id = car["id"].as_i64().unwrap();
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
 
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1544,7 +1559,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     // Backdate both the log row and a tombstone well past any sane window.
     sqlx::query("UPDATE changes SET applied_at = '2000-01-01T00:00:00Z'")
         .execute(&app.state.db).await.unwrap();
-    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = $1")
         .bind(object_id).execute(&app.state.db).await.unwrap();
 
     let removed = logb::sync::feed::purge(&app.state, 90).await.unwrap();
@@ -1556,7 +1571,7 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(rows, 0);
 
-    let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = ?")
+    let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(objects, 0, "an expired tombstone is finally a real delete");
 }
@@ -1566,7 +1581,7 @@ async fn purge_keeps_recent_history() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(car["id"].as_i64().unwrap())
         .fetch_one(&app.state.db).await.unwrap();
     app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1602,7 +1617,7 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
     let attachment_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
 
     let sha: String = sqlx::query_scalar(
-        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     let blob = app.state.storage.blob_path(&sha);
     assert!(blob.exists(), "the upload landed on disk");
@@ -1650,7 +1665,7 @@ async fn a_pushed_object_delete_cascades_tombstones_and_logs_each_child() {
         [("activities", activity_id), ("reminders", reminder_id), ("attachments", attachment_id)]
     {
         let deleted: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT deleted_at FROM {table} WHERE id = ?"
+            "SELECT deleted_at FROM {table} WHERE id = $1"
         )))
         .bind(id).fetch_one(&app.state.db).await.unwrap();
         assert!(deleted.is_some(), "the {table} row must be tombstoned with its object");
@@ -1664,7 +1679,7 @@ async fn a_pushed_object_delete_cascades_tombstones_and_logs_each_child() {
         ("attachment", &attachment_uuid),
     ] {
         let logged: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM changes WHERE entity = ? AND entity_uuid = ? AND op = 'delete'")
+            "SELECT count(*) FROM changes WHERE entity = $1 AND entity_uuid = $2 AND op = 'delete'")
             .bind(entity).bind(uuid).fetch_one(&app.state.db).await.unwrap();
         assert_eq!(logged, 1, "the cascaded {entity} delete must be in the log for other devices");
     }
@@ -1719,12 +1734,12 @@ async fn a_pushed_activity_delete_cascades_to_its_attachments() {
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
     let deleted: Option<String> =
-        sqlx::query_scalar("SELECT deleted_at FROM attachments WHERE id = ?")
+        sqlx::query_scalar("SELECT deleted_at FROM attachments WHERE id = $1")
             .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert!(deleted.is_some(), "the activity's attachment must be tombstoned with it");
 
     let logged: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM changes WHERE entity = 'attachment' AND entity_uuid = ? \
+        "SELECT count(*) FROM changes WHERE entity = 'attachment' AND entity_uuid = $1 \
          AND op = 'delete'")
         .bind(&attachment_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(logged, 1, "the cascaded attachment delete must be in the log");
@@ -1752,7 +1767,7 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "set cover failed: {}", res.text().await.unwrap());
     let cover: Option<i64> =
-        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = $1")
             .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(cover, Some(attachment_id), "fixture setup: the cover must be set before deletion");
 
@@ -1763,14 +1778,14 @@ async fn a_pushed_attachment_delete_clears_the_objects_cover() {
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
     let cover: Option<i64> =
-        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+        sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = $1")
             .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert!(cover.is_none(), "a pushed attachment delete must clear the object's cover, same as REST");
 }
 
 /// `apply_op`'s own-row tombstone `UPDATE` set only `deleted_at`, while the REST delete
 /// handlers also stamp `updated_at`. Only `objects` and `activities` carry that column
-/// (`reminders`, `attachments` and `files` do not -- see `migrations/0001_init.sql`), so this
+/// (`reminders`, `attachments` and `files` do not -- see `migrations/sqlite/0001_init.sql`), so this
 /// bumps the object's own row and, through `cascade_object`, the cascaded activity's row too.
 #[tokio::test]
 async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_activities() {
@@ -1783,9 +1798,9 @@ async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_acti
     // Backdate both rows' `updated_at` so a later read can tell a real bump from a value that
     // was already current.
     let stale = "2020-01-01T00:00:00Z";
-    sqlx::query("UPDATE objects SET updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE objects SET updated_at = $1 WHERE id = $2")
         .bind(stale).bind(object_id).execute(&app.state.db).await.unwrap();
-    sqlx::query("UPDATE activities SET updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE activities SET updated_at = $1 WHERE id = $2")
         .bind(stale).bind(activity_id).execute(&app.state.db).await.unwrap();
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1794,12 +1809,12 @@ async fn a_pushed_object_delete_bumps_updated_at_on_itself_and_its_cascaded_acti
     }]))).send().await.unwrap();
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
-    let object_updated: String = sqlx::query_scalar("SELECT updated_at FROM objects WHERE id = ?")
+    let object_updated: String = sqlx::query_scalar("SELECT updated_at FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_ne!(object_updated, stale, "the object's own tombstone must bump updated_at");
 
     let activity_updated: String =
-        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = ?")
+        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = $1")
             .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_ne!(activity_updated, stale, "a cascaded activity tombstone must bump updated_at too");
 }
@@ -1816,7 +1831,7 @@ async fn a_pushed_activity_delete_bumps_its_own_updated_at() {
     let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
 
     let stale = "2020-01-01T00:00:00Z";
-    sqlx::query("UPDATE activities SET updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE activities SET updated_at = $1 WHERE id = $2")
         .bind(stale).bind(activity_id).execute(&app.state.db).await.unwrap();
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -1826,7 +1841,7 @@ async fn a_pushed_activity_delete_bumps_its_own_updated_at() {
     assert_eq!(res.status(), 200, "push failed: {}", res.text().await.unwrap());
 
     let activity_updated: String =
-        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = ?")
+        sqlx::query_scalar("SELECT updated_at FROM activities WHERE id = $1")
             .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
     assert_ne!(activity_updated, stale, "a directly-deleted activity must bump its own updated_at");
 }
@@ -1848,7 +1863,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
     let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
 
     let sha: String = sqlx::query_scalar(
-        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        "SELECT f.sha256 FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     let blob = app.state.storage.blob_path(&sha);
     assert!(blob.exists(), "the fixture's upload landed on disk");
@@ -1862,7 +1877,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
     // Only the object's tombstone is aged out. Its children were tombstoned just now, so they
     // are still inside the window and the purge has no business removing them yet -- through
     // the cascade or otherwise.
-    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = $1")
         .bind(object_id).execute(&app.state.db).await.unwrap();
     logb::sync::feed::purge(&app.state, 90).await.unwrap();
 
@@ -1870,7 +1885,7 @@ async fn a_purge_after_a_pushed_delete_destroys_no_live_child_and_leaks_no_blob(
         [("activities", activity_id), ("reminders", reminder_id), ("attachments", attachment_id)]
     {
         let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM {table} WHERE id = ?"
+            "SELECT count(*) FROM {table} WHERE id = $1"
         )))
         .bind(id).fetch_one(&app.state.db).await.unwrap();
         assert_eq!(rows, 1, "the {table} row is still inside the window and must survive");
@@ -1917,7 +1932,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
         let car = app.create_object(&app.client, "Golf", Some("km")).await;
         let object_id = car["id"].as_i64().unwrap();
         let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
-        let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = ?")
+        let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = $1")
             .bind(object_id).fetch_one(&app.state.db).await.unwrap();
 
         // A live clock the sweep must leave alone, so a run that swept everything -- rather
@@ -1936,38 +1951,38 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
             "objects" => {
                 sqlx::query(
                     "INSERT INTO objects (user_id, name, type, created_at, updated_at) \
-                     VALUES (?, 'Legacy', 'car', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
+                     VALUES ($1, 'Legacy', 'car', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
                     .bind(user_id).execute(&app.state.db).await.unwrap();
             }
             "activities" => {
                 sqlx::query(
                     "INSERT INTO activities \
                      (object_id, date, category, title, notes, created_at, updated_at) \
-                     VALUES (?, '2026-03-05', 'other', 'Legacy', '', \
+                     VALUES ($1, '2026-03-05', 'other', 'Legacy', '', \
                              '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')")
                     .bind(object_id).execute(&app.state.db).await.unwrap();
             }
             "reminders" => {
                 sqlx::query(
                     "INSERT INTO reminders (object_id, title, due_date, created_at) \
-                     VALUES (?, 'Legacy', '2026-09-01', '2026-03-05T00:00:00Z')")
+                     VALUES ($1, 'Legacy', '2026-09-01', '2026-03-05T00:00:00Z')")
                     .bind(object_id).execute(&app.state.db).await.unwrap();
             }
             "attachments" => {
                 let file_id: i64 = sqlx::query_scalar(
                     "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
-                     VALUES (?, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z') \
+                     VALUES ($1, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z') \
                      RETURNING id")
                     .bind(user_id).fetch_one(&app.state.db).await.unwrap();
                 sqlx::query(
                     "INSERT INTO attachments (object_id, file_id, kind, created_at) \
-                     VALUES (?, ?, 'photo', '2026-03-05T00:00:00Z')")
+                     VALUES ($1, $2, 'photo', '2026-03-05T00:00:00Z')")
                     .bind(object_id).bind(file_id).execute(&app.state.db).await.unwrap();
             }
             "files" => {
                 sqlx::query(
                     "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
-                     VALUES (?, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z')")
+                     VALUES ($1, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z')")
                     .bind(user_id).execute(&app.state.db).await.unwrap();
             }
             other => unreachable!("not one of the five tables: {other}"),
@@ -1989,7 +2004,7 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
             "the orphaned clock must be swept even beside a NULL client_uuid in {legacy_table}"
         );
 
-        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = ?")
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
         // 9, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
         // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
@@ -2018,7 +2033,7 @@ async fn a_delete_op_on_a_file_is_rejected_and_leaves_it_live() {
         object_with_children(&app, &app.client, "Golf").await;
 
     let file_uuid: String = sqlx::query_scalar(
-        "SELECT f.client_uuid FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = ?")
+        "SELECT f.client_uuid FROM files f JOIN attachments a ON a.file_id = f.id WHERE a.id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -2030,7 +2045,7 @@ async fn a_delete_op_on_a_file_is_rejected_and_leaves_it_live() {
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
 
     let deleted: Option<String> = sqlx::query_scalar(
-        "SELECT deleted_at FROM files WHERE client_uuid = ?")
+        "SELECT deleted_at FROM files WHERE client_uuid = $1")
         .bind(&file_uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(deleted.is_none(), "a file must never be tombstoned over sync");
 
@@ -2116,13 +2131,13 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
     // put there.
     let (name, obj_type, purchase_date, price): (String, String, Option<String>, Option<i64>) =
         sqlx::query_as(
-            "SELECT name, type, purchase_date, purchase_price_cents FROM objects WHERE client_uuid = ?")
+            "SELECT name, type, purchase_date, purchase_price_cents FROM objects WHERE client_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!((name.as_str(), obj_type.as_str(), purchase_date, price), ("Golf", "car", None, None));
 
     let (date, title, cost, counter, qty): (String, String, Option<i64>, Option<i64>, Option<i64>) =
         sqlx::query_as(
-            "SELECT date, title, cost_cents, counter_value, quantity_milli FROM activities WHERE client_uuid = ?")
+            "SELECT date, title, cost_cents, counter_value, quantity_milli FROM activities WHERE client_uuid = $1")
             .bind(&activity_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(
         (date.as_str(), title.as_str(), cost, counter, qty),
@@ -2131,7 +2146,7 @@ async fn a_value_the_rest_handlers_would_reject_is_also_rejected_over_sync() {
 
     let (rtitle, rdue_date, rdue_counter, rrepeat_months, rrepeat_counter):
         (String, Option<String>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
-        "SELECT title, due_date, due_counter, repeat_months, repeat_counter FROM reminders WHERE client_uuid = ?")
+        "SELECT title, due_date, due_counter, repeat_months, repeat_counter FROM reminders WHERE client_uuid = $1")
         .bind(&reminder_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(
         (rtitle.as_str(), rdue_date.as_deref(), rdue_counter, rrepeat_months, rrepeat_counter),
@@ -2201,10 +2216,10 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
 
-    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = ?")
+    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(kind, "photo", "the cover's kind must not change while it is still the cover");
-    let cover: Option<i64> = sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = ?")
+    let cover: Option<i64> = sqlx::query_scalar("SELECT cover_attachment_id FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(cover, Some(attachment_id), "the cover pointer must be unaffected");
 
@@ -2223,7 +2238,7 @@ async fn changing_a_cover_attachments_kind_away_from_photo_is_rejected() {
     }]))).send().await.unwrap();
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
-    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = ?")
+    let kind: String = sqlx::query_scalar("SELECT kind FROM attachments WHERE id = $1")
         .bind(attachment_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(kind, "document", "with no cover pinning it, kind is free to change");
 }
@@ -2251,7 +2266,7 @@ async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
 
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
@@ -2281,7 +2296,7 @@ async fn a_rest_edit_beats_a_sync_op_stamped_before_it() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
 
-    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = ?")
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Browser Golf", "the REST edit must survive a sync op stamped before it");
 }
@@ -2294,7 +2309,7 @@ async fn a_browser_create_edit_and_delete_are_all_visible_on_pull() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = ?")
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
 
     let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
@@ -2373,7 +2388,7 @@ async fn a_browser_delete_logs_the_object_and_every_cascaded_child() {
         (&reminder_uuid, "reminder"), (&attachment_uuid, "attachment"),
     ] {
         let row: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT op, field FROM changes WHERE entity_uuid = ? AND op = 'delete'")
+            "SELECT op, field FROM changes WHERE entity_uuid = $1 AND op = 'delete'")
             .bind(uuid).fetch_optional(&app.state.db).await.unwrap();
         let (op, field) = row.unwrap_or_else(|| panic!("no delete logged for {label} ({uuid})"));
         assert_eq!(op, "delete", "{label}");

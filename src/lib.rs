@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backup;
 pub mod config;
 pub mod db;
+pub mod dialect;
 pub mod domain;
 pub mod error;
 pub mod files;
@@ -81,12 +82,25 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
 /// against it (the reminder digest scheduler). Tests use `build`, so they never start it.
 pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxError> {
     db::set_timezone(config.timezone);
-    let db = db::connect(&config.data_dir).await?;
+    let url = config.database_url()?;
+    let backend = dialect::Backend::of(&url);
+    // PostgreSQL is not a supported configuration yet: the README's LOGB_DATABASE_URL row names
+    // the same three gaps. This is the line that is already in an operator's scrollback when one
+    // of them bites, rather than something they had to have read in advance.
+    if backend != dialect::Backend::Sqlite {
+        tracing::warn!(
+            "LOGB_DATABASE_URL points at PostgreSQL, which is not a supported configuration yet: \
+             two setup requests can race into two admin accounts, a device's sync cursor can \
+             permanently skip changes, and there is no automatic backup"
+        );
+    }
+    let db = db::connect_with_pool_size(&url, config.db_pool_size).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();
     let state: App = Arc::new(AppState {
         db,
+        backend,
         storage,
         config,
         login_attempts: Mutex::new(HashMap::new()),

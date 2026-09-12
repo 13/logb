@@ -60,11 +60,11 @@ pub(crate) fn edited_at_now() -> String {
 /// treat a cascaded CHILD's uuid as possibly absent -- that row's existence is not this
 /// function's to guarantee, only its own.)
 pub(crate) async fn uuid_of(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     entity: Entity,
     id: i64,
 ) -> Result<String, AppError> {
-    let sql = format!("SELECT client_uuid FROM {} WHERE id = ?", entity.table());
+    let sql = format!("SELECT client_uuid FROM {} WHERE id = $1", entity.table());
     let uuid: Option<String> =
         sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(id).fetch_one(&mut *tx).await?;
     Ok(uuid.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
@@ -78,7 +78,7 @@ pub(crate) async fn uuid_of(
 /// names, and `edited_at` never travels without the `device_id` that clock reading belongs to
 /// -- which is also what keeps this under clippy's argument-count limit.
 async fn insert_change(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -95,7 +95,7 @@ async fn insert_change(
         "INSERT INTO changes \
          (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
           device_id, client_op_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
         .bind(entity.as_str())
         .bind(entity_uuid)
         .bind(op.as_str())
@@ -117,7 +117,7 @@ async fn insert_change(
 /// Upserts one `field_clock` row. Shared by `record_create`/`record_update` and by
 /// `apply_op`'s `set` handling, which used to carry its own copy of this exact statement.
 pub(crate) async fn stamp_field_clock(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     entity: Entity,
     entity_uuid: &str,
     field: &str,
@@ -126,7 +126,7 @@ pub(crate) async fn stamp_field_clock(
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
-         VALUES (?, ?, ?, ?, ?) \
+         VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT(entity, entity_uuid, field) \
          DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id")
         .bind(entity.as_str())
@@ -150,7 +150,7 @@ pub(crate) async fn stamp_field_clock(
 /// an absent `field_clock` row loses to nothing (see `apply_op`'s `set` handling: no stored row
 /// means the incoming op is accepted unconditionally).
 pub(crate) async fn record_create(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -174,7 +174,7 @@ pub(crate) async fn record_create(
 /// the log say something happened that didn't -- a no-op edit did not happen, and the log
 /// should not claim it did.
 pub(crate) async fn record_update(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -196,7 +196,7 @@ pub(crate) async fn record_update(
 /// reminders and attachments; an activity's attachments -- are a separate op each, logged by
 /// `log_cascade`; this call only ever accounts for the row the caller actually tombstoned.
 pub(crate) async fn record_delete(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     entity: Entity,
     entity_uuid: &str,
@@ -218,13 +218,13 @@ pub(crate) async fn record_delete(
 /// carries the object it belongs to whether or not it also names an activity. That is the same
 /// column both callers use, so neither can reach a row the other misses.
 pub(crate) async fn cascade_object(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     object_uuid: &str,
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
     let mut cascaded = Vec::new();
     // Of the three cascaded tables, only `activities` carries `updated_at`
-    // (migrations/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
+    // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
     // bump on those two.
     for (entity, has_updated_at) in
         [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
@@ -233,17 +233,24 @@ pub(crate) async fn cascade_object(
         // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
         // the author to have made.
         let table = entity.table();
-        const MINE: &str =
-            "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ?)";
+        // `{MINE}` carries one placeholder for `object_uuid`. Its number depends on how many
+        // placeholders precede it in the statement it's spliced into, so it takes that number
+        // as a parameter rather than fixing one -- the three call sites below bind `object_uuid`
+        // last, after zero, one or two earlier binds.
+        fn mine(placeholder: u8) -> String {
+            format!(
+                "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ${placeholder})"
+            )
+        }
         // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
         // rows this cascade is about to claim.
-        let select = format!("SELECT client_uuid FROM {table} WHERE {MINE}");
+        let select = format!("SELECT client_uuid FROM {table} WHERE {}", mine(1));
         let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
             .bind(object_uuid).fetch_all(&mut *tx).await?;
         let update = if has_updated_at {
-            format!("UPDATE {table} SET deleted_at = ?, updated_at = ? WHERE {MINE}")
+            format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 WHERE {}", mine(3))
         } else {
-            format!("UPDATE {table} SET deleted_at = ? WHERE {MINE}")
+            format!("UPDATE {table} SET deleted_at = $1 WHERE {}", mine(2))
         };
         let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
         let query = if has_updated_at { query.bind(now) } else { query };
@@ -259,12 +266,12 @@ pub(crate) async fn cascade_object(
 /// between a deleted attachment and a stale id sitting in `objects`, and in every sync
 /// snapshot, indefinitely.
 pub(crate) async fn clear_cover_of(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     attachment_uuid: &str,
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
-         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = ?)")
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
         .bind(attachment_uuid).execute(&mut *tx).await?;
     Ok(())
 }
@@ -279,7 +286,7 @@ pub(crate) async fn clear_cover_of(
 /// function, the two delete paths cannot leave different databases behind for what is meant to
 /// be the same op.
 pub(crate) async fn cascade_activity(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     activity_uuid: &str,
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
@@ -289,21 +296,21 @@ pub(crate) async fn cascade_activity(
         "UPDATE objects SET cover_attachment_id = NULL \
          WHERE deleted_at IS NULL AND cover_attachment_id IN (\
            SELECT id FROM attachments \
-           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = ?))")
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
         .bind(activity_uuid).execute(&mut *tx).await?;
     sqlx::query(
         "UPDATE reminders SET done_activity_id = NULL \
          WHERE deleted_at IS NULL \
-         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
         .bind(activity_uuid).execute(&mut *tx).await?;
 
     let uuids: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
         .bind(activity_uuid).fetch_all(&mut *tx).await?;
     sqlx::query(
-        "UPDATE attachments SET deleted_at = ? WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = ?)")
+        "UPDATE attachments SET deleted_at = $1 WHERE deleted_at IS NULL \
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $2)")
         .bind(now).bind(activity_uuid).execute(&mut *tx).await?;
     Ok(nameable(uuids).map(|uuid| (Entity::Attachment, uuid)).collect())
 }
@@ -334,7 +341,7 @@ fn nameable(uuids: Vec<Option<String>>) -> impl Iterator<Item = String> {
 /// `edited_at` and `device_id` are the parent's: the cascade is that write's edit at that
 /// moment, and a child carrying a different clock would compete with the parent's op.
 pub(crate) async fn log_cascade(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     edited_at: &str,
     device_id: &str,

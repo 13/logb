@@ -75,8 +75,28 @@ async fn login_is_rate_limited() {
 
 /// Two setup calls that race past the "is the database empty?" pre-check must not both
 /// create an admin: the conditional INSERT lets exactly one through.
+///
+/// KNOWN TO FAIL ON POSTGRESQL, AND OWNED BY PART TWO OF THE PORT. `INSERT ... WHERE NOT
+/// EXISTS (SELECT 1 FROM users)` in `src/api/auth.rs` is atomic only because SQLite has a
+/// single writer: under PostgreSQL's MVCC the two statements read the same empty `users` at
+/// the same instant, both find nothing, and both insert -- two admins, and the second setup
+/// answers 201 where it should answer 409. Left failing on purpose rather than fixed or
+/// skipped here: part two covers the whole class of check-then-write races this is one of, and
+/// a green test would hide the one case that already has a reproduction. The assertion below
+/// says so in its own failure message, so a reader of the output does not have to know that.
 #[tokio::test]
 async fn concurrent_setup_creates_exactly_one_admin() {
+    // Raced several times, because once is not decisive: run alone this fails on PostgreSQL
+    // every time, but under a loaded parallel suite the two requests sometimes serialise by
+    // luck and it passed 2 runs in 3. An intermittently red test is worse than a red one --
+    // it gets rerun until it is green and then believed -- so the race is repeated until it
+    // either misbehaves or has had enough chances that a pass means something.
+    for round in 1..=5 {
+        race_one_setup(round).await;
+    }
+}
+
+async fn race_one_setup(round: u32) {
     let app = common::spawn().await;
     let a = common::new_client();
     let b = common::new_client();
@@ -89,15 +109,31 @@ async fn concurrent_setup_creates_exactly_one_admin() {
     let mut codes = [ra.status().as_u16(), rb.status().as_u16()];
     let winner = if ra.status() == 201 { &a } else { &b };
     codes.sort_unstable();
-    assert_eq!(codes, [201, 409], "exactly one setup may succeed");
+    // Named in the failure message rather than skipped: see this test's doc comment. On
+    // SQLite the note is empty and the assertion reads exactly as it always did.
+    let known = known_postgres_race();
+    assert_eq!(codes, [201, 409], "round {round}: exactly one setup may succeed{known}");
 
     // Only the winner's account exists, and it is the one holding the admin session.
     let users: serde_json::Value = winner.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
-    assert_eq!(users.as_array().unwrap().len(), 1, "{users}");
+    assert_eq!(users.as_array().unwrap().len(), 1, "round {round}: {users}{known}");
 }
 
 /// The cookie that clears the session must carry the same attributes as the one that set it,
 /// or a browser can decline to overwrite the live session cookie.
+/// The sentence appended to the assertions above when the suite is running on PostgreSQL, so
+/// the failure identifies itself as a known, owned one instead of looking like a regression.
+fn known_postgres_race() -> &'static str {
+    if common::backend() == logb::dialect::Backend::Postgres {
+        " -- KNOWN FAILURE ON POSTGRESQL, OWNED BY PART TWO OF THE PORT: `INSERT ... WHERE NOT \
+         EXISTS` in src/api/auth.rs is atomic only under SQLite's single writer, so two \
+         concurrent first-run setups can both succeed here. Not a regression, and deliberately \
+         not fixed in the harness task."
+    } else {
+        ""
+    }
+}
+
 #[tokio::test]
 async fn logout_cookie_matches_session_cookie_attributes() {
     let app = common::spawn().await;
@@ -132,7 +168,7 @@ async fn logout_all_ends_every_session() {
 async fn expired_sessions_are_pruned() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
         .bind("stale-token").bind(1).bind("2020-01-01T00:00:00Z")
         .execute(&app.state.db).await.unwrap();
     let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();

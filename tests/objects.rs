@@ -120,7 +120,7 @@ async fn due_reminder_count_respects_snooze_for_a_date_due_reminder() {
 
     // Lapse the snooze by writing an already-past date directly through the pool, the same
     // way tests/reminders.rs does it -- there is no time-travel helper in this harness.
-    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(rid)
         .execute(&app.state.db)
         .await
@@ -150,7 +150,7 @@ async fn due_reminder_count_respects_snooze_for_a_counter_due_reminder() {
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     assert_eq!(due_reminder_count(&app, id).await, 0, "a snoozed counter-due reminder must not count as due");
 
-    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(rid)
         .execute(&app.state.db)
         .await
@@ -202,7 +202,7 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
     let snoozed_lapsed = add_reminder(&app, id, json!({ "title": "Lapsed snooze", "due_date": "2020-01-01" })).await;
     // Write an already-past snoozed_until directly through the pool, the same way
     // tests/reminders.rs lapses a snooze -- there is no time-travel helper in this harness.
-    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(snoozed_lapsed)
         .execute(&app.state.db)
         .await
@@ -220,7 +220,7 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
     let today_str = chrono::Utc::now().date_naive().to_string();
     let _due_exactly_today = add_reminder(&app, id, json!({ "title": "Due exactly today", "due_date": today_str })).await;
     let snooze_lapses_exactly_today = add_reminder(&app, id, json!({ "title": "Snooze lapses exactly today", "due_date": "2020-01-01" })).await;
-    sqlx::query("UPDATE reminders SET snoozed_until = ? WHERE id = ?")
+    sqlx::query("UPDATE reminders SET snoozed_until = $1 WHERE id = $2")
         .bind(&today_str)
         .bind(snooze_lapses_exactly_today)
         .execute(&app.state.db)

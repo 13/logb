@@ -55,14 +55,12 @@ async fn push(
     user: AuthUser,
     Json(mut body): Json<PushBody>,
 ) -> Result<Json<PushOut>, AppError> {
-    // `BEGIN IMMEDIATE`, not the default deferred begin. A deferred transaction takes its read
-    // snapshot first and only asks for the write lock at its first write, so under WAL two
-    // devices pushing at once can find the database changed underneath them and get
-    // `SQLITE_BUSY_SNAPSHOT` -- which `busy_timeout` does not retry, because waiting cannot fix
-    // a stale snapshot. That surfaces as a 500 and the whole batch is thrown away. Push is the
-    // endpoint most likely to have concurrent writers, so it takes the write lock up front,
-    // where `busy_timeout` does apply.
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    // On SQLite this is `BEGIN IMMEDIATE` rather than the default deferred begin: push is the
+    // endpoint most likely to have concurrent writers, and a deferred transaction that is
+    // going to write can lose its snapshot under WAL and throw the whole batch away with a
+    // 500. PostgreSQL spells the same intention as a plain `BEGIN` -- and rejects SQLite's
+    // spelling as a syntax error -- so the statement comes from `dialect`.
+    let mut tx = state.db.begin_with(state.backend.begin_write()).await?;
     let mut ids = HashMap::new();
 
     // Canonicalise before anything reads the value: the ordering rule, the `field_clock` row
@@ -95,7 +93,7 @@ async fn push(
         // reported as success. `idx_changes_user_op` makes the log agree: uniqueness is on
         // (user_id, client_op_id), which is exactly what this lookup asks about.
         let seen: Option<i64> =
-            sqlx::query_scalar("SELECT seq FROM changes WHERE user_id = ? AND client_op_id = ?")
+            sqlx::query_scalar("SELECT seq FROM changes WHERE user_id = $1 AND client_op_id = $2")
                 .bind(user.id)
                 .bind(&op.client_op_id)
                 .fetch_optional(&mut *tx)
@@ -123,7 +121,7 @@ async fn push(
                 "INSERT INTO changes \
                  (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
                   device_id, client_op_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
                 .bind(op.entity.as_str())
                 .bind(&op.entity_uuid)
                 .bind(op.op.as_str())
@@ -139,7 +137,7 @@ async fn push(
 
             // The table name comes from `Entity::table`, a closed set, and the uuid stays a
             // bind parameter -- which is the audit `AssertSqlSafe` requires of the caller.
-            let sql = format!("SELECT id FROM {} WHERE client_uuid = ?", op.entity.table());
+            let sql = format!("SELECT id FROM {} WHERE client_uuid = $1", op.entity.table());
             if let Some(id) = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
                 .bind(&op.entity_uuid)
                 .fetch_optional(&mut *tx)

@@ -5,6 +5,7 @@
 //! WAL entirely.
 
 use crate::db::{self, BoxError};
+use crate::dialect::Backend;
 use crate::error::AppError;
 use crate::state::App;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,29 @@ use std::path::{Path, PathBuf};
 /// How many snapshots survive. Two weeks is long enough to notice a bad delete that nobody
 /// spotted the same day, and bounded so the directory can never fill the volume.
 pub const KEEP: usize = 14;
+
+/// Shown wherever a SQLite-only backup mechanism is asked to run against PostgreSQL: `--backup`
+/// (`run_once`, below) and the nightly job (`tick`, guarded from ever starting -- see
+/// `tasks::spawn`). Names the reason and the alternative, since an operator reads this at the
+/// worst possible moment.
+const NOT_ON_POSTGRES: &str =
+    "backup is a SQLite mechanism (`VACUUM INTO`); on PostgreSQL, back up the database with \
+     PostgreSQL's own tooling (pg_dump, pg_basebackup, or a filesystem/WAL-level snapshot) \
+     instead";
+
+/// One-shot backup for `--backup`: opens `url` without migrating (`db::connect_existing`) and
+/// writes a snapshot to `dest` (`db::backup_to`, `VACUUM INTO`).
+///
+/// Guarded here, before either call, because `VACUUM INTO` does not exist on PostgreSQL --
+/// without this, the attempt would fail somewhere inside sqlx with a bare syntax error naming
+/// nothing an operator could act on.
+pub async fn run_once(url: &str, dest: &Path) -> Result<(), BoxError> {
+    if Backend::of(url) != Backend::Sqlite {
+        return Err(NOT_ON_POSTGRES.into());
+    }
+    let pool = db::connect_existing(url).await?;
+    db::backup_to(&pool, dest).await
+}
 
 /// Opens a finished snapshot and asks SQLite whether it is sound.
 ///
@@ -69,6 +93,12 @@ pub async fn verify(path: &Path) -> Result<(), BoxError> {
 /// Writes today's snapshot if it is due and not already there. Returns the path when one was
 /// made, `None` when there was nothing to do.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppError> {
+    // Belt and braces alongside the startup check in `tasks::spawn`, which is what actually
+    // keeps this from being called at all on PostgreSQL: `VACUUM INTO` must never be attempted
+    // here regardless of how `tick` came to be called.
+    if state.backend != Backend::Sqlite {
+        return Ok(None);
+    }
     let Some(dir) = state.config.backup_dir.clone() else { return Ok(None) };
     if hour_now < state.config.backup_hour {
         return Ok(None);

@@ -57,7 +57,16 @@ async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, App
             tracing::error!(error = %e, "health check: database query failed");
             AppError::Unavailable("database unavailable".into())
         })?;
-    let expected = crate::db::expected_migrations() as i64;
+    // The count to compare against is the one for *this* database's backend: SQLite carries
+    // nine migrations and PostgreSQL one, so counting the wrong set would report a healthy
+    // PostgreSQL instance as eight migrations behind. A URL this instance could not resolve
+    // is not something health can diagnose, so fall back to the applied count and let the
+    // check pass rather than fail an otherwise working instance on a config error.
+    let expected = state
+        .config
+        .database_url()
+        .map(|url| crate::db::expected_migrations(&url) as i64)
+        .unwrap_or(applied);
     if applied < expected {
         return Err(AppError::Unavailable(format!(
             "schema is behind: {applied} of {expected} migrations applied"

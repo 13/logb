@@ -162,24 +162,45 @@ pub fn canonical_edited_at(raw: &str) -> Option<String> {
 /// FOREIGN KEY, 2067 UNIQUE, and the rest. Testing the low byte therefore catches every subtype,
 /// including the ones `DatabaseError::kind()` folds into `ErrorKind::Other`, while still letting
 /// an I/O error, a locked database or a schema fault through as the genuine 500 it is.
+///
+/// PostgreSQL says the same thing in SQLSTATE: class `23` is "integrity constraint violation",
+/// covering 23502 NOT NULL, 23503 FOREIGN KEY, 23505 UNIQUE and 23514 CHECK. Without this half,
+/// every constraint failure on PostgreSQL was a 500 that threw away the whole batch -- the
+/// exact failure the `rejected` bucket exists to avoid.
+///
+/// The two are told apart by length rather than by asking which backend is connected, because
+/// the error is all this has: a SQLSTATE is always five characters, while SQLite's extended
+/// codes are at most four digits (the primary code in the low byte, a small subtype above it).
+/// Parsing first would misread `23502` as a number and test the wrong byte of it.
 fn is_constraint_violation(err: &sqlx::Error) -> bool {
     let sqlx::Error::Database(db) = err else {
         return false;
     };
-    db.code()
-        .and_then(|code| code.parse::<i32>().ok())
-        .is_some_and(|code| code & 0xff == SQLITE_CONSTRAINT)
+    let Some(code) = db.code() else {
+        return false;
+    };
+    if code.len() == PG_SQLSTATE_LEN {
+        return code.starts_with(PG_INTEGRITY_CONSTRAINT_CLASS);
+    }
+    code.parse::<i32>().is_ok_and(|code| code & 0xff == SQLITE_CONSTRAINT)
 }
 
 /// SQLite's primary result code for a constraint violation.
 const SQLITE_CONSTRAINT: i32 = 19;
+
+/// Every PostgreSQL SQLSTATE is exactly this long, which is what separates one from a SQLite
+/// extended result code.
+const PG_SQLSTATE_LEN: usize = 5;
+
+/// The SQLSTATE class PostgreSQL reports every integrity constraint violation under.
+const PG_INTEGRITY_CONSTRAINT_CLASS: &str = "23";
 
 /// Applies one op inside the caller's transaction and returns how it landed.
 ///
 /// Ownership is resolved by joining back to `objects.user_id` rather than trusting anything in
 /// the op, so a uuid belonging to another account cannot be written through.
 pub async fn apply_op(
-    tx: &mut sqlx::SqliteConnection,
+    tx: &mut sqlx::AnyConnection,
     user_id: i64,
     op: &Op,
 ) -> Result<Outcome, AppError> {
@@ -190,22 +211,22 @@ pub async fn apply_op(
     // Does this uuid exist, and does it belong to the caller?
     let owner: Option<i64> = match op.entity {
         Entity::Object => sqlx::query_scalar(
-            "SELECT user_id FROM objects WHERE client_uuid = ?")
+            "SELECT user_id FROM objects WHERE client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Activity => sqlx::query_scalar(
             "SELECT o.user_id FROM activities a JOIN objects o ON o.id = a.object_id \
-             WHERE a.client_uuid = ?")
+             WHERE a.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Reminder => sqlx::query_scalar(
             "SELECT o.user_id FROM reminders r JOIN objects o ON o.id = r.object_id \
-             WHERE r.client_uuid = ?")
+             WHERE r.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::Attachment => sqlx::query_scalar(
             "SELECT o.user_id FROM attachments t JOIN objects o ON o.id = t.object_id \
-             WHERE t.client_uuid = ?")
+             WHERE t.client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::File => sqlx::query_scalar(
-            "SELECT user_id FROM files WHERE client_uuid = ?")
+            "SELECT user_id FROM files WHERE client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
     };
     match owner {
@@ -255,20 +276,20 @@ pub async fn apply_op(
             }
 
             let now = crate::db::now();
-            // Only `objects` and `activities` carry `updated_at` (migrations/0001_init.sql);
+            // Only `objects` and `activities` carry `updated_at` (migrations/sqlite/0001_init.sql);
             // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
             // alongside `deleted_at` wherever the column exists, so this has to too, or a row
             // tombstoned over sync keeps whatever `updated_at` it had before the delete.
             let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity);
             let sql = if has_updated_at {
                 format!(
-                    "UPDATE {} SET deleted_at = ?, updated_at = ? \
-                     WHERE client_uuid = ? AND deleted_at IS NULL",
+                    "UPDATE {} SET deleted_at = $1, updated_at = $2 \
+                     WHERE client_uuid = $3 AND deleted_at IS NULL",
                     op.entity.table()
                 )
             } else {
                 format!(
-                    "UPDATE {} SET deleted_at = ? WHERE client_uuid = ? AND deleted_at IS NULL",
+                    "UPDATE {} SET deleted_at = $1 WHERE client_uuid = $2 AND deleted_at IS NULL",
                     op.entity.table()
                 )
             };
@@ -328,7 +349,7 @@ pub async fn apply_op(
                         let is_cover: Option<(i64,)> = sqlx::query_as(
                             "SELECT o.id FROM objects o \
                              JOIN attachments a ON a.id = o.cover_attachment_id \
-                             WHERE a.client_uuid = ? AND o.deleted_at IS NULL")
+                             WHERE a.client_uuid = $1 AND o.deleted_at IS NULL")
                             .bind(&op.entity_uuid)
                             .fetch_optional(&mut *tx).await?;
                         if is_cover.is_some() {
@@ -355,13 +376,13 @@ pub async fn apply_op(
                 let permitted: Option<i64> = match (op.entity, field) {
                     (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
                         "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
-                         WHERE a.id = ? AND o.client_uuid = ? AND a.deleted_at IS NULL")
+                         WHERE a.id = $1 AND o.client_uuid = $2 AND a.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
                     (Entity::Reminder, "done_activity_id") => sqlx::query_scalar(
                         "SELECT act.id FROM activities act \
                          JOIN reminders r ON r.object_id = act.object_id \
-                         WHERE act.id = ? AND r.client_uuid = ? AND act.deleted_at IS NULL")
+                         WHERE act.id = $1 AND r.client_uuid = $2 AND act.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
                     _ => Some(*referenced),
@@ -375,7 +396,7 @@ pub async fn apply_op(
 
             let stored: Option<(String, String)> = sqlx::query_as(
                 "SELECT edited_at, device_id FROM field_clock \
-                 WHERE entity = ? AND entity_uuid = ? AND field = ?")
+                 WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
                 .bind(op.entity.as_str()).bind(&op.entity_uuid).bind(field)
                 .fetch_optional(&mut *tx).await?;
 
@@ -391,14 +412,24 @@ pub async fn apply_op(
             // is exactly what `AssertSqlSafe` asks the author to have made before sqlx will
             // take a `String` as SQL.
             let sql = format!(
-                "UPDATE {} SET {field} = ? WHERE client_uuid = ?",
+                "UPDATE {} SET {field} = $1 WHERE client_uuid = $2",
                 op.entity.table()
             );
             let query = sqlx::query(sqlx::AssertSqlSafe(sql));
             // Nothing decides here: `binding` already settled what may reach the column, so
             // there is no second, weaker opinion about types for the first to drift from.
+            //
+            // A NULL still has to be bound with the column's own type. SQLite does not care --
+            // every parameter is dynamically typed -- but PostgreSQL infers the parameter's
+            // type from what is bound and then refuses `NULL::text` for a `bigint` column, so
+            // an untyped `None::<String>` made "clear this reference" a 500 on every integer
+            // field. `field_type` is the same source `binding` consulted, so the two cannot
+            // drift apart.
             let query = match bound {
-                Binding::Null => query.bind(None::<String>),
+                Binding::Null => match field_type {
+                    FieldType::Integer => query.bind(None::<i64>),
+                    FieldType::Text => query.bind(None::<String>),
+                },
                 Binding::Integer(n) => query.bind(n),
                 Binding::Text(s) => query.bind(s),
             };
@@ -410,18 +441,32 @@ pub async fn apply_op(
             // the client had no way to identify. Only constraint failures are converted; every
             // other database error is a genuine fault and still propagates.
             //
-            // This relies on SQLite's default `ON CONFLICT ABORT`, which rolls back only the
-            // failing statement and leaves the enclosing transaction open and usable -- so the
-            // ops either side of a rejected one still commit together, and batch atomicity
-            // holds. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
+            // The savepoint is what makes that survivable on both backends. SQLite's default
+            // `ON CONFLICT ABORT` rolls back only the failing statement and leaves the
+            // enclosing transaction usable, so this used to run bare; PostgreSQL aborts the
+            // whole transaction on any error, and every statement after it -- including the
+            // ops already accepted in this batch and the COMMIT -- fails with "current
+            // transaction is aborted". Rolling back to a savepoint is the one spelling both
+            // understand, and it gives SQLite exactly the statement-level rollback it already
+            // had. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
             // `tests/sync.rs` pins that, asserting the writes before and after really landed.
-            if let Err(e) = query.bind(&op.entity_uuid).execute(&mut *tx).await {
-                if is_constraint_violation(&e) {
+            //
+            // The name is a literal, and one `set` op is never nested inside another, so a
+            // single name cannot collide with itself.
+            sqlx::query("SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+            match query.bind(&op.entity_uuid).execute(&mut *tx).await {
+                Ok(_) => {
+                    sqlx::query("RELEASE SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+                },
+                Err(e) if is_constraint_violation(&e) => {
+                    sqlx::query("ROLLBACK TO SAVEPOINT logb_set_op").execute(&mut *tx).await?;
                     return Ok(Outcome::Rejected {
                         reason: format!("{field} violates a database constraint"),
                     });
-                }
-                return Err(e.into());
+                },
+                // Not a constraint failure: a genuine fault, and the whole batch is rolled
+                // back with it, so the savepoint needs no unwinding of its own.
+                Err(e) => return Err(e.into()),
             }
 
             record::stamp_field_clock(

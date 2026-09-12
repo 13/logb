@@ -76,7 +76,7 @@ but before that row is written leaves the migration applied but unrecorded, and 
 tries to run it again and fails on tables that already exist. Recovering from that is a manual
 insert of the one missing row (`version` 9, `description` "object types", `success` 1,
 `execution_time`, and a `checksum`) — the checksum has to be the exact SHA-384 hash of
-`migrations/0009_object_types.sql`'s contents, since sqlx compares it against the file it ships
+`migrations/sqlite/0009_object_types.sql`'s contents, since sqlx compares it against the file it ships
 with and refuses to start on a mismatch. This is rare and narrow, but if it happens, restoring
 the backup you just took is simpler than reconstructing the row by hand.
 
@@ -163,6 +163,7 @@ a database whose photos and documents all 404.
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
+| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: two setup requests can race into two admin accounts, a device's sync cursor can permanently skip changes, and there is no automatic backup. `docs/superpowers/specs/2026-09-11-postgres-p2-sync-cursor-design.md` is the work that makes it safe |
 | `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |

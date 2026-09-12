@@ -1,5 +1,18 @@
 mod common;
 
+/// Why the two `--backup` tests in this file do not run on PostgreSQL.
+///
+/// `db::backup_to` is `VACUUM INTO`: SQLite writing a consistent copy of itself into a second
+/// file, which these tests then open as a database in its own right. PostgreSQL has no such
+/// statement and no file to open, so this is a mechanism only one backend has rather than
+/// behaviour that should hold on both; part five of the PostgreSQL port gives PostgreSQL a
+/// backup of its own. Every other test here -- the health endpoint, and the migration check
+/// that builds its own SQLite database -- runs on both.
+const VACUUM_INTO_IS_SQLITE: &str =
+    "`db::backup_to` is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of \
+     its own in part five of the port";
+
+
 #[tokio::test]
 async fn health_reports_ok_and_creates_database() {
     let app = common::spawn().await;
@@ -12,7 +25,7 @@ async fn health_reports_ok_and_creates_database() {
 #[tokio::test]
 async fn migration_creates_all_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = logb::db::connect(dir.path()).await.unwrap();
+    let pool = logb::db::connect(&logb::db::sqlite_url(dir.path()).unwrap()).await.unwrap();
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .fetch_all(&pool)
         .await
@@ -27,6 +40,9 @@ async fn migration_creates_all_tables() {
 /// `--backup` has to produce a file a fresh instance can actually open and read.
 #[tokio::test]
 async fn backup_writes_a_readable_snapshot() {
+    if common::skipped_on_postgres("backup_writes_a_readable_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     app.create_object(&app.client, "Golf", Some("km")).await;
@@ -39,7 +55,7 @@ async fn backup_writes_a_readable_snapshot() {
     // The snapshot opens on its own and carries the data.
     let copied = dir.path().join("logb.db");
     std::fs::rename(&dest, &copied).unwrap();
-    let pool = logb::db::connect_existing(dir.path()).await.unwrap();
+    let pool = logb::db::connect_existing(&logb::db::sqlite_url(dir.path()).unwrap()).await.unwrap();
     let (objects,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM objects").fetch_one(&pool).await.unwrap();
     let (users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
     assert_eq!((objects, users), (1, 1));
@@ -47,6 +63,9 @@ async fn backup_writes_a_readable_snapshot() {
 
 #[tokio::test]
 async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
+    if common::skipped_on_postgres("backup_refuses_to_overwrite_and_needs_an_existing_database", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let dir = tempfile::tempdir().unwrap();
@@ -55,7 +74,7 @@ async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
     assert!(logb::db::backup_to(&app.state.db, &dest).await.is_err(), "must not clobber an existing file");
 
     let empty = tempfile::tempdir().unwrap();
-    assert!(logb::db::connect_existing(empty.path()).await.is_err(), "no database to back up");
+    assert!(logb::db::connect_existing(&logb::db::sqlite_url(empty.path()).unwrap()).await.is_err(), "no database to back up");
 }
 
 #[tokio::test]

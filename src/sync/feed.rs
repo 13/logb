@@ -16,14 +16,14 @@ pub struct ChangeRow {
 }
 
 pub async fn pull(
-    db: &sqlx::SqlitePool,
+    db: &sqlx::AnyPool,
     user_id: i64,
     since: i64,
     limit: i64,
 ) -> Result<Vec<ChangeRow>, AppError> {
     Ok(sqlx::query_as::<_, ChangeRow>(
         "SELECT seq, entity, entity_uuid, op, field, value, edited_at, device_id \
-         FROM changes WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?")
+         FROM changes WHERE user_id = $1 AND seq > $2 ORDER BY seq LIMIT $3")
         .bind(user_id)
         .bind(since)
         .bind(limit)
@@ -35,8 +35,8 @@ pub async fn pull(
 ///
 /// A client whose cursor sits below this has missed ops that were purged, so an incremental
 /// pull would silently skip them -- it has to re-bootstrap instead.
-pub async fn horizon(db: &sqlx::SqlitePool, user_id: i64) -> Result<i64, AppError> {
-    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = ?")
+pub async fn horizon(db: &sqlx::AnyPool, user_id: i64) -> Result<i64, AppError> {
+    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(db)
         .await?;
@@ -50,25 +50,25 @@ pub async fn horizon(db: &sqlx::SqlitePool, user_id: i64) -> Result<i64, AppErro
 /// an idempotent apply, but it would also let an op that landed between them be skipped if the
 /// order were reversed. Reading it first can only ever repeat work, never lose it.
 pub async fn snapshot(
-    db: &sqlx::SqlitePool,
+    db: &sqlx::AnyPool,
     user_id: i64,
 ) -> Result<(i64, serde_json::Value), AppError> {
-    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = ?")
+    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(db)
         .await?;
 
-    let objects = rows(db, "SELECT * FROM objects WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+    let objects = rows(db, "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
     let activities = rows(db,
         "SELECT a.* FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = ? AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
     let reminders = rows(db,
         "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE o.user_id = ? AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
     let attachments = rows(db,
         "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
-         WHERE o.user_id = ? AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
-    let files = rows(db, "SELECT * FROM files WHERE user_id = ? AND deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
+    let files = rows(db, "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
 
     Ok((seq, serde_json::json!({
         "objects": objects,
@@ -84,7 +84,7 @@ pub async fn snapshot(
 /// Generic in the shape it returns because the snapshot ships rows verbatim -- a typed struct
 /// per table would have to be kept in step with five schemas for no gain to any caller.
 async fn rows(
-    db: &sqlx::SqlitePool,
+    db: &sqlx::AnyPool,
     sql: &'static str,
     user_id: i64,
 ) -> Result<Vec<serde_json::Value>, AppError> {
@@ -98,9 +98,14 @@ async fn rows(
             let value = if raw.is_null() {
                 serde_json::Value::Null
             } else {
+                // `Any` reports its own type names, not the driver's: what the SQLite
+                // driver called INTEGER and REAL arrive here as BIGINT and DOUBLE. Both
+                // spellings are listed so this reads the same rows it always did, and the
+                // names PostgreSQL will produce are listed alongside them.
                 match raw.type_info().name() {
-                    "INTEGER" => serde_json::json!(row.try_get::<i64, _>(i)?),
-                    "REAL" => serde_json::json!(row.try_get::<f64, _>(i)?),
+                    "BIGINT" | "INTEGER" | "SMALLINT" => serde_json::json!(row.try_get::<i64, _>(i)?),
+                    "DOUBLE" | "REAL" => serde_json::json!(row.try_get::<f64, _>(i)?),
+                    "BOOLEAN" => serde_json::json!(row.try_get::<bool, _>(i)?),
                     _ => serde_json::json!(row.try_get::<String, _>(i)?),
                 }
             };
@@ -129,7 +134,7 @@ pub async fn purge(
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < ?")
+    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
         .bind(&cutoff)
         .execute(db)
         .await?
@@ -139,7 +144,7 @@ pub async fn purge(
     // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
     let pinned: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT file_id FROM attachments \
-         WHERE deleted_at IS NOT NULL AND deleted_at < ?")
+         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
         .bind(&cutoff)
         .fetch_all(db)
         .await?;
@@ -183,7 +188,7 @@ pub async fn purge(
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
         // accept it.
         let sql =
-            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < ? {guard}");
+            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
         sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(db).await?;
     }
 

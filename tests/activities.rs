@@ -302,7 +302,7 @@ async fn the_partial_unique_index_rejects_a_duplicate_non_null_op_id() {
             // fixture that manufactures the impossible row makes the suite disagree with the
             // system it is testing.
             "INSERT INTO activities (object_id, date, category, title, notes, client_op_id, client_uuid, created_at, updated_at) \
-             VALUES (?, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', ?, '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
+             VALUES ($1, '2026-03-05', 'other', 'Raw insert', '', 'raw-dup', $2, '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
         )
         .bind(id)
         .bind(uuid::Uuid::new_v4().to_string())
