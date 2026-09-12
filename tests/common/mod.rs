@@ -463,6 +463,52 @@ impl TestApp {
         res.json().await.unwrap()
     }
 
+    /// DELETE /objects/{id}: the ordinary REST delete, a tombstone plus the cascade of
+    /// tombstones over the object's children, exactly as a user pressing delete produces it.
+    pub async fn delete_object(&self, object: &serde_json::Value) {
+        let id = object["id"].as_i64().expect("an object id");
+        let res = self.client.delete(self.url(&format!("/objects/{id}"))).send().await.unwrap();
+        assert_eq!(res.status(), 204, "delete object failed: {}", res.text().await.unwrap());
+    }
+
+    /// Backdates every tombstone in the database well past any retention window.
+    ///
+    /// The window is measured in days, so a test cannot wait one out; this is the only way to
+    /// put a row into the state the purge is about. `changes.applied_at` is deliberately left
+    /// alone: a test asking whether a row vanished unrecorded needs the log rows that would
+    /// have recorded it to still be there to look at.
+    pub async fn age_out_tombstones(&self) {
+        for table in ["objects", "activities", "reminders", "attachments"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET deleted_at = '2000-01-01T00:00:00Z' WHERE deleted_at IS NOT NULL"
+            )))
+            .execute(&self.state.db)
+            .await
+            .unwrap();
+        }
+    }
+
+    /// Runs the retention purge over this app's database, with the window the server uses.
+    pub async fn run_purge(&self) {
+        logb::sync::feed::purge(&self.state, 90).await.unwrap();
+    }
+
+    /// Activities whose object row is not there any more.
+    ///
+    /// The weaker half of what a purge test has to check, and it is here to say so: with
+    /// `foreign_keys` on, `ON DELETE CASCADE` leaves no orphan -- it leaves nothing at all. A
+    /// row destroyed by a cascade is invisible to this count, which is why a test about silent
+    /// loss cannot rest on it alone.
+    pub async fn count_orphan_activities(&self) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM activities a \
+             WHERE NOT EXISTS (SELECT 1 FROM objects o WHERE o.id = a.object_id)",
+        )
+        .fetch_one(&self.state.db)
+        .await
+        .unwrap()
+    }
+
     /// The caller's unarchived object names, in the order the API returns them.
     pub async fn object_names(&self) -> Vec<String> {
         let res = self.client.get(self.url("/objects")).send().await.unwrap();

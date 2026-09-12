@@ -183,18 +183,43 @@ pub async fn purge(
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
     ];
+    // One transaction around the whole loop, and every delete against it. Run as four separate
+    // autocommit statements they were four separate answers to "has this parent any children
+    // left", each taken at its own moment: on PostgreSQL a `NOT EXISTS` subquery answers from
+    // the snapshot its statement began with, so a child committing while the statement waited
+    // on the parent's row lock was invisible to the guard and still taken by the cascade --
+    // hard-deleted with no tombstone and no `changes` row, which is precisely the silent loss
+    // the guards are here to prevent. Inside `begin_write` the guards and their deletes see one
+    // state, and no other writer can interleave: on PostgreSQL because the advisory lock it
+    // takes is the one every write path takes, on SQLite because `BEGIN IMMEDIATE` holds the
+    // only write lock the database has for the length of the loop rather than for one statement
+    // at a time.
+    let mut tx = crate::db::begin_write(db, state.backend).await?;
     for (table, guard) in guards {
         // `table` and `guard` only ever come from the fixed list above, never from user input
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
         // accept it.
         let sql =
             format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
-        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(db).await?;
+        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(&mut *tx).await?;
     }
+    tx.commit().await?;
 
     // Now that no attachment references them, the unreferenced ones can give up their blob and
     // thumbnail. `purge_orphan_files` re-checks each candidate against the live attachments, so
     // a file still used by another object is left alone.
+    //
+    // After the commit, deliberately, and it cannot be moved inside the transaction above.
+    // It works through the pool, so it would take a connection of its own -- one the
+    // transaction is not holding, which a pool of one does not have -- and then ask that
+    // connection to `DELETE FROM files` for rows whose `attachments` still exist as far as
+    // every other connection is concerned, because this transaction's deletes have not
+    // committed. `attachments.file_id` is `ON DELETE RESTRICT`, so that check blocks on the
+    // uncommitted rows and waits for a transaction that is itself waiting for this call to
+    // return: a hang rather than an error, and on SQLite the same standoff arrives as the
+    // write lock the open transaction holds. It also removes blobs and thumbnails from disk,
+    // which no rollback can put back, so the honest order is rows gone for good first, bytes
+    // after.
     crate::api::attachments::purge_orphan_files(state, &pinned).await?;
 
     // A field clock for a row nobody can name any more is dead weight.

@@ -151,3 +151,97 @@ async fn a_push_retried_concurrently_is_applied_once_and_accepted_twice() {
     }
     assert_eq!(app.count_changes_of("op-retry-1").await, 1, "the op was recorded more than once");
 }
+
+/// The purge deletes aged-out tombstones under guards that say "only if this parent has no
+/// children left". Each guard rides in the same `DELETE` as the delete it guards, but the four
+/// deletes were four separate autocommit statements against the pool, taking no transaction and
+/// no lock -- and on PostgreSQL a `NOT EXISTS` subquery answers from the snapshot its statement
+/// began with. A child that commits while that statement is parked on the parent's row lock is
+/// therefore invisible to the guard and still taken by `ON DELETE CASCADE`: hard-deleted, with
+/// no tombstone and no `changes` row, so no device ever learns it existed. That is the exact
+/// loss `sync::feed::purge`'s own comment says the guards exist to prevent.
+///
+/// The writer is the insert `api::activities::create` runs, in the `db::begin_write`
+/// transaction it runs it in, rather than a REST call: the interesting create is one that
+/// passed `load_owned_object` while the object was still live -- that check reads the pool
+/// before the transaction opens -- and only commits after the delete has landed. Holding that
+/// transaction open across the purge turns a window measured in microseconds into one a test
+/// can stand in, instead of one it has to hope to land in.
+///
+/// Two removals turn it red on PostgreSQL, and which one it is matters, because unlike the
+/// three tasks before it this race was NOT already prevented by Task 1's advisory lock. The
+/// lock was in place throughout and the test still failed: the purge ran its deletes in
+/// autocommit, so it took no lock at all and `Backend::write_lock` had nothing to say about
+/// them. Remove the `db::begin_write` around the guard loop in `sync::feed::purge` and it goes
+/// red again for that reason. Keep the transaction and remove `Backend::write_lock`'s
+/// PostgreSQL arm instead, and it ALSO goes red -- a READ COMMITTED transaction is no defence
+/// on its own, since every statement in it takes a fresh snapshot and none of them blocks the
+/// writer. So the two are one mechanism here rather than two independent ones: the transaction
+/// is what makes the purge take the lock, and the lock is what the transaction protects it
+/// with. Both were observed, in that order.
+///
+/// Observed before the fix, on PostgreSQL: the activity row gone, no tombstone, nothing in
+/// `changes`. On SQLite it passed throughout -- the writer's `BEGIN IMMEDIATE` holds the one
+/// write lock the database has, so the purge's first statement waits for the commit and every
+/// guard afterwards sees the child. The fix therefore changes nothing SQLite was relying on; it
+/// gives PostgreSQL the serialisation SQLite had all along.
+#[tokio::test]
+async fn a_child_created_during_a_purge_is_not_cascade_deleted() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = object["id"].as_i64().unwrap();
+    app.delete_object(&object).await;
+    app.age_out_tombstones().await;
+
+    // A device that was offline creates an activity against the object. Open and insert, but
+    // do not commit yet: this is the create that got past the liveness check and is still in
+    // flight when the purge starts.
+    const UUID: &str = "late-arrival-uuid";
+    let mut writer = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+    sqlx::query(
+        "INSERT INTO activities \
+           (object_id, date, category, title, notes, created_at, updated_at, client_uuid) \
+         VALUES ($1, '2024-03-01', 'maintenance', 'late arrival', '', $2, $3, $4)",
+    )
+    .bind(object_id)
+    .bind(logb::db::now())
+    .bind(logb::db::now())
+    .bind(UUID)
+    .execute(&mut *writer)
+    .await
+    .unwrap();
+
+    let purge = {
+        let state = app.state.clone();
+        tokio::spawn(async move { logb::sync::feed::purge(&state, 90).await })
+    };
+    // Long enough for the purge to have reached the delete that matters and be waiting on the
+    // row this transaction holds; the commit is what lets it through.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    writer.commit().await.unwrap();
+    purge.await.unwrap().expect("the purge itself must not fail");
+
+    // Either the object survived with its child, or the child is a tombstone, or a device can
+    // still learn of its delete from the log. What must never happen is a row vanishing with
+    // none of the three -- which is what a cascade over a live child leaves behind.
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM activities WHERE client_uuid = $1")
+        .bind(UUID)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let logged: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM changes WHERE entity_uuid = $1 AND op = 'delete'")
+            .bind(UUID)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert!(
+        rows == 1 || logged >= 1,
+        "the activity is gone with no tombstone and no delete in the log: no device can ever \
+         learn it existed"
+    );
+    // The other shape the same cascade could take, and the weaker of the two: a child that
+    // outlived its object rather than dying with it.
+    assert_eq!(app.count_orphan_activities().await, 0, "an activity outlived its object");
+}
