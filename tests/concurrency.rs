@@ -245,3 +245,25 @@ async fn a_child_created_during_a_purge_is_not_cascade_deleted() {
     // outlived its object rather than dying with it.
     assert_eq!(app.count_orphan_activities().await, 0, "an activity outlived its object");
 }
+
+/// Field-level last-write-wins compares `edited_at`, falling back to `device_id` for a tie. The
+/// comparison reads `field_clock`, decides in Rust, then writes -- which is only atomic if
+/// nothing else can write between the read and the write.
+///
+/// Two devices editing the same field at once must leave the field holding the LATER edit,
+/// whichever arrived first. Without serialised writes the winner is whichever transaction
+/// committed last, so the older edit can win and stay.
+#[tokio::test]
+async fn the_later_edit_wins_regardless_of_arrival_order() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+
+    let older = app.one_set_op_at(&object, "older name", "op-older", "2030-01-01T00:00:00Z").await;
+    let newer = app.one_set_op_at(&object, "newer name", "op-newer", "2030-06-01T00:00:00Z").await;
+
+    let (_, _) = tokio::join!(app.push_raw(&newer), app.push_raw(&older));
+
+    let name = app.object_name(&object).await;
+    assert_eq!(name, "newer name", "the older edit won: the clock was read before it was safe to");
+}

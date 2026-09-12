@@ -430,13 +430,26 @@ impl TestApp {
         name: &str,
         client_op_id: &str,
     ) -> serde_json::Value {
+        let edited_at = (chrono::Utc::now() + chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        self.one_set_op_at(object, name, client_op_id, &edited_at).await
+    }
+
+    /// `one_set_op`, but with the caller's own `edited_at` rather than "now plus an hour" --
+    /// for a test that is about last-write-wins itself, and so needs to name which of two
+    /// edits is the later one rather than let the clock decide.
+    pub async fn one_set_op_at(
+        &self,
+        object: &serde_json::Value,
+        name: &str,
+        client_op_id: &str,
+        edited_at: &str,
+    ) -> serde_json::Value {
         let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
             .bind(object["id"].as_i64().expect("an object with an id"))
             .fetch_one(&self.state.db)
             .await
             .unwrap();
-        let edited_at = (chrono::Utc::now() + chrono::Duration::hours(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         serde_json::json!({ "ops": [{
             "client_op_id": client_op_id, "entity": "object", "entity_uuid": uuid,
             "op": "set", "field": "name", "value": name,
@@ -507,6 +520,16 @@ impl TestApp {
         .fetch_one(&self.state.db)
         .await
         .unwrap()
+    }
+
+    /// The stored `name` of one object, read straight from the database -- so a test asking
+    /// which of two concurrent edits won does not also depend on the REST read path.
+    pub async fn object_name(&self, object: &serde_json::Value) -> String {
+        sqlx::query_scalar("SELECT name FROM objects WHERE id = $1")
+            .bind(object["id"].as_i64().expect("an object with an id"))
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
     }
 
     /// The caller's unarchived object names, in the order the API returns them.

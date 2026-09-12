@@ -394,6 +394,18 @@ pub async fn apply_op(
                 }
             }
 
+            // Read, decide with `wins`, then write: three statements that have to behave as
+            // one, because whatever else could write this row between the read and the write
+            // could make its own stale write disappear behind the very check meant to stop it.
+            // That is only safe because writers are serialised -- `apply_op` never runs outside
+            // a transaction `db::begin_write` opened, and on PostgreSQL that call takes the
+            // advisory lock (`Backend::write_lock`) for the transaction's whole lifetime, so no
+            // other write transaction's `field_clock` read or write can land between this read
+            // and the `UPDATE` below. Remove that lock and this exact read-compare-write loses:
+            // `tests/concurrency.rs`'s `the_later_edit_wins_regardless_of_arrival_order` fails
+            // on PostgreSQL without it (and stays green on SQLite, whose own `BEGIN IMMEDIATE`
+            // already serialises writers). Do not add a lock here -- the one this depends on is
+            // already held for the whole push.
             let stored: Option<(String, String)> = sqlx::query_as(
                 "SELECT edited_at, device_id FROM field_clock \
                  WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
