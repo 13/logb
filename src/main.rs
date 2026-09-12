@@ -10,13 +10,12 @@ async fn main() -> Result<(), logb::db::BoxError> {
         .with_env_filter(EnvFilter::new(config.log.clone()))
         .init();
     if let Some(dest) = config.backup.clone() {
-        let pool = logb::db::connect_existing(&config.database_url()?).await?;
-        logb::db::backup_to(&pool, &dest).await?;
+        logb::backup::run_once(&config.database_url()?, &dest).await?;
         println!("database backed up to {}", dest.display());
         return Ok(());
     }
     if let Some(src) = config.restore.clone() {
-        let report = logb::restore::run(&config.data_dir, &src).await?;
+        let report = logb::restore::run(&config.database_url()?, &src).await?;
         println!("restored {} into {}", src.display(), config.data_dir.display());
         if let Some(kept) = report.replaced_to {
             println!("the database it replaced is kept at {}", kept.display());

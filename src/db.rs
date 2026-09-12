@@ -34,10 +34,11 @@ pub fn sqlite_url(data_dir: &Path) -> Result<String, BoxError> {
 
 /// The file a SQLite URL points at, or `None` for any other backend.
 ///
-/// Used only to keep the two things a URL cannot say: that a data directory has to exist
-/// before SQLite can create a file in it, and that `connect_existing` must find a database
-/// rather than make one.
-fn sqlite_file(url: &str) -> Option<PathBuf> {
+/// Used to keep the two things a URL cannot say: that a data directory has to exist before
+/// SQLite can create a file in it, and that `connect_existing` must find a database rather
+/// than make one. `pub(crate)` so `restore::run` can locate the live database file from the
+/// URL it is handed, instead of re-deriving a URL from a data directory of its own.
+pub(crate) fn sqlite_file(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("sqlite://").or_else(|| url.strip_prefix("sqlite:"))?;
     let path = rest.split(['?', '#']).next().unwrap_or("");
     (!path.is_empty() && path != ":memory:").then(|| PathBuf::from(path))

@@ -11,6 +11,8 @@ mod common;
 /// Only the tests that actually take or restore a snapshot stand down. The two that are about
 /// the surrounding policy -- that backup stays off unless a directory is configured, and that
 /// a file which is not a database is refused -- hold on both backends and still run on both.
+/// `backup_and_restore_refuse_on_postgresql`, below, is the mirror image: it is the one test in
+/// this file that runs only *with* a PostgreSQL URL, and it is what pins the refusal itself.
 const VACUUM_INTO_IS_SQLITE: &str =
     "the backup is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of its own \
      in part five of the port";
@@ -259,7 +261,7 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
     // one. Point it at a data directory of its own, seeded from this instance's snapshot.
     let target = tempfile::tempdir().unwrap();
     std::fs::copy(&snapshot, target.path().join("logb.db")).unwrap();
-    let report = logb::restore::run(target.path(), &snapshot).await.unwrap();
+    let report = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await.unwrap();
 
     assert!(report.replaced_to.is_some(), "the database it replaced is kept, not deleted");
     assert!(report.replaced_to.as_ref().unwrap().exists());
@@ -297,7 +299,7 @@ async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
     std::fs::write(target.path().join("logb.db-wal"), orphan_wal).unwrap();
     std::fs::write(target.path().join("logb.db-shm"), orphan_shm).unwrap();
 
-    logb::restore::run(target.path(), &snapshot).await.unwrap();
+    logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await.unwrap();
 
     // The exact live path must not hold the orphan. This alone is not proof of a fix: SQLite's
     // own close-time checkpoint clears a `-wal` beside a database it just opened regardless of
@@ -384,7 +386,7 @@ async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoc
     let target = tempfile::tempdir().unwrap();
     std::fs::copy(&snapshot, target.path().join("logb.db")).unwrap();
 
-    let report = logb::restore::run(target.path(), &snapshot).await
+    let report = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &snapshot).await
         .expect("an ahead schema is additive and safe to use as-is, per the health check's own rule");
     assert_ne!(report.epoch, epoch_before, "the epoch must be rotated even on this path");
 
@@ -405,11 +407,31 @@ async fn restore_refuses_a_file_that_is_not_a_database() {
     std::fs::write(&junk, b"absolutely not a database").unwrap();
     std::fs::write(target.path().join("logb.db"), b"the live one").unwrap();
 
-    let err = logb::restore::run(target.path(), &junk).await.unwrap_err();
+    let err = logb::restore::run(&logb::db::sqlite_url(target.path()).unwrap(), &junk).await.unwrap_err();
     assert!(err.to_string().contains("not a usable snapshot"), "got: {err}");
     assert_eq!(
         std::fs::read(target.path().join("logb.db")).unwrap(),
         b"the live one",
         "a refused restore must not have touched the live database"
+    );
+}
+
+/// `VACUUM INTO` and replacing the database file are SQLite mechanisms. On PostgreSQL they must
+/// say so and stop, rather than failing somewhere inside sqlx with a syntax error that names
+/// nothing the operator can act on.
+#[tokio::test]
+async fn backup_and_restore_refuse_on_postgresql() {
+    let Some(url) = common::test_server_url() else { return };
+
+    let dest = std::env::temp_dir().join(format!("logb-backup-refuse-{}.db", common::unique_suffix()));
+    let err = logb::backup::run_once(&url, &dest).await.unwrap_err().to_string();
+    assert!(err.contains("PostgreSQL"), "the message must name the reason: {err}");
+    assert!(!dest.exists(), "a refusal must never attempt VACUUM INTO in the first place");
+
+    let err = logb::restore::run(&url, std::path::Path::new("/tmp/whatever.db")).await.unwrap_err().to_string();
+    assert!(err.contains("PostgreSQL"), "the message must name the reason: {err}");
+    assert!(
+        err.contains("copy-to"),
+        "restore's refusal must point at the tool that will move data between databases: {err}"
     );
 }
