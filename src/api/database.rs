@@ -371,9 +371,11 @@ const OFF: &str = "off";
 const SCHEDULED: &str = "scheduled";
 
 /// The modified time of the newest file `crate::backup::tick` would have written
-/// (`logb-*.db`), formatted the way the rest of the API formats timestamps. `None` for a
-/// directory with no snapshot yet, or one that does not exist at all -- neither is an error
-/// here, since `tick` creates the directory itself on its first run.
+/// (`logb-*.db`), converted to the instance's configured timezone -- the same one `tick` used
+/// to name the file and to decide whether to write it, so this stays "today" for as long as the
+/// filename and `db::local_hour()` beside it agree it is. `None` for a directory with no
+/// snapshot yet, or one that does not exist at all -- neither is an error here, since `tick`
+/// creates the directory itself on its first run.
 fn newest_snapshot(dir: &std::path::Path) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     let newest = entries
@@ -385,7 +387,7 @@ fn newest_snapshot(dir: &std::path::Path) -> Option<String> {
         .max()?;
     let secs = newest.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     let at = chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0)?;
-    Some(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    Some(at.with_timezone(&crate::db::timezone()).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 /// Reports who is responsible for backing up this database up: LogB itself (SQLite, with the
