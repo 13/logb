@@ -141,12 +141,14 @@ after moving to PostgreSQL; it is the one place that reports what is true of the
 instance rather than what was configured.
 
 **Settings → Export is not a database backup.** It writes one zip holding the JSON and
-every file, self-contained and importable into any LogB instance, which makes it the right
-tool for moving data between instances or keeping a copy you can read without LogB at all.
-But it is written only when somebody asks for one, it is a re-encoding of the data rather
-than a copy of the database, and `--restore` does not take it. A nightly snapshot is what
-gets you back to last night; an export is what gets your data out. Keep both if you like,
-but do not count the export as the backup.
+every file for the account you exported from, self-contained and importable into any LogB
+instance, which makes it the right tool for moving one user's data between instances or
+keeping a copy you can read without LogB at all. LogB is multi-user, and the export is
+per-user: it carries no other account, no API token and no sync state, so it is not a copy
+of the whole database either. It is also written only when somebody asks for one, and
+`--restore` does not take it. A nightly snapshot is what gets you back to last night; an
+export is what gets one user's data out. Keep both if you like, but do not count the
+export as the backup.
 
 ## Restore
 
