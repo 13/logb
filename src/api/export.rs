@@ -545,6 +545,22 @@ async fn import_attachment(
             } else { None };
             state.storage.write_blob(&x.sha256, bytes).await?;
             let file_uuid = uuid::Uuid::new_v4().to_string();
+            // The insert rides its own savepoint for the same reason `apply.rs`'s `set` arm
+            // does: PostgreSQL aborts the whole transaction on any error, so the re-query below
+            // -- which runs on this same transaction -- would itself fail with "current
+            // transaction is aborted" the moment it followed a bare, unrescued failed INSERT.
+            // SQLite rolls back only the failing statement by default, so the savepoint costs
+            // it nothing; on PostgreSQL it is what makes the recovery able to recover at all.
+            //
+            // This path is also reached only if a concurrent import of the same account
+            // manages to race this INSERT -- `db::begin_write`'s advisory lock on PostgreSQL
+            // (SQLite's single writer, always) serialises every write transaction, `import`
+            // included, so today nothing can. It rides the same rule as `apply.rs` anyway,
+            // rather than trusting that the lock is never lifted: `tests/concurrency.rs`
+            // documents removing it as a mutation test, and an unrescued arm here would have
+            // sprung back to life as a real 500 the moment that lock came off, on the one
+            // failure path this function could not otherwise exercise.
+            sqlx::query("SAVEPOINT logb_import_file").execute(&mut **tx).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
@@ -555,6 +571,7 @@ async fn import_attachment(
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
                 Ok((id,)) => {
+                    sqlx::query("RELEASE SAVEPOINT logb_import_file").execute(&mut **tx).await?;
                     if let Some(img) = &image { state.storage.write_thumb(id, &img.thumb_jpeg).await?; }
                     record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
                     id
@@ -564,6 +581,7 @@ async fn import_attachment(
                 // not an error -- reuse the row the winner just created, which was (or will
                 // be) logged by whichever request actually inserted it.
                 Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+                    sqlx::query("ROLLBACK TO SAVEPOINT logb_import_file").execute(&mut **tx).await?;
                     let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
                         .bind(user_id).bind(&x.sha256).fetch_one(&mut **tx).await?;
                     id
