@@ -1,6 +1,6 @@
 # PostgreSQL, part 2: what SQLite's single writer was hiding
 
-Status: approved design, not yet implemented. Second of five. Depends on part one.
+Status: implemented.
 
 ## Problem
 
