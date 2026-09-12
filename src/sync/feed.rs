@@ -134,12 +134,6 @@ pub async fn purge(
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
-        .bind(&cutoff)
-        .execute(db)
-        .await?
-        .rows_affected();
-
     // `files` is absent deliberately: `files.deleted_at` is never set, because
     // `sync::apply::apply_op`'s Delete arm refuses a `delete` op on `Entity::File` outright, so
     // no code path ever produces a file tombstone for this loop to find. A file is
@@ -189,6 +183,17 @@ pub async fn purge(
     // the only write lock the database has for the length of the transaction rather than for one
     // statement at a time.
     let mut tx = crate::db::begin_write(db, state.backend).await?;
+
+    // Aged-out log rows, in the same transaction as everything below rather than run against
+    // the pool first: nothing here reads `changes` afterwards, so a row landing in the gap
+    // could not be lost the way an interleaved child could, but running it before the
+    // transaction even opened would have made the comment above a lie about what "one
+    // transaction around the whole purge" actually covered.
+    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
+        .bind(&cutoff)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
     // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
     // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
