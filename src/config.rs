@@ -53,6 +53,14 @@ pub struct Config {
     /// full bootstrap.
     #[arg(long, value_name = "PATH")]
     pub restore: Option<PathBuf>,
+    /// Copy this database into another one and exit. The destination must be empty. Blobs are
+    /// not moved: they are content-addressed files under the data directory, and a copy of that
+    /// directory pairs with any database.
+    #[arg(long, value_name = "URL")]
+    pub copy_to: Option<String>,
+    /// Copy into a destination that already holds data. Two histories in one database.
+    #[arg(long, requires = "copy_to")]
+    pub force: bool,
     /// Probe a running instance's `/api/health` on the configured port and exit 0 or 1.
     /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
     #[arg(long)]
@@ -150,6 +158,8 @@ mod tests {
             backup_dir: None,
             backup_hour: 3,
             restore: None,
+            copy_to: None,
+            force: false,
             healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),

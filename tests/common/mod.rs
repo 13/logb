@@ -113,8 +113,62 @@ pub struct ScratchDatabase {
 /// A scratch database with no app around it, and the URL that reaches it, for a test that
 /// wants a database rather than a whole instance. It lives until the returned handle is
 /// dropped, exactly as a `TestApp`'s does.
-pub async fn scratch_database(server_url: &str) -> (ScratchDatabase, String) {
+///
+/// Named `_on` because it takes the *server* to make it on: `scratch_database` below is the
+/// one that asks no questions and hands back an empty database of whichever backend the suite
+/// is running against.
+pub async fn scratch_database_on(server_url: &str) -> (ScratchDatabase, String) {
     ScratchDatabase::create(server_url).await
+}
+
+/// An empty database of whichever backend the suite is running against, with nothing built on
+/// top of it: a temporary file for SQLite, a freshly created database for PostgreSQL.
+///
+/// It is the same machinery a `TestApp` gets its own database from, for the one kind of test
+/// that needs a *second* database rather than a second app -- copying one into another.
+pub async fn scratch_database() -> Scratch {
+    match test_server_url() {
+        Some(server_url) => {
+            let (database, url) = ScratchDatabase::create(&server_url).await;
+            Scratch { url, _dir: None, _database: Some(database) }
+        },
+        None => {
+            let dir = tempfile::tempdir().unwrap();
+            let url = logb::db::sqlite_url(dir.path()).unwrap();
+            Scratch { url, _dir: Some(dir), _database: None }
+        },
+    }
+}
+
+/// An empty database and the URL that reaches it. Lives until dropped, exactly as the database
+/// behind a `TestApp` does.
+pub struct Scratch {
+    pub url: String,
+    /// The directory the SQLite file lives in, deleted with this handle. `None` on PostgreSQL.
+    _dir: Option<tempfile::TempDir>,
+    /// The PostgreSQL database, dropped with this handle. `None` on SQLite.
+    _database: Option<ScratchDatabase>,
+}
+
+impl Scratch {
+    /// Every activity paired with the object it hangs off, straight from the database.
+    pub async fn all_activity_ids(&self) -> Vec<(i64, i64)> {
+        all_activity_ids(&self.url).await
+    }
+}
+
+/// Every `(id, object_id)` in `activities`, in id order, read through a connection of its own.
+///
+/// Deliberately not through an app's pool: the tests that ask this question have already let go
+/// of the database so that a copy could take it, and the answer has to be readable afterwards.
+pub async fn all_activity_ids(url: &str) -> Vec<(i64, i64)> {
+    let pool = logb::db::connect_existing(url).await.unwrap();
+    let rows = sqlx::query_as::<_, (i64, i64)>("SELECT id, object_id FROM activities ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    rows
 }
 
 impl ScratchDatabase {
@@ -131,6 +185,34 @@ impl ScratchDatabase {
         admin.close().await;
         let url = replace_database_in_url(server_url, &name);
         (Self { server_url: server_url.to_string(), name }, url)
+    }
+
+    /// Waits until nothing is connected to this database any more.
+    ///
+    /// Closing a pool hands the sockets back, but a PostgreSQL backend process lingers in
+    /// `pg_stat_activity` for a moment after its client has gone -- and that view is exactly
+    /// what `copy::run` reads to decide whether the source is still in use. Asked from the
+    /// *server's* own database, so this connection is never one of the ones being counted.
+    async fn wait_until_unused(&self) {
+        let admin = match admin_pool(&self.server_url).await {
+            Ok(admin) => admin,
+            Err(e) => {
+                eprintln!("could not check whether {} is still in use: {e}", self.name);
+                return;
+            },
+        };
+        for _ in 0..200 {
+            let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = $1")
+                .bind(&self.name)
+                .fetch_one(&admin)
+                .await
+                .unwrap_or(0);
+            if busy == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        admin.close().await;
     }
 }
 
@@ -214,6 +296,8 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         backup_dir: None,
         backup_hour: 3,
         restore: None,
+        copy_to: None,
+        force: false,
         healthcheck: false,
         secure_cookie: "false".into(),
         log: "warn".into(),
@@ -285,6 +369,30 @@ pub fn new_client() -> reqwest::Client {
 }
 
 impl TestApp {
+    /// The database this app was built on, as a URL -- the same one `--copy-to` would be
+    /// pointed at from the command line.
+    pub fn database_url(&self) -> String {
+        self.state.config.database_url().unwrap()
+    }
+
+    /// Lets go of the database, as stopping the server does.
+    ///
+    /// A copy refuses a source anything else still holds, so a test that copies out of an app's
+    /// database has to put the app down first. The app itself stays alive -- it still owns the
+    /// data directory and, on PostgreSQL, the scratch database -- it just holds no connections
+    /// any more, so anything it is asked to serve after this will fail.
+    pub async fn release_database(&self) {
+        self.state.db.close().await;
+        if let Some(database) = &self._database {
+            database.wait_until_unused().await;
+        }
+    }
+
+    /// Every activity paired with the object it hangs off, straight from the database.
+    pub async fn all_activity_ids(&self) -> Vec<(i64, i64)> {
+        all_activity_ids(&self.database_url()).await
+    }
+
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }

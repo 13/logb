@@ -186,7 +186,7 @@ async fn the_two_schemas_describe_the_same_tables_and_columns() {
     // A scratch database of its own, like every other test, rather than migrating into the
     // server's own `postgres` database: this test compares a schema built from nothing, and a
     // database left behind by an earlier run would let a dropped column keep passing.
-    let (_scratch, pg) = common::scratch_database(&server).await;
+    let (_scratch, pg) = common::scratch_database_on(&server).await;
     let postgres = schema(&pg).await;
 
     let failures: Vec<String> = [

@@ -23,6 +23,15 @@ async fn main() -> Result<(), logb::db::BoxError> {
         println!("sync epoch is now {} -- every device will re-bootstrap", report.epoch);
         return Ok(());
     }
+    if let Some(dest) = config.copy_to.clone() {
+        let report = logb::copy::run(&config.database_url()?, &dest, config.force).await?;
+        for (table, rows) in &report.tables {
+            println!("{rows:>7} {table}");
+        }
+        println!("sync epoch is now {} -- every device will re-bootstrap", report.epoch);
+        println!("blobs are NOT copied: copy the files/ directory alongside this database");
+        return Ok(());
+    }
     if config.healthcheck {
         return healthcheck(config.port).await;
     }
