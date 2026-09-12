@@ -94,6 +94,15 @@ export interface DbProbe {
   state: 'empty' | 'holds_logb_data' | 'unreachable';
   message?: string;
 }
+/** `GET /database/backup`: who is responsible for backing this database up. `scheduled` is
+ *  SQLite with a directory configured, `off` is SQLite without one, and `not_ours` is
+ *  PostgreSQL -- where LogB's nightly snapshot (`VACUUM INTO`) never runs, whatever
+ *  `LOGB_BACKUP_DIR` is set to. `directory`, `hour` and `last_at` are filled in for
+ *  `scheduled` only, and `last_at` is null until the first snapshot has been written. */
+export interface BackupStatus {
+  state: 'scheduled' | 'off' | 'not_ours';
+  directory: string | null; last_at: string | null; hour: number | null;
+}
 /** `POST /database/switch`: the copy report, returned only once the copy has been verified. */
 export interface DbSwitched {
   tables: { table: string; rows: number }[];
