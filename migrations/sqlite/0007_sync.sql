@@ -28,8 +28,11 @@ ALTER TABLE reminders   ADD COLUMN deleted_at TEXT;
 ALTER TABLE attachments ADD COLUMN deleted_at TEXT;
 ALTER TABLE files       ADD COLUMN deleted_at TEXT;
 
--- The append-only log. `seq` is the pull cursor: monotonic, gapless per database, and ordered
--- by the order the server accepted work rather than by any device's clock.
+-- The append-only log. `seq` is the pull cursor: monotonic and in commit order, which is what
+-- a pull actually depends on (`seq > cursor` must never revisit a number a device already
+-- passed) -- not gapless. A rolled-back insert still burns its `AUTOINCREMENT` number, so gaps
+-- happen, and nothing reads `seq` for contiguity. Commit order here comes from SQLite having
+-- one writer; see migrations/postgres/0001_schema.sql for what PostgreSQL needs instead.
 CREATE TABLE changes (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     entity       TEXT NOT NULL CHECK (entity IN ('object','activity','reminder','attachment','file')),

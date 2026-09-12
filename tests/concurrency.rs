@@ -34,17 +34,18 @@ async fn two_write_transactions_do_not_overlap() {
     assert!(after.is_ok(), "the lock was not released when the transaction ended");
 }
 
-/// The cursor's promise, from `0007_sync.sql`: "monotonic, gapless per database, and ordered".
-/// A device pulls with `seq > cursor` and remembers the highest it saw, so a number that
-/// appears after the device has moved past it is not late -- it is gone, for that device,
-/// permanently and with nothing reporting an error.
+/// The cursor's promise, from `0007_sync.sql`: monotonic and in commit order. A device pulls
+/// with `seq > cursor` and remembers the highest it saw, so a number that appears after the
+/// device has moved past it is not late -- it is gone, for that device, permanently and with
+/// nothing reporting an error.
 ///
-/// What turns this red on PostgreSQL is the advisory lock, not the `MAX(seq) + 1` assignment:
-/// point these writers at `state.db.begin()` instead of `db::begin_write`, or drop
-/// `Backend::write_lock`'s PostgreSQL arm, and the writers commit out of order while the puller
-/// walks past numbers that have not landed -- observed at 148, 154 and 158 of 161 changes
-/// reaching the puller. Removing `MAX(seq) + 1` on its own leaves it green; that assignment
-/// buys gaplessness across a rollback, which is not what this test measures.
+/// What turns this red on PostgreSQL is the advisory lock in `db::begin_write`: point these
+/// writers at `state.db.begin()` instead, or drop `Backend::write_lock`'s PostgreSQL arm, and
+/// the writers commit out of order while the puller walks past numbers that have not landed --
+/// observed at 148, 154 and 158 of 161 changes reaching the puller. `seq` is not gapless on
+/// either backend -- a rolled-back insert burns its number here the same as on SQLite -- and
+/// this test does not measure that; it only measures that every number that does land, lands
+/// in order.
 ///
 /// It stays green on SQLite throughout, which is what says the test is about the difference
 /// between the two databases rather than about itself.
