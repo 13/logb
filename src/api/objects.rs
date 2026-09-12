@@ -241,7 +241,7 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
     let object_uuid = uuid::Uuid::new_v4().to_string();
     let edited_at = record::edited_at_now();
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at, client_uuid) \
@@ -301,7 +301,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         changed.push(("cover_attachment_id", json!(cover_attachment_id)));
     }
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
          purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, updated_at = $10 WHERE id = $11 AND deleted_at IS NULL",
@@ -335,7 +335,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
     let now = db::now();
     let edited_at = record::edited_at_now();
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     let affected = sqlx::query(
         "UPDATE objects SET deleted_at = $1, updated_at = $2 \
          WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL")

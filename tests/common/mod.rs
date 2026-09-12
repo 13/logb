@@ -375,6 +375,34 @@ impl TestApp {
         res.json().await.unwrap()
     }
 
+    /// GET /sync/pull from a cursor, exactly as a device following the log does.
+    ///
+    /// The epoch travels with every cursor past the first, and it is constant for the life of
+    /// one database -- so this reads it from the app's own settings rather than making every
+    /// caller thread it back out of the previous page.
+    pub async fn pull(&self, since: i64) -> serde_json::Value {
+        let epoch = logb::sync::epoch::current(&self.state.db).await.unwrap();
+        let res = self
+            .client
+            .get(self.url(&format!("/sync/pull?since={since}&epoch={epoch}")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200, "pull failed: {}", res.text().await.unwrap());
+        res.json().await.unwrap()
+    }
+
+    /// How many rows the change log holds, read straight from the database.
+    ///
+    /// This is the number a puller that missed nothing must have seen, and it deliberately does
+    /// not go through the API: the question is what the log contains, not what it serves.
+    pub async fn count_changes(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM changes")
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
+    }
+
     /// GET /search, with the term encoded by the client rather than pasted into the URL --
     /// the terms that matter here are accented.
     pub async fn search(&self, term: &str) -> serde_json::Value {

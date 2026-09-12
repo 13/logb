@@ -366,7 +366,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     // the row itself, per rule 1 in `sync::record` -- this is about `changes`/`field_clock`
     // only).
     let edited_at = record::edited_at_now();
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     for o in data.objects {
         let now = db::now();
         let object_uuid = uuid::Uuid::new_v4().to_string();

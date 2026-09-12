@@ -119,10 +119,16 @@ async fn push(
                 (None, None)
             };
             sqlx::query(
+                // `seq` is assigned here, not by the column's default, for the reason spelled
+                // out over `record::insert_change` -- and it has to be assigned in *both*
+                // places or neither. PostgreSQL's identity sequence does not advance when a
+                // value is supplied, so a table whose numbers came from `MAX + 1` would hand
+                // this insert a number already taken the moment it fell back on the default.
                 "INSERT INTO changes \
-                 (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
+                 (seq, entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
                   device_id, client_op_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+                 VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM changes), $1, $2, $3, $4, $5, \
+                         $6, $7, $8, $9, $10)")
                 .bind(op.entity.as_str())
                 .bind(&op.entity_uuid)
                 .bind(op.op.as_str())

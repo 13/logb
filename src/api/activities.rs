@@ -249,7 +249,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     let now = db::now();
     let activity_uuid = uuid::Uuid::new_v4().to_string();
     let edited_at = record::edited_at_now();
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
@@ -320,7 +320,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if body.cost_cents != existing.cost_cents { changed.push(("cost_cents", json!(body.cost_cents))); }
     if body.quantity_milli != existing.quantity_milli { changed.push(("quantity_milli", json!(body.quantity_milli))); }
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query(
         "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8 WHERE id = $9 AND deleted_at IS NULL",
     )
@@ -348,7 +348,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     load_owned_activity(&state, user.id, id).await?;
     let now = db::now();
     let edited_at = record::edited_at_now();
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     let affected = sqlx::query("UPDATE activities SET deleted_at = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL")
         .bind(&now).bind(&now).bind(id)
         .execute(&mut *tx).await?.rows_affected();

@@ -92,10 +92,24 @@ async fn insert_change(
     };
     let (edited_at, device_id) = clock;
     sqlx::query(
+        // `seq` is assigned here rather than by the column's default, and the difference
+        // matters on PostgreSQL. An identity column hands out numbers before commit and keeps
+        // the number even if the transaction rolls back, so the log would have gaps where
+        // SQLite has none -- `AUTOINCREMENT` keeps its counter in `sqlite_sequence`, which
+        // rolls back with everything else.
+        //
+        // It is the advisory lock in `db::begin_write`, not this statement, that puts the
+        // numbers in commit order and so stops a puller reading past one that has not landed.
+        // What this adds is the gapless half: inside that lock this is the only transaction
+        // writing, so `MAX + 1` is exactly the next number, and it goes back with the
+        // transaction that computed it. That also makes it strictly dependent on the lock --
+        // `MAX + 1` outside one is two writers computing the same number and the loser taking
+        // a primary-key violation. Every write that reaches here begins at `db::begin_write`.
         "INSERT INTO changes \
-         (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
+         (seq, entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
           device_id, client_op_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+         VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM changes), $1, $2, $3, $4, $5, $6, $7, \
+                 $8, $9, $10)")
         .bind(entity.as_str())
         .bind(entity_uuid)
         .bind(op.as_str())

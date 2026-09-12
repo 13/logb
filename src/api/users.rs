@@ -157,7 +157,7 @@ async fn delete(AdminUser(me): AdminUser, State(state): State<App>, Path(id): Pa
     let blobs: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
         .bind(id).fetch_all(&state.db).await?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query("DELETE FROM attachments WHERE object_id IN (SELECT id FROM objects WHERE user_id = $1)")
         .bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM objects WHERE user_id = $1").bind(id).execute(&mut *tx).await?;
