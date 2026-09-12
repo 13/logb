@@ -4,17 +4,18 @@
 //! next person can read the whole surface of the difference in under a minute, rather than
 //! discovering it one failing query at a time.
 //!
-//! There are four, and only the first three need code here:
+//! There are five, and only the first three need code here:
 //!
 //! 1. Case-insensitive matching in `LIKE` -- `case_insensitive_like`.
 //! 2. Case-insensitive sorting of names -- `name_order`.
-//! 3. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
+//! 3. How a transaction that intends to write begins -- `begin_write`.
+//! 4. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
 //!    column; PostgreSQL has no per-column collation of that kind without `citext`, so its
 //!    schema carries a unique index on `lower(username)` instead. The statements themselves
 //!    need no adapter: every username lookup compares `lower(username) = lower($1)`, which is
 //!    the same answer on SQLite (usernames are ASCII by `validate_username`) and is what makes
 //!    PostgreSQL use that index rather than scan.
-//! 4. Seeding. The SQLite migrations wrote the `currency` and `sync_epoch` settings rows with
+//! 5. Seeding. The SQLite migrations wrote the `currency` and `sync_epoch` settings rows with
 //!    `INSERT ... randomblob()`; the PostgreSQL schema seeds nothing, and `db::seed_settings`
 //!    now writes both on first start on either backend.
 
@@ -43,6 +44,26 @@ impl Backend {
         match self {
             Self::Sqlite => "LIKE",
             Self::Postgres => "ILIKE",
+        }
+    }
+
+    /// How to begin a transaction that is going to write.
+    ///
+    /// SQLite needs `BEGIN IMMEDIATE`: the default deferred begin takes its read snapshot
+    /// first and only asks for the write lock at its first write, so under WAL two devices
+    /// pushing at once can find the database changed underneath them and get
+    /// `SQLITE_BUSY_SNAPSHOT` -- which `busy_timeout` does not retry, because waiting cannot
+    /// fix a stale snapshot. Taking the lock up front puts the wait somewhere `busy_timeout`
+    /// applies.
+    ///
+    /// PostgreSQL has no such statement and does not need one: readers never block writers, a
+    /// write takes its row locks as it goes, and a conflict surfaces as a serialization error
+    /// to retry rather than a stale snapshot. `BEGIN IMMEDIATE` there is a syntax error, which
+    /// is how this was found -- every sync push answered 500.
+    pub fn begin_write(&self) -> &'static str {
+        match self {
+            Self::Sqlite => "BEGIN IMMEDIATE",
+            Self::Postgres => "BEGIN",
         }
     }
 
@@ -79,5 +100,13 @@ mod tests {
         assert_eq!(Backend::Postgres.name_order("name"), "lower(name)");
         // Qualified columns are passed through whole, since the search joins two tables.
         assert_eq!(Backend::Postgres.name_order("o.name"), "lower(o.name)");
+    }
+
+    /// `BEGIN IMMEDIATE` is SQLite's spelling and PostgreSQL rejects it outright, so this is
+    /// not a tuning knob: the wrong one there fails every writing transaction.
+    #[test]
+    fn each_backend_begins_a_writing_transaction_its_own_way() {
+        assert_eq!(Backend::Sqlite.begin_write(), "BEGIN IMMEDIATE");
+        assert_eq!(Backend::Postgres.begin_write(), "BEGIN");
     }
 }

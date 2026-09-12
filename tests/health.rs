@@ -1,5 +1,18 @@
 mod common;
 
+/// Why the two `--backup` tests in this file do not run on PostgreSQL.
+///
+/// `db::backup_to` is `VACUUM INTO`: SQLite writing a consistent copy of itself into a second
+/// file, which these tests then open as a database in its own right. PostgreSQL has no such
+/// statement and no file to open, so this is a mechanism only one backend has rather than
+/// behaviour that should hold on both; part five of the PostgreSQL port gives PostgreSQL a
+/// backup of its own. Every other test here -- the health endpoint, and the migration check
+/// that builds its own SQLite database -- runs on both.
+const VACUUM_INTO_IS_SQLITE: &str =
+    "`db::backup_to` is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of \
+     its own in part five of the port";
+
+
 #[tokio::test]
 async fn health_reports_ok_and_creates_database() {
     let app = common::spawn().await;
@@ -27,6 +40,9 @@ async fn migration_creates_all_tables() {
 /// `--backup` has to produce a file a fresh instance can actually open and read.
 #[tokio::test]
 async fn backup_writes_a_readable_snapshot() {
+    if common::skipped_on_postgres("backup_writes_a_readable_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     app.create_object(&app.client, "Golf", Some("km")).await;
@@ -47,6 +63,9 @@ async fn backup_writes_a_readable_snapshot() {
 
 #[tokio::test]
 async fn backup_refuses_to_overwrite_and_needs_an_existing_database() {
+    if common::skipped_on_postgres("backup_refuses_to_overwrite_and_needs_an_existing_database", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let dir = tempfile::tempdir().unwrap();

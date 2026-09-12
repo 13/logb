@@ -55,14 +55,12 @@ async fn push(
     user: AuthUser,
     Json(mut body): Json<PushBody>,
 ) -> Result<Json<PushOut>, AppError> {
-    // `BEGIN IMMEDIATE`, not the default deferred begin. A deferred transaction takes its read
-    // snapshot first and only asks for the write lock at its first write, so under WAL two
-    // devices pushing at once can find the database changed underneath them and get
-    // `SQLITE_BUSY_SNAPSHOT` -- which `busy_timeout` does not retry, because waiting cannot fix
-    // a stale snapshot. That surfaces as a 500 and the whole batch is thrown away. Push is the
-    // endpoint most likely to have concurrent writers, so it takes the write lock up front,
-    // where `busy_timeout` does apply.
-    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    // On SQLite this is `BEGIN IMMEDIATE` rather than the default deferred begin: push is the
+    // endpoint most likely to have concurrent writers, and a deferred transaction that is
+    // going to write can lose its snapshot under WAL and throw the whole batch away with a
+    // 500. PostgreSQL spells the same intention as a plain `BEGIN` -- and rejects SQLite's
+    // spelling as a syntax error -- so the statement comes from `dialect`.
+    let mut tx = state.db.begin_with(state.backend.begin_write()).await?;
     let mut ids = HashMap::new();
 
     // Canonicalise before anything reads the value: the ordering rule, the `field_clock` row

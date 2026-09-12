@@ -1121,10 +1121,25 @@ async fn a_value_of_the_wrong_type_for_its_column_is_rejected() {
     }
 
     // The columns still hold what they held, in the storage class they are declared with.
-    let stored: (String, Option<i64>) = sqlx::query_as(
-        "SELECT typeof(counter_value), counter_value FROM activities WHERE id = $1")
-        .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(stored, ("integer".into(), Some(1000)), "the integer column is still an integer");
+    //
+    // `typeof` is SQLite's function, and so is the question behind it: only SQLite would have
+    // stored the string `"abc"` in an INTEGER column in the first place, so only there is
+    // "is this column still holding an integer?" something a test can ask. PostgreSQL cannot
+    // put anything but a bigint in a bigint column -- a wrongly typed write is an error, not a
+    // silently different storage class -- so the value is the whole of what is left to check.
+    let counter: Option<i64> = match app.state.backend {
+        logb::dialect::Backend::Sqlite => {
+            let stored: (String, Option<i64>) = sqlx::query_as(
+                "SELECT typeof(counter_value), counter_value FROM activities WHERE id = $1")
+                .bind(activity_id).fetch_one(&app.state.db).await.unwrap();
+            assert_eq!(stored.0, "integer", "the integer column is still an integer");
+            stored.1
+        },
+        logb::dialect::Backend::Postgres => sqlx::query_scalar(
+            "SELECT counter_value FROM activities WHERE id = $1")
+            .bind(activity_id).fetch_one(&app.state.db).await.unwrap(),
+    };
+    assert_eq!(counter, Some(1000), "the integer column still holds the value it held");
     let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE id = $1")
         .bind(object_id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(name, "Golf", "the text column is untouched");

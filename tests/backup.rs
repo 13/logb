@@ -1,7 +1,26 @@
 mod common;
 
+/// Why the snapshot tests in this file do not run on PostgreSQL.
+///
+/// LogB's backup is `VACUUM INTO`, and its restore is moving the resulting file back into
+/// place: both are SQLite mechanisms, and PostgreSQL has neither -- its snapshots are
+/// `pg_dump`, taken outside the process. These tests are therefore about a mechanism only one
+/// backend has, not about behaviour that should hold on both, and part five of the PostgreSQL
+/// port is where PostgreSQL gets a backup of its own.
+///
+/// Only the tests that actually take or restore a snapshot stand down. The two that are about
+/// the surrounding policy -- that backup stays off unless a directory is configured, and that
+/// a file which is not a database is refused -- hold on both backends and still run on both.
+const VACUUM_INTO_IS_SQLITE: &str =
+    "the backup is `VACUUM INTO`, a SQLite-only statement; PostgreSQL gets a backup of its own \
+     in part five of the port";
+
+
 #[tokio::test]
 async fn a_run_writes_and_verifies_a_snapshot() {
+    if common::skipped_on_postgres("a_run_writes_and_verifies_a_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -40,6 +59,9 @@ async fn backup_is_off_unless_a_directory_is_configured() {
 
 #[tokio::test]
 async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
+    if common::skipped_on_postgres("a_corrupt_snapshot_is_rejected_and_the_previous_one_survives", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -64,6 +86,9 @@ async fn a_corrupt_snapshot_is_rejected_and_the_previous_one_survives() {
 
 #[tokio::test]
 async fn a_zero_length_file_in_todays_slot_is_replaced() {
+    if common::skipped_on_postgres("a_zero_length_file_in_todays_slot_is_replaced", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -89,6 +114,9 @@ async fn a_zero_length_file_in_todays_slot_is_replaced() {
 
 #[tokio::test]
 async fn a_prune_failure_does_not_mask_a_successful_backup() {
+    if common::skipped_on_postgres("a_prune_failure_does_not_mask_a_successful_backup", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -124,6 +152,9 @@ async fn a_prune_failure_does_not_mask_a_successful_backup() {
 
 #[tokio::test]
 async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
+    if common::skipped_on_postgres("prune_matches_by_name_only_not_by_being_a_real_snapshot", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -170,6 +201,9 @@ async fn prune_matches_by_name_only_not_by_being_a_real_snapshot() {
 
 #[tokio::test]
 async fn retention_keeps_the_newest_fourteen() {
+    if common::skipped_on_postgres("retention_keeps_the_newest_fourteen", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     std::fs::create_dir_all(&backups).unwrap();
@@ -200,6 +234,9 @@ async fn retention_keeps_the_newest_fourteen() {
 
 #[tokio::test]
 async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
+    if common::skipped_on_postgres("restore_brings_back_the_snapshot_and_changes_the_epoch", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -241,6 +278,9 @@ async fn restore_brings_back_the_snapshot_and_changes_the_epoch() {
 /// to; SQLite would read them as that database's journal.
 #[tokio::test]
 async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
+    if common::skipped_on_postgres("restore_moves_aside_an_orphaned_wal_with_no_live_database", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {
@@ -303,6 +343,9 @@ async fn restore_moves_aside_an_orphaned_wal_with_no_live_database() {
 /// prevent.
 #[tokio::test]
 async fn restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoch() {
+    if common::skipped_on_postgres("restore_of_an_ahead_schema_snapshot_still_succeeds_and_rotates_the_epoch", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     let app = common::spawn_with(|c| {

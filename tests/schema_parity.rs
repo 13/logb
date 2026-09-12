@@ -16,6 +16,8 @@
 //!     bearer-token authentication did a sequential scan, and the old table/column-only version
 //!     of this test passed throughout.
 
+mod common;
+
 use sqlx::AnyPool;
 use std::collections::BTreeSet;
 
@@ -175,12 +177,16 @@ async fn the_two_schemas_describe_the_same_tables_and_columns() {
     // `LOGB_DATABASE_URL`: it names a scratch PostgreSQL server this test may migrate into,
     // not the database an instance serves. A skipped test is not a passing test -- CI always
     // provides the URL, so this cannot be quietly skipped forever.
-    let Ok(pg) = std::env::var("LOGB_TEST_DATABASE_URL") else {
+    let Some(server) = common::test_server_url() else {
         eprintln!("skipped: set LOGB_TEST_DATABASE_URL to a PostgreSQL server to run this");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let sqlite = schema(&format!("sqlite://{}/logb.db?mode=rwc", dir.path().display())).await;
+    // A scratch database of its own, like every other test, rather than migrating into the
+    // server's own `postgres` database: this test compares a schema built from nothing, and a
+    // database left behind by an earlier run would let a dropped column keep passing.
+    let (_scratch, pg) = common::scratch_database(&server).await;
     let postgres = schema(&pg).await;
 
     let failures: Vec<String> = [

@@ -2,6 +2,16 @@
 //! matters is not that it produces the right column -- it is that nothing else moves: no
 //! attachment is cascade-deleted, no reminder loses its activity, and no text a user typed is
 //! thrown away.
+//!
+//! SQLite-only, deliberately, and without a backend guard. The subject is `0009`, a SQLite
+//! table rebuild (`CREATE TABLE new` / copy / `DROP` / `RENAME`), applied to the SQLite
+//! migration history that existing installations have to be moved through one step at a time.
+//! PostgreSQL has no such history: it gets today's schema in a single file, so there is no
+//! PostgreSQL counterpart of this test to write. It needs no `if backend is postgres` guard
+//! because it never touches the harness -- it builds its own in-memory SQLite database from
+//! the migration files -- so it runs, and must keep passing, whichever backend the rest of the
+//! suite is pointed at. Skipping it on a PostgreSQL run would only lose coverage of a
+//! migration that still ships.
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{AssertSqlSafe, Row, SqlitePool};

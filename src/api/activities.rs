@@ -200,6 +200,11 @@ async fn recent_titles(
     // The correlated subqueries pick the newest occurrence explicitly. SQLite would also
     // hand back a bare column from the MAX() row, but that behaviour is a quirk to rely on,
     // not a contract.
+    //
+    // `a.object_id` is in the GROUP BY only so the subqueries may name it: PostgreSQL refuses
+    // an ungrouped outer column inside a subquery, while SQLite allows it. It groups nothing
+    // differently -- the WHERE clause has already pinned `object_id` to a single value -- so
+    // the rows are the same on both backends.
     let rows = sqlx::query_as::<_, TitleSuggestion>(
         "SELECT a.title, a.category, MAX(a.date) AS last_date, \
            (SELECT x.cost_cents FROM activities x WHERE x.object_id = a.object_id \
@@ -209,7 +214,7 @@ async fn recent_titles(
               AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
               ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter \
          FROM activities a WHERE a.object_id = $1 AND a.deleted_at IS NULL \
-         GROUP BY a.title, a.category ORDER BY last_date DESC LIMIT $2",
+         GROUP BY a.object_id, a.title, a.category ORDER BY last_date DESC LIMIT $2",
     )
     .bind(object_id)
     .bind(SUGGESTION_LIMIT)

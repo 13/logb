@@ -162,17 +162,38 @@ pub fn canonical_edited_at(raw: &str) -> Option<String> {
 /// FOREIGN KEY, 2067 UNIQUE, and the rest. Testing the low byte therefore catches every subtype,
 /// including the ones `DatabaseError::kind()` folds into `ErrorKind::Other`, while still letting
 /// an I/O error, a locked database or a schema fault through as the genuine 500 it is.
+///
+/// PostgreSQL says the same thing in SQLSTATE: class `23` is "integrity constraint violation",
+/// covering 23502 NOT NULL, 23503 FOREIGN KEY, 23505 UNIQUE and 23514 CHECK. Without this half,
+/// every constraint failure on PostgreSQL was a 500 that threw away the whole batch -- the
+/// exact failure the `rejected` bucket exists to avoid.
+///
+/// The two are told apart by length rather than by asking which backend is connected, because
+/// the error is all this has: a SQLSTATE is always five characters, while SQLite's extended
+/// codes are at most four digits (the primary code in the low byte, a small subtype above it).
+/// Parsing first would misread `23502` as a number and test the wrong byte of it.
 fn is_constraint_violation(err: &sqlx::Error) -> bool {
     let sqlx::Error::Database(db) = err else {
         return false;
     };
-    db.code()
-        .and_then(|code| code.parse::<i32>().ok())
-        .is_some_and(|code| code & 0xff == SQLITE_CONSTRAINT)
+    let Some(code) = db.code() else {
+        return false;
+    };
+    if code.len() == PG_SQLSTATE_LEN {
+        return code.starts_with(PG_INTEGRITY_CONSTRAINT_CLASS);
+    }
+    code.parse::<i32>().is_ok_and(|code| code & 0xff == SQLITE_CONSTRAINT)
 }
 
 /// SQLite's primary result code for a constraint violation.
 const SQLITE_CONSTRAINT: i32 = 19;
+
+/// Every PostgreSQL SQLSTATE is exactly this long, which is what separates one from a SQLite
+/// extended result code.
+const PG_SQLSTATE_LEN: usize = 5;
+
+/// The SQLSTATE class PostgreSQL reports every integrity constraint violation under.
+const PG_INTEGRITY_CONSTRAINT_CLASS: &str = "23";
 
 /// Applies one op inside the caller's transaction and returns how it landed.
 ///
@@ -397,8 +418,18 @@ pub async fn apply_op(
             let query = sqlx::query(sqlx::AssertSqlSafe(sql));
             // Nothing decides here: `binding` already settled what may reach the column, so
             // there is no second, weaker opinion about types for the first to drift from.
+            //
+            // A NULL still has to be bound with the column's own type. SQLite does not care --
+            // every parameter is dynamically typed -- but PostgreSQL infers the parameter's
+            // type from what is bound and then refuses `NULL::text` for a `bigint` column, so
+            // an untyped `None::<String>` made "clear this reference" a 500 on every integer
+            // field. `field_type` is the same source `binding` consulted, so the two cannot
+            // drift apart.
             let query = match bound {
-                Binding::Null => query.bind(None::<String>),
+                Binding::Null => match field_type {
+                    FieldType::Integer => query.bind(None::<i64>),
+                    FieldType::Text => query.bind(None::<String>),
+                },
                 Binding::Integer(n) => query.bind(n),
                 Binding::Text(s) => query.bind(s),
             };
@@ -410,18 +441,32 @@ pub async fn apply_op(
             // the client had no way to identify. Only constraint failures are converted; every
             // other database error is a genuine fault and still propagates.
             //
-            // This relies on SQLite's default `ON CONFLICT ABORT`, which rolls back only the
-            // failing statement and leaves the enclosing transaction open and usable -- so the
-            // ops either side of a rejected one still commit together, and batch atomicity
-            // holds. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
+            // The savepoint is what makes that survivable on both backends. SQLite's default
+            // `ON CONFLICT ABORT` rolls back only the failing statement and leaves the
+            // enclosing transaction usable, so this used to run bare; PostgreSQL aborts the
+            // whole transaction on any error, and every statement after it -- including the
+            // ops already accepted in this batch and the COMMIT -- fails with "current
+            // transaction is aborted". Rolling back to a savepoint is the one spelling both
+            // understand, and it gives SQLite exactly the statement-level rollback it already
+            // had. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
             // `tests/sync.rs` pins that, asserting the writes before and after really landed.
-            if let Err(e) = query.bind(&op.entity_uuid).execute(&mut *tx).await {
-                if is_constraint_violation(&e) {
+            //
+            // The name is a literal, and one `set` op is never nested inside another, so a
+            // single name cannot collide with itself.
+            sqlx::query("SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+            match query.bind(&op.entity_uuid).execute(&mut *tx).await {
+                Ok(_) => {
+                    sqlx::query("RELEASE SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+                },
+                Err(e) if is_constraint_violation(&e) => {
+                    sqlx::query("ROLLBACK TO SAVEPOINT logb_set_op").execute(&mut *tx).await?;
                     return Ok(Outcome::Rejected {
                         reason: format!("{field} violates a database constraint"),
                     });
-                }
-                return Err(e.into());
+                },
+                // Not a constraint failure: a genuine fault, and the whole batch is rolled
+                // back with it, so the savepoint needs no unwinding of its own.
+                Err(e) => return Err(e.into()),
             }
 
             record::stamp_field_clock(
