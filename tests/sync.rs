@@ -1418,6 +1418,97 @@ async fn a_cursor_one_below_the_horizon_is_accepted_and_two_below_is_gone() {
     assert_eq!(res.status(), 410, "since == horizon - 2 (498) has missed seq 499 and must be refused");
 }
 
+/// `seq` is shared by every account, so a gap wider than one below the horizon does not mean
+/// this user lost more than one row -- it can just as easily be a rejected push's burned
+/// `client_op_id` claim, or another account's own op, neither of which was ever this user's
+/// data to lose. `feed::horizon` cannot tell those apart from a genuinely purged row of this
+/// user's own; comparing against `feed::retention_floor` instead does not need to, because
+/// nothing above that floor has been purged for anyone.
+///
+/// Mallory's object anchors the floor low and is never touched. Ben's own log is then trimmed
+/// down to a single surviving row far above his cursor, with three rejected ops' burned claims
+/// sitting in the gap between them -- exactly the shape the old `since < horizon - 1` rule
+/// mistook for missing data, because it judged staleness against Ben's own horizon rather than
+/// what the server still retains for anyone. Before the fix this answers 410; the fix must
+/// answer 200 and actually resume from where Ben left off.
+#[tokio::test]
+async fn a_gap_from_a_rejected_push_below_the_boundary_does_not_force_a_rebootstrap() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // Anchors the retention floor at a low `seq` that is never removed, so it stays well below
+    // anything Ben's own cursor could be judged against once his own earlier rows are gone.
+    let mallory = app.create_user_client("mallory", "another password").await;
+    app.create_object(&mallory, "Mallory's ride", None).await;
+
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+
+    // The epoch, fetched before any of the manipulation below -- it only touches `changes`, not
+    // `settings`, so it stays constant, but a non-zero `since` on a real pull needs one either
+    // way.
+    let epoch: String = app.client.get(app.url("/sync/pull?since=0"))
+        .send().await.unwrap().json::<serde_json::Value>().await.unwrap()["epoch"]
+        .as_str().unwrap().to_string();
+
+    // The row Ben's client already has -- this becomes its cursor.
+    let kept = app.one_set_op(&car, "Kept", "op-kept").await;
+    assert_eq!(app.push_raw(&kept).await.status(), 200);
+    let since: i64 = sqlx::query_scalar("SELECT seq FROM changes WHERE client_op_id = 'op-kept'")
+        .fetch_one(&app.state.db).await.unwrap();
+
+    // Three ops that never become rows: an unknown `entity_uuid` is rejected by
+    // `apply::apply_op` before it touches any table, so each burns exactly the `changes` claim
+    // its own `client_op_id` insert made and nothing else.
+    for i in 0..3 {
+        let body = push_body(json!([{
+            "client_op_id": format!("op-burn-{i}"), "entity": "object",
+            "entity_uuid": "does-not-exist", "op": "set", "field": "name", "value": "x",
+            "edited_at": after_now(60), "device_id": "phone"
+        }]));
+        let res: serde_json::Value = app.push_raw(&body).await.json().await.unwrap();
+        assert_eq!(
+            res["results"][0]["outcome"], "rejected",
+            "the burn setup itself must reject, or nothing here pins a real gap"
+        );
+    }
+
+    // One more real row, which will end up as Ben's own new horizon.
+    let new = app.one_set_op(&car, "New", "op-new").await;
+    assert_eq!(app.push_raw(&new).await.status(), 200);
+
+    // Simulate the purge having reclaimed everything of Ben's own older than `op-new` -- his
+    // object's own `create` row and `op-kept` included -- while leaving Mallory's row (and
+    // everything else) alone.
+    let ben_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'ben'")
+        .fetch_one(&app.state.db).await.unwrap();
+    sqlx::query("DELETE FROM changes WHERE user_id = $1 AND client_op_id != 'op-new'")
+        .bind(ben_id)
+        .execute(&app.state.db).await.unwrap();
+
+    let new_horizon: i64 = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = $1")
+        .bind(ben_id)
+        .fetch_one(&app.state.db).await.unwrap();
+    assert!(
+        since < new_horizon - 1,
+        "the setup must actually widen the gap past what the old rule tolerated, or this test \
+         proves nothing: since={since}, horizon={new_horizon}"
+    );
+
+    let res = app.client.get(app.url(&format!("/sync/pull?since={since}&epoch={epoch}")))
+        .send().await.unwrap();
+    assert_eq!(
+        res.status(), 200,
+        "a burned claim and another account's own row never held data of Ben's to lose -- \
+         resuming from his own last-seen row must not force a re-bootstrap"
+    );
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(
+        body["changes"].as_array().unwrap().len(), 1,
+        "resuming must actually return the one row Ben has not seen yet"
+    );
+    assert_eq!(body["next_seq"], new_horizon, "the one row returned must be his new horizon");
+}
+
 #[tokio::test]
 async fn a_cursor_against_an_emptied_log_is_gone() {
     let app = common::spawn().await;

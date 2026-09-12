@@ -31,13 +31,37 @@ pub async fn pull(
         .await?)
 }
 
-/// The oldest `seq` still retained for this user, or 0 when the log is empty.
+/// The oldest `seq` still retained for this user, or 0 when this user's own log is empty.
 ///
-/// A client whose cursor sits below this has missed ops that were purged, so an incremental
-/// pull would silently skip them -- it has to re-bootstrap instead.
+/// A non-zero cursor sitting at 0 retained rows has nothing to resume from -- see the call
+/// site in `api::sync::pull`, which is the only thing this specific case guards.
 pub async fn horizon(db: &sqlx::AnyPool, user_id: i64) -> Result<i64, AppError> {
     let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = $1")
         .bind(user_id)
+        .fetch_one(db)
+        .await?;
+    Ok(lowest.unwrap_or(0))
+}
+
+/// The oldest `seq` retained anywhere in the log, across every user, or 0 when it is empty.
+///
+/// `seq` is one sequence shared by every account, handed out in commit order under
+/// `db::begin_write`'s advisory lock, and `applied_at` is stamped in that same commit -- so the
+/// two rise together and the purge's `DELETE FROM changes WHERE applied_at < $1` always removes
+/// a prefix of `seq`, on every backend, never a hole further in. (A user's own account being
+/// deleted can also remove rows, out of `seq` order, but only that user's -- it can raise this
+/// floor, never lower what it means for anyone still here.) That makes this floor a sound proof
+/// that nothing above it has been purged out from under ANY user, which is a stronger and
+/// simpler question than "was this particular gap mine": a `client_op_id` a push rejected never
+/// leaves a row for any statement to see (`api::sync::push` deletes the claim inside the same
+/// transaction that inserted it), and another account's own ops were never this user's to lose
+/// either way -- both just widen the numeric distance between two of this user's real rows
+/// without a single one of them having gone missing. `api::sync::pull` is the only caller, and
+/// `since >= this - 1` is the exact question "has the client's cursor fallen below what the
+/// server still retains for anyone" -- not an approximation of it, which is what `horizon`
+/// compared with a hard-coded "at most one missing" used to be.
+pub async fn retention_floor(db: &sqlx::AnyPool) -> Result<i64, AppError> {
+    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes")
         .fetch_one(db)
         .await?;
     Ok(lowest.unwrap_or(0))

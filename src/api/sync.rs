@@ -215,14 +215,21 @@ async fn pull(
 ) -> Result<Json<PullOut>, AppError> {
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let horizon = feed::horizon(&state.db, user.id).await?;
-    // `since` of 0 is a first pull and always legal. Anything below the horizon has missed
-    // purged ops, and resuming from it would skip them without either side noticing.
+    // `since` of 0 is a first pull and always legal.
     //
-    // An empty log (horizon 0) with a non-zero cursor is the same failure wearing a different
-    // hat: a client only ever gets a non-zero cursor from ops that existed, so if none remain
-    // they were purged. Without this arm that client is handed 200 and an empty page, and
-    // silently carries on believing it is current.
-    if params.since > 0 && (horizon == 0 || params.since < horizon - 1) {
+    // An empty log (horizon 0) with a non-zero cursor is a failure of its own: a client only
+    // ever gets a non-zero cursor from ops that existed, so if this user has none left they
+    // were purged. Without this arm that client is handed 200 and an empty page, and silently
+    // carries on believing it is current.
+    //
+    // Below that, staleness is judged against `retention_floor`, not `horizon` -- see that
+    // function's comment for why. In short: `horizon` is this user's own oldest surviving row,
+    // and `seq` is shared with every other account, so the numbers between this user's own rows
+    // are routinely someone else's, or a push rejection's burned claim, and never had anything
+    // of this user's to lose either way. `horizon` cannot tell those apart from a genuinely
+    // purged row of this user's own; comparing against the floor does not need to.
+    let floor = feed::retention_floor(&state.db).await?;
+    if params.since > 0 && (horizon == 0 || params.since < floor - 1) {
         return Err(AppError::Gone);
     }
     let epoch = crate::sync::epoch::current(&state.db).await?;
