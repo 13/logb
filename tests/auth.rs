@@ -86,6 +86,17 @@ async fn login_is_rate_limited() {
 /// says so in its own failure message, so a reader of the output does not have to know that.
 #[tokio::test]
 async fn concurrent_setup_creates_exactly_one_admin() {
+    // Raced several times, because once is not decisive: run alone this fails on PostgreSQL
+    // every time, but under a loaded parallel suite the two requests sometimes serialise by
+    // luck and it passed 2 runs in 3. An intermittently red test is worse than a red one --
+    // it gets rerun until it is green and then believed -- so the race is repeated until it
+    // either misbehaves or has had enough chances that a pass means something.
+    for round in 1..=5 {
+        race_one_setup(round).await;
+    }
+}
+
+async fn race_one_setup(round: u32) {
     let app = common::spawn().await;
     let a = common::new_client();
     let b = common::new_client();
@@ -101,11 +112,11 @@ async fn concurrent_setup_creates_exactly_one_admin() {
     // Named in the failure message rather than skipped: see this test's doc comment. On
     // SQLite the note is empty and the assertion reads exactly as it always did.
     let known = known_postgres_race();
-    assert_eq!(codes, [201, 409], "exactly one setup may succeed{known}");
+    assert_eq!(codes, [201, 409], "round {round}: exactly one setup may succeed{known}");
 
     // Only the winner's account exists, and it is the one holding the admin session.
     let users: serde_json::Value = winner.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
-    assert_eq!(users.as_array().unwrap().len(), 1, "{users}{known}");
+    assert_eq!(users.as_array().unwrap().len(), 1, "round {round}: {users}{known}");
 }
 
 /// The cookie that clears the session must carry the same attributes as the one that set it,
