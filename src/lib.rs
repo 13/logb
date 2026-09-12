@@ -84,7 +84,7 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     db::set_timezone(config.timezone);
     let url = config.database_url()?;
     let backend = dialect::Backend::of(&url);
-    let db = db::connect(&url).await?;
+    let db = db::connect_with_pool_size(&url, config.db_pool_size).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();

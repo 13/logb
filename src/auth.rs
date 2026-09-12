@@ -339,6 +339,7 @@ mod tests {
             login_max_attempts: 10,
             cors_origins: String::new(),
             database_url: None,
+            db_pool_size: None,
         };
         Arc::new(AppState {
             db,

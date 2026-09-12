@@ -221,6 +221,10 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         login_max_attempts: 10,
         cors_origins: String::new(),
         database_url: None,
+        // Each test spawns its own app and pool, and the suite runs many of them in parallel;
+        // a pool of 16 per test (today's PostgreSQL default) exhausts a stock server's
+        // `max_connections` long before the suite finishes. A small pool is all one test needs.
+        db_pool_size: Some(2),
     }
 }
 

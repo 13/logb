@@ -81,6 +81,12 @@ pub struct Config {
     /// PostgreSQL instead; `LOGB_DATA_DIR` still decides where blobs live either way.
     #[arg(long, env = "LOGB_DATABASE_URL")]
     pub database_url: Option<String>,
+    /// Maximum connections in the database pool. Unset (the default) keeps today's behaviour:
+    /// 4 for SQLite, 16 for everything else. Exists so the test harness -- which opens one pool
+    /// per test and runs many tests in parallel -- can ask for a small pool instead of exhausting
+    /// a stock PostgreSQL server's `max_connections`.
+    #[arg(long, env = "LOGB_DB_POOL_SIZE")]
+    pub db_pool_size: Option<u32>,
 }
 
 impl Config {
@@ -151,6 +157,7 @@ mod tests {
             login_max_attempts: 10,
             cors_origins: String::new(),
             database_url: None,
+            db_pool_size: None,
         }
     }
 

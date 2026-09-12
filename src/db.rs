@@ -76,7 +76,16 @@ fn pool_options(url: &str, max_connections: u32, busy_timeout_ms: u32) -> AnyPoo
     })
 }
 
+/// Connects using the default pool size for the backend: 4 for SQLite, 16 otherwise. Most
+/// callers have no reason to pick a different size; `connect_with_pool_size` is for the one
+/// that does (the test harness, which needs a small pool to avoid exhausting a shared
+/// PostgreSQL server run in parallel by many tests).
 pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
+    connect_with_pool_size(url, None).await
+}
+
+/// As `connect`, but `pool_size` overrides the backend's default max connections when set.
+pub async fn connect_with_pool_size(url: &str, pool_size: Option<u32>) -> Result<AnyPool, BoxError> {
     sqlx::any::install_default_drivers();
     // SQLite will create the database file, but not the directory holding it.
     if let Some(file) = sqlite_file(url) {
@@ -86,9 +95,8 @@ pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
             }
         }
     }
-    let pool = pool_options(url, if url.starts_with("sqlite:") { 4 } else { 16 }, 5_000)
-        .connect(url)
-        .await?;
+    let default_size = if url.starts_with("sqlite:") { 4 } else { 16 };
+    let pool = pool_options(url, pool_size.unwrap_or(default_size), 5_000).connect(url).await?;
     migrator(url).run(&pool).await?;
     seed_settings(&pool).await?;
     Ok(pool)
