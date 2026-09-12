@@ -1,6 +1,17 @@
 # PostgreSQL, part 5: what happens to backups
 
-Status: approved design, not yet implemented. Last of five. Depends on part four.
+Status: implemented. Last of five. Depends on part four.
+
+**Reading the series in order:** three of the bullets below were already done when this part
+started, and were not built here. Part one needed them the day `LOGB_DATABASE_URL` first
+accepted a PostgreSQL URL, because without them an instance pointed at PostgreSQL would have
+failed obscurely inside `VACUUM INTO` or logged a nightly backup failure forever. So `--backup`
+and `--restore` refusing with an explanation, the nightly job not running, and the startup line
+arrived there. What this part built is the rest: `GET /database/backup`, the Settings section
+that reports backup status honestly for both backends, and the documentation. The startup line
+was also rewritten here — part one wrote it as a warning that PostgreSQL was "not a supported
+configuration yet", which was true then and is not now; it states the two real properties of the
+configuration instead, at INFO, and says them once.
 
 ## Problem
 

@@ -126,13 +126,27 @@ docker compose exec logb /logb --backup /data/snapshot.db
 `--backup` runs SQLite's `VACUUM INTO`, so it is safe while the server is
 running — copying `logb.db` out from under a live instance can catch it
 mid-write and miss the WAL. Blobs under `files/` are content-addressed and never
-rewritten, so `rsync` covers them. Settings → Export is the other route: one zip
-with the JSON and every file, importable into any instance.
+rewritten, so `rsync` covers them.
 
 Set `LOGB_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGB_BACKUP_HOUR`
 (default 3) and verified with `PRAGMA integrity_check` before it counts. The newest 14
 are kept. Point it at a volume that is itself backed up — a snapshot on the same disk
 protects you from your own mistakes, not from the disk's.
+
+**Settings → Backup says which of these is actually happening**, for an admin, without
+a shell on the host: where the nightly snapshot goes and when the newest one landed, or
+that none are being taken and `LOGB_BACKUP_DIR` turns them on, or — on PostgreSQL — that
+LogB is taking none and never did. Check it after any change to the backup settings, and
+after moving to PostgreSQL; it is the one place that reports what is true of the running
+instance rather than what was configured.
+
+**Settings → Export is not a database backup.** It writes one zip holding the JSON and
+every file, self-contained and importable into any LogB instance, which makes it the right
+tool for moving data between instances or keeping a copy you can read without LogB at all.
+But it is written only when somebody asks for one, it is a re-encoding of the data rather
+than a copy of the database, and `--restore` does not take it. A nightly snapshot is what
+gets you back to last night; an export is what gets your data out. Keep both if you like,
+but do not count the export as the backup.
 
 ## Restore
 
@@ -215,8 +229,13 @@ still exists, so keep it around until the new instance has been checked over. Th
 copy rotates the destination's sync epoch, so every device does one full re-bootstrap
 the next time it syncs; that is expected and needs nothing from you.
 
-Pointing `LOGB_DATABASE_URL` at PostgreSQL remains not a fully supported configuration
-(see [Configuration](#configuration)) — LogB takes no automatic backups there yet.
+**Your nightly backups do not come with you.** LogB takes no backups of a PostgreSQL
+database — that is PostgreSQL's own tooling's job, and `LOGB_BACKUP_DIR` is ignored once
+you are there, even if it is still set. Settings → Backup says so on the screen, and the
+server says it once in the log at every start. Set up `pg_dump`, `pg_basebackup` or a
+WAL-level snapshot on the database server before you consider the move done. The other
+property of running here — writes serialising under a global advisory lock — is in
+[Configuration](#configuration).
 
 ### From Settings, instead of the shell
 
@@ -259,7 +278,7 @@ until it is started by hand.
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
-| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: LogB takes no automatic backups there (`--backup`/`--restore` refuse on purpose; back it up with PostgreSQL's own tooling). Use `logb --copy-to` to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql). Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs |
+| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is a supported configuration with two properties worth reading once, which the server also logs once at every start. LogB takes no backups of a PostgreSQL database: `--backup` and `--restore` refuse on purpose, `LOGB_BACKUP_DIR` is ignored, and backing it up is PostgreSQL's own tooling's job -- Settings -> Backup reports which of those applies to the running instance. Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs. Neither is unfinished work; SQLite is still the default, and the more exercised path. Use `logb --copy-to`, or Settings, to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql) |
 | `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
