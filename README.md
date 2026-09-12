@@ -168,21 +168,46 @@ that looks fine. It refuses a destination that already holds LogB data, and it r
 to read a source the server is still holding open.
 
 **The database only holds references to blobs by hash, not the blobs themselves —
-`--copy-to` does not touch `files/`.** Skip this and the new instance looks completely
-healthy until someone opens a photo. Copy the directory alongside the database, every
-time:
+`--copy-to` does not touch `files/`.** Only the database moves to PostgreSQL; photos,
+documents and thumbnails stay on disk under `LOGB_DATA_DIR`, and the server keeps
+reading them from there. With the compose file in this repository that is the same
+`./data` directory before and after, so there is nothing to copy. **If the new
+instance runs on another host, or from another volume, copy `data/files/` (and
+`data/thumbs/`) across as well** — skip that and the new instance looks completely
+healthy until someone opens a photo.
+
+Stop the server, because a copy refuses a database anything still holds open, and
+copy:
 
 ```bash
 docker compose stop logb
-cp -a /data/files /new-data/files
 docker compose run --rm logb --copy-to postgres://user:pass@host/logb
 ```
 
-Then point the server at the new database and start it:
+Then point the server at the new database. The `environment:` block in
+`docker-compose.yml` is a literal list with no `${...}` in it, so the URL goes in
+the file rather than in your shell — an `export` before `docker compose` would be
+ignored, and the server would come back up on the old SQLite database, healthy and
+wrong. Uncomment the line the `environment:` block already carries, with your own
+URL in it:
+
+```yaml
+    environment:
+      LOGB_DATABASE_URL: "postgres://user:pass@host/logb"
+```
+
+and recreate the container so it picks the new environment up — `docker compose
+start` would only restart the container built from the old one:
 
 ```bash
-export LOGB_DATABASE_URL=postgres://user:pass@host/logb
-docker compose start logb
+docker compose up -d logb
+```
+
+To confirm the running container really has it — the failure this section exists to
+prevent is a server that comes back up healthy on the old SQLite file:
+
+```bash
+docker inspect logb --format '{{range .Config.Env}}{{println .}}{{end}}' | grep LOGB_DATABASE_URL
 ```
 
 The source database is never written to — the move is reversible for as long as it

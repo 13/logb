@@ -13,6 +13,10 @@ services:
       LOGB_SECURE_COOKIE: "auto"
       LOGB_LOG: "info"
       LOGB_TRUST_PROXY: "false"
+      # Unset means the SQLite file in /data. Nothing here is interpolated from the shell, so
+      # moving to PostgreSQL means uncommenting this line and `docker compose up -d logb` --
+      # see "Moving to PostgreSQL" in the README. Files and thumbnails stay in /data either way.
+      # LOGB_DATABASE_URL: "postgres://user:pass@host/logb"
       # Nightly snapshot of the database, kept beside it. Unset means no automatic backup at
       # all, which is how this instance ran until now. Blobs under files/ are content-addressed
       # and never rewritten, so a plain copy of that directory pairs with any snapshot.
