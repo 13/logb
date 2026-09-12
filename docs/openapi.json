@@ -1506,6 +1506,34 @@
         }
       }
     },
+    "/database/backup": {
+      "get": {
+        "summary": "Whether LogB is taking automatic backups of the database it is serving, and where. Admin only.",
+        "description": "`not_ours` on PostgreSQL: LogB is not the thing that backs this database up there, regardless of whether `LOGB_BACKUP_DIR` happens to be set -- it may well be, left over from a compose file, on an instance that was migrated through Settings. `off` is SQLite with no `LOGB_BACKUP_DIR` configured. `scheduled` is SQLite with one configured, and carries the directory, the hour it runs at, and the newest snapshot's timestamp -- `null` when the directory has no snapshot yet, including one that does not exist at all before the first run.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseBackupStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/database/test": {
       "post": {
         "summary": "Look at another database without changing it. Admin only.",
@@ -2801,6 +2829,40 @@
           "message": {
             "type": "string",
             "description": "Why, when that is worth saying. Never carries the URL's credentials."
+          }
+        }
+      },
+      "DatabaseBackupStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "off",
+              "not_ours"
+            ]
+          },
+          "directory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The configured backup directory. null for off and not_ours"
+          },
+          "last_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest snapshot's timestamp, or null when there isn't one yet"
+          },
+          "hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The hour backups run at. null for off and not_ours"
           }
         }
       },

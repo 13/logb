@@ -7,7 +7,7 @@
   import { fmtDate } from '../lib/format';
   import { settings } from '../stores/settings';
   import { currency, user, logout, logoutEverywhere } from '../stores/session';
-  import type { ApiToken, DbDescription, DbLocation, DbProbe, DbSwitched, ImportCounts, User } from '../lib/types';
+  import type { ApiToken, BackupStatus, DbDescription, DbLocation, DbProbe, DbSwitched, ImportCounts, User } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
 
   let dead = $state<QueuedOp[]>([]);
@@ -29,6 +29,10 @@
   let copied = $state(false);
 
   let db = $state<DbDescription | null>(null);
+  /** Who is backing this database up, from `GET /database/backup`. Null until it has answered,
+   *  and null if it could not -- the section says nothing at all rather than guess, because a
+   *  guess here is a guess about whether anything exists to restore from. */
+  let backup = $state<BackupStatus | null>(null);
   /** What is typed into the connection-string field. It is sent, never stored and never read
    *  back: `GET /database` deliberately answers with a host and a database name and no URL, so
    *  there is nothing to prefill this with, and it is cleared the moment a switch succeeds so
@@ -58,11 +62,21 @@
     currencyText = $currency;
     dead = await deadOps();
     await loadTokens();
-    if (isAdmin) { await loadUsers(); await loadDatabase(); }
+    if (isAdmin) { await loadUsers(); await loadDatabase(); await loadBackup(); }
   });
 
   async function loadDatabase() {
     try { db = await api<DbDescription>('GET', '/database'); } catch (e) { dbError = (e as Error).message; }
+  }
+
+  async function loadBackup() {
+    try { backup = await api<BackupStatus>('GET', '/database/backup'); } catch (e) { dbError = (e as Error).message; }
+  }
+
+  /** The configured hour as a clock time. The server sends 0-23 in the instance's timezone, and
+   *  "3" alone on a screen reads as a count of something rather than a time of day. */
+  function hourText(hour: number | null): string {
+    return hour === null ? '' : `${String(hour).padStart(2, '0')}:00`;
   }
 
   function backendName(at: DbLocation): string {
@@ -341,6 +355,33 @@
         </div>
       {/if}
     {/if}
+
+    <h2>{$t('backup.title')}</h2>
+    <!-- Three states, one of which is the reason this section exists: on PostgreSQL LogB backs
+         up nothing, and an instance migrated from SQLite through the section just above looks
+         in every other way as if its nightly backups came along with it. That is said as a
+         division of responsibility rather than as an error, because it is not a fault -- but it
+         is said plainly enough that nobody reads this screen and still believes otherwise. -->
+    {#if backup}
+      <div class="card stack" class:elsewhere={backup.state === 'not_ours'}>
+        {#if backup.state === 'scheduled'}
+          <b>{$t('backup.scheduled-title')}</b>
+          <span class="break">{$t('backup.scheduled', { directory: backup.directory ?? '', hour: hourText(backup.hour) })}</span>
+          <span class="muted">
+            {backup.last_at
+              ? $t('backup.last', { date: fmtDate(backup.last_at, $locale) })
+              : $t('backup.last-none', { hour: hourText(backup.hour) })}
+          </span>
+        {:else if backup.state === 'off'}
+          <b>{$t('backup.off-title')}</b>
+          <span>{$t('backup.off')}</span>
+        {:else}
+          <b>{$t('backup.not-ours-title')}</b>
+          <span>{$t('backup.not-ours')}</span>
+          <span>{$t('backup.not-ours-how')}</span>
+        {/if}
+      </div>
+    {/if}
   {/if}
 
   <h2>{$t('tokens.title')}</h2>
@@ -381,6 +422,10 @@
     <button onclick={() => fileEl.click()}>{$t('settings.import')}</button>
     <input bind:this={fileEl} type="file" accept=".zip,application/zip" hidden onchange={(e) => doImport((e.currentTarget as HTMLInputElement).files)} />
   </div>
+  <!-- Beside the button, not in the Backup section: the export is the thing somebody reaches
+       for when they mean "keep a copy", and it is genuinely useful -- just not a backup of the
+       database. -->
+  <p class="muted">{$t('settings.export-not-backup')}</p>
 
   <p class="muted version">{$t('settings.version')} {__APP_VERSION__}</p>
 </main>
@@ -399,6 +444,10 @@
   .blobs { border-left: 4px solid var(--warn); }
   .blobs b { color: var(--warn); }
   .restart { border-left: 4px solid var(--danger); }
+  /* Marked out, but in the accent colour rather than the warning or danger one: a PostgreSQL
+     database LogB does not back up is a division of responsibility, not a fault. */
+  .elsewhere { border-left: 4px solid var(--accent); }
+  .elsewhere b { color: var(--accent); }
   .tables { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
   .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
   .toggle input { flex: none; width: 20px; height: 20px; }

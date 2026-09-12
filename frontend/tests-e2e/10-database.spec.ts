@@ -34,3 +34,13 @@ test('the database section shows where the data is, and is admin only', async ({
   await page.getByRole('button', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { name: /Database/ })).not.toBeVisible();
 });
+
+// The Playwright suite runs on SQLite with no backup directory configured, so this is the "off"
+// case: the screen must say backups are not being taken and name the variable that turns them
+// on. The PostgreSQL wording is covered by tests/database_api.rs, which has a server.
+test('settings says whether backups are being taken', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByRole('heading', { name: /Backup/ })).toBeVisible();
+  await expect(page.getByText(/LOGB_BACKUP_DIR/)).toBeVisible();
+});

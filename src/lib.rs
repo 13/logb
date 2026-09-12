@@ -144,17 +144,26 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     db::set_timezone(config.timezone);
     let url = config.database_url()?;
     let backend = dialect::Backend::of(&url);
-    // PostgreSQL is not a supported configuration yet: the README's LOGB_DATABASE_URL row names
-    // the same gap. This is the line that is already in an operator's scrollback when it bites,
-    // rather than something they had to have read in advance. `logb --copy-to` (part three) now
-    // gets an existing SQLite database across, so that half of the old warning is gone -- but
-    // parts four and five (switching over, and PostgreSQL's own backup story) are still unbuilt,
-    // so this stays a warning rather than becoming an endorsement.
+    // Running on PostgreSQL used to be unfinished work, and this line used to say so. It is
+    // finished: the query layer is portable, the single-writer assumptions are gone, `--copy-to`
+    // and Settings both move an existing database across, and who backs PostgreSQL up is a
+    // stated division of responsibility rather than a missing feature. What is left is two
+    // properties of the configuration, and this says them once, at the moment the process comes
+    // up, so they are already in the scrollback when one of them is felt. It is INFO, not WARN:
+    // nothing here is wrong, and a line that cries "unsupported" at every start is a line the
+    // reader learns to skip. The README's LOGB_DATABASE_URL row says the same two things -- keep
+    // them in step. `tasks::spawn` logs the scheduler's own decision not to back up a few lines
+    // below this one, so the backup half here stays short and adds only what that line leaves
+    // out; saying it twice at length would teach the same skipping.
     if backend != dialect::Backend::Sqlite {
-        tracing::warn!(
-            "LOGB_DATABASE_URL points at PostgreSQL, which is not a supported configuration yet: \
-             LogB takes no automatic backups there -- backing it up is your own job, with \
-             PostgreSQL's own tooling"
+        tracing::info!(
+            "LOGB_DATABASE_URL points at PostgreSQL: a supported configuration, with two \
+             properties worth reading once. Writes serialise under a global advisory lock, \
+             exactly as they already do on SQLite, and an upload holds that lock while it writes \
+             its thumbnail -- so a large upload or import blocks other writes while it runs. \
+             Backups here are yours: `--backup` and `--restore` refuse on purpose, \
+             LOGB_BACKUP_DIR is ignored, and Settings -> Backup says so on the screen. Neither is \
+             unfinished work; SQLite is still the default, and the more exercised path"
         );
     }
     // A pointer file means somebody migrated onto the database it names. From here on a
