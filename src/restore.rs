@@ -32,6 +32,11 @@ fn ahead_schema_version(err: &BoxError) -> Option<i64> {
 
 #[derive(Debug)]
 pub struct Report {
+    /// The directory the restore actually wrote into -- derived from `url`, which need not
+    /// match any `--data-dir`/`LOGB_DATA_DIR` a caller has configured (see the comment on
+    /// `live`, below). Callers report this rather than their own configured directory, so what
+    /// they print is what happened, not what they assumed.
+    pub data_dir: PathBuf,
     /// Where the replaced database was moved, if there was one.
     pub replaced_to: Option<PathBuf>,
     /// The identity the restored database now advertises. Every device holding the old one is
@@ -94,7 +99,8 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
         .ok_or_else(|| -> BoxError { format!("{url} does not name a SQLite database file").into() })?;
     let data_dir = live
         .parent()
-        .ok_or_else(|| -> BoxError { format!("{} has no parent directory", live.display()).into() })?;
+        .ok_or_else(|| -> BoxError { format!("{} has no parent directory", live.display()).into() })?
+        .to_path_buf();
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let replaced_to = if live.exists() {
         let dest = data_dir.join(format!("logb.db.replaced-{stamp}"));
@@ -188,5 +194,5 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
     })?;
     pool.close().await;
 
-    Ok(Report { replaced_to, epoch })
+    Ok(Report { data_dir, replaced_to, epoch })
 }

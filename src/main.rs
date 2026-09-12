@@ -16,7 +16,7 @@ async fn main() -> Result<(), logb::db::BoxError> {
     }
     if let Some(src) = config.restore.clone() {
         let report = logb::restore::run(&config.database_url()?, &src).await?;
-        println!("restored {} into {}", src.display(), config.data_dir.display());
+        println!("restored {} into {}", src.display(), report.data_dir.display());
         if let Some(kept) = report.replaced_to {
             println!("the database it replaced is kept at {}", kept.display());
         }
