@@ -218,6 +218,42 @@ the next time it syncs; that is expected and needs nothing from you.
 Pointing `LOGB_DATABASE_URL` at PostgreSQL remains not a fully supported configuration
 (see [Configuration](#configuration)) — LogB takes no automatic backups there yet.
 
+### From Settings, instead of the shell
+
+An admin can do the same move from Settings, without a shell on the host: paste a connection
+string, test it, then "Copy data and switch". It runs the identical copy `--copy-to` runs — same
+table order, same row-count and fingerprint verification, same refusal of a destination that
+already holds data — but it runs it live, from the server's own database connection, rather than
+requiring the server to be stopped first.
+
+The request blocks for as long as the copy takes and only returns once it has been verified.
+Writes are blocked for that whole time — the copy reads inside the same lock every write goes
+through, which is what makes the copied data a single consistent snapshot — but reads are not
+affected, and the instance keeps serving the old database throughout. There is nothing to poll:
+the response is either a finished, verified copy or a refusal, and until it succeeds nothing
+about the running instance has changed.
+
+Once chosen, the URL is written to `database.url` inside `LOGB_DATA_DIR`, mode 0600 — readable
+only by the account LogB runs as — and **it holds the password in plaintext, next to the data**.
+That is the real cost of choosing a database from a web form instead of the environment; encoding
+or hashing it would only hide that cost, not remove it. Setting `LOGB_DATABASE_URL` overrides
+this file completely and turns the Settings screen read-only, so an operator who has already made
+the choice in the environment cannot have it changed from a browser.
+
+**A switch from Settings does not copy blobs either** — the same caveat as `--copy-to` applies,
+for the same reason: the database only holds references to files by hash, not the files
+themselves. If the new database is on a different host than the one serving `LOGB_DATA_DIR`
+today, `files/` (and `thumbs/`) still has to be copied there by hand, or the instance comes up
+looking healthy with every photo and document 404ing.
+
+Switching only chooses the database for the *next* start — nothing about a running instance can
+be swapped out from under it. Settings shows a "Restart now" button once a switch is pending; it
+exits the process and nothing more. It comes back only if something is watching for that and
+starts it again — `restart: unless-stopped` in this repository's compose file is that something.
+LogB has no way to confirm one exists, so it says exactly that rather than implying the app
+restarts itself: if nothing supervises the process, "Restart now" is "stop now" and it stays down
+until it is started by hand.
+
 ## Configuration
 
 | Env                   | Default   |                                                                                                                              |

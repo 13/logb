@@ -1,6 +1,6 @@
 # PostgreSQL, part 4: choosing it from Settings
 
-Status: approved design, not yet implemented. Fourth of five. Depends on parts one to three.
+Status: implemented. Fourth of five. Depends on parts one to three.
 
 ## Problem
 
@@ -55,6 +55,10 @@ Not in the database — it cannot live in the thing it points away from.
 it at startup. `LOGB_DATABASE_URL` overrides it entirely, so an operator who sets the
 environment cannot have it changed from a browser.
 
+**Built differently:** the file is `<data dir>/database.url`, not `database.toml` — it holds the
+bare connection string with no framing, so `.toml` would have named a format the file does not
+use. `pointer::write`/`pointer::read` (`src/pointer.rs`) are the only code that touches it.
+
 **This file holds a password in plaintext, beside the data.** That is the cost of configuring a
 database from a web form instead of the environment, it is not hidden by any amount of file
 permission, and it belongs in the README next to the feature rather than in a footnote. An
@@ -87,3 +91,15 @@ redacted from every log line and every error message that could reach a response
   response bodies and the captured log output for the password, not by reading the code.
 - `LOGB_DATABASE_URL` set makes the form read-only and the API refuse to write the pointer.
 - The refuse-to-start paths are tested: unreachable database, and empty database.
+
+**Built differently:** the "drives the screen" test — test, copy, switch, restart, and the data
+is there — is a `tokio::test` in `tests/database_api.rs` (`switching_copies_the_database_and_remembers_the_destination`,
+`a_restart_is_acknowledged_before_the_process_goes_away`) against the HTTP API and a real
+PostgreSQL when `LOGB_TEST_DATABASE_URL` is set, not a Playwright test driving a browser. The
+Playwright run has no PostgreSQL to copy into, so `frontend/tests-e2e/10-database.spec.ts` only
+drives the SQLite-default rendering and says in a comment why the rest lives in the Rust suite
+instead. Everything the bullet asks to be checked is checked; it is checked at the API rather
+than through the screen.
+
+The rest of this design was built as written: the screen, the four routes, the failure and
+security behaviour, and the remaining tests.
