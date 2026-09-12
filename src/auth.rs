@@ -354,6 +354,7 @@ mod tests {
         backup_dir: None,
         backup_hour: 3,
         restore: None,
+        copy_to: None,
         healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),

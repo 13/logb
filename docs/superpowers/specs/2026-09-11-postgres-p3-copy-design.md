@@ -1,6 +1,12 @@
 # PostgreSQL, part 3: moving the data across
 
-Status: approved design, not yet implemented. Third of five. Depends on parts one and two.
+Status: implemented.
+
+This spec and its plan (`docs/superpowers/plans/2026-09-12-postgres-p3-copy.md`) still describe
+a `--force` flag on the refusal to copy into a populated destination. It was deliberately removed
+during implementation -- there is no override, on purpose (see `NOT_EMPTY` in `src/copy.rs`) --
+so both documents are left as historical record rather than edited to match. Do not go looking
+for `--force`; it does not exist.
 
 ## Problem
 

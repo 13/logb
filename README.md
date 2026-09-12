@@ -158,12 +158,72 @@ The database only holds references to blobs by hash, not the blobs themselves, s
 `files/` has to be copied across too — following this section alone leaves you with
 a database whose photos and documents all 404.
 
+## Moving to PostgreSQL
+
+`logb --copy-to` moves an existing SQLite database into an empty PostgreSQL one, once.
+It copies every table in dependency order inside a single transaction, keeps every id
+exactly as it was, and verifies row counts and a primary-key fingerprint before it
+commits — a copy that lost rows rolls back instead of leaving a half-copied database
+that looks fine. It refuses a destination that already holds LogB data, and it refuses
+to read a source the server is still holding open.
+
+**The database only holds references to blobs by hash, not the blobs themselves —
+`--copy-to` does not touch `files/`.** Only the database moves to PostgreSQL; photos,
+documents and thumbnails stay on disk under `LOGB_DATA_DIR`, and the server keeps
+reading them from there. With the compose file in this repository that is the same
+`./data` directory before and after, so there is nothing to copy. **If the new
+instance runs on another host, or from another volume, copy `data/files/` (and
+`data/thumbs/`) across as well** — skip that and the new instance looks completely
+healthy until someone opens a photo.
+
+Stop the server, because a copy refuses a database anything still holds open, and
+copy:
+
+```bash
+docker compose stop logb
+docker compose run --rm logb --copy-to postgres://user:pass@host/logb
+```
+
+Then point the server at the new database. The `environment:` block in
+`docker-compose.yml` is a literal list with no `${...}` in it, so the URL goes in
+the file rather than in your shell — an `export` before `docker compose` would be
+ignored, and the server would come back up on the old SQLite database, healthy and
+wrong. Uncomment the line the `environment:` block already carries, with your own
+URL in it:
+
+```yaml
+    environment:
+      LOGB_DATABASE_URL: "postgres://user:pass@host/logb"
+```
+
+and recreate the container so it picks the new environment up — `docker compose
+start` would only restart the container built from the old one:
+
+```bash
+docker compose up -d logb
+```
+
+To confirm the running container really has it — the failure this section exists to
+prevent is a server that comes back up healthy on the old SQLite file:
+
+```bash
+docker inspect logb --format '{{range .Config.Env}}{{println .}}{{end}}' | grep LOGB_DATABASE_URL
+```
+
+The source database is never written to — the move is reversible for as long as it
+still exists, so keep it around until the new instance has been checked over. The
+copy rotates the destination's sync epoch, so every device does one full re-bootstrap
+the next time it syncs; that is expected and needs nothing from you.
+
+Pointing `LOGB_DATABASE_URL` at PostgreSQL remains not a fully supported configuration
+(see [Configuration](#configuration)) — LogB takes no automatic backups there yet.
+
 ## Configuration
 
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
-| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: LogB takes no automatic backups there (`--backup`/`--restore` refuse on purpose; back it up with PostgreSQL's own tooling), and there is no supported way to bring an existing SQLite database across (`logb --copy-to` is unbuilt -- `docs/superpowers/specs/2026-09-11-postgres-p3-copy-design.md`). Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs |
+| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: LogB takes no automatic backups there (`--backup`/`--restore` refuse on purpose; back it up with PostgreSQL's own tooling). Use `logb --copy-to` to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql). Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs |
 | `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
