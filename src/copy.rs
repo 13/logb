@@ -44,9 +44,7 @@ const IN_USE: &str = "the source database is still in use by something else -- s
 /// does not have and roll the whole copy back. A merge is a different operation from a copy,
 /// and this command does not do it.
 const NOT_EMPTY: &str = "the destination database already holds data (its `users` table is not \
-                         empty). Copying into it would put two histories in one database. Point \
-                         --copy-to at an empty database -- one this command creates itself, or \
-                         an empty PostgreSQL database made with `CREATE DATABASE`";
+                         empty). Copying into it would put two histories in one database.";
 
 #[derive(Debug)]
 pub struct Report {

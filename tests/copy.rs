@@ -45,9 +45,9 @@ async fn a_destination_that_already_holds_data_is_refused() {
 
     // Copying again would merge two histories into one database. There is no flag to override
     // it: both databases number their rows from 1, so the second copy collides on the first
-    // primary key it writes. The refusal has to say what to do instead.
+    // primary key it writes. The refusal has to say why.
     let err = logb::copy::run(&app.database_url(), &dest.url).await.unwrap_err().to_string();
-    assert!(err.contains("empty database"), "the refusal must say what to do instead: {err}");
+    assert!(err.contains("two histories in one database"), "the refusal must say why: {err}");
 }
 
 /// Copying out of a database a server is still writing to would capture a moving target: later
