@@ -1,6 +1,6 @@
 # PostgreSQL, part 2: what SQLite's single writer was hiding
 
-Status: approved design, not yet implemented. Second of five. Depends on part one.
+Status: implemented.
 
 ## Problem
 
@@ -73,6 +73,21 @@ Rejected: reading `xmin` to derive commit order (ties the protocol to PostgreSQL
 transaction ID wraparound); a logical replication slot (a second moving part, and the client
 protocol would still need a total order); allowing gaps and having clients tolerate them (every
 client, including ones already installed, would need to change).
+
+## The cost, stated
+
+Serialising writes means one write transaction at a time on PostgreSQL. That is what SQLite
+does today, so nothing regresses — but two things are worth knowing rather than discovering.
+
+`src/api/attachments.rs` writes a thumbnail to disk inside its write transaction, and import
+writes blobs inside one. Under a global write lock, an upload's image decode and disk write
+therefore block every other write in the instance. At household scale that is tolerable; on a
+large import it is not invisible. Moving the disk work outside the transaction is the fix if it
+ever matters, and it is not free — a blob written before its row is an orphan until
+`purge_orphan_files` collects it.
+
+Reads are unaffected and stay fully concurrent, which is where PostgreSQL's benefit for this
+project actually lies.
 
 ## Testing
 

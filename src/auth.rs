@@ -82,6 +82,28 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     Ok(token)
 }
 
+/// As `create_session`, but runs on a write transaction the caller already holds instead of
+/// asking the pool for a fresh connection.
+///
+/// Setup's admin-creation race (`api::auth::setup`) needs this rather than plain
+/// `create_session`: with a pool as small as the test harness's two connections, a request
+/// that already holds one connection open in an uncommitted transaction would block forever
+/// asking the same pool for a second one to run `create_session` on -- a self-deadlock, not a
+/// PostgreSQL lock wait, but one only visible once two such requests run at once.
+pub async fn create_session_in(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    user_id: i64,
+) -> Result<String, AppError> {
+    let token = new_token();
+    let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1").bind(db::now()).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(&token).bind(user_id).bind(expires)
+        .execute(&mut **tx).await?;
+    Ok(token)
+}
+
 /// Drops every session AND every API token belonging to `user_id`.
 ///
 /// Called whenever a password changes: without it, a password reset -- the one action taken

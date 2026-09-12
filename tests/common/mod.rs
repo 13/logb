@@ -375,6 +375,94 @@ impl TestApp {
         res.json().await.unwrap()
     }
 
+    /// GET /sync/pull from a cursor, exactly as a device following the log does.
+    ///
+    /// The epoch travels with every cursor past the first, and it is constant for the life of
+    /// one database -- so this reads it from the app's own settings rather than making every
+    /// caller thread it back out of the previous page.
+    pub async fn pull(&self, since: i64) -> serde_json::Value {
+        let epoch = logb::sync::epoch::current(&self.state.db).await.unwrap();
+        let res = self
+            .client
+            .get(self.url(&format!("/sync/pull?since={since}&epoch={epoch}")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200, "pull failed: {}", res.text().await.unwrap());
+        res.json().await.unwrap()
+    }
+
+    /// How many rows the change log holds, read straight from the database.
+    ///
+    /// This is the number a puller that missed nothing must have seen, and it deliberately does
+    /// not go through the API: the question is what the log contains, not what it serves.
+    pub async fn count_changes(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM changes")
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
+    }
+
+    /// How many rows the change log holds for one `client_op_id`.
+    ///
+    /// Scoped, where `count_changes` is not, because a test that pushes an op has almost always
+    /// created the row it edits over REST first -- and that create logs a change of its own. The
+    /// question an idempotency test asks is about ONE op id: how many times did that op land.
+    pub async fn count_changes_of(&self, client_op_id: &str) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM changes WHERE client_op_id = $1")
+            .bind(client_op_id)
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
+    }
+
+    /// A push body carrying a single `set` of an object's name, under the given `client_op_id`.
+    ///
+    /// Prepared rather than posted so a caller can send the very same bytes more than once --
+    /// which is what a client retrying a push it never saw the answer to actually does.
+    ///
+    /// `edited_at` is an hour ahead so the op wins last-write-wins against the `field_clock`
+    /// the REST create that made this object stamped a moment ago: an op that lost would answer
+    /// `superseded`, and this helper is for tests that are about idempotency, not about LWW.
+    pub async fn one_set_op(
+        &self,
+        object: &serde_json::Value,
+        name: &str,
+        client_op_id: &str,
+    ) -> serde_json::Value {
+        let edited_at = (chrono::Utc::now() + chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        self.one_set_op_at(object, name, client_op_id, &edited_at).await
+    }
+
+    /// `one_set_op`, but with the caller's own `edited_at` rather than "now plus an hour" --
+    /// for a test that is about last-write-wins itself, and so needs to name which of two
+    /// edits is the later one rather than let the clock decide.
+    pub async fn one_set_op_at(
+        &self,
+        object: &serde_json::Value,
+        name: &str,
+        client_op_id: &str,
+        edited_at: &str,
+    ) -> serde_json::Value {
+        let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+            .bind(object["id"].as_i64().expect("an object with an id"))
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap();
+        serde_json::json!({ "ops": [{
+            "client_op_id": client_op_id, "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": name,
+            "edited_at": edited_at, "device_id": "phone"
+        }]})
+    }
+
+    /// POST /sync/push with a body the caller prepared, answering the raw response so a test
+    /// can assert on a status the harness would otherwise have unwrapped away.
+    pub async fn push_raw(&self, body: &serde_json::Value) -> reqwest::Response {
+        self.client.post(self.url("/sync/push")).json(body).send().await.unwrap()
+    }
+
     /// GET /search, with the term encoded by the client rather than pasted into the URL --
     /// the terms that matter here are accented.
     pub async fn search(&self, term: &str) -> serde_json::Value {
@@ -386,6 +474,62 @@ impl TestApp {
             .unwrap();
         assert_eq!(res.status(), 200, "search failed: {}", res.text().await.unwrap());
         res.json().await.unwrap()
+    }
+
+    /// DELETE /objects/{id}: the ordinary REST delete, a tombstone plus the cascade of
+    /// tombstones over the object's children, exactly as a user pressing delete produces it.
+    pub async fn delete_object(&self, object: &serde_json::Value) {
+        let id = object["id"].as_i64().expect("an object id");
+        let res = self.client.delete(self.url(&format!("/objects/{id}"))).send().await.unwrap();
+        assert_eq!(res.status(), 204, "delete object failed: {}", res.text().await.unwrap());
+    }
+
+    /// Backdates every tombstone in the database well past any retention window.
+    ///
+    /// The window is measured in days, so a test cannot wait one out; this is the only way to
+    /// put a row into the state the purge is about. `changes.applied_at` is deliberately left
+    /// alone: a test asking whether a row vanished unrecorded needs the log rows that would
+    /// have recorded it to still be there to look at.
+    pub async fn age_out_tombstones(&self) {
+        for table in ["objects", "activities", "reminders", "attachments"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET deleted_at = '2000-01-01T00:00:00Z' WHERE deleted_at IS NOT NULL"
+            )))
+            .execute(&self.state.db)
+            .await
+            .unwrap();
+        }
+    }
+
+    /// Runs the retention purge over this app's database, with the window the server uses.
+    pub async fn run_purge(&self) {
+        logb::sync::feed::purge(&self.state, 90).await.unwrap();
+    }
+
+    /// Activities whose object row is not there any more.
+    ///
+    /// The weaker half of what a purge test has to check, and it is here to say so: with
+    /// `foreign_keys` on, `ON DELETE CASCADE` leaves no orphan -- it leaves nothing at all. A
+    /// row destroyed by a cascade is invisible to this count, which is why a test about silent
+    /// loss cannot rest on it alone.
+    pub async fn count_orphan_activities(&self) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM activities a \
+             WHERE NOT EXISTS (SELECT 1 FROM objects o WHERE o.id = a.object_id)",
+        )
+        .fetch_one(&self.state.db)
+        .await
+        .unwrap()
+    }
+
+    /// The stored `name` of one object, read straight from the database -- so a test asking
+    /// which of two concurrent edits won does not also depend on the REST read path.
+    pub async fn object_name(&self, object: &serde_json::Value) -> String {
+        sqlx::query_scalar("SELECT name FROM objects WHERE id = $1")
+            .bind(object["id"].as_i64().expect("an object with an id"))
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
     }
 
     /// The caller's unarchived object names, in the order the API returns them.

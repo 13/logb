@@ -31,13 +31,37 @@ pub async fn pull(
         .await?)
 }
 
-/// The oldest `seq` still retained for this user, or 0 when the log is empty.
+/// The oldest `seq` still retained for this user, or 0 when this user's own log is empty.
 ///
-/// A client whose cursor sits below this has missed ops that were purged, so an incremental
-/// pull would silently skip them -- it has to re-bootstrap instead.
+/// A non-zero cursor sitting at 0 retained rows has nothing to resume from -- see the call
+/// site in `api::sync::pull`, which is the only thing this specific case guards.
 pub async fn horizon(db: &sqlx::AnyPool, user_id: i64) -> Result<i64, AppError> {
     let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes WHERE user_id = $1")
         .bind(user_id)
+        .fetch_one(db)
+        .await?;
+    Ok(lowest.unwrap_or(0))
+}
+
+/// The oldest `seq` retained anywhere in the log, across every user, or 0 when it is empty.
+///
+/// `seq` is one sequence shared by every account, handed out in commit order under
+/// `db::begin_write`'s advisory lock, and `applied_at` is stamped in that same commit -- so the
+/// two rise together and the purge's `DELETE FROM changes WHERE applied_at < $1` always removes
+/// a prefix of `seq`, on every backend, never a hole further in. (A user's own account being
+/// deleted can also remove rows, out of `seq` order, but only that user's -- it can raise this
+/// floor, never lower what it means for anyone still here.) That makes this floor a sound proof
+/// that nothing above it has been purged out from under ANY user, which is a stronger and
+/// simpler question than "was this particular gap mine": a `client_op_id` a push rejected never
+/// leaves a row for any statement to see (`api::sync::push` deletes the claim inside the same
+/// transaction that inserted it), and another account's own ops were never this user's to lose
+/// either way -- both just widen the numeric distance between two of this user's real rows
+/// without a single one of them having gone missing. `api::sync::pull` is the only caller, and
+/// `since >= this - 1` is the exact question "has the client's cursor fallen below what the
+/// server still retains for anyone" -- not an approximation of it, which is what `horizon`
+/// compared with a hard-coded "at most one missing" used to be.
+pub async fn retention_floor(db: &sqlx::AnyPool) -> Result<i64, AppError> {
+    let lowest: Option<i64> = sqlx::query_scalar("SELECT min(seq) FROM changes")
         .fetch_one(db)
         .await?;
     Ok(lowest.unwrap_or(0))
@@ -134,21 +158,6 @@ pub async fn purge(
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
-        .bind(&cutoff)
-        .execute(db)
-        .await?
-        .rows_affected();
-
-    // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
-    // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
-    let pinned: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT file_id FROM attachments \
-         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
-        .bind(&cutoff)
-        .fetch_all(db)
-        .await?;
-
     // `files` is absent deliberately: `files.deleted_at` is never set, because
     // `sync::apply::apply_op`'s Delete arm refuses a `delete` op on `Entity::File` outright, so
     // no code path ever produces a file tombstone for this loop to find. A file is
@@ -183,19 +192,50 @@ pub async fn purge(
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
     ];
+    // One transaction around the whole purge, and every guarded read or delete against it. Run
+    // as separate autocommit statements they were separate answers to "has this parent any
+    // children left" or "what does this attachment still pin", each taken at its own moment: on
+    // PostgreSQL a `NOT EXISTS` subquery answers from the snapshot its statement began with, so
+    // a child committing while the statement waited on the parent's row lock was invisible to
+    // the guard and still taken by the cascade -- hard-deleted with no tombstone and no
+    // `changes` row, which is precisely the silent loss the guards are here to prevent. The same
+    // gap between an autocommit read and a later autocommit delete could let an attachment cross
+    // the cutoff after `pinned` was read but before its row (or its parent's) is removed, leaking
+    // its blob until the next run. Inside `begin_write` the read, the guards and their deletes
+    // all see one state, and no other writer can interleave: on PostgreSQL because the advisory
+    // lock it takes is the one every write path takes, on SQLite because `BEGIN IMMEDIATE` holds
+    // the only write lock the database has for the length of the transaction rather than for one
+    // statement at a time.
+    let mut tx = crate::db::begin_write(db, state.backend).await?;
+
+    // Aged-out log rows, in the same transaction as everything below rather than run against
+    // the pool first: nothing here reads `changes` afterwards, so a row landing in the gap
+    // could not be lost the way an interleaved child could, but running it before the
+    // transaction even opened would have made the comment above a lie about what "one
+    // transaction around the whole purge" actually covered.
+    let removed = sqlx::query("DELETE FROM changes WHERE applied_at < $1")
+        .bind(&cutoff)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    // Which files the expiring attachments were pinning, read BEFORE those rows go: once the
+    // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
+    let pinned: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT file_id FROM attachments \
+         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
+        .bind(&cutoff)
+        .fetch_all(&mut *tx)
+        .await?;
+
     for (table, guard) in guards {
         // `table` and `guard` only ever come from the fixed list above, never from user input
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
         // accept it.
         let sql =
             format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
-        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(db).await?;
+        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(&mut *tx).await?;
     }
-
-    // Now that no attachment references them, the unreferenced ones can give up their blob and
-    // thumbnail. `purge_orphan_files` re-checks each candidate against the live attachments, so
-    // a file still used by another object is left alone.
-    crate::api::attachments::purge_orphan_files(state, &pinned).await?;
 
     // A field clock for a row nobody can name any more is dead weight.
     //
@@ -207,6 +247,11 @@ pub async fn purge(
     // the only question that matters, "does any row still carry this uuid", and a NULL uuid
     // simply never matches -- which is right, since a row with no uuid is not one a
     // `field_clock` row could have been naming.
+    //
+    // Run in the same transaction as the guarded deletes above, not against the pool afterwards:
+    // the same guard-then-delete shape, straddled by a concurrent write, would otherwise lose a
+    // field clock instead of a row -- the next edit to that field would then win on an empty
+    // comparison instead of on its timestamp.
     sqlx::query(
         "DELETE FROM field_clock WHERE \
            NOT EXISTS (SELECT 1 FROM objects WHERE client_uuid = field_clock.entity_uuid) \
@@ -214,8 +259,27 @@ pub async fn purge(
            AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid)")
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
+
+    // Now that no attachment references them, the unreferenced ones can give up their blob and
+    // thumbnail. `purge_orphan_files` re-checks each candidate against the live attachments, so
+    // a file still used by another object is left alone.
+    //
+    // After the commit, deliberately, and it cannot be moved inside the transaction above.
+    // It works through the pool, so it would take a connection of its own -- one the
+    // transaction is not holding, which a pool of one does not have -- and then ask that
+    // connection to `DELETE FROM files` for rows whose `attachments` still exist as far as
+    // every other connection is concerned, because this transaction's deletes have not
+    // committed. `attachments.file_id` is `ON DELETE RESTRICT`, so that check blocks on the
+    // uncommitted rows and waits for a transaction that is itself waiting for this call to
+    // return: a hang rather than an error, and on SQLite the same standoff arrives as the
+    // write lock the open transaction holds. It also removes blobs and thumbnails from disk,
+    // which no rollback can put back, so the honest order is rows gone for good first, bytes
+    // after.
+    crate::api::attachments::purge_orphan_files(state, &pinned).await?;
 
     Ok(removed)
 }

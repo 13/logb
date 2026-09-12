@@ -125,25 +125,34 @@ async fn setup(
     Json(body): Json<Credentials>,
 ) -> Result<(StatusCode, CookieJar, Json<AuthUser>), AppError> {
     // Cheap pre-check: rejects the common "setup already done" call before spending an
-    // Argon2 hash on it. The authoritative guard is the conditional INSERT below.
+    // Argon2 hash on it. The authoritative guard is the transaction below.
     if user_count(&state).await? > 0 {
         return Err(AppError::Conflict("setup already completed".into()));
     }
     auth::validate_username(&body.username)?;
     auth::validate_password(&body.password)?;
+    // Hashed before the write transaction opens: Argon2 takes hundreds of milliseconds, and
+    // doing it here means it happens outside the `begin_write` lock instead of holding
+    // PostgreSQL's advisory lock -- and every other writer in the app -- for the duration.
     let hash = auth::hash_password(&body.password)?;
-    // `WHERE NOT EXISTS (SELECT 1 FROM users)` re-checks emptiness inside the same statement
-    // that writes the row, so two concurrent setup calls with different usernames cannot both
-    // pass the check and both become admin — the loser inserts nothing and gets a 409.
+    // Count, conditional insert and session creation all happen inside one `db::begin_write`
+    // transaction, which on PostgreSQL holds the same advisory lock every other write path
+    // takes (see `db::begin_write`). That -- not the `WHERE NOT EXISTS` below -- is what stops
+    // two concurrent setup calls from both becoming admin: PostgreSQL's own MVCC would let
+    // both transactions see an empty `users` table and both insert under READ COMMITTED
+    // without it. `WHERE NOT EXISTS` is kept because it costs nothing and still states the
+    // intent in the statement that depends on it, but it is no longer what makes this safe.
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
     let user = sqlx::query_as::<_, AuthUser>(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) \
          SELECT $1, $2, 1, 'en', $3 WHERE NOT EXISTS (SELECT 1 FROM users) \
          RETURNING id, username, is_admin, lang",
     )
     .bind(&body.username).bind(hash).bind(db::now())
-    .fetch_optional(&state.db).await?
+    .fetch_optional(&mut *tx).await?
     .ok_or_else(|| AppError::Conflict("setup already completed".into()))?;
-    let token = auth::create_session(&state, user.id).await?;
+    let token = auth::create_session_in(&mut tx, user.id).await?;
+    tx.commit().await?;
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
     Ok((StatusCode::CREATED, jar, Json(user)))
 }

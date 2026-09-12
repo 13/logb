@@ -4,18 +4,21 @@
 //! next person can read the whole surface of the difference in under a minute, rather than
 //! discovering it one failing query at a time.
 //!
-//! There are five, and only the first three need code here:
+//! There are six, and only the first four need code here:
 //!
 //! 1. Case-insensitive matching in `LIKE` -- `case_insensitive_like`.
 //! 2. Case-insensitive sorting of names -- `name_order`.
 //! 3. How a transaction that intends to write begins -- `begin_write`.
-//! 4. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
+//! 4. How a write transaction claims the right to be the only one -- `write_lock`. SQLite
+//!    needs nothing, because `BEGIN IMMEDIATE` already took the one write lock the database
+//!    has; PostgreSQL permits concurrent writers and so has to be told not to.
+//! 5. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
 //!    column; PostgreSQL has no per-column collation of that kind without `citext`, so its
 //!    schema carries a unique index on `lower(username)` instead. The statements themselves
 //!    need no adapter: every username lookup compares `lower(username) = lower($1)`, which is
 //!    the same answer on SQLite (usernames are ASCII by `validate_username`) and is what makes
 //!    PostgreSQL use that index rather than scan.
-//! 5. Seeding. The SQLite migrations wrote the `currency` and `sync_epoch` settings rows with
+//! 6. Seeding. The SQLite migrations wrote the `currency` and `sync_epoch` settings rows with
 //!    `INSERT ... randomblob()`; the PostgreSQL schema seeds nothing, and `db::seed_settings`
 //!    now writes both on first start on either backend.
 
@@ -67,6 +70,25 @@ impl Backend {
         }
     }
 
+    /// How a write transaction claims the right to be the only one.
+    ///
+    /// SQLite needs nothing here: `BEGIN IMMEDIATE` already took the database's write lock, and
+    /// there is exactly one. PostgreSQL permits concurrent writers, which is precisely what
+    /// this codebase is not written for -- the audit in part two's spec found five places where
+    /// check-then-act is atomic only because SQLite serialises writers.
+    ///
+    /// The key is arbitrary but must never change: it names this application's write lock, and
+    /// a different value would let two versions of LogB write concurrently against one
+    /// database. `pg_advisory_xact_lock` releases at commit or rollback, including a rollback
+    /// nobody wrote -- a dropped transaction, a panic, a killed connection -- which is why it
+    /// is the transaction-scoped form rather than the session one.
+    pub fn write_lock(&self) -> Option<&'static str> {
+        match self {
+            Self::Sqlite => None,
+            Self::Postgres => Some("SELECT pg_advisory_xact_lock(4479001)"),
+        }
+    }
+
     /// SQLite sorts with `COLLATE NOCASE`; PostgreSQL sorts by `lower(...)`.
     ///
     /// Both fold only ASCII -- SQLite's `NOCASE` by definition, PostgreSQL's `lower` by the
@@ -108,5 +130,14 @@ mod tests {
     fn each_backend_begins_a_writing_transaction_its_own_way() {
         assert_eq!(Backend::Sqlite.begin_write(), "BEGIN IMMEDIATE");
         assert_eq!(Backend::Postgres.begin_write(), "BEGIN");
+    }
+
+    /// The advisory key is load-bearing rather than decorative: two LogB builds that disagreed
+    /// about it would each believe they held the write lock while writing concurrently, so it
+    /// is pinned here and must never be changed.
+    #[test]
+    fn only_postgres_has_to_be_told_to_write_alone() {
+        assert_eq!(Backend::Sqlite.write_lock(), None);
+        assert_eq!(Backend::Postgres.write_lock(), Some("SELECT pg_advisory_xact_lock(4479001)"));
     }
 }
