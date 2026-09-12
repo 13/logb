@@ -382,8 +382,10 @@ async fn a_configured_backup_directory_is_reported_with_its_hour() {
         c.backup_hour = 4;
     })
     .await;
-    if app.state.backend != logb::dialect::Backend::Sqlite {
-        eprintln!("SKIPPED: automatic backup is a SQLite mechanism");
+    if common::skipped_on_postgres(
+        "a_configured_backup_directory_is_reported_with_its_hour",
+        "automatic backup is a SQLite mechanism",
+    ) {
         return;
     }
     app.setup("ben", "correct horse").await;
