@@ -35,9 +35,24 @@ a way in.
 The fix is the same mechanism as the cursor's: serialise the operation with a
 transaction-scoped advisory lock on PostgreSQL, leaving SQLite untouched.
 
-Before implementing, **audit for the rest of the class** rather than fixing these two: every
-check-then-act that relies on the check and the act being one writer's work. Report what the
-audit found, including the places judged safe and why.
+**The audit has been done**, during part one's final review: seventeen read-then-write sites,
+of which these are unsafe without a single writer. Part two's scope is all of them.
+
+| Site | What breaks |
+|---|---|
+| `src/api/auth.rs:140` | first-run setup: two concurrent setups both succeed, two admins |
+| `src/api/sync.rs:95` | push idempotency is SELECT-then-INSERT on `changes`; a concurrent duplicate hits `idx_changes_user_op` and 500s instead of answering idempotently. The SAVEPOINT at `apply.rs:455` does not cover that INSERT |
+| `src/sync/apply.rs:396-425` | `field_clock` read-compare-write: commit order rather than `edited_at` decides the last-write-wins winner, so the older edit can win |
+| `src/sync/feed.rs:180-193` | purge's `NOT EXISTS` parent guards run as separate autocommit statements. A child created in the gap is hard-deleted by `ON DELETE CASCADE`, with no tombstone — exactly the loss that code's own comment warns about |
+| `changes.seq` | the cursor, described above |
+
+Judged safe, with reasons: `users::create`, the `client_op_id` creates and identical-bytes
+uploads (a unique index plus a winner re-lookup — their `concurrent_*` tests pass on
+PostgreSQL), `auth.rs:239`'s conditional `last_used_at`, `epoch::rotate`'s upsert, and
+`record::cascade_*`, which are single statements.
+
+Racy on SQLite too, so pre-existing rather than introduced by the port, and out of scope here:
+`users::update` demotion, and `purge_orphan_files` blob deletion.
 
 ## Approach
 
