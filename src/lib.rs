@@ -84,6 +84,16 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     db::set_timezone(config.timezone);
     let url = config.database_url()?;
     let backend = dialect::Backend::of(&url);
+    // PostgreSQL is not a supported configuration yet: the README's LOGB_DATABASE_URL row names
+    // the same three gaps. This is the line that is already in an operator's scrollback when one
+    // of them bites, rather than something they had to have read in advance.
+    if backend != dialect::Backend::Sqlite {
+        tracing::warn!(
+            "LOGB_DATABASE_URL points at PostgreSQL, which is not a supported configuration yet: \
+             two setup requests can race into two admin accounts, a device's sync cursor can \
+             permanently skip changes, and there is no automatic backup"
+        );
+    }
     let db = db::connect_with_pool_size(&url, config.db_pool_size).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
