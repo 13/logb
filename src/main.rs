@@ -24,7 +24,7 @@ async fn main() -> Result<(), logb::db::BoxError> {
         return Ok(());
     }
     if let Some(dest) = config.copy_to.clone() {
-        let report = logb::copy::run(&config.database_url()?, &dest, config.force).await?;
+        let report = logb::copy::run(&config.database_url()?, &dest).await?;
         for (table, rows) in &report.tables {
             println!("{rows:>7} {table}");
         }

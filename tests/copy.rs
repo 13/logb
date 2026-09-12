@@ -23,7 +23,7 @@ async fn every_row_and_identifier_survives_the_copy() {
     app.release_database().await;
     let dest = common::scratch_database().await;
 
-    let report = logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap();
+    let report = logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
 
     // Row counts, per table, in the order they were copied.
     let copied: Vec<(String, i64)> = report.tables.clone();
@@ -41,11 +41,13 @@ async fn a_destination_that_already_holds_data_is_refused() {
     let app = seeded().await;
     app.release_database().await;
     let dest = common::scratch_database().await;
-    logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap();
+    logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
 
-    // Copying again without --force would merge two histories into one database.
-    let err = logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap_err().to_string();
-    assert!(err.contains("--force"), "the refusal must name the way round it: {err}");
+    // Copying again would merge two histories into one database. There is no flag to override
+    // it: both databases number their rows from 1, so the second copy collides on the first
+    // primary key it writes. The refusal has to say what to do instead.
+    let err = logb::copy::run(&app.database_url(), &dest.url).await.unwrap_err().to_string();
+    assert!(err.contains("empty database"), "the refusal must say what to do instead: {err}");
 }
 
 /// Copying out of a database a server is still writing to would capture a moving target: later
@@ -54,7 +56,7 @@ async fn a_destination_that_already_holds_data_is_refused() {
 async fn copying_from_a_database_still_in_use_is_refused() {
     let app = seeded().await;              // its server is running and holds the database
     let dest = common::scratch_database().await;
-    let err = logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap_err().to_string();
+    let err = logb::copy::run(&app.database_url(), &dest.url).await.unwrap_err().to_string();
     assert!(err.contains("stop the server"), "the refusal must say what to do: {err}");
 }
 
@@ -69,7 +71,7 @@ async fn the_copy_can_still_take_new_rows_of_its_own() {
     let app = seeded().await;
     app.release_database().await;
     let dest = common::scratch_database().await;
-    logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap();
+    logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
 
     let pool = logb::db::connect_existing(&dest.url).await.unwrap();
     // No `id`: the database picks one, exactly as every insert in the app does.
@@ -98,7 +100,7 @@ async fn a_copy_that_loses_rows_fails_and_names_the_table() {
     // Delete a row from the destination mid-copy by racing is unreliable; instead copy, then
     // remove a row and re-run the verification directly. That is the same check the command
     // performs, against a destination that is genuinely wrong.
-    logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap();
+    logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
     dest.delete_one_activity().await;
 
     let err = logb::copy::verify(&app.database_url(), &dest.url).await.unwrap_err().to_string();
@@ -114,7 +116,7 @@ async fn a_copy_that_fails_verification_commits_nothing() {
     let dest = common::scratch_database().await;
     dest.plant_a_stray_row().await;
 
-    let err = logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap_err().to_string();
+    let err = logb::copy::run(&app.database_url(), &dest.url).await.unwrap_err().to_string();
     assert!(err.contains("field_clock"), "the error must name the table that differs: {err}");
     assert_eq!(dest.user_count().await, 0, "a failed verification must leave nothing committed");
 }

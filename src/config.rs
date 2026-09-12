@@ -58,9 +58,6 @@ pub struct Config {
     /// directory pairs with any database.
     #[arg(long, value_name = "URL")]
     pub copy_to: Option<String>,
-    /// Copy into a destination that already holds data. Two histories in one database.
-    #[arg(long, requires = "copy_to")]
-    pub force: bool,
     /// Probe a running instance's `/api/health` on the configured port and exit 0 or 1.
     /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
     #[arg(long)]
@@ -159,7 +156,6 @@ mod tests {
             backup_hour: 3,
             restore: None,
             copy_to: None,
-            force: false,
             healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),

@@ -23,10 +23,17 @@ const IN_USE: &str = "the source database is still in use by something else -- s
                       (and anything else connected to it) before copying, so the copy is taken \
                       from a database nobody is writing to";
 
-/// Shown when the destination already holds data, and names the flag that overrides it.
+/// Shown when the destination already holds data.
+///
+/// There is deliberately no flag to override this. Both databases number their rows from 1, so
+/// copying into a populated destination collides on the first primary key it writes; and even
+/// where it did not, the verification below would find the destination holding rows the source
+/// does not have and roll the whole copy back. A merge is a different operation from a copy,
+/// and this command does not do it.
 const NOT_EMPTY: &str = "the destination database already holds data (its `users` table is not \
                          empty). Copying into it would put two histories in one database. Point \
-                         --copy-to at an empty database, or pass --force to proceed anyway";
+                         --copy-to at an empty database -- one this command creates itself, or \
+                         an empty PostgreSQL database made with `CREATE DATABASE`";
 
 #[derive(Debug)]
 pub struct Report {
@@ -41,7 +48,7 @@ pub struct Report {
 /// Both pools are closed on every path, success or not: on SQLite the source is held in
 /// exclusive locking mode for the duration, and on PostgreSQL the destination's write
 /// transaction holds this application's advisory lock -- neither should outlive the call.
-pub async fn run(source_url: &str, dest_url: &str, force: bool) -> Result<Report, BoxError> {
+pub async fn run(source_url: &str, dest_url: &str) -> Result<Report, BoxError> {
     if source_url == dest_url {
         return Err("the source and the destination are the same database".into());
     }
@@ -53,7 +60,7 @@ pub async fn run(source_url: &str, dest_url: &str, force: bool) -> Result<Report
             return Err(e);
         },
     };
-    let result = copy(&source, Backend::of(source_url), &dest, Backend::of(dest_url), force).await;
+    let result = copy(&source, Backend::of(source_url), &dest, Backend::of(dest_url)).await;
     source.close().await;
     dest.close().await;
     result
@@ -64,7 +71,6 @@ async fn copy(
     source_backend: Backend,
     dest: &AnyPool,
     dest_backend: Backend,
-    force: bool,
 ) -> Result<Report, BoxError> {
     // Claimed before the destination is touched at all, so a refusal leaves a destination that
     // was never written to.
@@ -75,7 +81,7 @@ async fn copy(
     // holds the application's advisory lock, so a helper that opened a connection of its own
     // here would block against it and hang rather than fail.
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
-    if users > 0 && !force {
+    if users > 0 {
         return Err(NOT_EMPTY.into());
     }
 

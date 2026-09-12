@@ -340,7 +340,6 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         backup_hour: 3,
         restore: None,
         copy_to: None,
-        force: false,
         healthcheck: false,
         secure_cookie: "false".into(),
         log: "warn".into(),
