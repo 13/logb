@@ -84,3 +84,37 @@ async fn the_copy_can_still_take_new_rows_of_its_own() {
     pool.close().await;
     assert_eq!(ids.len(), 2, "the copied user and the new one: {ids:?}");
 }
+
+/// A copy that reports success while having dropped rows is worse than one that fails: the
+/// operator deletes the source. So the command counts both sides and compares, and a mismatch
+/// is an error naming the table.
+#[tokio::test]
+async fn a_copy_that_loses_rows_fails_and_names_the_table() {
+    let app = seeded().await;
+    // As every copy test does: the source has to be let go of before it can be copied out of.
+    app.release_database().await;
+    let dest = common::scratch_database().await;
+
+    // Delete a row from the destination mid-copy by racing is unreliable; instead copy, then
+    // remove a row and re-run the verification directly. That is the same check the command
+    // performs, against a destination that is genuinely wrong.
+    logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap();
+    dest.delete_one_activity().await;
+
+    let err = logb::copy::verify(&app.database_url(), &dest.url).await.unwrap_err().to_string();
+    assert!(err.contains("activities"), "the error must name the table that differs: {err}");
+}
+
+/// Running the verification before the commit is the point of it: a copy that did not arrive
+/// has to leave nothing behind at all, rather than a half-copied database that looks finished.
+#[tokio::test]
+async fn a_copy_that_fails_verification_commits_nothing() {
+    let app = seeded().await;
+    app.release_database().await;
+    let dest = common::scratch_database().await;
+    dest.plant_a_stray_row().await;
+
+    let err = logb::copy::run(&app.database_url(), &dest.url, false).await.unwrap_err().to_string();
+    assert!(err.contains("field_clock"), "the error must name the table that differs: {err}");
+    assert_eq!(dest.user_count().await, 0, "a failed verification must leave nothing committed");
+}

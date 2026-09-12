@@ -155,6 +155,49 @@ impl Scratch {
     pub async fn all_activity_ids(&self) -> Vec<(i64, i64)> {
         all_activity_ids(&self.url).await
     }
+
+    /// Puts a row into `field_clock`, which references nothing else, so an otherwise empty
+    /// database can be given a row without inventing a user to hang it off.
+    ///
+    /// It leaves `users` empty, so a copy into this database gets past the refusal and runs all
+    /// the way to the verification -- which is the only way to exercise what a failed
+    /// verification does to the destination.
+    pub async fn plant_a_stray_row(&self) {
+        // `connect`, not `connect_existing`: a scratch SQLite database is a directory with no
+        // file in it yet, and the file has to be made and migrated before it can hold a row.
+        let pool = logb::db::connect(&self.url).await.unwrap();
+        sqlx::query(
+            "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
+             VALUES ('object', 'stray', 'name', '2026-01-01T00:00:00Z', 'nobody')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// How many rows `users` holds, read through a connection of its own.
+    pub async fn user_count(&self) -> i64 {
+        let pool = logb::db::connect_existing(&self.url).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&pool).await.unwrap();
+        pool.close().await;
+        count
+    }
+
+    /// Removes one activity, making this database a wrong copy of whatever it was copied from.
+    ///
+    /// A verification that cannot see this is not verifying anything, so a test needs a way to
+    /// break a destination that is otherwise a faithful copy.
+    pub async fn delete_one_activity(&self) {
+        let pool = logb::db::connect_existing(&self.url).await.unwrap();
+        let deleted = sqlx::query("DELETE FROM activities WHERE id = (SELECT min(id) FROM activities)")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected();
+        pool.close().await;
+        assert_eq!(deleted, 1, "there was no activity to delete");
+    }
 }
 
 /// Every `(id, object_id)` in `activities`, in id order, read through a connection of its own.
