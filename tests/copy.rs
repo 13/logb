@@ -120,3 +120,301 @@ async fn a_copy_that_fails_verification_commits_nothing() {
     assert!(err.contains("field_clock"), "the error must name the table that differs: {err}");
     assert_eq!(dest.user_count().await, 0, "a failed verification must leave nothing committed");
 }
+
+/// Every table with a stable order to read it in, so two databases can be compared row for row.
+/// `settings` is deliberately absent: the copy rotates the `sync_epoch` in it on purpose, and
+/// it is checked on its own below.
+const COMPARABLE: [(&str, &str); 10] = [
+    ("users", "id"),
+    ("api_tokens", "id"),
+    ("sessions", "token"),
+    ("objects", "id"),
+    ("activities", "id"),
+    ("files", "id"),
+    ("attachments", "id"),
+    ("reminders", "id"),
+    ("changes", "seq"),
+    ("field_clock", "entity, entity_uuid, field"),
+];
+
+/// SQLite to PostgreSQL: the copy this command exists to perform, and the one no ordinary suite
+/// run reaches -- every other test in this file copies a database into another of its own kind,
+/// because a run is against one backend at a time. Skipped unless a PostgreSQL server is
+/// configured, because there is nothing to copy into without one.
+///
+/// What only a change of engine can break is types. SQLite keeps a type per value and hands
+/// back whatever it was given; PostgreSQL holds every value to its column's declared type, and
+/// the two schemas do not declare the same shapes -- `is_admin` is INTEGER on one side and
+/// SMALLINT on the other, timestamps are TEXT holding ISO-8601 rather than a timestamp type,
+/// an absent value is NULL where an empty one is `''`, and a log that has been running for
+/// years carries a `seq` past what 32 bits hold. So the seeding below produces all of those
+/// through the real API, and the comparison is value by value: the copy's own verification is a
+/// fingerprint -- count, key sum, newest `updated_at` -- and would not notice a changed value.
+#[tokio::test]
+async fn a_sqlite_database_copies_into_postgresql() {
+    let Some(server) = common::test_server_url() else {
+        eprintln!(
+            "SKIPPED: a_sqlite_database_copies_into_postgresql -- \
+             set LOGB_TEST_DATABASE_URL to a PostgreSQL server to run it"
+        );
+        return;
+    };
+    if logb::dialect::Backend::of(&server) != logb::dialect::Backend::Postgres {
+        eprintln!("SKIPPED: a_sqlite_database_copies_into_postgresql -- {server} is not PostgreSQL");
+        return;
+    }
+
+    // A SQLite source, deliberately, whatever backend the rest of the suite is running on.
+    let dir = tempfile::tempdir().unwrap();
+    let source = logb::db::sqlite_url(dir.path()).unwrap();
+    let app = common::spawn_on(&source).await;
+    let object_id = seed_every_awkward_shape(&app).await;
+    // As every copy test does: a running server holds the source, and the copy refuses it.
+    app.release_database().await;
+
+    let (_database, dest_url) = common::scratch_database_on(&server).await;
+    let report = logb::copy::run(&source, &dest_url).await.unwrap();
+    assert!(report.tables.iter().any(|(t, n)| t == "users" && *n == 2), "{:?}", report.tables);
+    assert!(report.tables.iter().any(|(t, n)| t == "activities" && *n == 2), "{:?}", report.tables);
+    assert!(report.tables.iter().any(|(t, n)| t == "attachments" && *n == 2), "{:?}", report.tables);
+
+    // The comparison below is only worth what the seeding put in front of it: a value-by-value
+    // assertion over rows that all turned out to be NULL would pass for the wrong reason.
+    the_awkward_shapes_are_really_in_the_source(&source).await;
+
+    // Content, not counts: every value of every row, on both sides.
+    for (table, order) in COMPARABLE {
+        let before = dump(&source, table, order).await;
+        let after = dump(&dest_url, table, order).await;
+        assert!(!before.is_empty(), "{table} was never seeded, so copying it proves nothing");
+        assert_eq!(before, after, "{table} does not hold the same values after the copy");
+    }
+
+    // `settings` is the one table the copy is meant to change: the epoch is rotated, so every
+    // device re-bootstraps rather than resuming a cursor against a database it has not seen.
+    let before = settings(&source).await;
+    let after = settings(&dest_url).await;
+    assert_eq!(value(&before, "currency"), value(&after, "currency"), "the currency must survive");
+    assert_eq!(value(&after, "sync_epoch"), report.epoch, "the destination must advertise the reported epoch");
+    assert_ne!(value(&before, "sync_epoch"), value(&after, "sync_epoch"), "the epoch must be rotated");
+
+    // And the copy is usable, rather than merely correct: an app starts on it and serves the
+    // data. The login is part of the assertion -- the password hash crossed as text, and a
+    // database nobody can log into has not been migrated.
+    let moved = common::spawn_on(&dest_url).await;
+    let res = moved.login(&moved.client, "ben", "correct horse").await;
+    assert_eq!(res.status(), 200, "the copied password must still authenticate: {}", res.text().await.unwrap());
+
+    let objects = moved.get_json("/objects").await;
+    assert_eq!(objects[0]["name"], "Golf");
+    assert_eq!(objects[0]["type"], "car");
+    assert_eq!(objects[0]["counter_unit"], "km");
+    assert_eq!(objects[0]["description"], "", "an empty description must not come back as null");
+
+    let activities = moved.get_json(&format!("/objects/{object_id}/activities")).await;
+    let titles: Vec<&str> = activities.as_array().unwrap().iter().map(|a| a["title"].as_str().unwrap()).collect();
+    assert!(titles.contains(&"Ölwechsel"), "non-ASCII text must arrive intact: {titles:?}");
+    let fuel = activities.as_array().unwrap().iter().find(|a| a["category"] == "fuel").expect("the fuel activity");
+    assert_eq!(fuel["quantity_milli"], 38_500);
+    assert_eq!(fuel["cost_cents"], 7_250);
+    assert_eq!(fuel["counter_value"], 123_456);
+    assert_eq!(
+        fuel["attachments"][0]["original_name"], "Rechnung für Öl.txt",
+        "a non-ASCII file name must survive the crossing too: {fuel}"
+    );
+
+    // The sync log is what a device resumes against, and its cursor is the value most likely to
+    // be quietly narrowed on the way across.
+    let seqs = change_seqs(&dest_url).await;
+    assert!(seqs.iter().all(|seq| *seq > i64::from(i32::MAX)), "a large seq must cross whole: {seqs:?}");
+    assert_eq!(seqs, change_seqs(&source).await, "the cursor numbers must be the ones the source had");
+}
+
+/// Seeds, through the real API, every shape of value a change of engine could plausibly mangle,
+/// and answers the id of the object most of it hangs off.
+async fn seed_every_awkward_shape(app: &common::TestApp) -> i64 {
+    // The admin, whose `is_admin` is 1 against an INTEGER column on one side and a SMALLINT on
+    // the other, and a second user whose is 0 -- so a copy that lost the column would still
+    // have to explain the admin.
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    // `description` is '' and `purchase_date` is NULL in the same row: an empty value and an
+    // absent one, which a row count cannot tell apart and PostgreSQL will not confuse.
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = object["id"].as_i64().unwrap();
+    // A second user's object, with no counter at all, so `counter_unit` is NULL somewhere.
+    app.create_object(&anna, "Fahrrad", None).await;
+
+    app.create_activity(&object["id"], "Ölwechsel").await;
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{id}/activities")))
+        .json(&serde_json::json!({
+            "date": "2024-04-01", "category": "fuel", "title": "Tanken – Süd",
+            "notes": "38,5 l für 72,50 €",
+            "counter_value": 123_456, "cost_cents": 7_250, "quantity_milli": 38_500
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201, "create fuel activity failed: {}", res.text().await.unwrap());
+    let fuel: serde_json::Value = res.json().await.unwrap();
+
+    // A reminder with a due date and no counter: half its columns are NULL, and the CHECK on
+    // the destination refuses a row where both are.
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&serde_json::json!({ "title": "TÜV", "due_date": "2030-01-01" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201, "create reminder failed: {}", res.text().await.unwrap());
+
+    // Two uploads: one on the activity, one on the object alone, so `attachments.activity_id`
+    // is a number in one row and NULL in the other. A text file has no dimensions, so
+    // `files.width` and `files.height` are NULL too, beside a `size` that is not.
+    let base = app.url(&format!("/objects/{id}/attachments"));
+    for (bytes, name, activity) in [
+        (b"rechnung".to_vec(), "Rechnung für Öl.txt", Some(fuel["id"].as_i64().unwrap())),
+        (b"handbuch".to_vec(), "Handbuch.txt", None),
+    ] {
+        let mut form = reqwest::multipart::Form::new().part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes)
+                .file_name(name.to_string())
+                .mime_str("text/plain")
+                .unwrap(),
+        );
+        if let Some(activity) = activity {
+            form = form.text("activity_id", activity.to_string());
+        }
+        let res = app.client.post(&base).multipart(form).send().await.unwrap();
+        assert_eq!(res.status(), 201, "upload failed: {}", res.text().await.unwrap());
+    }
+
+    // Two API tokens, one of them used: `last_used_at` is a NULL in one row and an ISO-8601
+    // timestamp in a TEXT column in the other.
+    let mut used = String::new();
+    for name in ["phone", "laptop"] {
+        let res = app
+            .client
+            .post(app.url("/auth/tokens"))
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 201, "create token failed: {}", res.text().await.unwrap());
+        let body: serde_json::Value = res.json().await.unwrap();
+        used = body["token"].as_str().unwrap().to_string();
+    }
+    let bare = reqwest::Client::new();
+    let res = bare.get(app.url("/objects")).bearer_auth(&used).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the token should work: {}", res.text().await.unwrap());
+
+    // A pull cursor past what 32 bits hold, which is what a database that has been logging for
+    // years arrives with. The API cannot produce one -- the log numbers its own rows -- so it
+    // is moved here, before the server lets go of the database.
+    sqlx::query("UPDATE changes SET seq = seq + 4294967296").execute(&app.state.db).await.unwrap();
+
+    id
+}
+
+/// Checks that the source really holds each shape this test claims to carry across.
+///
+/// Written against the rendered rows rather than against the API's answers so that it asks the
+/// same question the comparison does: what is in the database, spelled the way the comparison
+/// spells it.
+async fn the_awkward_shapes_are_really_in_the_source(source: &str) {
+    for (table, shape) in [
+        // An INTEGER column on this side, a SMALLINT on the other, in both of its states.
+        ("users", "is_admin=1"),
+        ("users", "is_admin=0"),
+        // An empty value and an absent one in the same row, which are not the same thing.
+        ("objects", "description=\"\""),
+        ("objects", "purchase_date=NULL"),
+        ("objects", "counter_unit=NULL"),
+        // Non-ASCII text, and numbers that are not ids.
+        ("activities", "title=\"Ölwechsel\""),
+        ("activities", "quantity_milli=38500"),
+        // An ISO-8601 timestamp in a TEXT column, and the same column NULL in another row.
+        ("api_tokens", "last_used_at=NULL"),
+        ("api_tokens", "last_used_at=\"20"),
+        // A nullable foreign key, in both of its states.
+        ("attachments", "activity_id=NULL"),
+        ("attachments", "activity_id=2"),
+        ("files", "width=NULL"),
+        ("reminders", "due_counter=NULL"),
+    ] {
+        let rows = dump(source, table, "1").await;
+        assert!(
+            rows.iter().any(|row| row.contains(shape)),
+            "the seeding was meant to put {shape} in {table}, and did not: {rows:?}"
+        );
+    }
+}
+
+/// Every row of one table as `column=value` text, in a stable order.
+///
+/// Rendered as text on purpose: the question is whether the *content* crossed, and the two
+/// backends will not agree on the type of a value that did -- SQLite answers with what it
+/// stored, PostgreSQL with what the column declares. Sorted by column name because the two
+/// schemas are guaranteed to have the same columns, not to list them in the same order.
+async fn dump(url: &str, table: &str, order: &str) -> Vec<String> {
+    use sqlx::any::AnyTypeInfoKind;
+    use sqlx::{Column, Row, ValueRef};
+
+    let pool = logb::db::connect_existing(url).await.unwrap();
+    let sql = format!("SELECT * FROM {table} ORDER BY {order}");
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&pool).await.unwrap();
+    pool.close().await;
+    rows.iter()
+        .map(|row| {
+            let mut cells: Vec<String> = row
+                .columns()
+                .iter()
+                .map(|column| {
+                    let i = column.ordinal();
+                    let value = match row.try_get_raw(i).unwrap().type_info().kind() {
+                        AnyTypeInfoKind::Null => "NULL".to_string(),
+                        AnyTypeInfoKind::Bool => row.get::<bool, _>(i).to_string(),
+                        AnyTypeInfoKind::SmallInt => row.get::<i16, _>(i).to_string(),
+                        AnyTypeInfoKind::Integer => row.get::<i32, _>(i).to_string(),
+                        AnyTypeInfoKind::BigInt => row.get::<i64, _>(i).to_string(),
+                        AnyTypeInfoKind::Real => row.get::<f32, _>(i).to_string(),
+                        AnyTypeInfoKind::Double => row.get::<f64, _>(i).to_string(),
+                        AnyTypeInfoKind::Text => format!("{:?}", row.get::<String, _>(i)),
+                        AnyTypeInfoKind::Blob => format!("{:?}", row.get::<Vec<u8>, _>(i)),
+                    };
+                    format!("{}={value}", column.name())
+                })
+                .collect();
+            cells.sort();
+            cells.join(" ")
+        })
+        .collect()
+}
+
+/// The `settings` table as pairs, which is the one table the copy deliberately changes.
+async fn settings(url: &str) -> Vec<(String, String)> {
+    let pool = logb::db::connect_existing(url).await.unwrap();
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM settings ORDER BY key")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    rows
+}
+
+fn value<'a>(settings: &'a [(String, String)], key: &str) -> &'a str {
+    settings.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or_else(|| panic!("no {key} setting"))
+}
+
+/// Every `seq` in the change log, in order -- the numbers a device's cursor is measured against.
+async fn change_seqs(url: &str) -> Vec<i64> {
+    let pool = logb::db::connect_existing(url).await.unwrap();
+    let seqs = sqlx::query_scalar::<_, i64>("SELECT seq FROM changes ORDER BY seq").fetch_all(&pool).await.unwrap();
+    pool.close().await;
+    seqs
+}

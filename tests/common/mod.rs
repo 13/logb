@@ -375,6 +375,33 @@ pub async fn spawn_with(tweak: impl FnOnce(&mut logb::config::Config)) -> TestAp
     };
     // The tweak runs last so a test can still override anything, including the database URL.
     tweak(&mut config);
+    serve(config, dir, database).await
+}
+
+/// As `spawn`, but on a database the caller already has, named by its URL.
+///
+/// For the one thing the harness cannot otherwise express: an app on a *chosen* backend rather
+/// than on whichever one the suite is running against. Copying a SQLite database into a
+/// PostgreSQL one needs a SQLite source in a PostgreSQL run, and an app started on the
+/// destination afterwards to prove the copy can be served.
+///
+/// The database belongs to the caller: this `TestApp` neither creates nor drops it. The data
+/// directory is still the app's own temporary one, so a second app started on a copied
+/// database does not have the first one's file blobs -- everything in the database is there,
+/// nothing that was on disk beside it is.
+pub async fn spawn_on(database_url: &str) -> TestApp {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path().to_path_buf());
+    config.database_url = Some(database_url.to_string());
+    serve(config, dir, None).await
+}
+
+/// Builds the app from a finished config and serves it on a port of its own.
+async fn serve(
+    config: logb::config::Config,
+    dir: tempfile::TempDir,
+    database: Option<ScratchDatabase>,
+) -> TestApp {
     let (app, state) = logb::build_with_state(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -437,6 +464,15 @@ impl TestApp {
 
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
+    }
+
+    /// GETs a path as `self.client` and answers the JSON, failing loudly on anything but 200.
+    pub async fn get_json(&self, path: &str) -> serde_json::Value {
+        let res = self.client.get(self.url(path)).send().await.unwrap();
+        let status = res.status();
+        let body = res.text().await.unwrap();
+        assert_eq!(status, 200, "GET {path} failed: {body}");
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("GET {path} answered {body}: {e}"))
     }
 
     /// POST /auth/setup with the given credentials using `self.client` (first user = admin).
