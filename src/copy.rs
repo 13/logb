@@ -44,9 +44,7 @@ const IN_USE: &str = "the source database is still in use by something else -- s
 /// does not have and roll the whole copy back. A merge is a different operation from a copy,
 /// and this command does not do it.
 const NOT_EMPTY: &str = "the destination database already holds data (its `users` table is not \
-                         empty). Copying into it would put two histories in one database. Point \
-                         --copy-to at an empty database -- one this command creates itself, or \
-                         an empty PostgreSQL database made with `CREATE DATABASE`";
+                         empty). Copying into it would put two histories in one database.";
 
 #[derive(Debug)]
 pub struct Report {
@@ -57,6 +55,11 @@ pub struct Report {
 }
 
 /// Copies `source_url`'s database into `dest_url`'s, row for row and id for id.
+///
+/// One of two entry points into `copy_from`, which is the whole of the copy. They differ in
+/// nothing but how the source is made safe to read from: this one refuses a source anything
+/// else still holds (`claim_source`), because a command run from a shell cannot stop the
+/// writers itself. `run_live` is the other, for the server copying its own database.
 ///
 /// Both pools are closed on every path, success or not: on SQLite the source is held in
 /// exclusive locking mode for the duration, and on PostgreSQL the destination's write
@@ -79,6 +82,40 @@ pub async fn run(source_url: &str, dest_url: &str) -> Result<Report, BoxError> {
     result
 }
 
+/// Copies the database this server is running on into `dest_url`'s, without stopping it.
+///
+/// The other entry point into `copy_from`, and the same copy in every respect but one: where
+/// `run` makes the source safe to read by refusing a database anything else holds, this one
+/// makes it safe by *being* the writer -- it reads inside `db::begin_write`, the transaction
+/// every write in this application goes through, so no write can land on the source while the
+/// copy is in flight and the eleven tables are still read from one point in time. `run`'s
+/// refusal is unusable here because the process asking for the copy is precisely the server
+/// that would be refused.
+///
+/// Takes the pool the server already holds rather than a URL, and hands the transaction down:
+/// on PostgreSQL that transaction holds this application's advisory lock, so anything below
+/// that acquired a second connection from this pool would block against it and hang rather
+/// than fail. The destination is a different database, so its own pool is free to open.
+pub async fn run_live(db: &AnyPool, backend: Backend, dest_url: &str) -> Result<Report, BoxError> {
+    // Opened before the write lock is taken: `db::connect` migrates the destination, and every
+    // write to this server is stalled for as long as the transaction below is open.
+    let dest = db::connect(dest_url).await?;
+    let mut src = match db::begin_write(db, backend).await {
+        Ok(src) => src,
+        Err(e) => {
+            dest.close().await;
+            return Err(e.into());
+        },
+    };
+    let result = copy_from(&mut src, &dest, Backend::of(dest_url)).await;
+    // The source was only ever read. Let go of it explicitly rather than leaving the rollback
+    // to a drop, so the server is taking writes again before this returns.
+    let _ = src.rollback().await;
+    dest.close().await;
+    result
+}
+
+/// `run`'s half: claim the source, copy, let it go.
 async fn copy(
     source: &AnyPool,
     source_backend: Backend,
@@ -88,7 +125,27 @@ async fn copy(
     // Claimed before the destination is touched at all, so a refusal leaves a destination that
     // was never written to.
     let mut src = claim_source(source, source_backend).await?;
+    let report = copy_from(&mut src, dest, dest_backend).await?;
 
+    // The source was only ever read. Let go of it explicitly rather than leaving the rollback
+    // to a drop, so the lock is gone before this returns.
+    let _ = sqlx::raw_sql(AssertSqlSafe("ROLLBACK")).execute(&mut *src).await;
+
+    Ok(report)
+}
+
+/// The copy itself, from a source that is already open and already safe to read.
+///
+/// `src` is a connection with a transaction open on it -- how that transaction came to be is
+/// the only thing `run` and `run_live` disagree about. It is a `&mut AnyConnection` rather than
+/// a pool precisely so that neither entry point can hand this a pool to acquire from: under
+/// `run_live` the caller's transaction holds this application's advisory lock, and a second
+/// connection taken here would block against it and hang.
+async fn copy_from(
+    src: &mut sqlx::AnyConnection,
+    dest: &AnyPool,
+    dest_backend: Backend,
+) -> Result<Report, BoxError> {
     let mut tx = db::begin_write(dest, dest_backend).await?;
     // Everything below runs on `tx`, never on `dest` itself. On PostgreSQL that transaction
     // holds the application's advisory lock, so a helper that opened a connection of its own
@@ -108,7 +165,7 @@ async fn copy(
 
     let mut tables = Vec::with_capacity(TABLES.len());
     for table in TABLES {
-        let rows = copy_table(&mut src, &mut tx, table).await?;
+        let rows = copy_table(&mut *src, &mut tx, table).await?;
         tables.push((table.to_string(), rows));
     }
 
@@ -121,8 +178,8 @@ async fn copy(
     // transaction and the destination's write transaction. On PostgreSQL the latter holds this
     // application's advisory lock, so a helper that opened a connection of its own here would
     // block against it and hang rather than fail.
-    let shapes = shapes(&mut src).await?;
-    let expected = fingerprints(&mut src, &shapes).await?;
+    let shapes = shapes(&mut *src).await?;
+    let expected = fingerprints(&mut *src, &shapes).await?;
     let found = fingerprints(&mut tx, &shapes).await?;
     compare(&shapes, &expected, &found)?;
 
@@ -139,10 +196,8 @@ async fn copy(
     let epoch = crate::sync::epoch::rotate(&mut *tx).await?;
     tx.commit().await?;
 
-    // The source was only ever read. Let go of it explicitly rather than leaving the rollback
-    // to a drop, so the lock is gone before this returns.
-    let _ = sqlx::raw_sql(AssertSqlSafe("ROLLBACK")).execute(&mut *src).await;
-
+    // The source is left exactly as it was handed over, transaction still open: ending it is
+    // the caller's half of the job, and the two callers end it differently.
     Ok(Report { tables, epoch })
 }
 
@@ -339,12 +394,12 @@ async fn claim_source(pool: &AnyPool, backend: Backend) -> Result<PoolConnection
 /// here: `tests/schema_parity.rs` already guarantees both backends name their columns the same,
 /// and a list written out here would drift from the schema the first time one changed.
 async fn copy_table(
-    src: &mut PoolConnection<Any>,
+    src: &mut sqlx::AnyConnection,
     tx: &mut sqlx::Transaction<'static, Any>,
     table: &str,
 ) -> Result<i64, BoxError> {
     let select = format!("SELECT * FROM {table}");
-    let rows = sqlx::query(AssertSqlSafe(select)).fetch_all(&mut **src).await?;
+    let rows = sqlx::query(AssertSqlSafe(select)).fetch_all(&mut *src).await?;
     let mut copied = 0i64;
     for row in &rows {
         let mut names = Vec::with_capacity(row.columns().len());

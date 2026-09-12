@@ -45,9 +45,9 @@ async fn a_destination_that_already_holds_data_is_refused() {
 
     // Copying again would merge two histories into one database. There is no flag to override
     // it: both databases number their rows from 1, so the second copy collides on the first
-    // primary key it writes. The refusal has to say what to do instead.
+    // primary key it writes. The refusal has to say why.
     let err = logb::copy::run(&app.database_url(), &dest.url).await.unwrap_err().to_string();
-    assert!(err.contains("empty database"), "the refusal must say what to do instead: {err}");
+    assert!(err.contains("two histories in one database"), "the refusal must say why: {err}");
 }
 
 /// Copying out of a database a server is still writing to would capture a moving target: later
@@ -417,4 +417,23 @@ async fn change_seqs(url: &str) -> Vec<i64> {
     let seqs = sqlx::query_scalar::<_, i64>("SELECT seq FROM changes ORDER BY seq").fetch_all(&pool).await.unwrap();
     pool.close().await;
     seqs
+}
+
+/// The Settings flow copies from the database the server is using, which `run` deliberately
+/// refuses. `run_live` does it from the pool the server already holds, inside the write
+/// transaction -- so the snapshot is consistent and no write can land on the old database while
+/// the copy is in flight.
+#[tokio::test]
+async fn a_running_server_can_copy_its_own_database() {
+    let app = seeded().await;                 // its server is running and holds the database
+    let dest = common::scratch_database().await;
+
+    let report = logb::copy::run_live(&app.state.db, app.state.backend, &dest.url).await.unwrap();
+
+    assert!(report.tables.iter().any(|(t, n)| t == "activities" && *n == 2), "{:?}", report.tables);
+    // And the source is untouched and still serving: this is not a move. `/objects` answers a
+    // bare array -- indexing it by a key would be `Null` whatever the copy did, which is no
+    // assertion at all.
+    let objects: serde_json::Value = app.get_json("/objects").await;
+    assert_eq!(objects[0]["name"], "Golf");
 }

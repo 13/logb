@@ -44,6 +44,54 @@ pub(crate) fn sqlite_file(url: &str) -> Option<PathBuf> {
     (!path.is_empty() && path != ":memory:").then(|| PathBuf::from(path))
 }
 
+/// A connection URL with everything secret taken out of it, for an error message or a log line.
+///
+/// `postgres://user:pass@host:5432/logb?sslmode=require` becomes `postgres://…@host:5432/logb`.
+/// The whole userinfo goes, not just the password -- a username is a hint about the password --
+/// and so does the query string, which is another place a credential can hide (`?password=`).
+/// A URL LogB cannot recognise is reduced to its scheme rather than guessed at: printing an
+/// unparsed string is exactly how a password ends up in a log.
+pub fn redacted(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return match url.split_once(':') {
+            Some((scheme, _)) => format!("{scheme}:…"),
+            None => "…".to_string(),
+        };
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let (credentials, host) = match authority.rsplit_once('@') {
+        Some((_, host)) => ("…@", host),
+        None => ("", authority),
+    };
+    let path = tail.split(['?', '#']).next().unwrap_or("");
+    format!("{scheme}://{credentials}{host}{path}")
+}
+
+/// The same scrubbing, applied to text that came from somewhere else -- a driver error, which
+/// may quote the URL it was given back at whoever is reading the log.
+///
+/// sqlx 0.9 does not, today: a refused connection is `error communicating with database:
+/// Connection refused`. That is not a guarantee, and it is not true of every error a driver can
+/// raise, so any text that is about to be joined to a URL is put through here first.
+pub(crate) fn scrub(text: &str, url: &str) -> String {
+    let mut out = text.replace(url, &redacted(url));
+    if let Some((_, rest)) = url.split_once("://") {
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        if let Some((credentials, _)) = rest[..authority_end].rsplit_once('@') {
+            if !credentials.is_empty() {
+                out = out.replace(credentials, "…");
+                if let Some((_, password)) = credentials.split_once(':') {
+                    if !password.is_empty() {
+                        out = out.replace(password, "…");
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// SQLite needs three settings that a connection URL cannot carry: sqlx 0.9's URL parser accepts
 /// only `mode`, `cache`, `immutable` and `vfs`. `AnyPool` connects by URL, so they are applied
 /// to every connection as it is opened instead.
@@ -290,6 +338,42 @@ pub fn expected_migrations(url: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every shape a connection URL takes here, checked for the one thing that matters: the
+    /// password is gone, and enough of the URL survives to tell an operator which database
+    /// this was about.
+    #[test]
+    fn a_redacted_url_keeps_the_database_and_loses_the_credentials() {
+        for (url, expected) in [
+            ("postgres://user:pass@host:5432/logb", "postgres://…@host:5432/logb"),
+            ("postgres://user:pass@host/logb?sslmode=require", "postgres://…@host/logb"),
+            // A password is not required for there to be a userinfo to hide.
+            ("postgres://user@host/logb", "postgres://…@host/logb"),
+            // No credentials at all: nothing to take out, and the host still says which.
+            ("postgres://host/logb", "postgres://host/logb"),
+            ("sqlite:///var/lib/logb/logb.db?mode=rwc", "sqlite:///var/lib/logb/logb.db"),
+            // Not a URL LogB can take apart -- say only the scheme rather than guess.
+            ("sqlite:logb.db", "sqlite:…"),
+            ("nonsense", "…"),
+        ] {
+            assert_eq!(redacted(url), expected, "redacting {url}");
+        }
+    }
+
+    /// Driver text is scrubbed against the URL it was produced from, whether it quotes the whole
+    /// URL or only the credentials in it. sqlx 0.9 does neither today; that is not a promise.
+    #[test]
+    fn scrubbing_removes_the_password_from_text_that_quotes_the_url() {
+        let url = "postgres://user:hunter2@host:5432/logb";
+        for quoted in [
+            format!("failed to connect to {url}: refused"),
+            "authentication failed for user:hunter2@host".to_string(),
+            "the password hunter2 was rejected".to_string(),
+        ] {
+            let scrubbed = scrub(&quoted, url);
+            assert!(!scrubbed.contains("hunter2"), "the password survived scrubbing: {scrubbed}");
+        }
+    }
 
     /// `today()` reads the process timezone, which the tests leave at UTC; the conversion
     /// itself is what matters, so exercise it directly.

@@ -8,6 +8,71 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Everything this test binary has logged, kept in memory so a test can assert on it.
+///
+/// A secret that must never reach a log line can only be tested for by reading the log lines.
+/// Asserting instead on the shape of the code -- "this handler calls `redacted`" -- passes
+/// happily the day somebody adds a second `tracing::info!` beside it, which is exactly the
+/// failure the assertion exists to catch.
+#[derive(Clone)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+    type Writer = LogBuffer;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+static CAPTURED: OnceLock<LogBuffer> = OnceLock::new();
+
+/// Points the process's tracing subscriber at the buffer above, once.
+///
+/// Called from `serve`, so every test binary that spawns an app captures its own logs from the
+/// first line. The level is `debug` by default -- high enough to include what the request
+/// tracing layer and the drivers say, not only this application's own `info!` lines -- and
+/// `LOGB_TEST_LOG` overrides it for a run that wants something quieter or noisier.
+fn capture_logs() {
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    let buffer = CAPTURED.get_or_init(|| LogBuffer(Arc::new(Mutex::new(Vec::new())))).clone();
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let filter = std::env::var("LOGB_TEST_LOG").unwrap_or_else(|_| "debug".to_string());
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_ansi(false)
+        .with_writer(buffer)
+        // Loud rather than silent: a capture that quietly failed to install would turn every
+        // "the log does not contain this secret" assertion into one that cannot fail.
+        .try_init()
+        .expect("the test harness must be the only thing installing a tracing subscriber");
+}
+
+/// Everything logged by this test binary so far, from every test in it.
+///
+/// Process-wide on purpose: the question asked of it is whether a secret appears anywhere, and
+/// a test that only saw its own lines would miss a leak from a background task.
+pub fn captured_logs() -> String {
+    let buffer = CAPTURED.get().expect("no app has been spawned, so nothing has been captured");
+    let bytes = buffer.0.lock().unwrap();
+    assert!(!bytes.is_empty(), "nothing was captured at all: the subscriber is not recording");
+    String::from_utf8_lossy(&bytes).to_string()
+}
 
 pub struct TestApp {
     pub base: String,
@@ -90,9 +155,19 @@ pub(crate) fn replace_database_in_url(server_url: &str, name: &str) -> String {
 
 /// A single connection to the server itself, for the statements that cannot be run from inside
 /// the database they are about.
+///
+/// Statement logging is off on this one connection, and that is not tidiness: `CREATE ROLE ...
+/// LOGIN PASSWORD '...'` is a statement with a password *in its text*, and sqlx logs every
+/// statement it runs at debug. Leaving it on would put the harness's own secret into the log
+/// buffer the leak tests read, and they would fail pointing at the test that set them up
+/// rather than at the application. Nothing the application itself runs is affected: it never
+/// puts a credential in a statement, only in the connection options.
 async fn admin_pool(server_url: &str) -> Result<sqlx::AnyPool, sqlx::Error> {
+    use sqlx::ConnectOptions;
+    use std::str::FromStr;
     sqlx::any::install_default_drivers();
-    sqlx::any::AnyPoolOptions::new().max_connections(1).connect(server_url).await
+    let options = sqlx::any::AnyConnectOptions::from_str(server_url)?.disable_statement_logging();
+    sqlx::any::AnyPoolOptions::new().max_connections(1).connect_with(options).await
 }
 
 /// Every scratch database this harness has ever made shares this prefix, so leftovers from a
@@ -119,6 +194,93 @@ pub struct ScratchDatabase {
 /// is running against.
 pub async fn scratch_database_on(server_url: &str) -> (ScratchDatabase, String) {
     ScratchDatabase::create(server_url).await
+}
+
+/// The password every `ScratchLogin` connects with.
+///
+/// Deliberately not the one in `LOGB_TEST_DATABASE_URL`, which is `logb` on every machine this
+/// suite runs on: "logb" is also this application's name, its crate name, the prefix of every
+/// scratch database, part of the SQLite filename and the target on every one of its own log
+/// lines, so "the password does not appear in this text" would be false everywhere with nothing
+/// having leaked. A password that occurs nowhere else makes the question answerable.
+pub const SCRATCH_PASSWORD: &str = "aardvark-trombone-hinge";
+
+/// An empty PostgreSQL database reached through a login of its own.
+///
+/// It exists for the one question a shared login cannot answer: whether a connection URL's
+/// password reaches a response body or a log line. The role owns the database, so LogB can
+/// create its schema in it exactly as it would in any database an operator pointed it at.
+pub struct ScratchLogin {
+    server_url: String,
+    role: String,
+    name: String,
+    /// The URL to hand to LogB: this role, this password, this database.
+    pub url: String,
+    /// The password inside `url`, and the needle every leak assertion looks for.
+    pub password: &'static str,
+}
+
+/// Creates a role and a database it owns, on the server the suite was pointed at.
+pub async fn scratch_database_with_its_own_password(server_url: &str) -> ScratchLogin {
+    let admin = admin_pool(server_url)
+        .await
+        .unwrap_or_else(|e| panic!("LOGB_TEST_DATABASE_URL is set but unreachable: {e}"));
+    sweep_leftovers(&admin).await;
+    let suffix = unique_suffix();
+    let name = format!("{SCRATCH_PREFIX}{suffix}");
+    // `pid_of` has to be able to read the pid out of this too, so the sweep can collect a role
+    // left behind by a run that was killed: `logb_test_<pid>_<n>_user`.
+    let role = format!("{SCRATCH_PREFIX}{suffix}_user");
+    for sql in [
+        format!("CREATE ROLE {role} LOGIN PASSWORD '{SCRATCH_PASSWORD}'"),
+        format!("CREATE DATABASE {name} OWNER {role}"),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone())).execute(&admin).await.unwrap_or_else(|e| {
+            panic!("could not set up a scratch login ({sql}): {e} -- this test needs a server \
+                    whose LOGB_TEST_DATABASE_URL login may CREATE ROLE and CREATE DATABASE")
+        });
+    }
+    admin.close().await;
+    let url = with_credentials(&replace_database_in_url(server_url, &name), &role, SCRATCH_PASSWORD);
+    ScratchLogin { server_url: server_url.to_string(), role, name, url, password: SCRATCH_PASSWORD }
+}
+
+impl Drop for ScratchLogin {
+    /// The database first, then the role that owns it: PostgreSQL refuses to drop a role while
+    /// anything it owns is still there. Same thread-with-its-own-runtime shape as
+    /// `ScratchDatabase`, and for the same reason -- a `Drop` cannot await.
+    fn drop(&mut self) {
+        let (server_url, name, role) = (self.server_url.clone(), self.name.clone(), self.role.clone());
+        let dropped = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let admin = admin_pool(&server_url).await?;
+                for sql in [
+                    format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+                    format!("DROP ROLE IF EXISTS {role}"),
+                ] {
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&admin).await?;
+                }
+                admin.close().await;
+                Ok::<_, sqlx::Error>(())
+            })
+        })
+        .join();
+        if let Ok(Err(e)) = dropped {
+            eprintln!("could not drop the scratch login {}: {e}", self.role);
+        }
+    }
+}
+
+/// Puts a user and password onto a server URL, replacing whatever userinfo it had.
+fn with_credentials(url: &str, user: &str, password: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    format!("{scheme}://{user}:{password}@{host}{tail}")
 }
 
 /// An empty database of whichever backend the suite is running against, with nothing built on
@@ -180,6 +342,18 @@ impl Scratch {
     pub async fn user_count(&self) -> i64 {
         let pool = logb::db::connect_existing(&self.url).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&pool).await.unwrap();
+        pool.close().await;
+        count
+    }
+
+    /// How many rows `users` holds, or `None` when there is nothing to ask -- no database at
+    /// all, or one with no LogB schema in it.
+    ///
+    /// The difference matters to exactly one caller: a test that a probe left its destination
+    /// untouched. `user_count` would panic on the database that test is about.
+    pub async fn user_count_or_no_schema(&self) -> Option<i64> {
+        let pool = logb::db::connect_existing(&self.url).await.ok()?;
+        let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users").fetch_one(&pool).await.ok();
         pool.close().await;
         count
     }
@@ -356,6 +530,35 @@ async fn sweep_leftovers(admin: &sqlx::AnyPool) {
             .execute(admin)
             .await;
     }
+    sweep_leftover_roles(admin, &mine).await;
+}
+
+/// The same sweep for the login roles `scratch_database_with_its_own_password` creates.
+///
+/// Runs after the databases, because a role cannot be dropped while it still owns one -- and
+/// the database a leftover role owns carries the same pid, so the loop above has just taken it.
+async fn sweep_leftover_roles(admin: &sqlx::AnyPool, mine: &str) {
+    // `rolname` is `name`, which the `Any` driver cannot decode without the cast.
+    let roles = sqlx::query_scalar::<_, String>(
+        "SELECT rolname::text FROM pg_roles WHERE rolname LIKE $1 AND rolname NOT LIKE $2",
+    )
+    .bind(format!("{SCRATCH_PREFIX}%\\_user"))
+    .bind(format!("{mine}%"))
+    .fetch_all(admin)
+    .await;
+    let roles = match roles {
+        Ok(roles) => roles,
+        Err(e) => {
+            eprintln!("could not sweep leftover scratch roles: {e}");
+            return;
+        },
+    };
+    for role in roles {
+        if pid_of(&role).is_none_or(process_is_alive) {
+            continue;
+        }
+        let _ = sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP ROLE {role}"))).execute(admin).await;
+    }
 }
 
 pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
@@ -436,6 +639,7 @@ async fn serve(
     dir: tempfile::TempDir,
     database: Option<ScratchDatabase>,
 ) -> TestApp {
+    capture_logs();
     let (app, state) = logb::build_with_state(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -507,6 +711,26 @@ impl TestApp {
         let body = res.text().await.unwrap();
         assert_eq!(status, 200, "GET {path} failed: {body}");
         serde_json::from_str(&body).unwrap_or_else(|e| panic!("GET {path} answered {body}: {e}"))
+    }
+
+    /// Everything this test binary has logged. See `captured_logs`.
+    pub fn captured_logs(&self) -> String {
+        captured_logs()
+    }
+
+    /// POSTs JSON as `self.client` and answers the JSON, failing loudly on anything but 2xx.
+    pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> serde_json::Value {
+        let res = self.post_raw(path, body).await;
+        let status = res.status();
+        let text = res.text().await.unwrap();
+        assert!(status.is_success(), "POST {path} failed: {status} {text}");
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("POST {path} answered {text}: {e}"))
+    }
+
+    /// POSTs JSON as `self.client` and hands back the response, whatever it is -- for the
+    /// tests whose subject is the refusal.
+    pub async fn post_raw(&self, path: &str, body: &serde_json::Value) -> reqwest::Response {
+        self.client.post(self.url(path)).json(body).send().await.unwrap()
     }
 
     /// POST /auth/setup with the given credentials using `self.client` (first user = admin).

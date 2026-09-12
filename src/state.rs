@@ -7,6 +7,14 @@ use std::time::Instant;
 
 pub struct AppState {
     pub db: AnyPool,
+    /// The URL `db` was opened from -- what this instance is *actually* serving, which is not
+    /// always what `config.database_url()` would answer now: writing the pointer file from
+    /// Settings changes that answer immediately, while the pool goes on serving the database it
+    /// opened until the process restarts. Anything describing or comparing against the live
+    /// database has to read it here, or it will describe a database nobody is connected to.
+    ///
+    /// It holds a password on PostgreSQL. `db::redacted` is how it reaches a human.
+    pub database_url: String,
     /// Which database `db` is, for the handful of statements the two spell differently.
     /// Decided once from the connection URL rather than re-derived per request.
     pub backend: crate::dialect::Backend,

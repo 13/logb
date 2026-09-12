@@ -76,3 +76,26 @@ export interface Insights {
 export interface ApiToken {
   id: number; name: string; prefix: string; created_at: string; last_used_at: string | null;
 }
+
+/** Where a database is, said in a way that can be put on screen. The server builds this from a
+ *  redacted URL and never sends the URL itself, so there is no user, password or query string
+ *  here to leak back out through the UI. */
+export interface DbLocation { backend: 'sqlite' | 'postgres'; host: string | null; database: string | null }
+/** `GET /database`: the location in use, flattened, plus whether Settings may change it. */
+export interface DbDescription extends DbLocation {
+  pointer_writable: boolean;
+  /** The database a pointer file names when it is not the one being served -- a switch has
+   *  happened and the restart has not. */
+  pending: DbLocation | null;
+}
+/** `POST /database/test`: what another database is, without changing it. */
+export interface DbProbe {
+  reachable: boolean; version: string | null;
+  state: 'empty' | 'holds_logb_data' | 'unreachable';
+  message?: string;
+}
+/** `POST /database/switch`: the copy report, returned only once the copy has been verified. */
+export interface DbSwitched {
+  tables: { table: string; rows: number }[];
+  epoch: string; pointer: string; restart_required: boolean; database: DbLocation;
+}

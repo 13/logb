@@ -1477,6 +1477,168 @@
           }
         }
       }
+    },
+    "/database": {
+      "get": {
+        "summary": "Which database this instance is serving, and whether it may be changed from here. Admin only.",
+        "description": "Never carries a credential: the user, password and query string of the connection URL are removed before anything is reported. `pointer_writable` is false when `LOGB_DATABASE_URL` is set -- the environment always wins over the choice made here -- or when the data directory will not take the pointer file. `pending` is set once a switch has happened and the restart has not.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseDescription"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/database/test": {
+      "post": {
+        "summary": "Look at another database without changing it. Admin only.",
+        "description": "Opens one connection, reads the server version and whether the database already holds LogB data, and closes it. No schema is created and nothing is written, so a URL typed by mistake is not turned into a LogB database. An unreachable destination is a 200 with `reachable: false`, not an error: not being able to connect is the answer to the question, and the reason is scrubbed of anything the URL carried.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatabaseTarget"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the destination is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseProbe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No URL was given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/database/switch": {
+      "post": {
+        "summary": "Copy this instance's database into another one and remember the choice. Admin only.",
+        "description": "Copies every table, row for row and id for id, from inside the write transaction every write in this application goes through: no write can land on the source while it runs, so the copy is taken from one point in time. **The request therefore blocks for the whole copy** -- seconds to minutes, depending on the database -- and reads go on being served throughout. A client should allow for that rather than timing out.\n\nThe pointer file is written only if the copy succeeded, so a failure leaves the instance exactly where it was. Nothing moves until the process restarts: see `POST /database/restart`. Blobs under the data directory are not copied -- they are content-addressed files and pair with any database.\n\nRefused with 400 when `LOGB_DATABASE_URL` is set (the environment decides instead), when the destination is the database already in use, or when the destination cannot be copied onto. Every message is scrubbed of the URL's credentials.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatabaseTarget"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The copy finished and the choice was remembered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseSwitched"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No URL, the database already in use, the environment deciding instead, or a destination that cannot be copied onto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The copy finished but the choice could not be remembered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/database/restart": {
+      "post": {
+        "summary": "Exit the process, so the next start opens the database that was chosen. Admin only.",
+        "description": "Answers 202 and then exits, a moment later, once the response has been written. There is no way to swap the connection pool underneath a running instance, so a restart is the whole mechanism -- and LogB does not start itself again: something has to supervise the process (systemd, a container restart policy). If nothing does, the instance stays down until it is started by hand.",
+        "responses": {
+          "202": {
+            "description": "The process is exiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2534,6 +2696,145 @@
           "epoch": {
             "type": "string",
             "description": "Which database this snapshot came from. Pass alongside `seq` as the `epoch` query parameter on the first `GET /sync/pull` call."
+          }
+        }
+      },
+      "DatabaseLocation": {
+        "type": "object",
+        "description": "A database with nothing secret in it: no user, no password, no query string.",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgres"
+            ]
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "host:port for PostgreSQL; null for SQLite, which has no host"
+          },
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The database name for PostgreSQL, the file for SQLite"
+          }
+        }
+      },
+      "DatabaseDescription": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgres"
+            ]
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pointer_writable": {
+            "type": "boolean",
+            "description": "Whether the database may be chosen from here at all"
+          },
+          "pending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseLocation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The database a restart would move onto, once a switch has happened"
+          }
+        }
+      },
+      "DatabaseTarget": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "A connection URL, e.g. postgres://user:password@host:5432/logb"
+          }
+        }
+      },
+      "DatabaseProbe": {
+        "type": "object",
+        "properties": {
+          "reachable": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the server says it is, or null when there was nothing to ask"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "holds_logb_data",
+              "unreachable"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Why, when that is worth saying. Never carries the URL's credentials."
+          }
+        }
+      },
+      "DatabaseSwitched": {
+        "type": "object",
+        "properties": {
+          "tables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "table": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "epoch": {
+            "type": "string",
+            "description": "The identity the destination now advertises; every synced device re-bootstraps against it"
+          },
+          "pointer": {
+            "type": "string",
+            "description": "The file the choice was remembered in"
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "Always true: this instance is still serving the database it started on"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DatabaseLocation"
           }
         }
       }
