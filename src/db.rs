@@ -103,6 +103,21 @@ pub async fn connect_with_pool_size(url: &str, pool_size: Option<u32>) -> Result
     Ok(pool)
 }
 
+/// Begins a transaction that intends to write, and makes it the only one.
+///
+/// Every write path goes through here. See `dialect::Backend::write_lock` for why PostgreSQL
+/// needs more than a `BEGIN`.
+pub async fn begin_write(
+    pool: &AnyPool,
+    backend: crate::dialect::Backend,
+) -> Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+    let mut tx = pool.begin_with(backend.begin_write()).await?;
+    if let Some(lock) = backend.write_lock() {
+        sqlx::query(lock).execute(&mut *tx).await?;
+    }
+    Ok(tx)
+}
+
 /// The two `settings` rows the app cannot run without, written on first start if absent.
 ///
 /// They used to be seeded by the SQLite migrations -- `currency` by 0001, `sync_epoch` by 0008
