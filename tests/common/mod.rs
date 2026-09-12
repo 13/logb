@@ -288,11 +288,40 @@ impl Drop for ScratchDatabase {
     }
 }
 
+/// Whether the process that made a scratch database is still running.
+///
+/// `/proc` where there is one, which is how CI and every development machine this runs on
+/// answer it without spawning anything; `ps` otherwise, which covers macOS. Anything this
+/// cannot answer counts as alive: leaking a database that a later run will sweep is a nuisance,
+/// and dropping one out from under a running test is a failure in a test that was doing nothing
+/// wrong.
+pub(crate) fn process_is_alive(pid: u32) -> bool {
+    if std::path::Path::new("/proc/self").exists() {
+        return std::path::Path::new(&format!("/proc/{pid}")).exists();
+    }
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .output()
+        .map_or(true, |out| out.status.success())
+}
+
+/// The process id a scratch database's name carries, from `logb_test_<pid>_<n>`.
+///
+/// `None` for a name that does not have one, which is not a name this harness writes -- and an
+/// unrecognised database is left alone rather than dropped on a guess.
+pub(crate) fn pid_of(name: &str) -> Option<u32> {
+    name.strip_prefix(SCRATCH_PREFIX)?.split('_').next()?.parse().ok()
+}
+
 /// Drops scratch databases left behind by runs that were killed before their teardown ran.
 ///
-/// Once per process, and never touching this process's own databases. A database another run
-/// is still using cannot be dropped without `FORCE`, which is deliberately not used here: the
-/// plain `DROP` fails, the error is ignored, and the concurrent run keeps its database.
+/// Once per process, and only for a process that is gone. The name carries the pid that made
+/// it (see `unique_suffix`), so "left behind" is a question that can be answered directly
+/// rather than inferred from `DROP DATABASE` failing while someone is connected -- which it
+/// does not do for a database that merely has no connections *at this instant*. A test between
+/// two pools, or one that has closed its pool and is still running (every `--copy-to` test
+/// does exactly that), presents precisely that window, and a concurrent run sweeping through it
+/// would delete a live test's database and fail it with `3D000 database ... does not exist`.
 async fn sweep_leftovers(admin: &sqlx::AnyPool) {
     static SWEPT: AtomicBool = AtomicBool::new(false);
     if SWEPT.swap(true, Ordering::SeqCst) {
@@ -318,6 +347,11 @@ async fn sweep_leftovers(admin: &sqlx::AnyPool) {
         },
     };
     for name in names {
+        // Its maker is still running, or the name carries no pid to ask about: either way it
+        // is not this run's to drop. A live run's database may simply be between connections.
+        if pid_of(&name).is_none_or(process_is_alive) {
+            continue;
+        }
         let _ = sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
             .execute(admin)
             .await;
