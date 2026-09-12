@@ -116,3 +116,38 @@ async fn a_puller_sees_every_change_exactly_once_under_concurrent_writers() {
         sorted.len(),
     );
 }
+
+/// A client that retries a push it never saw the answer to sends the same op ids again. Two
+/// such attempts can arrive at once -- a flaky connection retrying while the first is still in
+/// flight. Both must be answered `accepted`, and the write must happen once.
+///
+/// Before the fix this raced: idempotency was SELECT-then-INSERT, so both attempts read "not
+/// seen", both inserted, and the second hit `idx_changes_user_op` and turned the whole batch
+/// into a 500 -- a client that retries forever, forever.
+///
+/// What to remove to see it red, because this one takes two removals rather than one: the
+/// advisory lock already serialises the two pushes, so with `Backend::write_lock`'s PostgreSQL
+/// arm in place the second attempt always finds the first's row however the lookup is spelled,
+/// and this passes on either version of `api::sync::push`. Drop that arm and the two pushes
+/// genuinely overlap -- then the old SELECT-then-INSERT answers the second attempt 500
+/// (observed, on the first run, with two attempts; no need to add more), and the `ON CONFLICT
+/// (user_id, client_op_id) DO NOTHING` claim that replaced it answers 200 twice with one row
+/// logged. That pairing is the point: the lock and the index protect this independently, and
+/// idempotency should not be resting on a lock taken for a different reason.
+///
+/// The count is scoped to this op id rather than the whole log (`count_changes`) because the
+/// REST create above logs a change of its own; the question here is how many times the pushed
+/// op landed.
+#[tokio::test]
+async fn a_push_retried_concurrently_is_applied_once_and_accepted_twice() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+    let ops = app.one_set_op(&object, "Golf VII", "op-retry-1").await;
+
+    let (a, b) = tokio::join!(app.push_raw(&ops), app.push_raw(&ops));
+    for (which, res) in [("first", a), ("second", b)] {
+        assert_eq!(res.status(), 200, "the {which} attempt did not answer 200");
+    }
+    assert_eq!(app.count_changes_of("op-retry-1").await, 1, "the op was recorded more than once");
+}

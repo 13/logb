@@ -85,21 +85,65 @@ async fn push(
         };
         op.edited_at = canonical;
 
+        // The schema documents `field TEXT, -- NULL for create and delete`: only a `set` op
+        // names a field or carries a value, so anything a `create`/`delete` op happened to
+        // have in those spots is junk that must not be stored, or pull would serve it back to
+        // other devices as if it meant something. (A `set` with no value at all is a different
+        // thing entirely -- that is a field being cleared, and `apply::binding` reads it as
+        // NULL -- so the two are kept apart rather than bundled.)
+        let (field, value) = if op.op == OpKind::Set {
+            (op.field.as_deref(), op.value.as_ref().map(|v| v.to_string()))
+        } else {
+            (None, None)
+        };
+
         // Idempotency: an op id already in the log was applied by an earlier attempt whose
         // response the client never saw. Report it as accepted without applying it twice.
+        //
+        // The log row goes in BEFORE the op is applied, and the INSERT is what answers the
+        // question -- `idx_changes_user_op` is the authority on whether an id has been seen,
+        // not a read. This used to be `SELECT seq ...` followed by an INSERT, and a pair of
+        // statements can be overtaken between them: a client retrying a push it never got an
+        // answer to can have both attempts in flight at once, both read "not seen", both
+        // insert, and the loser hits the index and turns the whole batch into a 500 -- for a
+        // client whose only recourse is to retry, forever. One statement cannot be overtaken.
+        // Whoever inserts the row owns the op; whoever inserts nothing is looking at an
+        // attempt that already applied it, and answers `accepted` for it without applying it
+        // a second time. What serialises writes today (`BEGIN IMMEDIATE` on SQLite, the
+        // advisory lock in `db::begin_write` on PostgreSQL) means the two rarely meet -- but
+        // idempotency should not be resting on a lock taken for a different reason.
         //
         // Scoped by user because clients mint their own op ids, so an id is only unique within
         // the account that minted it. Unscoped, one account reusing an id another had already
         // used would be told `accepted` while its write was never applied -- a lost write
         // reported as success. `idx_changes_user_op` makes the log agree: uniqueness is on
-        // (user_id, client_op_id), which is exactly what this lookup asks about.
-        let seen: Option<i64> =
-            sqlx::query_scalar("SELECT seq FROM changes WHERE user_id = $1 AND client_op_id = $2")
-                .bind(user.id)
-                .bind(&op.client_op_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        if seen.is_some() {
+        // (user_id, client_op_id), which is exactly what this insert conflicts on.
+        let claimed = sqlx::query(
+            // `seq` is left to the column's own default here too, matching
+            // `record::insert_change` -- see the comment there. It has to be left to the
+            // default in *both* places or neither: PostgreSQL's identity sequence does not
+            // advance when a value is supplied, so one site assigning its own `seq` while
+            // the other took the default would hand out the same number twice.
+            "INSERT INTO changes \
+             (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
+              device_id, client_op_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (user_id, client_op_id) DO NOTHING")
+            .bind(op.entity.as_str())
+            .bind(&op.entity_uuid)
+            .bind(op.op.as_str())
+            .bind(field)
+            .bind(value)
+            .bind(&op.edited_at)
+            .bind(db::now())
+            .bind(user.id)
+            .bind(&op.device_id)
+            .bind(&op.client_op_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        if !claimed {
             results.push(OpResult {
                 client_op_id: op.client_op_id.clone(),
                 outcome: Outcome::Accepted,
@@ -108,39 +152,20 @@ async fn push(
         }
 
         let outcome = apply_op(&mut tx, user.id, op).await?;
-        if !matches!(outcome, Outcome::Rejected { .. }) {
-            // The schema documents `field TEXT, -- NULL for create and delete`: only a `set`
-            // op names a field or carries a value, so anything a `create`/`delete` op happened
-            // to have in those spots is junk that must not be stored, or pull would serve it
-            // back to other devices as if it meant something.
-            let (field, value) = if op.op == OpKind::Set {
-                (op.field.as_deref(), op.value.as_ref().map(|v| v.to_string()))
-            } else {
-                (None, None)
-            };
-            sqlx::query(
-                // `seq` is left to the column's own default here too, matching
-                // `record::insert_change` -- see the comment there. It has to be left to the
-                // default in *both* places or neither: PostgreSQL's identity sequence does not
-                // advance when a value is supplied, so one site assigning its own `seq` while
-                // the other took the default would hand out the same number twice.
-                "INSERT INTO changes \
-                 (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
-                  device_id, client_op_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
-                .bind(op.entity.as_str())
-                .bind(&op.entity_uuid)
-                .bind(op.op.as_str())
-                .bind(field)
-                .bind(value)
-                .bind(&op.edited_at)
-                .bind(db::now())
+        if matches!(outcome, Outcome::Rejected { .. }) {
+            // A rejected op is not part of the log -- it changed nothing -- so the claim above
+            // has to be given back. Left standing it would answer the client's next attempt
+            // `accepted` for a write that never happened, which is the lost write this whole
+            // mechanism exists to prevent. The unique index names exactly one row, so this
+            // deletes the claim and nothing else. It burns a `seq`, which costs nothing: the
+            // column has never promised to be gapless (see `record::insert_change`), only to
+            // be increasing.
+            sqlx::query("DELETE FROM changes WHERE user_id = $1 AND client_op_id = $2")
                 .bind(user.id)
-                .bind(&op.device_id)
                 .bind(&op.client_op_id)
                 .execute(&mut *tx)
                 .await?;
-
+        } else {
             // The table name comes from `Entity::table`, a closed set, and the uuid stays a
             // bind parameter -- which is the audit `AssertSqlSafe` requires of the caller.
             let sql = format!("SELECT id FROM {} WHERE client_uuid = $1", op.entity.table());

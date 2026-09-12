@@ -121,6 +121,13 @@ async fn insert_change(
         // Fresh per row, exactly as `log_cascade` already does for a cascaded child: nothing
         // a REST write does is idempotency-checked by client_op_id the way a pushed op is (the
         // request itself is the client's only attempt), so there is no id to reuse here.
+        //
+        // That is also why this insert, unlike the near-identical one in `api::sync::push`,
+        // carries no `ON CONFLICT (user_id, client_op_id) DO NOTHING`. There, the client picks
+        // the id and can send it twice, so the clause is how the unique index -- rather than a
+        // read that can go stale between two statements -- decides whether the op has already
+        // been applied. Here the id is minted a line above and cannot collide with anything;
+        // the same clause would only be able to swallow a bug that produced one.
         .bind(uuid::Uuid::new_v4().to_string())
         .execute(&mut *tx)
         .await?;

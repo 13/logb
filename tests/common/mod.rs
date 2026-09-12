@@ -403,6 +403,53 @@ impl TestApp {
             .unwrap()
     }
 
+    /// How many rows the change log holds for one `client_op_id`.
+    ///
+    /// Scoped, where `count_changes` is not, because a test that pushes an op has almost always
+    /// created the row it edits over REST first -- and that create logs a change of its own. The
+    /// question an idempotency test asks is about ONE op id: how many times did that op land.
+    pub async fn count_changes_of(&self, client_op_id: &str) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM changes WHERE client_op_id = $1")
+            .bind(client_op_id)
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
+    }
+
+    /// A push body carrying a single `set` of an object's name, under the given `client_op_id`.
+    ///
+    /// Prepared rather than posted so a caller can send the very same bytes more than once --
+    /// which is what a client retrying a push it never saw the answer to actually does.
+    ///
+    /// `edited_at` is an hour ahead so the op wins last-write-wins against the `field_clock`
+    /// the REST create that made this object stamped a moment ago: an op that lost would answer
+    /// `superseded`, and this helper is for tests that are about idempotency, not about LWW.
+    pub async fn one_set_op(
+        &self,
+        object: &serde_json::Value,
+        name: &str,
+        client_op_id: &str,
+    ) -> serde_json::Value {
+        let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+            .bind(object["id"].as_i64().expect("an object with an id"))
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap();
+        let edited_at = (chrono::Utc::now() + chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        serde_json::json!({ "ops": [{
+            "client_op_id": client_op_id, "entity": "object", "entity_uuid": uuid,
+            "op": "set", "field": "name", "value": name,
+            "edited_at": edited_at, "device_id": "phone"
+        }]})
+    }
+
+    /// POST /sync/push with a body the caller prepared, answering the raw response so a test
+    /// can assert on a status the harness would otherwise have unwrapped away.
+    pub async fn push_raw(&self, body: &serde_json::Value) -> reqwest::Response {
+        self.client.post(self.url("/sync/push")).json(body).send().await.unwrap()
+    }
+
     /// GET /search, with the term encoded by the client rather than pasted into the URL --
     /// the terms that matter here are accented.
     pub async fn search(&self, term: &str) -> serde_json::Value {
