@@ -158,12 +158,47 @@ The database only holds references to blobs by hash, not the blobs themselves, s
 `files/` has to be copied across too — following this section alone leaves you with
 a database whose photos and documents all 404.
 
+## Moving to PostgreSQL
+
+`logb --copy-to` moves an existing SQLite database into an empty PostgreSQL one, once.
+It copies every table in dependency order inside a single transaction, keeps every id
+exactly as it was, and verifies row counts and a primary-key fingerprint before it
+commits — a copy that lost rows rolls back instead of leaving a half-copied database
+that looks fine. It refuses a destination that already holds LogB data, and it refuses
+to read a source the server is still holding open.
+
+**The database only holds references to blobs by hash, not the blobs themselves —
+`--copy-to` does not touch `files/`.** Skip this and the new instance looks completely
+healthy until someone opens a photo. Copy the directory alongside the database, every
+time:
+
+```bash
+docker compose stop logb
+cp -a /data/files /new-data/files
+docker compose run --rm logb --copy-to postgres://user:pass@host/logb
+```
+
+Then point the server at the new database and start it:
+
+```bash
+export LOGB_DATABASE_URL=postgres://user:pass@host/logb
+docker compose start logb
+```
+
+The source database is never written to — the move is reversible for as long as it
+still exists, so keep it around until the new instance has been checked over. The
+copy rotates the destination's sync epoch, so every device does one full re-bootstrap
+the next time it syncs; that is expected and needs nothing from you.
+
+Pointing `LOGB_DATABASE_URL` at PostgreSQL remains not a fully supported configuration
+(see [Configuration](#configuration)) — LogB takes no automatic backups there yet.
+
 ## Configuration
 
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
-| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: LogB takes no automatic backups there (`--backup`/`--restore` refuse on purpose; back it up with PostgreSQL's own tooling), and there is no supported way to bring an existing SQLite database across (`logb --copy-to` is unbuilt -- `docs/superpowers/specs/2026-09-11-postgres-p3-copy-design.md`). Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs |
+| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is not a supported configuration yet: LogB takes no automatic backups there (`--backup`/`--restore` refuse on purpose; back it up with PostgreSQL's own tooling). Use `logb --copy-to` to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql). Every write also takes a global advisory lock, serialising writers the same as SQLite does today -- an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs |
 | `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |

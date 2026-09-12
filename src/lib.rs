@@ -86,13 +86,16 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     let url = config.database_url()?;
     let backend = dialect::Backend::of(&url);
     // PostgreSQL is not a supported configuration yet: the README's LOGB_DATABASE_URL row names
-    // the same two gaps. This is the line that is already in an operator's scrollback when one
-    // of them bites, rather than something they had to have read in advance.
+    // the same gap. This is the line that is already in an operator's scrollback when it bites,
+    // rather than something they had to have read in advance. `logb --copy-to` (part three) now
+    // gets an existing SQLite database across, so that half of the old warning is gone -- but
+    // parts four and five (switching over, and PostgreSQL's own backup story) are still unbuilt,
+    // so this stays a warning rather than becoming an endorsement.
     if backend != dialect::Backend::Sqlite {
         tracing::warn!(
             "LOGB_DATABASE_URL points at PostgreSQL, which is not a supported configuration yet: \
-             there is no automatic backup, and there is no supported way to bring an existing \
-             SQLite database across"
+             LogB takes no automatic backups there -- backing it up is your own job, with \
+             PostgreSQL's own tooling"
         );
     }
     let db = db::connect_with_pool_size(&url, config.db_pool_size).await?;
