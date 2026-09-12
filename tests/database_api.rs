@@ -139,6 +139,28 @@ async fn an_unreachable_destination_is_reported_without_its_password() {
     );
 }
 
+/// The ordering `switch` relies on for safety: the destination is copied onto *before* the
+/// pointer is written, so a copy that fails leaves the instance exactly as it was. A switch to
+/// an unreachable host must therefore both be refused and leave no pointer behind -- a pointer
+/// written anyway would arm the next restart onto a database that was never populated, and the
+/// refuse-to-start path would then hold the instance down until someone hand-deletes
+/// `database.url`.
+#[tokio::test]
+async fn a_failed_switch_leaves_no_pointer_behind() {
+    let app = common::spawn_with(|config| config.database_url = None).await;
+    app.setup("ben", "correct horse").await;
+    let url = "postgres://x:y@127.0.0.1:1/nowhere";
+
+    let res = app.post_raw("/database/switch", &json!({ "url": url })).await;
+
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+    assert_eq!(
+        logb::pointer::read(&app.state.config.data_dir),
+        None,
+        "a switch that failed to copy still wrote the pointer",
+    );
+}
+
 #[tokio::test]
 async fn a_database_with_users_in_it_is_reported_as_holding_logb_data() {
     let app = common::spawn().await;
