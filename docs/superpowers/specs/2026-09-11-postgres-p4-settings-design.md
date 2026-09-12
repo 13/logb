@@ -35,6 +35,18 @@ Under Settings, admin only:
 Every step is reversible until the restart: the pointer is written last, and the SQLite database
 is left exactly as it was.
 
+## Revised during planning: the server copies its own database
+
+This design assumed the copy would run with the server stopped, as `logb --copy-to` does. It
+cannot: `copy::run` refuses a source that a server still holds, and the process doing the
+copying from Settings *is* that server.
+
+So the server copies from the pool it already has, inside the write transaction — `BEGIN
+IMMEDIATE` on SQLite, the advisory lock on PostgreSQL. Writes are blocked for the duration,
+which is what makes the snapshot consistent; a migration that let writes land on the old
+database while copying would lose them. Both paths share one body, because two copies of this
+logic would drift and the drifted one would be the one nobody ran.
+
 ## Where the pointer lives
 
 Not in the database — it cannot live in the thing it points away from.
