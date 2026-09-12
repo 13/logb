@@ -12,9 +12,8 @@ use std::path::{Path, PathBuf};
 /// SQLite mechanism, and PostgreSQL has no file to replace.
 const NOT_ON_POSTGRES: &str =
     "restore is a SQLite mechanism (it replaces the database file); on PostgreSQL, restore with \
-     PostgreSQL's own tooling. Moving data between a SQLite snapshot and a PostgreSQL database \
-     is a separate operation -- `logb --copy-to` -- that this project will provide separately; \
-     it does not exist yet";
+     PostgreSQL's own tooling. To move data from a SQLite database into a PostgreSQL one, use \
+     `logb --copy-to <url>` instead";
 
 /// Picks out the one `sqlx::migrate!` failure that is not a real migration failure: a snapshot
 /// carrying a migration version this binary's embedded set does not contain. That is the ahead-
