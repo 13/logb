@@ -184,6 +184,10 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     let max_import = config.max_import_bytes();
     let state: App = Arc::new(AppState {
         db,
+        // The URL this pool was actually opened from, kept because the answer to "which
+        // database is this instance on" changes the moment Settings writes a pointer file --
+        // and until the restart, the true answer is still this one.
+        database_url: url,
         backend,
         storage,
         config,
