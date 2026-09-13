@@ -172,6 +172,9 @@ export default {
   'reminder.unsnooze': 'Zurückstellung aufheben',
 
   'settings.title': 'Einstellungen',
+  'settings.appearance': 'Darstellung',
+  'settings.you': 'Du',
+  'settings.instance': 'Diese Instanz',
   'settings.language': 'Sprache',
   'settings.language-auto': 'Automatisch',
   'settings.theme': 'Design',
@@ -181,6 +184,8 @@ export default {
   'settings.currency': 'Währung',
   'settings.currency-hint': 'ISO-Code, z. B. EUR — gilt für alle',
   'settings.users': 'Benutzer',
+  'settings.users-count-one': '1 Benutzer',
+  'settings.users-count': '{n} Benutzer',
   'settings.user-new': 'Benutzer hinzufügen',
   'settings.user-admin': 'Admin',
   'settings.user-password': 'Neues Passwort',
@@ -242,6 +247,8 @@ export default {
   'backup.not-ours-how': 'Eine PostgreSQL-Datenbank sichert PostgreSQL selbst: mit pg_dump, pg_basebackup oder einer Datei- oder WAL-Momentaufnahme, eingerichtet auf dem Server. Solange das nicht eingerichtet ist, sichert niemand diese Datenbank.',
 
   'tokens.title': 'API-Zugriff',
+  'tokens.count-one': '1 Token',
+  'tokens.count': '{n} Tokens',
   'tokens.intro': 'Für Apps und Skripte, die ohne Browser auf LogB zugreifen. Ein Token gilt als dein Konto — behandle es wie ein Passwort.',
   'tokens.name': 'Wofür ist dieses Token?',
   'tokens.name-placeholder': 'z. B. Handy',

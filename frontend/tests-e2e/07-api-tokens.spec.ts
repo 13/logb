@@ -10,6 +10,7 @@ import { signIn } from './helpers';
 test('a token can be created, used, and revoked from Settings', async ({ page, playwright, baseURL }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: /API access/ }).click();
 
   await page.getByLabel('What is this token for?').fill('phone');
   await page.getByRole('button', { name: 'Create token' }).click();

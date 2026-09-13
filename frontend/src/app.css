@@ -329,6 +329,14 @@ button, a, .chip {
   .fab { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
 }
 
+/* The hub's rows: a single column on a phone, two where there is room. Six rows in one column
+   on a wide screen would leave most of the pane empty and put the last row a long way from the
+   first. */
+.settings-grid { display: grid; gap: var(--space-2); }
+@media (width >= 900px) {
+  .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Wider is not better everywhere. A list or a grid is what a wide screen genuinely helps; a
    text input stretched across a 27" monitor is worse than one that is not. Capping the form
    rather than each screen means no screen has to opt in, and none can forget to. */
