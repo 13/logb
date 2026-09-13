@@ -70,6 +70,66 @@ pub(crate) async fn uuid_of(
     Ok(uuid.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
 }
 
+/// The reverse of `uuid_of`: the internal id a `client_uuid` names, for entities where a
+/// caller needs to reason about the row as an integer -- as `parent_is_valid` does, since the
+/// tree it walks is built entirely out of integer `parent_id`s.
+pub async fn id_of(
+    tx: &mut sqlx::AnyConnection,
+    entity: Entity,
+    uuid: &str,
+) -> Result<i64, AppError> {
+    let sql = format!("SELECT id FROM {} WHERE client_uuid = $1", entity.table());
+    let id: Option<i64> =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(uuid).fetch_one(&mut *tx).await?;
+    Ok(id.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
+}
+
+/// Whether `candidate_parent_id` may become `object_id`'s parent: it must exist, belong to
+/// `user_id`, and not be deleted; and it must not be `object_id` itself or a descendant of it,
+/// which would leave the object as its own ancestor once the write took effect.
+///
+/// `object_id` is `None` on create, where the object being created has no id yet and therefore
+/// cannot possibly be anyone's ancestor -- only existence and ownership are checked there.
+///
+/// Shared by the REST handler and sync's `Set` handling. A recursive check written twice is a
+/// recursive check that can drift into disagreeing twice, which is worse here than for a plain
+/// existence check -- this is the one field in the app where the two doors disagreeing could
+/// corrupt data rather than merely let a bad value through.
+pub async fn parent_is_valid(
+    tx: &mut sqlx::AnyConnection,
+    user_id: i64,
+    object_id: Option<i64>,
+    candidate_parent_id: i64,
+) -> Result<bool, AppError> {
+    let exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
+        .bind(candidate_parent_id).bind(user_id)
+        .fetch_optional(&mut *tx).await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    let Some(object_id) = object_id else { return Ok(true) };
+
+    // Walk the candidate's own ancestor chain (itself, then its parent, then its parent's
+    // parent, ...). If `object_id` ever appears in it, making the candidate `object_id`'s
+    // parent would close a loop: the candidate is already inside the subtree rooted at
+    // `object_id`, including the trivial case where the candidate IS `object_id`.
+    //
+    // `crate::db::Bool`, not a bare `bool`: `EXISTS(...)` decodes as an INTEGER 0/1 on SQLite
+    // and a real BOOLEAN on PostgreSQL, and `Decode<Any> for bool` only accepts the latter --
+    // the same defect that once broke every `/users` read, here on a query this project has
+    // never run before rather than a column it has always had.
+    let would_cycle: (crate::db::Bool,) = sqlx::query_as(
+        "WITH RECURSIVE ancestors(id) AS ( \
+           SELECT id FROM objects WHERE id = $1 \
+           UNION ALL \
+           SELECT o.parent_id FROM objects o JOIN ancestors a ON o.id = a.id WHERE o.parent_id IS NOT NULL \
+         ) SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = $2)")
+        .bind(candidate_parent_id).bind(object_id)
+        .fetch_one(&mut *tx).await?;
+    Ok(!bool::from(would_cycle.0))
+}
+
 /// Inserts one `changes` row. Private: every caller goes through `record_create`,
 /// `record_update`, `record_delete` or `log_cascade`, which is what keeps `field`/`value`
 /// tied to `op` the same way `api::sync::push` ties them (NULL for anything but a `set`).

@@ -296,3 +296,68 @@ async fn an_unknown_type_is_refused() {
         .json(&json!({ "name": "Golf", "type": "spaceship" })).send().await.unwrap();
     assert_eq!(res.status(), 400, "the CHECK would catch it, but a 400 says which field is wrong");
 }
+
+/// A brand-new object cannot be anyone's ancestor, so creating one only needs to check that
+/// the given parent exists, belongs to the caller, and is not deleted -- no cycle is possible
+/// yet.
+#[tokio::test]
+async fn a_nonexistent_parent_is_invalid_on_create() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let ok = logb::sync::record::parent_is_valid(&mut app.state.db.acquire().await.unwrap(), 1, None, 999_999)
+        .await
+        .unwrap();
+    assert!(!ok, "a parent id that does not exist must be invalid");
+}
+
+/// The core property this task exists for: reparenting an ancestor underneath its own
+/// descendant must be refused, at every depth, including the trivial one-hop case of an object
+/// naming itself.
+#[tokio::test]
+async fn a_cycle_is_refused_at_every_depth() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    // Build House -> Garage -> Light directly, so this test is not entangled with the REST
+    // handler this task's function does not yet feed into.
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(house_id).bind(garage_id)
+        .execute(&mut *conn).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+
+    // Self-parent.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), house_id).await.unwrap());
+    // One hop: House under its own child.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), garage_id).await.unwrap());
+    // Two hops: House under its grandchild.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), light_id).await.unwrap());
+    // The legitimate direction must still work: Light may be reparented onto House directly.
+    assert!(logb::sync::record::parent_is_valid(&mut conn, 1, Some(light_id), house_id).await.unwrap());
+}
+
+/// Ownership is not optional: a parent id that exists and has no ancestor relationship to the
+/// object is still invalid if it belongs to someone else.
+#[tokio::test]
+async fn a_parent_belonging_to_another_user_is_invalid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let mine = app.create_object(&app.client, "Mine", None).await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let theirs_res = anna.post(app.url("/objects"))
+        .json(&serde_json::json!({ "name": "Theirs", "type": "car", "counter_unit": null, "description": "", "purchase_date": null, "purchase_price_cents": null }))
+        .send().await.unwrap();
+    let theirs: serde_json::Value = theirs_res.json().await.unwrap();
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    let ok = logb::sync::record::parent_is_valid(
+        &mut conn, 1, Some(mine["id"].as_i64().unwrap()), theirs["id"].as_i64().unwrap(),
+    ).await.unwrap();
+    assert!(!ok, "a parent owned by another account must be invalid regardless of ancestry");
+}
