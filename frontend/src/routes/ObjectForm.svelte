@@ -6,6 +6,7 @@
   import { t } from '../i18n';
   import { centsToInput, parseMoney } from '../lib/format';
   import { emptyInput, toInput, validate } from '../lib/object-form';
+  import { excludingDescendants } from '../lib/object-tree';
   import { OBJECT_TYPES, type MemObject, type ObjectInput } from '../lib/types';
 
   let { id }: { id?: string } = $props();
@@ -14,12 +15,18 @@
   let priceText = $state('');
   let error = $state('');
   let busy = $state(false);
+  /** The objects that may legally become this one's parent: everything the user owns, minus
+   *  this object and its descendants, which the server would refuse as a cycle. */
+  let parentChoices = $state<MemObject[]>([]);
 
   onMount(async () => {
-    if (!id) return;
-    const o = await api<MemObject>('GET', `/objects/${id}`);
-    input = toInput(o);
-    priceText = centsToInput(o.purchase_price_cents);
+    if (id) {
+      const o = await api<MemObject>('GET', `/objects/${id}`);
+      input = toInput(o);
+      priceText = centsToInput(o.purchase_price_cents);
+    }
+    const all = await api<MemObject[]>('GET', '/objects?all=true');
+    parentChoices = excludingDescendants(all, editing ? Number(id) : null);
   });
 
   async function submit(e: SubmitEvent) {
@@ -70,6 +77,13 @@
         <option value="l">l</option>
         <option value="gal">gal</option>
         <option value="kwh">kwh</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="p">{$t('object.parent')}</label>
+      <select id="p" bind:value={input.parent_id}>
+        <option value={null}>{$t('object.parent-none')}</option>
+        {#each parentChoices as p}<option value={p.id}>{p.name}</option>{/each}
       </select>
     </div>
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>

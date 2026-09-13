@@ -14,11 +14,15 @@ export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {
   id: number; user_id: number; name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null;
-  cover_attachment_id: number | null; cover_file_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
+  cover_attachment_id: number | null; cover_file_id: number | null; parent_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
+  /** The chain from the root down to this object's parent, nearest last. A single-object read
+   *  fills this in; a list response leaves it out, so it is optional rather than empty. */
+  ancestors?: { id: number; name: string }[];
 }
 export interface ObjectInput {
   name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
+  parent_id?: number | null;
 }
 
 export interface Attachment {

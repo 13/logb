@@ -46,6 +46,8 @@ export default {
   'object.counter-km': 'Kilometer (km)',
   'object.counter-mi': 'Meilen (mi)',
   'object.counter-h': 'Stunden (h)',
+  'object.parent': 'Teil von',
+  'object.parent-none': 'Nichts — ein oberstes Objekt',
   'object.fuel-unit': 'Tank-Einheit',
   'object.description': 'Beschreibung',
   'object.purchase-date': 'Kaufdatum',
