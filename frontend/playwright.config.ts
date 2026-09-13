@@ -21,7 +21,14 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'mobile', use: { ...devices['Pixel 7'] } }],
+  // Two viewports, because a desktop layout that is never rendered in a test is a desktop
+  // layout that regresses silently. `fullyParallel: false` and `workers: 1` still apply, so
+  // the two projects run one after the other against the same server and database -- which is
+  // why the desktop spec below seeds its own distinctly-named data.
+  projects: [
+    { name: 'mobile', use: { ...devices['Pixel 7'] } },
+    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+  ],
   webServer: {
     // The scratch data directory is wiped by the server command itself: this config is
     // re-imported by every worker, so a module-scope rmSync would delete the database

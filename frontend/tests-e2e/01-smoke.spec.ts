@@ -1,7 +1,14 @@
 import { test, expect } from '@playwright/test';
 import { signIn } from './helpers';
 
-test('first run leads to setup, then the dashboard', async ({ page }) => {
+test('first run leads to setup, then the dashboard', async ({ page }, testInfo) => {
+  // "First run" can only be true once for the whole suite: the mobile project's own pass
+  // through this same test already creates the admin account in the database the desktop
+  // project then shares (see playwright.config.ts -- one server, one database, both projects).
+  // By the time the desktop project reaches this test, setup is no longer required, so this is
+  // not a claim about desktop rendering at all -- it is a run-order limitation of testing
+  // "first run" a second time against a database that already had one.
+  test.skip(testInfo.project.name === 'desktop', 'setup already completed by the mobile project against the shared database');
   await page.goto('/');
   await expect(page).toHaveTitle('LogB');
   const logo = page.getByRole('img', { name: 'LogB' });
