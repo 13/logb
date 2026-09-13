@@ -20,10 +20,13 @@ export type SettingsRowsInput = {
   themeLabel: string;
   /** An uppercase language code, e.g. "EN". */
   localeLabel: string;
-  /** `null` until `/auth/tokens` answers. */
-  tokenCount: number | null;
-  /** `null` until `/users` answers, and for a non-admin who never asks. */
-  userCount: number | null;
+  /** Already-translated, singular/plural already chosen by the caller, e.g. "1 key" or
+   *  "3 keys" -- this module does no lookups. `null` until `/auth/tokens` answers, and also
+   *  when there are none: the caller turns a zero count into `null` too. */
+  tokenLabel: string | null;
+  /** Already-translated, singular/plural already chosen by the caller, e.g. "1 user" or
+   *  "3 users". `null` until `/users` answers, and for a non-admin who never asks. */
+  userLabel: string | null;
   /** `null` until `/database` answers, e.g. "PostgreSQL". */
   backendLabel: string | null;
 };
@@ -46,8 +49,9 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
     {
       id: 'api', path: '/settings/api', icon: 'key', label: 'tokens.title',
       // Zero is not a number worth printing here: "no keys" is the default state of every
-      // account, and a row that says so is noise on a screen meant to be scanned.
-      value: input.tokenCount ? `${input.tokenCount} keys` : null, group: 'you',
+      // account, and a row that says so is noise on a screen meant to be scanned. The caller
+      // is the one that turns a zero count into `null` -- this module just passes it through.
+      value: input.tokenLabel, group: 'you',
     },
     {
       id: 'data', path: '/settings/data', icon: 'box', label: 'settings.data',
@@ -58,7 +62,7 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
   rows.push(
     {
       id: 'people', path: '/settings/people', icon: 'people', label: 'settings.users',
-      value: input.userCount ? `${input.userCount} users` : null, group: 'instance',
+      value: input.userLabel, group: 'instance',
     },
     {
       id: 'database', path: '/settings/database', icon: 'database', label: 'db.title',

@@ -185,6 +185,8 @@ export default {
   'settings.currency-hint': 'ISO code, e.g. EUR — applies to everyone',
   'settings.currency-everyone': 'The currency applies to everyone on this instance.',
   'settings.users': 'Users',
+  'settings.users-count-one': '1 user',
+  'settings.users-count': '{n} users',
   'settings.user-new': 'Add user',
   'settings.user-admin': 'Admin',
   'settings.user-password': 'New password',
@@ -246,6 +248,8 @@ export default {
   'backup.not-ours-how': 'Backing up a PostgreSQL database is PostgreSQL\'s own job: pg_dump, pg_basebackup, or a filesystem or WAL-level snapshot, set up on the server itself. Until that is in place, nothing is backing this database up.',
 
   'tokens.title': 'API access',
+  'tokens.count-one': '1 key',
+  'tokens.count': '{n} keys',
   'tokens.intro': 'For apps and scripts that connect to LogB without a browser. A token acts as your account, so treat it like a password.',
   'tokens.name': 'What is this token for?',
   'tokens.name-placeholder': 'e.g. phone',

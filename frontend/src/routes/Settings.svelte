@@ -18,6 +18,15 @@
 
   const isAdmin = $derived($user?.is_admin === true);
 
+  /** Turns a count that may not have arrived yet into an already-translated, correctly
+   *  pluralised label -- or `null` when there is nothing worth printing. Zero is folded into
+   *  `null` here too: "no keys"/"no users" is the default state of every account, and a row
+   *  that says so is noise on a screen meant to be scanned. */
+  function countLabel(count: number | null, oneKey: string, manyKey: string): string | null {
+    if (!count) return null;
+    return count === 1 ? $t(oneKey) : $t(manyKey, { n: count });
+  }
+
   /** The hub's rows, values and all. Everything here is a fact already in hand -- a count that
    *  has not arrived yet stays `null`, and its row simply shows nothing. */
   const rows = $derived(settingsRows({
@@ -25,7 +34,9 @@
     username: $user?.username ?? null,
     themeLabel: $t(`settings.theme-${$settings.theme}`),
     localeLabel: ($settings.locale === 'auto' ? navigator.language : $settings.locale).slice(0, 2).toUpperCase(),
-    tokenCount, userCount, backendLabel,
+    tokenLabel: countLabel(tokenCount, 'tokens.count-one', 'tokens.count'),
+    userLabel: countLabel(userCount, 'settings.users-count-one', 'settings.users-count'),
+    backendLabel,
   }));
 
   // Each of these fills in one row's value. They fail quietly: a hub whose Database row says

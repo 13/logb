@@ -25,6 +25,24 @@ test('a row carries its current value', async ({ page }) => {
   await page.goto('/settings');
   // `signIn` uses the admin account, so the account row shows its username.
   await expect(page.getByRole('button', { name: /Account/ })).toContainText('ben');
+
+  // The Users row must read "1 user", not "1 users" -- earlier specs sharing this database
+  // (10-database creates a second user and never removes it) may have left more than the
+  // signed-in admin behind, so clear them first: this assertion is about the singular form,
+  // not about whatever count happens to be left over from another spec.
+  await page.goto('/settings/people');
+  for (;;) {
+    const removeButtons = page.getByRole('button', { name: /Remove|Entfernen/ });
+    const remaining = await removeButtons.count();
+    if (remaining === 0) break;
+    page.once('dialog', (d) => d.accept());
+    await removeButtons.first().click();
+    await expect(removeButtons).toHaveCount(remaining - 1);
+  }
+  await page.goto('/settings');
+  // A regex without a word boundary would let "1 users" match too -- \b after "user" only
+  // holds when nothing more follows, so this fails against the un-pluralised bug on purpose.
+  await expect(page.getByRole('button', { name: /Users/ })).toContainText(/\b1 user\b/);
 });
 
 test('an administrator sees the instance group; the rows are real links', async ({ page }) => {
