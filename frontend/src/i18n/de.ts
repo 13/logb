@@ -183,7 +183,6 @@ export default {
   'settings.theme-dark': 'Dunkel',
   'settings.currency': 'Währung',
   'settings.currency-hint': 'ISO-Code, z. B. EUR — gilt für alle',
-  'settings.currency-everyone': 'Die Währung gilt für alle auf dieser Instanz.',
   'settings.users': 'Benutzer',
   'settings.users-count-one': '1 Benutzer',
   'settings.users-count': '{n} Benutzer',

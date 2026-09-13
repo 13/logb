@@ -198,6 +198,7 @@
 </main>
 
 <style>
+  .row > button { flex: none; }
   .stack { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
   /* A host, a file path, an epoch and a driver's error message are all long and none of them
      may be cut off half way through. */

@@ -14,7 +14,6 @@
   let tokenCount = $state<number | null>(null);
   let userCount = $state<number | null>(null);
   let backendLabel = $state<string | null>(null);
-  let error = $state('');
 
   const isAdmin = $derived($user?.is_admin === true);
 
@@ -71,7 +70,6 @@
 
 <main>
   <TopBar title={$t('settings.title')} backTo="/" />
-  {#if error}<p class="error">{error}</p>{/if}
 
   <!-- Not a row in a group: a failed write is an alert, it is the only time-sensitive thing on
        this screen, and it is absent entirely when the queue is clean. It expands here rather
@@ -109,5 +107,6 @@
 </main>
 
 <style>
+  .row > button { flex: none; }
   .danger-text { color: var(--danger); }
 </style>

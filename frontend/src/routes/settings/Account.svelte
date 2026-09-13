@@ -36,3 +36,7 @@
   <button class="ghost" onclick={signOutEverywhere}>{$t('settings.logout-all')}</button>
   <p class="muted hint">{$t('settings.logout-all-hint')}</p>
 </main>
+
+<style>
+  .row > button { flex: none; }
+</style>

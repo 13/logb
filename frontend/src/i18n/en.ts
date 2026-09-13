@@ -183,7 +183,6 @@ export default {
   'settings.theme-dark': 'Dark',
   'settings.currency': 'Currency',
   'settings.currency-hint': 'ISO code, e.g. EUR — applies to everyone',
-  'settings.currency-everyone': 'The currency applies to everyone on this instance.',
   'settings.users': 'Users',
   'settings.users-count-one': '1 user',
   'settings.users-count': '{n} users',

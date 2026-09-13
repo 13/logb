@@ -42,6 +42,32 @@ test('the database section shows where the data is, and is admin only', async ({
   await expect(page.getByRole('button', { name: /Database/ })).not.toBeVisible();
 });
 
+// The redirect in App.svelte's ADMIN_ONLY guard is only proved by typing the URL directly --
+// navigating there through the hub's own nav never reaches it, since the hub omits the row
+// entirely for a non-admin (see the test above). Same "create a plain user, sign in as them"
+// machinery as above, with its own distinctive username so the two tests never collide.
+test('a non-administrator reaching /settings/database directly is sent back to the hub', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /Users/ }).click();
+  await page.getByLabel('Username', { exact: true }).fill('database-direct');
+  await page.getByLabel('Password', { exact: true }).fill('password123');
+  await page.getByRole('button', { name: 'Add user' }).click();
+  await expect(page.getByText('database-direct')).toBeVisible();
+
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel('Username', { exact: true }).fill('database-direct');
+  await page.getByLabel('Password', { exact: true }).fill('password123');
+  await page.getByRole('button', { name: /^Sign in$/ }).click();
+  await page.waitForURL('**/');
+
+  await page.goto('/settings/database');
+  await expect(page).toHaveURL(/\/settings$/);
+});
+
 // The Playwright suite runs on SQLite with no backup directory configured, so this is the "off"
 // case: the screen must say backups are not being taken and name the variable that turns them
 // on. The PostgreSQL wording is covered by tests/database_api.rs, which has a server.

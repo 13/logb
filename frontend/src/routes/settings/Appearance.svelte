@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
-  import { locale, t } from '../../i18n';
+  import { t } from '../../i18n';
   import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
   import { settings } from '../../stores/settings';
   import { currency, user } from '../../stores/session';
@@ -54,6 +54,9 @@
       <div class="field"><input bind:value={currencyText} maxlength="3" aria-label={$t('settings.currency')} /><span class="hint">{$t('settings.currency-hint')}</span></div>
       <button onclick={saveCurrency}>{$t('nav.save')}</button>
     </div>
-    <p class="hint">{$t('settings.currency-everyone')}</p>
   {/if}
 </main>
+
+<style>
+  .row > button { flex: none; }
+</style>
