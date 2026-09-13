@@ -59,7 +59,7 @@ test('the quick-log action belongs to its row', async ({ page }) => {
 
   const row = page.locator('.card-row', { hasText: 'Row shape probe' });
   const card = row.locator('.list-card');
-  const quick = row.getByRole('button', { name: /Log|Eintrag/ });
+  const quick = row.getByRole('button', { name: /Log|Erfassen/ });
 
   const [rowBox, cardBox, quickBox] = await Promise.all([
     row.boundingBox(), card.boundingBox(), quick.boundingBox(),
