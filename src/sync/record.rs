@@ -115,6 +115,13 @@ pub async fn parent_is_valid(
     // parent would close a loop: the candidate is already inside the subtree rooted at
     // `object_id`, including the trivial case where the candidate IS `object_id`.
     //
+    // Plain `UNION`, not `UNION ALL`: this function is the only thing standing between a
+    // write and an actual cycle, so if one ever got into the data anyway -- a bug, an
+    // import, someone editing the database by hand -- `UNION ALL` would walk it forever
+    // rather than answer. `UNION`'s deduplication is what makes the recursion terminate on a
+    // cycle instead of spinning; the cost is one extra dedup pass on a chain this app expects
+    // to be a handful of rows deep at most.
+    //
     // `crate::db::Bool`, not a bare `bool`: `EXISTS(...)` decodes as an INTEGER 0/1 on SQLite
     // and a real BOOLEAN on PostgreSQL, and `Decode<Any> for bool` only accepts the latter --
     // the same defect that once broke every `/users` read, here on a query this project has
@@ -122,7 +129,7 @@ pub async fn parent_is_valid(
     let would_cycle: (crate::db::Bool,) = sqlx::query_as(
         "WITH RECURSIVE ancestors(id) AS ( \
            SELECT id FROM objects WHERE id = $1 \
-           UNION ALL \
+           UNION \
            SELECT o.parent_id FROM objects o JOIN ancestors a ON o.id = a.id WHERE o.parent_id IS NOT NULL \
          ) SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = $2)")
         .bind(candidate_parent_id).bind(object_id)
