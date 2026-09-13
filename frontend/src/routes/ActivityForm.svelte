@@ -9,6 +9,7 @@
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { fieldError } from '../lib/form-error';
   import { categoriesFor } from '../lib/object-types';
   import { locale, t } from '../i18n';
   import { type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
@@ -135,7 +136,13 @@
     if (!ready) throw new Error('not loaded yet');
     const body = buildInput();
     const bad = validateActivity(body);
-    if (bad) throw new Error($t(bad));
+    if (bad === 'activity.title') {
+      // The one field a person skips on the way to "add photos" -- the title sits above it and
+      // is not yet filled in. Say why it is needed now, and put the cursor there.
+      document.getElementById('ti')?.focus();
+      throw new Error($t('activity.title-first'));
+    }
+    if (bad) throw new Error(fieldError(bad, $t));
     const tempId = mintTempId();
     // `createQueued` returns null when the write only reached the outbox (offline). Passing
     // the SAME tempId as its `tempId` argument means the outbox stores it on the queued op, so
@@ -184,7 +191,7 @@
     }
     const body = buildInput();
     const bad = validateActivity(body);
-    if (bad) { error = $t(bad); return; }
+    if (bad) { error = fieldError(bad, $t); return; }
     busy = true; error = '';
     try {
       if (saved?.pending) {
@@ -327,12 +334,12 @@
     {#if saved}
       <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
     {:else if ready}
-      <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); } catch (e) { error = (e as Error).message; } }}>
+      <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); error = ''; } catch (e) { error = (e as Error).message; } }}>
         + {$t('activity.add-files')}
       </button>
     {/if}
 
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row actions">
       <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>

@@ -5,6 +5,7 @@
   import { go, back } from '../lib/router';
   import { t } from '../i18n';
   import { emptyReminder, readingReminder, reminderBody, toReminderInput, validateReminder } from '../lib/reminder-form';
+  import { fieldError } from '../lib/form-error';
   import type { MemObject, Reminder, ReminderInput } from '../lib/types';
 
   let { id, rid }: { id: string; rid?: string } = $props();
@@ -53,7 +54,7 @@
     e.preventDefault();
     const body = normalized();
     const bad = validateReminder(body);
-    if (bad) { error = $t(bad); return; }
+    if (bad) { error = fieldError(bad, $t); return; }
     busy = true; error = '';
     try {
       if (rid) await api('PATCH', `/reminders/${rid}`, body);

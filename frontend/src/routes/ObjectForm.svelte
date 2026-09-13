@@ -7,6 +7,7 @@
   import { centsToInput, parseMoney } from '../lib/format';
   import { emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
+  import { fieldError } from '../lib/form-error';
   import { readingReminder, reminderBody } from '../lib/reminder-form';
   import { addMonthsIso } from '../lib/reading';
   import { todayIso } from '../lib/format';
@@ -78,7 +79,7 @@
     e.preventDefault();
     input.purchase_price_cents = parseMoney(priceText);
     const bad = validate(input);
-    if (bad) { error = $t(bad); return; }
+    if (bad) { error = fieldError(bad, $t); return; }
     busy = true; error = '';
     try {
       if (!input.purchase_date) input.purchase_date = null;

@@ -103,6 +103,8 @@ export default {
   'activity.title': 'Title',
   'activity.counter': 'Counter reading',
   'activity.counter-warn': 'Lower than the last reading ({last}).',
+  'activity.title-first': 'Give the entry a title first — photos and files are saved with it.',
+  'form.check-field': 'Check “{field}”: it is missing or not valid.',
   'activity.cost': 'Cost',
   'activity.quantity': 'Amount',
   'activity.notes': 'Notes',

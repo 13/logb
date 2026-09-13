@@ -103,6 +103,8 @@ export default {
   'activity.title': 'Titel',
   'activity.counter': 'Zählerstand',
   'activity.counter-warn': 'Niedriger als der letzte Stand ({last}).',
+  'activity.title-first': 'Gib dem Eintrag zuerst einen Titel — Fotos und Dateien werden mit ihm gespeichert.',
+  'form.check-field': 'Bitte „{field}“ prüfen: fehlt oder ist ungültig.',
   'activity.cost': 'Kosten',
   'activity.quantity': 'Menge',
   'activity.notes': 'Notizen',
