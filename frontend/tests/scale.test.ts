@@ -21,6 +21,32 @@ function styleBlocks(dir: string): Array<{ rel: string; css: string }> {
 }
 
 /**
+ * The declarations that space a box, and the custom properties that alias them. A value
+ * laundered through `--space-something: 7px` is still a spacing value the component invented,
+ * so the alias is read at its declaration rather than where it is used -- otherwise one line
+ * of CSS buys an exemption from the whole scale.
+ */
+const SPACING = /(?:(?:gap|margin|padding)(?:-[a-z]+)*|--space-[\w-]*):\s*([^;]+);/g;
+
+/**
+ * The values a declaration writes, with scale references and `calc()` scaffolding taken out.
+ * What is left is what the component chose for itself: `calc(44px + var(--space-2) * 2)` is
+ * one invented value (`44px`) and one scale reference, not five tokens.
+ */
+function values(raw: string, scale: RegExp): string[] {
+  return raw
+    .replace(scale, ' ')
+    // A unitless factor inside a `calc()` is arithmetic on a value, not a value of its own:
+    // the `2` in `var(--space-2) * 2` doubles a scale step rather than inventing a number.
+    .replace(/[*/]\s*[\d.]+|[\d.]+\s*[*/]/g, ' ')
+    .replace(/\bcalc\b|[()*/+]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+const spacingValues = (raw: string) => values(raw, /var\(--space-[\w-]*\)/g);
+
+/**
  * Values a component may hold despite not being on the scale, each with the reason. Listed by
  * the exact string so an exemption that stops being needed fails loudly, the way the icon
  * test's exclusions do.
@@ -28,6 +54,7 @@ function styleBlocks(dir: string): Array<{ rel: string; css: string }> {
 const ALLOWED: Record<string, string> = {
   '1px': "the pending badge's vertical inset, drawn over a 64px thumbnail: optical, not spatial",
   '2px': 'the focus ring and badge insets are optical, not spatial',
+  '44px': 'the tap-target floor the quick-log gutter is built from: an accessibility minimum, not a spacing step',
   '0': 'zero is zero',
   auto: 'a centring keyword, not a spacing value: `margin: 0 auto` is alignment',
 };
@@ -35,9 +62,7 @@ const ALLOWED: Record<string, string> = {
 /** Every spacing token any component writes, scale values included. */
 function spacingTokens(): string[] {
   return styleBlocks(SRC).flatMap(({ css }) =>
-    [...css.matchAll(/(?:gap|margin|padding)(?:-[a-z]+)?:\s*([^;]+);/g)].flatMap((m) =>
-      m[1].trim().split(/\s+/),
-    ),
+    [...css.matchAll(SPACING)].flatMap((m) => spacingValues(m[1])),
   );
 }
 
@@ -52,9 +77,9 @@ describe('the scale', () => {
 
   it('no component invents a spacing value', () => {
     for (const { rel, css } of styleBlocks(SRC)) {
-      const hits = [...css.matchAll(/(?:gap|margin|padding)(?:-[a-z]+)?:\s*([^;]+);/g)]
-        .flatMap((m) => m[1].trim().split(/\s+/))
-        .filter((v) => !v.startsWith('var(--space-') && !(v in ALLOWED));
+      const hits = [...css.matchAll(SPACING)]
+        .flatMap((m) => spacingValues(m[1]))
+        .filter((v) => !(v in ALLOWED));
       expect(hits, `${rel} sets spacing outside the scale: ${hits.join(', ')}`).toEqual([]);
     }
   });
