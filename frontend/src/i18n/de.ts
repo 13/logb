@@ -131,6 +131,7 @@ export default {
   'search.objects': 'Objekte',
   'search.activities': 'Aktivitäten',
   'search.archived': 'archiviert',
+  'search.in-parent': 'in {name}',
   'search.none': 'Keine Treffer für „{q}“ — weder in einem Objektnamen noch in einem Titel oder einer Notiz.',
   'docs.empty': 'Belege, Anleitungen, Garantiekarten und Fotos gehören hierher — zum Objekt statt in eine Schublade.',
   'docs.upload': 'Hochladen',

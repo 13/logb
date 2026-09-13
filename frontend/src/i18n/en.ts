@@ -131,6 +131,7 @@ export default {
   'search.objects': 'Objects',
   'search.activities': 'Activities',
   'search.archived': 'archived',
+  'search.in-parent': 'in {name}',
   'search.none': 'No matches for “{q}” in any object name, entry title or note.',
   'docs.empty': 'Receipts, manuals, warranty cards and photos belong here, with the object instead of in a drawer.',
   'docs.upload': 'Upload',
