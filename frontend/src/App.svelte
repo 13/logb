@@ -14,6 +14,8 @@
   import ReminderForm from './routes/ReminderForm.svelte';
   import Search from './routes/Search.svelte';
   import Settings from './routes/Settings.svelte';
+  import SettingsAppearance from './routes/settings/Appearance.svelte';
+  import SettingsAccount from './routes/settings/Account.svelte';
   import AppNav from './lib/AppNav.svelte';
   import AppFooter from './lib/AppFooter.svelte';
 
@@ -47,6 +49,8 @@
     ['/objects/:id/reminders/:rid', ReminderForm],
     ['/search', Search],
     ['/settings', Settings],
+    ['/settings/appearance', SettingsAppearance],
+    ['/settings/account', SettingsAccount],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {

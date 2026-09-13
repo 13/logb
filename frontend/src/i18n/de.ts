@@ -172,6 +172,9 @@ export default {
   'reminder.unsnooze': 'Zurückstellung aufheben',
 
   'settings.title': 'Einstellungen',
+  'settings.appearance': 'Darstellung',
+  'settings.you': 'Du',
+  'settings.instance': 'Diese Instanz',
   'settings.language': 'Sprache',
   'settings.language-auto': 'Automatisch',
   'settings.theme': 'Design',
@@ -180,6 +183,7 @@ export default {
   'settings.theme-dark': 'Dunkel',
   'settings.currency': 'Währung',
   'settings.currency-hint': 'ISO-Code, z. B. EUR — gilt für alle',
+  'settings.currency-everyone': 'Die Währung gilt für alle auf dieser Instanz.',
   'settings.users': 'Benutzer',
   'settings.user-new': 'Benutzer hinzufügen',
   'settings.user-admin': 'Admin',

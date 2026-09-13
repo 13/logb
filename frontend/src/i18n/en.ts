@@ -172,6 +172,9 @@ export default {
   'reminder.unsnooze': 'Unsnooze',
 
   'settings.title': 'Settings',
+  'settings.appearance': 'Appearance',
+  'settings.you': 'You',
+  'settings.instance': 'This instance',
   'settings.language': 'Language',
   'settings.language-auto': 'Automatic',
   'settings.theme': 'Theme',
@@ -180,6 +183,7 @@ export default {
   'settings.theme-dark': 'Dark',
   'settings.currency': 'Currency',
   'settings.currency-hint': 'ISO code, e.g. EUR — applies to everyone',
+  'settings.currency-everyone': 'The currency applies to everyone on this instance.',
   'settings.users': 'Users',
   'settings.user-new': 'Add user',
   'settings.user-admin': 'Admin',
