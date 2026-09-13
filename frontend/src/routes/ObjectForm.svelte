@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import { api } from '../lib/api';
   import { go, back } from '../lib/router';
@@ -11,7 +11,10 @@
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
-  let input = $state<ObjectInput>(emptyInput());
+  const presetParentId = new URLSearchParams(location.search).get('parent_id');
+  let input = $state<ObjectInput>(
+    untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
+  );
   let priceText = $state('');
   let error = $state('');
   let busy = $state(false);

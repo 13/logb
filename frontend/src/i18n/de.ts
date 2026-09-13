@@ -65,6 +65,9 @@ export default {
   'object.set-cover': 'Als Titelbild',
   'object.clear-cover': 'Titelbild entfernen',
   'object.saved': 'Gespeichert',
+  'object.contents': 'Inhalt',
+  'object.contents-empty': 'Noch nichts drin.',
+  'object.contents-add': 'Neues Objekt darin',
 
   'tab.timeline': 'Verlauf',
   'tab.documents': 'Dokumente',

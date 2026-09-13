@@ -65,6 +65,9 @@ export default {
   'object.set-cover': 'Use as cover',
   'object.clear-cover': 'Remove cover',
   'object.saved': 'Saved',
+  'object.contents': 'Contents',
+  'object.contents-empty': 'Nothing inside yet.',
+  'object.contents-add': 'New object inside',
 
   'tab.timeline': 'Timeline',
   'tab.documents': 'Documents',
