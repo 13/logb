@@ -1,9 +1,79 @@
 use chrono::{Days, Months, NaiveDate};
 
+/// A reminder that watches a date or a counter target, and is closed by marking it done.
+pub const KIND_SERVICE: &str = "service";
+/// A reminder to record a counter reading at a regular interval. Nobody marks it done: logging
+/// any entry with a counter value is what satisfies it (see `reading_status`).
+pub const KIND_READING: &str = "reading";
+
+/// The largest `every_n` accepted, in either unit. Five years of months is already far past
+/// anything a "log the reading" habit means.
+pub const MAX_EVERY: u32 = 60;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Repeat {
     pub months: Option<u32>,
     pub counter: Option<i64>,
+}
+
+/// How often a reading reminder wants a new reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Every {
+    Week(u32),
+    Month(u32),
+}
+
+impl Every {
+    /// The interval stored as `every_n` + `every_unit`, or None when either is missing or out of
+    /// range -- a row that fails this is treated as never due rather than guessed at.
+    pub fn from_parts(n: Option<i64>, unit: Option<&str>) -> Option<Every> {
+        let n = u32::try_from(n?).ok().filter(|n| (1..=MAX_EVERY).contains(n))?;
+        match unit? {
+            "week" => Some(Every::Week(n)),
+            "month" => Some(Every::Month(n)),
+            _ => None,
+        }
+    }
+
+    /// `date` plus the interval. Calendar months clamp to the end of a shorter month, so a
+    /// reading on 31 January wants the next one on 28 February, not in March.
+    pub fn after(self, date: NaiveDate) -> Option<NaiveDate> {
+        match self {
+            Every::Week(n) => date.checked_add_days(Days::new(7 * u64::from(n))),
+            Every::Month(n) => date.checked_add_months(Months::new(n)),
+        }
+    }
+}
+
+/// When a reading reminder next wants a reading: one interval after the latest reading, but
+/// never before the reminder's own start. With no reading at all, the start is the due date.
+///
+/// Derived from the data every time rather than stored: a reading logged anywhere -- a fuel
+/// entry, a service, the quick reading form, a device syncing an entry made offline -- moves
+/// it, and deleting that reading moves it back, with nothing to keep in step.
+pub fn reading_next_due(start: NaiveDate, last_reading: Option<NaiveDate>, every: Every) -> NaiveDate {
+    match last_reading.and_then(|d| every.after(d)) {
+        Some(next) if next > start => next,
+        _ => start,
+    }
+}
+
+/// Whether a reading reminder is due, and the date it next wants a reading. `None` for the date
+/// when the row's start or interval is unusable, which is also never due.
+///
+/// The one copy of this rule: `api::reminders` answers each reminder's `due` with it, and
+/// `api::objects` counts an object's due readings with it.
+pub fn reading_status(
+    today: NaiveDate,
+    start: Option<NaiveDate>,
+    last_reading: Option<NaiveDate>,
+    every: Option<Every>,
+    snoozed_until: Option<NaiveDate>,
+) -> (bool, Option<NaiveDate>) {
+    let Some(next) = start.zip(every).map(|(s, e)| reading_next_due(s, last_reading, e)) else {
+        return (false, None);
+    };
+    (is_due(today, None, Some(next), None, snoozed_until), Some(next))
 }
 
 /// Due when the date has arrived or the counter has been reached (whichever is set), unless a
@@ -214,6 +284,62 @@ mod tests {
             !is_upcoming(today, false, Some(5), 30, Some(d("2026-09-13"))),
             "a live snooze suppresses the lookahead arm too",
         );
+    }
+
+    #[test]
+    fn every_reads_only_complete_in_range_intervals() {
+        assert_eq!(Every::from_parts(Some(1), Some("month")), Some(Every::Month(1)));
+        assert_eq!(Every::from_parts(Some(2), Some("week")), Some(Every::Week(2)));
+        assert_eq!(Every::from_parts(Some(0), Some("month")), None);
+        assert_eq!(Every::from_parts(Some(61), Some("month")), None);
+        assert_eq!(Every::from_parts(Some(-1), Some("week")), None);
+        assert_eq!(Every::from_parts(Some(1), Some("day")), None);
+        assert_eq!(Every::from_parts(None, Some("month")), None);
+        assert_eq!(Every::from_parts(Some(1), None), None);
+    }
+
+    #[test]
+    fn a_monthly_interval_clamps_to_the_end_of_a_short_month() {
+        assert_eq!(Every::Month(1).after(d("2026-01-31")), Some(d("2026-02-28")));
+        assert_eq!(Every::Week(2).after(d("2026-12-25")), Some(d("2027-01-08")));
+    }
+
+    #[test]
+    fn without_a_reading_the_start_is_the_due_date() {
+        assert_eq!(reading_next_due(d("2026-10-01"), None, Every::Month(1)), d("2026-10-01"));
+    }
+
+    #[test]
+    fn a_reading_moves_the_next_one_an_interval_later() {
+        assert_eq!(reading_next_due(d("2026-09-01"), Some(d("2026-09-20")), Every::Month(1)), d("2026-10-20"));
+    }
+
+    #[test]
+    fn a_reading_older_than_the_start_does_not_pull_it_earlier() {
+        // Readings logged long before anyone asked to be reminded must not make the brand-new
+        // reminder overdue on the day it was created.
+        assert_eq!(reading_next_due(d("2026-10-01"), Some(d("2025-01-01")), Every::Month(1)), d("2026-10-01"));
+    }
+
+    #[test]
+    fn a_reading_reminder_is_due_once_the_interval_has_passed() {
+        let every = Some(Every::Month(1));
+        let start = Some(d("2026-01-01"));
+        assert_eq!(reading_status(d("2026-09-13"), start, Some(d("2026-08-13")), every, None), (true, Some(d("2026-09-13"))));
+        assert_eq!(reading_status(d("2026-09-12"), start, Some(d("2026-08-13")), every, None), (false, Some(d("2026-09-13"))));
+    }
+
+    #[test]
+    fn a_snooze_hides_a_due_reading_reminder() {
+        let (due, next) = reading_status(d("2026-09-13"), Some(d("2026-01-01")), None, Some(Every::Week(1)), Some(d("2026-09-20")));
+        assert!(!due);
+        assert_eq!(next, Some(d("2026-01-01")), "the real due date stays truthful while hidden");
+    }
+
+    #[test]
+    fn an_unusable_reading_row_is_never_due() {
+        assert_eq!(reading_status(d("2026-09-13"), None, None, Some(Every::Month(1)), None), (false, None));
+        assert_eq!(reading_status(d("2026-09-13"), Some(d("2020-01-01")), None, None, None), (false, None));
     }
 
     /// The boundary matches `is_due`: `snoozed_until` ON today has lapsed, not still running.

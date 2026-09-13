@@ -117,6 +117,9 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
             ("repeat_months", Integer), ("repeat_counter", Integer), ("done_at", Text),
             ("done_activity_id", Integer), ("snoozed_until", Text),
+            // `kind` is absent on purpose: a reminder never changes kind (see
+            // `api::reminders::update`), so it is fixed at create like `object_id`.
+            ("every_n", Integer), ("every_unit", Text),
         ],
         Entity::Attachment => &[("kind", Text), ("caption", Text)],
         // Content-addressed and written once. A file changes by being replaced, never edited.
@@ -170,6 +173,7 @@ mod tests {
         (Entity::Reminder, "repeat_months"),
         (Entity::Reminder, "repeat_counter"),
         (Entity::Reminder, "done_activity_id"),
+        (Entity::Reminder, "every_n"),
     ];
 
     #[test]

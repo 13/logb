@@ -1,3 +1,62 @@
+use chrono::{Days, NaiveDate};
+
+/// How far back the usage rate looks: recent enough to follow a change of habit (a new commute,
+/// a winter the bike stays in), long enough to smooth out one long trip.
+pub const RATE_WINDOW_DAYS: i64 = 180;
+/// The shortest span a rate is measured over. Two readings a day apart say more about that day
+/// than about how the object is used.
+pub const RATE_MIN_SPAN_DAYS: i64 = 14;
+/// An estimate further out than this is not a date anyone can plan around.
+const MAX_ESTIMATE_DAYS: i64 = 3650;
+
+/// One counter reading, as the rate needs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reading {
+    pub date: NaiveDate,
+    pub counter: i64,
+}
+
+/// The newest reading: latest date, and on that date the highest value.
+pub fn latest_reading(readings: &[Reading]) -> Option<Reading> {
+    readings.iter().copied().max_by_key(|r| (r.date, r.counter))
+}
+
+/// Counter units per day, scaled by 1000, or None when the readings cannot support a rate.
+///
+/// Measured from the earliest reading inside the window to the latest one. When the window
+/// holds too short a span -- readings only started recently, or there is one old reading and one
+/// new -- it falls back to the earliest reading of all. A span under `RATE_MIN_SPAN_DAYS`, or a
+/// counter that did not rise (a replaced odometer), gives no rate rather than a wrong one.
+pub fn daily_rate_milli(readings: &[Reading]) -> Option<i64> {
+    let last = latest_reading(readings)?;
+    let rate_from = |first: Reading| {
+        let span = (last.date - first.date).num_days();
+        let delta = last.counter - first.counter;
+        (span >= RATE_MIN_SPAN_DAYS && delta > 0).then(|| delta * 1000 / span)
+    };
+    let window_start = last.date - chrono::Duration::days(RATE_WINDOW_DAYS);
+    let in_window = readings.iter().copied()
+        .filter(|r| r.date >= window_start && r.date < last.date)
+        .min_by_key(|r| (r.date, r.counter));
+    let earliest = readings.iter().copied().min_by_key(|r| (r.date, r.counter));
+    in_window.and_then(rate_from).or_else(|| earliest.and_then(rate_from))
+}
+
+/// The date the counter is expected to reach `target`, projected from the latest reading at
+/// `rate_milli` units per day (scaled by 1000). None when the target is already reached -- that
+/// reminder is due, not upcoming -- or when there is no usable rate.
+pub fn estimated_date(last: Reading, rate_milli: i64, target: i64) -> Option<NaiveDate> {
+    let remaining = target - last.counter;
+    if rate_milli <= 0 || remaining <= 0 {
+        return None;
+    }
+    let days = (remaining.saturating_mul(1000) + rate_milli - 1) / rate_milli;
+    if days > MAX_ESTIMATE_DAYS {
+        return None;
+    }
+    last.date.checked_add_days(Days::new(days as u64))
+}
+
 /// One fuel entry that carries an odometer reading, an amount, and what it cost.
 #[derive(Clone, Copy, Debug)]
 pub struct Fill {
@@ -60,6 +119,48 @@ mod tests {
 
     fn f(counter: i64, quantity_milli: i64, cost_cents: Option<i64>) -> Fill {
         Fill { counter, quantity_milli, cost_cents }
+    }
+
+    fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
+    fn r(date: &str, counter: i64) -> Reading { Reading { date: day(date), counter } }
+
+    #[test]
+    fn the_rate_runs_from_the_earliest_reading_in_the_window_to_the_latest() {
+        // 3_000 km over 100 days: 30 km a day. The 2024 reading is outside the window and must
+        // not dilute the recent rate.
+        let readings = [r("2024-01-01", 0), r("2026-06-01", 50_000), r("2026-09-09", 52_970)];
+        assert_eq!(daily_rate_milli(&readings), Some(2_970 * 1000 / 100));
+    }
+
+    #[test]
+    fn a_short_window_falls_back_to_the_earliest_reading() {
+        // The only reading inside the window is five days old: too short, so the rate is taken
+        // from the start of the history instead.
+        let readings = [r("2025-09-09", 40_000), r("2026-09-04", 49_950), r("2026-09-09", 50_000)];
+        assert_eq!(daily_rate_milli(&readings), Some(10_000 * 1000 / 365));
+    }
+
+    #[test]
+    fn no_rate_without_a_real_span_or_a_rising_counter() {
+        assert_eq!(daily_rate_milli(&[]), None);
+        assert_eq!(daily_rate_milli(&[r("2026-09-01", 1_000)]), None);
+        assert_eq!(daily_rate_milli(&[r("2026-09-01", 1_000), r("2026-09-10", 1_500)]), None, "under 14 days");
+        assert_eq!(daily_rate_milli(&[r("2026-01-01", 90_000), r("2026-09-01", 1_000)]), None, "odometer replaced");
+    }
+
+    #[test]
+    fn the_estimate_projects_from_the_latest_reading() {
+        // 1_000 km to go at 25 km a day: 40 days after the reading, not after today.
+        assert_eq!(estimated_date(r("2026-09-01", 59_000), 25_000, 60_000), Some(day("2026-10-11")));
+        // A remainder that does not divide evenly rounds up: the target is reached on day 41.
+        assert_eq!(estimated_date(r("2026-09-01", 59_000), 24_900, 60_000), Some(day("2026-10-12")));
+    }
+
+    #[test]
+    fn no_estimate_once_reached_or_without_a_rate_or_absurdly_far() {
+        assert_eq!(estimated_date(r("2026-09-01", 60_000), 25_000, 60_000), None);
+        assert_eq!(estimated_date(r("2026-09-01", 59_000), 0, 60_000), None);
+        assert_eq!(estimated_date(r("2026-09-01", 0), 1, 1_000_000), None);
     }
 
     #[test]

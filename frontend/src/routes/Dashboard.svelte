@@ -3,7 +3,8 @@
   import ObjectCard from '../lib/ObjectCard.svelte';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
-  import { t } from '../i18n';
+  import { locale, t } from '../i18n';
+  import { fmtDate } from '../lib/format';
   import type { MemObject, Reminder } from '../lib/types';
   import Icon from '../lib/Icon.svelte';
 
@@ -49,6 +50,10 @@
         {#each due.slice(0, 5) as r (r.id)}
           <li>
             <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
+            {#if r.kind === 'reading'}
+              <!-- The whole job is one number, so it is one tap from here. -->
+              <button class="ghost snooze" onclick={() => go(`/objects/${r.object_id}/reading`)}>{$t('reminder.record')}</button>
+            {/if}
             <button class="ghost snooze" onclick={() => snooze(r)}>{$t('reminder.snooze')}</button>
           </li>
         {/each}
@@ -66,6 +71,7 @@
             <span class="muted">
               {#if r.days_until !== null}{r.days_until === 1 ? $t('dash.in-day') : $t('dash.in-days', { n: r.days_until })}{/if}
               {#if r.counter_until !== null && r.counter_unit} · {$t('dash.in-counter', { n: r.counter_until, unit: r.counter_unit })}{/if}
+              {#if r.estimated_due_date} · {$t('dash.estimated', { date: fmtDate(r.estimated_due_date, $locale) })}{/if}
             </span>
           </li>
         {/each}

@@ -1,14 +1,18 @@
 use super::objects::load_owned_object;
 use crate::auth::AuthUser;
+use crate::db;
 use crate::domain::insights::{
-    consumption_per_100_milli, cost_per_counter_milli, default_fuel_unit, fuel_cost_per_counter_milli, Fill,
+    consumption_per_100_milli, cost_per_counter_milli, daily_rate_milli, default_fuel_unit, fuel_cost_per_counter_milli,
+    latest_reading, Fill, Reading, RATE_WINDOW_DAYS,
 };
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use chrono::NaiveDate;
 use serde::Serialize;
+use std::collections::HashMap;
 
 pub fn router() -> Router<App> {
     Router::new().route("/objects/{id}/insights", get(read))
@@ -42,6 +46,53 @@ pub struct InsightsOut {
     pub counter_span: Option<Span>,
     pub cost_per_counter_milli: Option<i64>,
     pub fuel: Option<FuelOut>,
+    /// Counter units per day over recent readings, scaled by 1000 -- see
+    /// `domain::insights::daily_rate_milli`. Null until there is enough history.
+    pub counter_per_day_milli: Option<i64>,
+}
+
+/// An object's newest reading and the rate its recent readings rise at.
+#[derive(Clone, Copy, Debug)]
+pub struct Usage {
+    pub last: Reading,
+    pub rate_milli: i64,
+}
+
+/// Usage for every object of `user_id` that has enough readings for a rate, or just `only`.
+///
+/// One query over the readings of the last window and a bit -- the fallback in
+/// `daily_rate_milli` reaches past the window, so this reads twice its length -- rather than one
+/// per object, because the dashboard's lookahead asks for every object at once. Readings dated
+/// past `reminders::reading_horizon` are left out: a typo'd year must not become the "latest"
+/// reading.
+pub async fn usage_by_object(state: &App, user_id: i64, only: Option<i64>) -> Result<HashMap<i64, Usage>, AppError> {
+    let today = db::today();
+    let from = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
+        .map(|t| (t - chrono::Duration::days(RATE_WINDOW_DAYS * 2)).to_string())
+        .unwrap_or_else(|_| today.clone());
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT a.object_id, a.date, a.counter_value FROM activities a JOIN objects o ON o.id = a.object_id \
+         WHERE o.user_id = $1 AND ($2 IS NULL OR o.id = $2) AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
+           AND a.counter_value IS NOT NULL AND a.date <= $3 AND a.date >= $4",
+    )
+    .bind(user_id).bind(only).bind(super::reminders::reading_horizon()).bind(&from)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut readings: HashMap<i64, Vec<Reading>> = HashMap::new();
+    for (object_id, date, counter) in rows {
+        // A stored date that does not parse is skipped, as every other read of a row does.
+        if let Ok(date) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") {
+            readings.entry(object_id).or_default().push(Reading { date, counter });
+        }
+    }
+    Ok(readings
+        .into_iter()
+        .filter_map(|(object_id, list)| {
+            let rate_milli = daily_rate_milli(&list)?;
+            Some((object_id, Usage { last: latest_reading(&list)?, rate_milli }))
+        })
+        .collect())
 }
 
 async fn read(
@@ -62,9 +113,11 @@ async fn read(
     .fetch_all(&state.db)
     .await?;
 
+    // Readings are left out: they never carry a cost, and a monthly reading habit would put
+    // an empty "Reading" bar at the bottom of every car's breakdown.
     let by_category = sqlx::query_as::<_, Bucket>(
         "SELECT category AS bucket, COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) AS cost_cents, \
-         COUNT(*) AS count FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         COUNT(*) AS count FROM activities WHERE object_id = $1 AND deleted_at IS NULL AND category <> 'reading' \
          GROUP BY category ORDER BY cost_cents DESC",
     )
     .bind(object_id)
@@ -114,11 +167,15 @@ async fn read(
         })
     };
 
+    let counter_per_day_milli =
+        usage_by_object(&state, user.id, Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
+
     Ok(Json(InsightsOut {
         by_year,
         by_category,
         counter_span,
         cost_per_counter_milli: overall_cost_per_counter_milli,
         fuel,
+        counter_per_day_milli,
     }))
 }

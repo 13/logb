@@ -1,6 +1,6 @@
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
 export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
-  'symptom', 'treatment', 'appointment', 'medication'] as const;
+  'symptom', 'treatment', 'appointment', 'medication', 'reading'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
@@ -51,13 +51,27 @@ export interface TitleSuggestion {
   last_cost_cents: number | null; last_counter: number | null;
 }
 
+/** `service` watches a date or a counter target and is marked done; `reading` asks for a counter
+ *  reading every `every_n` `every_unit`s and is satisfied by logging one. */
+export type ReminderKind = 'service' | 'reading';
+export type EveryUnit = 'week' | 'month';
 export interface Reminder {
   id: number; object_id: number; title: string; notes: string; due_date: string | null; due_counter: number | null;
   repeat_months: number | null; repeat_counter: number | null; done_at: string | null; done_activity_id: number | null;
   created_at: string; snoozed_until: string | null; object_name: string; counter_unit: CounterUnit; current_counter: number | null; due: boolean;
   days_until: number | null; counter_until: number | null;
+  kind: ReminderKind; every_n: number | null; every_unit: EveryUnit | null;
+  /** Date of the object's newest counter reading on or before today. */
+  last_reading_date: string | null;
+  /** When it comes due by date: `due_date` for a service reminder, derived for a reading one. */
+  next_due_date: string | null;
+  /** A counter target's projected date from recent usage; never makes it due. */
+  estimated_due_date: string | null;
 }
-export interface ReminderInput { title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null }
+export interface ReminderInput {
+  title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null;
+  kind: ReminderKind; every_n: number | null; every_unit: EveryUnit | null;
+}
 export interface DoneOut { done: Reminder; next: Reminder | null }
 export interface ImportCounts { objects: number; activities: number; attachments: number; reminders: number }
 
@@ -81,6 +95,8 @@ export interface Insights {
   counter_span: { from: number; to: number } | null;
   cost_per_counter_milli: number | null;
   fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null } | null;
+  /** Counter units per day over recent readings, ×1000; null until there is enough history. */
+  counter_per_day_milli: number | null;
 }
 
 /** An API token as it is listed: never the token itself, which the server returns exactly once

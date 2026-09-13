@@ -1851,8 +1851,10 @@
           "symptom",
           "treatment",
           "appointment",
-          "medication"
-        ]
+          "medication",
+          "reading"
+        ],
+        "description": "`reading` is an entry that records nothing but a counter value, and requires `counter_value`"
       },
       "ObjectType": {
         "type": "string",
@@ -2350,6 +2352,56 @@
             ],
             "format": "int64"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "service",
+              "reading"
+            ],
+            "description": "`service` watches due_date/due_counter and is marked done. `reading` wants a counter reading every `every_n` `every_unit`s, counted from the newest reading and never before `due_date` (its start); logging any activity with a counter value satisfies it, and it cannot be marked done"
+          },
+          "every_n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "A reading reminder's interval, 1..60"
+          },
+          "every_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "week",
+              "month",
+              null
+            ]
+          },
+          "last_reading_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date of the object's newest counter reading on or before today"
+          },
+          "next_due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "When it comes due by date: `due_date` for a service reminder, derived for a reading reminder. `days_until` is measured to this"
+          },
+          "estimated_due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "For a service reminder with an unreached due_counter: when recent usage projects the counter to reach it. Feeds the `within_days` lookahead; never makes a reminder due"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -2394,6 +2446,32 @@
               "null"
             ],
             "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "service",
+              "reading"
+            ],
+            "default": "service",
+            "description": "Fixed at create; a PATCH naming another kind is refused. A reading reminder takes every_n and every_unit, needs an object with a counter, refuses due_counter and repeat_*, and treats a missing due_date as today"
+          },
+          "every_n": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "week",
+              "month",
+              null
+            ]
           }
         }
       },
@@ -2492,6 +2570,14 @@
                 "format": "int64"
               }
             }
+          },
+          "counter_per_day_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Counter units per day, x1000, from the earliest reading in the last 180 days (or of all, when that span is under 14 days) to the newest; null without enough history"
           }
         }
       },

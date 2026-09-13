@@ -13,12 +13,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-// Kept in sync with migration 0009's widened CHECK on activities.category, and with
-// frontend/src/lib/types.ts's CATEGORIES: four health categories alongside the original seven,
-// so a `body` object can log a symptom, treatment, appointment or medication.
-pub const CATEGORIES: [&str; 11] = [
+// Kept in sync with the CHECK on activities.category (migrations 0009 and 0011 on SQLite, 0001
+// and 0002 on PostgreSQL) and with frontend/src/lib/types.ts's CATEGORIES: four health
+// categories alongside the original seven, so a `body` object can log a symptom, treatment,
+// appointment or medication; and `reading`, an entry that is nothing but a counter value.
+pub const CATEGORIES: [&str; 12] = [
     "maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other",
-    "symptom", "treatment", "appointment", "medication",
+    "symptom", "treatment", "appointment", "medication", "reading",
 ];
 
 pub fn router() -> Router<App> {
@@ -75,6 +76,10 @@ impl ActivityInput {
                 return Err(AppError::BadRequest("this object has no counter".into()));
             }
             if c < 0 { return Err(AppError::BadRequest("counter_value must be >= 0".into())); }
+        }
+        // A reading with no value records nothing at all.
+        if self.category == "reading" && self.counter_value.is_none() {
+            return Err(AppError::BadRequest("a reading needs counter_value".into()));
         }
         if matches!(self.cost_cents, Some(c) if c < 0) {
             return Err(AppError::BadRequest("cost_cents must be >= 0".into()));

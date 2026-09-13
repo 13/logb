@@ -3,7 +3,7 @@
   import { go } from './router';
   import { counter, fmtDate } from './format';
   import { locale, t } from '../i18n';
-  import { splitReminders } from './reminder-form';
+  import { intervalDays, splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
@@ -56,11 +56,35 @@
     } catch (e) { error = (e as Error).message; }
   }
 
+  /** "Skip this one": a snooze one interval long, so the reading is asked for again next period
+   *  rather than tomorrow. The server measures it from today when the reading is overdue. */
+  async function skip(r: Reminder) {
+    try {
+      await api<Reminder>('POST', `/reminders/${r.id}/snooze`, { days: intervalDays(r.every_n, r.every_unit) });
+      await load();
+      onchanged?.();
+    } catch (e) { error = (e as Error).message; }
+  }
+
   function when(r: Reminder): string {
     const parts: string[] = [];
     if (r.due_date) parts.push($t('reminder.on', { date: fmtDate(r.due_date, $locale) }));
     if (r.due_counter !== null) parts.push($t('reminder.at', { counter: counter(r.due_counter, unit, $locale) }));
     return parts.join(' · ');
+  }
+
+  function every(r: Reminder): string {
+    const n = r.every_n ?? 1;
+    if (r.every_unit === 'week') return n === 1 ? $t('reminder.every-week') : $t('reminder.every-weeks', { n });
+    return n === 1 ? $t('reminder.every-month') : $t('reminder.every-months', { n });
+  }
+
+  function reading(r: Reminder): string {
+    const last = r.last_reading_date && r.current_counter !== null
+      ? $t('reminder.last-reading', { counter: counter(r.current_counter, unit, $locale), date: fmtDate(r.last_reading_date, $locale) })
+      : $t('reminder.no-reading');
+    const next = r.next_due_date && !r.due ? ` · ${$t('reminder.next-reading', { date: fmtDate(r.next_due_date, $locale) })}` : '';
+    return `${last}${next}`;
   }
 </script>
 
@@ -75,6 +99,9 @@
     <span class="empty-icon"><Icon name="repeat" size={40} /></span>
     <p>{$t('reminder.empty')}</p>
     <button class="primary" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+    {#if unit}
+      <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t('reminder.new-reading')}</button>
+    {/if}
   </div>
 {/if}
 
@@ -87,7 +114,15 @@
           {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
         </span>
       </div>
-      <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
+      {#if r.kind === 'reading'}
+        <div class="muted"><span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span> {every(r)}</div>
+        <div class="muted tnum">{reading(r)}</div>
+      {:else}
+        <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
+        {#if r.estimated_due_date}
+          <div class="muted">{$t('reminder.estimated', { date: fmtDate(r.estimated_due_date, $locale) })}</div>
+        {/if}
+      {/if}
       {#if !r.due && r.snoozed_until}
         <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so
              `when(r)` above can still read as overdue while the reminder is suppressed -- this
@@ -100,7 +135,13 @@
       {#if r.notes}<p class="notes">{r.notes}</p>{/if}
       <div class="row actions">
         <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/${r.id}`)}>{$t('nav.edit')}</button>
-        <button class="primary" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</button>
+        {#if r.kind === 'reading'}
+          <!-- No "done": logging the reading is what satisfies it, from here or anywhere else. -->
+          {#if r.due}<button class="ghost" onclick={() => skip(r)}>{$t('reminder.skip')}</button>{/if}
+          <button class="primary" onclick={() => go(`/objects/${objectId}/reading`)}>{$t('reminder.record')}</button>
+        {:else}
+          <button class="primary" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</button>
+        {/if}
       </div>
     </div>
   {/each}

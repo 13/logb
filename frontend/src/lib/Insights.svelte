@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from './api';
-  import { money, perCounter, quantity } from './format';
+  import { counter, money, perCounter, quantity } from './format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { CounterUnit, Insights } from './types';
@@ -33,6 +33,12 @@
 </script>
 
 {#if error}<p class="error">{error}</p>{/if}
+{#if data && data.counter_per_day_milli !== null && unit}
+  <!-- A month is the unit people think in for mileage; 30.44 days is the average one. Rounded
+       to a whole unit, since the rate is an average and more digits would claim precision it
+       does not have. -->
+  <p class="muted">{$t('insights.usage')}: <b>{$t('insights.per-month', { amount: counter(Math.round(data.counter_per_day_milli * 30.44 / 1000), unit, $locale) })}</b></p>
+{/if}
 {#if data}
   {#if data.by_year.length === 0}
     <p class="muted">{$t('insights.none')}</p>

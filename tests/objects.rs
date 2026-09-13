@@ -227,9 +227,15 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
         .await
         .unwrap();
 
+    // Reading reminders are counted by a different path (`due_readings`), so the matrix carries
+    // one of each side: overdue since 2020 with no reading after the activity above, and one
+    // whose start is still years away.
+    let _reading_due = add_reminder(&app, id, json!({ "title": "Reading due", "kind": "reading", "every_n": 1, "every_unit": "month", "due_date": "2020-01-01" })).await;
+    let _reading_later = add_reminder(&app, id, json!({ "title": "Reading later", "kind": "reading", "every_n": 1, "every_unit": "month", "due_date": "2999-01-01" })).await;
+
     let reminders: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{id}/reminders")))
         .send().await.unwrap().json().await.unwrap();
-    assert_eq!(reminders.len(), 9, "every seeded row must still be present");
+    assert_eq!(reminders.len(), 11, "every seeded row must still be present");
 
     let expected_due = reminders.iter().filter(|r| r["due"].as_bool().unwrap()).count() as i64;
     // A matrix where everything happens to land on the same side of "due" would let the two

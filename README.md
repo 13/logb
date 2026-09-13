@@ -288,6 +288,7 @@ until it is started by hand.
 | `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
 | `LOGB_NOTIFY_HOUR`   | `8`       | hour (in `LOGB_TIMEZONE`) the digest goes out                                                                                |
 | `LOGB_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
+| `LOGB_PUBLIC_URL`    | unset     | the address LogB is opened at (`https://logb.example.com`); puts links into the digest, so a notification opens the right form |
 | `LOGB_TIMEZONE`      | `UTC`     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against                                                  |
 | `LOGB_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `LOGB_LOG`           | `info`    | tracing filter                                                                                                               |
@@ -396,6 +397,14 @@ and subscribe to the same topic. A topic on the public server is readable by
 anyone who knows its name, so treat the name as the secret or self-host ntfy.
 LogB has no push notifications of its own and asks for no notification
 permission.
+
+Reading reminders ("log the odometer every month") come after the services,
+under `Readings to log:`. They clear themselves as soon as any entry with a
+counter value is logged, so there is nothing to mark done. With
+`LOGB_PUBLIC_URL` set, every item carries a `link`, each reading line ends in
+the URL of its one-field reading form, and a text digest about a single
+reminder also sends ntfy's `Click` header, so tapping the notification opens
+that form.
 
 The digest is a notification, not a queue: the day is marked as handled before
 the request goes out, so an endpoint that is down costs one failed request a

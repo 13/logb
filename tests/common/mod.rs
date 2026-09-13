@@ -571,6 +571,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         notify_url: None,
         notify_hour: 8,
         notify_format: "json".into(),
+        public_url: None,
         timezone: chrono_tz::Tz::UTC,
         backup: None,
         backup_dir: None,

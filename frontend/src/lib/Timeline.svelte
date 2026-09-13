@@ -52,6 +52,20 @@
     <p class="year">{year}</p>
     <div class="list">
       {#each items as a (a.id)}
+        {#if a.category === 'reading'}
+          <!-- Folded: a reading is one number, and a monthly habit would otherwise bury the
+               repairs and services under a full card each. Still a button, so a typo can be
+               opened and fixed like any other entry. -->
+          <button
+            class="entry reading"
+            class:pending={a.pending}
+            disabled={a.pending}
+            onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
+          >
+            <span class="muted">{fmtDate(a.date, $locale)} · {$t('cat.reading')}{#if a.pending} · {$t('timeline.pending')}{/if}</span>
+            <span class="tnum">{counter(a.counter_value, unit, $locale)}</span>
+          </button>
+        {:else}
         <button
           class="card entry"
           class:pending={a.pending}
@@ -77,6 +91,7 @@
             </div>
           {/if}
         </button>
+        {/if}
       {/each}
     </div>
   {/each}
@@ -90,6 +105,12 @@
 <style>
   .entry { display: flex; flex-direction: column; gap: var(--space-1); text-align: left; width: 100%; }
   .entry.pending { opacity: .55; cursor: default; }
+  .entry.reading {
+    flex-direction: row; justify-content: space-between; align-items: baseline;
+    min-height: auto; padding: var(--space-2) var(--space-3);
+    background: transparent; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+    font-size: var(--text-sm); color: var(--text);
+  }
   .pending-chip { flex: none; }
   .head { justify-content: space-between; }
   .head b { flex: 1; }

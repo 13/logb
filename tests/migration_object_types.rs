@@ -56,6 +56,41 @@ async fn run_0009(pool: &SqlitePool) {
     sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await.unwrap();
 }
 
+/// Every SQLite migration after 0009, in order. A test about what the code offers has to run
+/// against the schema that code ships with: `CATEGORIES` grew `reading` in 0011, and checking it
+/// against 0009's CHECK alone reported a rejection no real database would make.
+async fn run_after_0009(pool: &SqlitePool) {
+    let mut later: Vec<_> = std::fs::read_dir("migrations/sqlite").unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.as_str() > "0009_object_types.sql" && name.ends_with(".sql"))
+        .collect();
+    later.sort();
+    for file in later {
+        let sql = std::fs::read_to_string(format!("migrations/sqlite/{file}")).unwrap();
+        sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await.unwrap_or_else(|e| panic!("{file}: {e}"));
+    }
+}
+
+/// 0011 is a second rebuild of `activities`, with the same way to go wrong as 0009: a DROP with
+/// foreign keys on takes every attachment and unlinks every reminder.
+#[tokio::test]
+async fn the_reading_migration_moves_nothing_else() {
+    let pool = old_schema_with_rows().await;
+    run_0009(&pool).await;
+    run_after_0009(&pool).await;
+    let attachments: i64 = sqlx::query_scalar("SELECT count(*) FROM attachments").fetch_one(&pool).await.unwrap();
+    let done: Option<i64> = sqlx::query_scalar("SELECT done_activity_id FROM reminders WHERE id = 1").fetch_one(&pool).await.unwrap();
+    let kind: String = sqlx::query_scalar("SELECT kind FROM reminders WHERE id = 1").fetch_one(&pool).await.unwrap();
+    assert_eq!(attachments, 1);
+    assert_eq!(done, Some(1), "the reminder still points at its activity");
+    assert_eq!(kind, "service", "every existing reminder is a service reminder");
+    let violations = sqlx::query("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap();
+    assert!(violations.is_empty(), "{} foreign key violations after the rebuild", violations.len());
+    let bad = sqlx::query("INSERT INTO reminders (object_id, title, due_date, created_at, kind) VALUES (1, 'x', '2026-01-01', 'x', 'odometer')")
+        .execute(&pool).await;
+    assert!(bad.is_err(), "kind is a closed set");
+}
+
 #[tokio::test]
 async fn known_categories_become_types() {
     let pool = old_schema_with_rows().await;
@@ -116,6 +151,7 @@ async fn the_new_categories_are_accepted_and_nonsense_is_not() {
 async fn the_schema_accepts_every_type_and_category_the_code_offers() {
     let pool = old_schema_with_rows().await;
     run_0009(&pool).await;
+    run_after_0009(&pool).await;
 
     for t in logb::object_type::OBJECT_TYPES.iter() {
         sqlx::query(

@@ -32,6 +32,10 @@ pub struct Config {
     /// ntfy-style services render.
     #[arg(long, env = "LOGB_NOTIFY_FORMAT", default_value = "json")]
     pub notify_format: String,
+    /// The address people open LogB at, e.g. `https://logb.example.com`. Only used to put
+    /// links into the reminder digest; unset sends the digest without them.
+    #[arg(long, env = "LOGB_PUBLIC_URL")]
+    pub public_url: Option<String>,
     /// IANA timezone name (`Europe/Berlin`, `UTC`, ...). Decides which day a reminder's
     /// due date is compared against, and when the daily digest goes out.
     #[arg(long, env = "LOGB_TIMEZONE", default_value = "UTC")]
@@ -174,6 +178,7 @@ mod tests {
             notify_url: None,
             notify_hour: 8,
             notify_format: "json".into(),
+            public_url: None,
             timezone: chrono_tz::Tz::UTC,
             backup: None,
             backup_dir: None,

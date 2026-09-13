@@ -203,6 +203,10 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
     // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
     // in tests/objects.rs is what catches them drifting apart.
+    //
+    // It counts service reminders only. A reading reminder's due date is a calendar-month
+    // addition on the latest reading, which SQL cannot spell the same way on both backends, so
+    // those are counted in Rust by `due_readings` below with the one copy of the rule.
     // `CAST(SUM(...) AS BIGINT)`, not a bare `SUM`: PostgreSQL widens a sum over a BIGINT
     // column to NUMERIC, which sqlx's `Any` driver cannot decode at all -- every read of an
     // object failed with "Any driver does not support the Postgres type Numeric" before the
@@ -213,6 +217,7 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
            (SELECT COUNT(*) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS activity_count, \
            (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS current_counter, \
            (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND r.deleted_at IS NULL \
+              AND r.kind = 'service' \
               AND (r.snoozed_until IS NULL OR r.snoozed_until <= $2) AND ( \
               (r.due_date IS NOT NULL AND r.due_date <= $2) OR \
               (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL)) \
@@ -222,7 +227,41 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
     )
     .bind(user_id).bind(db::today()).bind(only)
     .fetch_all(&state.db).await?;
-    Ok(rows.into_iter().map(|r| (r.object_id, r)).collect())
+    let mut rows: HashMap<i64, DerivedRow> = rows.into_iter().map(|r| (r.object_id, r)).collect();
+    for (object_id, due) in due_readings(state, user_id, only).await? {
+        if let Some(row) = rows.get_mut(&object_id) {
+            row.due_reminder_count += due;
+        }
+    }
+    Ok(rows)
+}
+
+/// How many reading reminders are due per object, for the same scope `derived` answers.
+/// Decided by `domain::reminder::reading_status`, the rule each reminder's own `due` uses.
+async fn due_readings(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result<HashMap<i64, i64>, AppError> {
+    use crate::domain::reminder::{reading_status, Every};
+    type ReadingRow = (i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>);
+    let today_str = db::today();
+    let rows: Vec<ReadingRow> = sqlx::query_as(
+        "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, \
+           (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
+              AND a.counter_value IS NOT NULL AND a.date <= $2) AS last_reading_date \
+         FROM reminders r JOIN objects o ON o.id = r.object_id \
+         WHERE r.kind = 'reading' AND r.done_at IS NULL AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
+           AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
+    )
+    .bind(user_id).bind(super::reminders::reading_horizon()).bind(only)
+    .fetch_all(&state.db).await?;
+    let parse = |s: &Option<String>| s.as_deref().and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let Some(today) = parse(&Some(today_str.clone())) else { return Ok(HashMap::new()) };
+    let mut counts = HashMap::new();
+    for (object_id, start, every_n, every_unit, snoozed, last) in rows {
+        let every = Every::from_parts(every_n, every_unit.as_deref());
+        if reading_status(today, parse(&start), parse(&last), every, parse(&snoozed)).0 {
+            *counts.entry(object_id).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
 }
 
 impl DerivedRow {

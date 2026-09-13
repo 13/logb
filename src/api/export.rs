@@ -1,7 +1,7 @@
 use super::attachments::{self, AttachmentOut};
 use super::objects::{load_owned_object, ObjectInput, ObjectRow};
 use super::activities::{ActivityInput, ActivityRow};
-use super::reminders::{ReminderInput, ReminderRow};
+use super::reminders::{select_reminders, ReminderInput, ReminderRow};
 use super::settings;
 use crate::auth::AuthUser;
 use crate::db;
@@ -69,6 +69,13 @@ struct ReminderExport {
     // those older archives import as reminders that simply were never snoozed.
     #[serde(default)]
     snoozed_until: Option<String>,
+    // Added with reading reminders; an older archive's reminders are all service reminders.
+    #[serde(default = "super::reminders::service_kind")]
+    kind: String,
+    #[serde(default)]
+    every_n: Option<i64>,
+    #[serde(default)]
+    every_unit: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -159,12 +166,9 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
              FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
-        let rems = sqlx::query_as::<_, ReminderRow>(
-            "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
-             r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, o.name AS object_name, o.counter_unit, \
-             NULL AS current_counter FROM reminders r JOIN objects o ON o.id = r.object_id \
-             WHERE r.object_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")
-            .bind(o.id).fetch_all(&state.db).await?;
+        let rems = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
+            "WHERE r.object_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")))
+            .bind(super::reminders::reading_horizon()).bind(o.id).fetch_all(&state.db).await?;
         for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
         let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
         let cover_sha256 = match o.cover_attachment_id.and_then(|cid| atts.iter().find(|a| a.id == cid)) {
@@ -186,6 +190,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter, done_at: r.done_at.clone(),
                 done_activity_index: r.done_activity_id.and_then(|id| index_of.get(&id).copied()),
                 created_at: r.created_at.clone(), snoozed_until: r.snoozed_until.clone(),
+                kind: r.kind.clone(), every_n: r.every_n, every_unit: r.every_unit.clone(),
             }).collect(),
         });
     }
@@ -429,12 +434,13 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
             let reminder_uuid = uuid::Uuid::new_v4().to_string();
             sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)")
+                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .bind(&r.snoozed_until)
                 .bind(&reminder_uuid)
+                .bind(&r.kind).bind(r.every_n).bind(&r.every_unit)
                 .execute(&mut *tx).await?;
             record::record_create(&mut tx, user.id, Entity::Reminder, &reminder_uuid, &edited_at).await?;
             counts.reminders += 1;
@@ -500,7 +506,16 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             let mut rem_input = ReminderInput {
                 title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(),
                 due_counter: r.due_counter, repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
+                kind: r.kind.clone(), every_n: r.every_n, every_unit: r.every_unit.clone(),
             };
+            // `validate` fills in a missing start for a reading reminder, but the insert below
+            // writes the archive's own value -- so the archive has to carry one.
+            if r.kind == crate::domain::reminder::KIND_READING && r.due_date.is_none() {
+                return Err(tag(
+                    AppError::BadRequest("a reading reminder needs a due_date (its start)".into()),
+                    &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title),
+                ));
+            }
             rem_input.validate(o.counter_unit.as_deref())
                 .map_err(|e| tag(e, &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title)))?;
         }

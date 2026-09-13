@@ -103,7 +103,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         // `ReminderInput::validate` -- which is a stricter bound than "non-negative" and
         // therefore satisfies it too.
         let must_be_positive =
-            matches!((entity, field), (Entity::Reminder, "repeat_months" | "repeat_counter"));
+            matches!((entity, field), (Entity::Reminder, "repeat_months" | "repeat_counter" | "every_n"));
         let non_negative = matches!(
             (entity, field),
             (Entity::Object, "purchase_price_cents")

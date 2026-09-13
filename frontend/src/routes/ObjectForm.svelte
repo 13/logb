@@ -7,6 +7,9 @@
   import { centsToInput, parseMoney } from '../lib/format';
   import { emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
+  import { readingReminder, reminderBody } from '../lib/reminder-form';
+  import { addMonthsIso } from '../lib/reading';
+  import { todayIso } from '../lib/format';
   import { OBJECT_TYPES, type MemObject, type ObjectInput } from '../lib/types';
 
   let { id }: { id?: string } = $props();
@@ -16,6 +19,8 @@
     untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
   );
   let priceText = $state('');
+  /** Opt-in, never automatic: a reminder nobody asked for is the kind that gets muted. */
+  let remindReading = $state(false);
   let error = $state('');
   let busy = $state(false);
   /** The objects offered as this one's parent: everything the user owns, minus this object and
@@ -80,6 +85,14 @@
       const saved = editing
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
         : await api<MemObject>('POST', '/objects', input);
+      if (!editing && remindReading && saved.counter_unit) {
+        // Starting a month out: the reading just typed into a new object's first entry is as
+        // good as today's, so asking again tomorrow would be noise. A failure here must not
+        // lose the object that was just saved -- the reminder can be added from its tab.
+        const start = addMonthsIso(todayIso(), 1);
+        try { await api('POST', `/objects/${saved.id}/reminders`, reminderBody(readingReminder($t('reading.reminder-title'), start))); }
+        catch { /* the object is saved; the reminders tab offers the same action */ }
+      }
       go(`/objects/${saved.id}`, true);
     } catch (err) { error = (err as Error).message; } finally { busy = false; }
   }
@@ -110,6 +123,9 @@
         <option value="h">{$t('object.counter-h')}</option>
       </select>
     </div>
+    {#if !editing && input.counter_unit}
+      <label class="row toggle"><input type="checkbox" bind:checked={remindReading} /> {$t('object.reading-reminder')}</label>
+    {/if}
     <div class="field">
       <label for="fu">{$t('object.fuel-unit')}</label>
       <select id="fu" bind:value={input.fuel_unit}>
