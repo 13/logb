@@ -83,8 +83,6 @@
 </main>
 
 <style>
-  input[type='search'] { width: 100%; }
-  h2 { font-size: .9rem; color: var(--muted); margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--surface-2); }
   .hit-title { font-weight: 600; }
   .small { font-size: .8rem; }
