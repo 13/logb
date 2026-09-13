@@ -7,7 +7,7 @@ import { signIn } from './helpers';
  * moment it can be read is the moment it is created; if that does not reach the screen, the
  * token is unusable and the only remedy is to revoke it and start again.
  */
-test('a token can be created, used, and revoked from Settings', async ({ page, playwright }) => {
+test('a token can be created, used, and revoked from Settings', async ({ page, playwright, baseURL }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
 
@@ -25,8 +25,10 @@ test('a token can be created, used, and revoked from Settings', async ({ page, p
   await expect(page.locator('.list').getByText(token)).toHaveCount(0);
 
   // A request context of its own, so it carries no cookie and the header is the only credential
-  // in play -- which is the whole point of the token.
-  const client = await playwright.request.newContext({ baseURL: 'http://127.0.0.1:8099' });
+  // in play -- which is the whole point of the token. Each project runs its own server on its
+  // own port (see playwright.config.ts), so this has to follow the project's own baseURL rather
+  // than a fixed port -- otherwise it would mint a token on one server and spend it on the other.
+  const client = await playwright.request.newContext({ baseURL });
   try {
     expect((await client.get('/api/objects')).status()).toBe(401);
     const authed = await client.get('/api/objects', { headers: { Authorization: `Bearer ${token}` } });

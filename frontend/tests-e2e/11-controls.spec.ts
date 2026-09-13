@@ -49,12 +49,7 @@ test('the browser draws no clear button of its own', async ({ page }) => {
 
 // The quick-log button sat in its own full-height box beside the card, with a gap on each side,
 // so every row read as two cards -- and it was a fullwidth plus character rather than an icon.
-test('the quick-log action belongs to its row', async ({ page }, testInfo) => {
-  // "Row shape probe" is a fixed object name. The desktop project shares the mobile project's
-  // database (see playwright.config.ts), so the mobile pass has already created one, and a
-  // second one here makes `.card-row` match two rows -- a run-order limitation of a fixed
-  // name, not anything about desktop layout.
-  test.skip(testInfo.project.name === 'desktop', 'creates a fixed-named object that collides with the mobile project\'s own run of this test');
+test('the quick-log action belongs to its row', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Row shape probe');
@@ -91,13 +86,7 @@ test('an empty search says so, and an unrun search does not', async ({ page }) =
 // A button stood 46px tall, a text field 48 and a select and a date field 50 -- three heights
 // in one form, from three different internal line boxes rather than from anything anyone chose.
 // The numbers are the assertion: "they look consistent" is what the last fix claimed.
-test('every control in a form is the same height', async ({ page }, testInfo) => {
-  // "Control height probe" is a fixed object name. The desktop project shares the mobile
-  // project's database (see playwright.config.ts), so the mobile pass has already created one
-  // and put it ahead of this run's own copy in the dashboard list, and clicking into "the" row
-  // by that name times out -- a run-order limitation of a fixed name, not anything about
-  // desktop layout.
-  test.skip(testInfo.project.name === 'desktop', 'creates a fixed-named object that collides with the mobile project\'s own run of this test');
+test('every control in a form is the same height', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Control height probe');
@@ -133,12 +122,7 @@ test('every control in a form is the same height', async ({ page }, testInfo) =>
 // The chips row sat flush against the first card: 8px of air above it and 4px below, and the
 // 4px was the focus ring's bleed rather than a gap anyone chose. A row that filters a list
 // belongs between the two, not stuck to one of them.
-test('the filter row sits in the middle of its own gap', async ({ page }, testInfo) => {
-  // "Chip gap probe" is a fixed object name. The desktop project shares the mobile project's
-  // database (see playwright.config.ts), so the mobile pass has already created one, and a
-  // second one here makes `.card-row` match two rows -- a run-order limitation of a fixed
-  // name, not anything about desktop layout.
-  test.skip(testInfo.project.name === 'desktop', 'creates a fixed-named object that collides with the mobile project\'s own run of this test');
+test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Chip gap probe');

@@ -19,14 +19,7 @@ async function seed(page: import('@playwright/test').Page) {
   expect(activity.ok()).toBe(true);
 }
 
-test('search finds an object and an activity from the dashboard', async ({ page }, testInfo) => {
-  // `seed` names this test's fixtures "Saab" / "Cambelt" so they cannot collide with what other
-  // *specs* create -- but it does not make them unique against a second run of *this same
-  // test*. The desktop project shares the mobile project's database (see playwright.config.ts),
-  // so the mobile pass has already seeded one "Saab", and seeding a second here turns every
-  // `getByRole('button', { name: /Saab/ })` into a strict-mode violation -- a run-order
-  // limitation of this test, not anything about desktop rendering.
-  test.skip(testInfo.project.name === 'desktop', 'seeds fixed-named fixtures that collide with the mobile project\'s own run of this test');
+test('search finds an object and an activity from the dashboard', async ({ page }) => {
   await signIn(page);
   await seed(page);
   await page.getByRole('button', { name: 'Search' }).click();

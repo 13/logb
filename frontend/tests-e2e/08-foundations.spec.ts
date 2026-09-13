@@ -1,16 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { signIn } from './helpers';
 
-test('keyboard focus is visible', async ({ page }, testInfo) => {
-  // Bounded at 40 Tab presses to reach the dashboard's `.primary` button, which was enough
-  // against however much data the mobile project's own run of specs 01-07 had left in the
-  // shared database (see playwright.config.ts -- one server, one database, both projects). By
-  // the time the desktop project reaches this test it is tabbing through *its own* run of
-  // those same specs on top of everything the mobile project already created, roughly doubling
-  // the object cards -- and their per-row buttons -- ahead of the one being tabbed to. That is
-  // a run-order/data-volume limitation of a fixed tab budget, not anything about desktop focus
-  // order or rendering: the same assertions pass on desktop against a database of its own.
-  test.skip(testInfo.project.name === 'desktop', 'fixed Tab budget is exceeded once the mobile project has also populated the shared database');
+test('keyboard focus is visible', async ({ page }) => {
   await signIn(page);
 
   // A real Tab press, not .focus(): `:focus-visible` deliberately does not match a programmatic
