@@ -184,13 +184,25 @@ pub async fn purge(
     // the log rows for their window are already gone, and a purge has no device to attribute
     // them to -- so no device would ever learn of them and the next run would destroy them for
     // good. That is the same silent loss wearing a tidier hat.
+    //
+    // The last guard on `objects` is the same promise turned inward: an object may name another
+    // object as its `parent_id`, so the table is its own child table and the ordering of this
+    // list cannot separate the two. It carries no `deleted_at` condition on `c` deliberately. A
+    // LIVE child could not be there anyway -- deleting an object cascades tombstones over its
+    // whole subtree, so no live child outlives its parent's tombstone -- but a child tombstoned
+    // later than its parent, and so still inside the window, must hold the parent back all the
+    // same: `objects.parent_id` references `objects(id)` with no `ON DELETE` action, so taking
+    // the parent first fails the entire purge on the foreign key, and if that reference were
+    // ever relaxed it would silently leave the child pointing at nothing. The parent waits a
+    // run, which is what it already does for an activity, a reminder or an attachment.
     let guards = [
         ("attachments", ""),
         ("activities", "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)"),
         ("reminders", ""),
         ("objects", "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
-                     AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
+                     AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id) \
+                     AND NOT EXISTS (SELECT 1 FROM objects c WHERE c.parent_id = objects.id)"),
     ];
     // One transaction around the whole purge, and every guarded read or delete against it. Run
     // as separate autocommit statements they were separate answers to "has this parent any

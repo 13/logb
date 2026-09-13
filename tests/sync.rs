@@ -1667,6 +1667,47 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     assert_eq!(objects, 0, "an expired tombstone is finally a real delete");
 }
 
+/// The purge must not hard-delete a tombstoned parent while any object -- live, or itself
+/// tombstoned but not yet purged -- still names it as `parent_id`. `objects.parent_id`
+/// references `objects(id)` with no `ON DELETE` action, so taking the parent first is a foreign
+/// key violation that fails the whole purge; and were the constraint ever relaxed it would
+/// instead leave the child pointing at a row that no longer exists. Either way the parent waits,
+/// exactly as it already waits for its activities, reminders and attachments.
+#[tokio::test]
+async fn a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+        .bind(garage_id).bind(light_id)
+        .execute(&app.state.db).await.unwrap();
+
+    // The REST delete tombstones the garage and cascades a tombstone onto the light.
+    app.delete_object(&garage).await;
+    // Backdate both tombstones past the retention window, the only way a test can reach the
+    // state the purge is about.
+    app.age_out_tombstones().await;
+
+    app.run_purge().await;
+
+    let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(parent, 1, "the parent must survive a purge that is still clearing its child");
+    let child: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(child, 0, "the child itself had aged out and goes on this run");
+
+    // Nothing references the garage any more, so the next run finishes the job.
+    app.run_purge().await;
+    let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(parent, 0, "once the child is gone the parent is finally purged");
+}
+
 #[tokio::test]
 async fn purge_keeps_recent_history() {
     let app = common::spawn().await;
