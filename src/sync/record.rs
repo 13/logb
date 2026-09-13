@@ -293,6 +293,13 @@ pub(crate) async fn record_delete(
         .await
 }
 
+/// What `cascade_object` returns: its future, boxed. Spelled out as an alias because
+/// `clippy::type_complexity` -- denied in CI -- will not accept it inline.
+type CascadeFuture<'a> =
+    std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<(Entity, String)>, AppError>> + Send + 'a>,
+    >;
+
 /// Tombstones an object's activities, reminders and attachments, answering the children this
 /// call actually tombstoned so the caller can log them.
 ///
@@ -304,47 +311,77 @@ pub(crate) async fn record_delete(
 /// Attachments are matched on `object_id`, not on their activity, because every attachment
 /// carries the object it belongs to whether or not it also names an activity. That is the same
 /// column both callers use, so neither can reach a row the other misses.
-pub(crate) async fn cascade_object(
-    tx: &mut sqlx::AnyConnection,
-    object_uuid: &str,
-    now: &str,
-) -> Result<Vec<(Entity, String)>, AppError> {
-    let mut cascaded = Vec::new();
-    // Of the three cascaded tables, only `activities` carries `updated_at`
-    // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
-    // bump on those two.
-    for (entity, has_updated_at) in
-        [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
-    {
-        // The table name comes from `Entity::table` over a closed set fixed above, never from
-        // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
-        // the author to have made.
-        let table = entity.table();
-        // `{MINE}` carries one placeholder for `object_uuid`. Its number depends on how many
-        // placeholders precede it in the statement it's spliced into, so it takes that number
-        // as a parameter rather than fixing one -- the three call sites below bind `object_uuid`
-        // last, after zero, one or two earlier binds.
-        fn mine(placeholder: u8) -> String {
-            format!(
-                "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ${placeholder})"
-            )
+///
+/// An object's direct children are cascaded too, and each child's own children after that, so
+/// deleting "House" takes the "Garage" inside it and the "Main light" inside that. Because the
+/// function now calls itself, it cannot stay an `async fn` -- the generated future would
+/// contain itself and so have infinite size -- hence the explicitly boxed return.
+pub(crate) fn cascade_object<'a>(
+    tx: &'a mut sqlx::AnyConnection,
+    object_uuid: &'a str,
+    now: &'a str,
+) -> CascadeFuture<'a> {
+    Box::pin(async move {
+        let mut cascaded = Vec::new();
+        // Of the three cascaded tables, only `activities` carries `updated_at`
+        // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
+        // bump on those two.
+        for (entity, has_updated_at) in
+            [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
+        {
+            // The table name comes from `Entity::table` over a closed set fixed above, never from
+            // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
+            // the author to have made.
+            let table = entity.table();
+            // `{MINE}` carries one placeholder for `object_uuid`. Its number depends on how many
+            // placeholders precede it in the statement it's spliced into, so it takes that number
+            // as a parameter rather than fixing one -- the three call sites below bind `object_uuid`
+            // last, after zero, one or two earlier binds.
+            fn mine(placeholder: u8) -> String {
+                format!(
+                    "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ${placeholder})"
+                )
+            }
+            // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
+            // rows this cascade is about to claim.
+            let select = format!("SELECT client_uuid FROM {table} WHERE {}", mine(1));
+            let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
+                .bind(object_uuid).fetch_all(&mut *tx).await?;
+            let update = if has_updated_at {
+                format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 WHERE {}", mine(3))
+            } else {
+                format!("UPDATE {table} SET deleted_at = $1 WHERE {}", mine(2))
+            };
+            let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
+            let query = if has_updated_at { query.bind(now) } else { query };
+            query.bind(object_uuid).execute(&mut *tx).await?;
+            cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
         }
-        // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
-        // rows this cascade is about to claim.
-        let select = format!("SELECT client_uuid FROM {table} WHERE {}", mine(1));
-        let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
-            .bind(object_uuid).fetch_all(&mut *tx).await?;
-        let update = if has_updated_at {
-            format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 WHERE {}", mine(3))
-        } else {
-            format!("UPDATE {table} SET deleted_at = $1 WHERE {}", mine(2))
-        };
-        let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
-        let query = if has_updated_at { query.bind(now) } else { query };
-        query.bind(object_uuid).execute(&mut *tx).await?;
-        cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
-    }
-    Ok(cascaded)
+
+        // The fourth cascaded relationship, and the only recursive one: an object's direct
+        // children. Each child tombstoned here may itself have children, so this calls itself
+        // once per child. It terminates because `parent_is_valid`'s cycle check refuses every
+        // write that could make this tree infinite -- there is no way to reach this point with
+        // a loop in the ancestry.
+        // `client_uuid` is nullable here as everywhere else in this file, so the read goes through
+        // `nameable` rather than decoding straight into `String`: a child row without a uuid is
+        // still tombstoned by the UPDATE below, it just has no identity the log could name and no
+        // key this function could recurse on. Decoding into `String` would instead fail the whole
+        // delete over such a row.
+        let child_uuids: Vec<String> = nameable(sqlx::query_scalar(
+            "SELECT client_uuid FROM objects \
+             WHERE deleted_at IS NULL AND parent_id = (SELECT id FROM objects WHERE client_uuid = $1)")
+            .bind(object_uuid).fetch_all(&mut *tx).await?).collect();
+        sqlx::query(
+            "UPDATE objects SET deleted_at = $1, updated_at = $1 \
+             WHERE deleted_at IS NULL AND parent_id = (SELECT id FROM objects WHERE client_uuid = $2)")
+            .bind(now).bind(object_uuid).execute(&mut *tx).await?;
+        for child_uuid in &child_uuids {
+            cascaded.push((Entity::Object, child_uuid.clone()));
+            cascaded.extend(cascade_object(&mut *tx, child_uuid, now).await?);
+        }
+        Ok(cascaded)
+    })
 }
 
 /// Clears an object's cover pointer if the attachment just tombstoned is what it was pointing

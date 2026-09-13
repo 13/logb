@@ -361,3 +361,64 @@ async fn a_parent_belonging_to_another_user_is_invalid() {
     ).await.unwrap();
     assert!(!ok, "a parent owned by another account must be invalid regardless of ancestry");
 }
+
+/// Deleting an object deletes everything inside it, at every depth, and each descendant's own
+/// activities, attachments and reminders go with it -- not just the descendant itself.
+#[tokio::test]
+async fn deleting_an_object_tombstones_every_descendant_and_their_own_children() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+    app.create_activity(&light["id"], "Changed the bulb").await;
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(house_id).bind(garage_id)
+        .execute(&mut *conn).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{house_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    for id in [garage_id, light_id] {
+        let deleted_at: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = $1")
+            .bind(id).fetch_one(&mut *conn).await.unwrap();
+        assert!(deleted_at.is_some(), "object {id} must be tombstoned when its ancestor is deleted");
+    }
+    let live_activities: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL")
+        .bind(light_id).fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(live_activities, 0, "the light's own activity must be tombstoned too, not just the light");
+}
+
+/// Each cascaded descendant must appear in the change log as its own delete, or a device that
+/// only pulls Garage's delete would never learn the light inside it was removed.
+#[tokio::test]
+async fn a_cascaded_descendant_is_logged_as_its_own_delete() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+    let mut conn = app.state.db.acquire().await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+    drop(conn);
+
+    app.client.delete(app.url(&format!("/objects/{garage_id}"))).send().await.unwrap();
+
+    let light_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE entity = 'object' AND entity_uuid = $1 AND op = 'delete'")
+        .bind(&light_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "the light's own delete must reach the change log, or a device never learns it is gone");
+}
