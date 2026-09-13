@@ -3,6 +3,7 @@
   import { t } from '../i18n';
   import Icon from './Icon.svelte';
   import AppFooter from './AppFooter.svelte';
+  import Logo from './Logo.svelte';
   import { DESTINATIONS, activeDestination } from './nav';
 
   const active = $derived(activeDestination($path));
@@ -12,7 +13,9 @@
      here by a matchMedia read: a breakpoint measured in JavaScript is wrong on first paint and
      wrong again on every resize, and this element is on screen for all of both. -->
 <nav class="appnav" aria-label={$t('nav.primary')}>
-  <span class="wordmark">LogB</span>
+  <!-- Desktop only: app.css hides .wordmark below 900px, where the phone's top bar is already
+       full with the back button, title and outbox chips. -->
+  <span class="wordmark"><Logo size={28} decorative inline />LogB</span>
   <ul>
     {#each DESTINATIONS as d (d.id)}
       <li>

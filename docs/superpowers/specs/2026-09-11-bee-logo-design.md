@@ -1,6 +1,6 @@
 # A bee for logb
 
-Status: approved design, not yet implemented.
+Status: superseded by [2026-09-13-logb-mark-design.md](2026-09-13-logb-mark-design.md). The bee is retired.
 
 ## Problem
 

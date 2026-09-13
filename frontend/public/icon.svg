@@ -1,18 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LogB">
   <rect width="64" height="64" rx="14" fill="#1f6f5f"/>
-  <!--bee-->
-  <g transform="rotate(-14 32 36)">
-    <ellipse cx="30" cy="23" rx="11" ry="6.2" transform="rotate(-26 30 23)" fill="#ffffff" opacity=".55"/>
-    <ellipse cx="41" cy="25" rx="8.6" ry="5" transform="rotate(-8 41 25)" fill="#ffffff" opacity=".4"/>
-    <path d="M49 34.5l6 3.5-6 3.5z" fill="#123c34"/>
-    <rect x="22" y="30" width="28" height="16" rx="8" fill="#f2b134"/>
-    <clipPath id="body"><rect x="22" y="30" width="28" height="16" rx="8"/></clipPath>
-    <g clip-path="url(#body)">
-      <rect x="33" y="29" width="5" height="18" fill="#123c34"/>
-      <rect x="42" y="29" width="5" height="18" fill="#123c34"/>
-    </g>
-    <circle cx="22" cy="38" r="8" fill="#123c34"/>
-    <path d="M18.5 31l-4.5-4.5M23 29.5l-2-5.5" stroke="#123c34" stroke-width="2.6" stroke-linecap="round" fill="none"/>
-  </g>
-  <!--/bee-->
+  <!--mark-->
+  <circle cx="32" cy="32" r="20" fill="none" stroke="#ffffff" stroke-width="4.5"/>
+  <circle cx="22.5" cy="25" r="2.9" fill="#ffffff"/>
+  <path d="M29 25h14M22 32h17.5M22 39h13" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+  <!--/mark-->
 </svg>

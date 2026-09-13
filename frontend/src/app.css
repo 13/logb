@@ -250,7 +250,7 @@ button, a, .chip {
   background: none; color: var(--muted);
 }
 .appnav .dest.active { color: var(--accent); font-weight: 600; }
-.wordmark { font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
+.wordmark { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
 
 /* Mobile: a bottom tab bar. The top of a phone screen is the one place a thumb cannot reach,
    which is exactly where every navigation control in this app used to live.

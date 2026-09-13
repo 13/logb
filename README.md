@@ -1,4 +1,4 @@
-# LogB
+# <img src="frontend/public/icon.svg" width="40" height="40" alt="" align="top"> LogB
 
 Complete history of your owned objects — cars, e-bikes, homes, tools.
 Log what you did (date, mileage, cost, notes, photos, documents), see the
