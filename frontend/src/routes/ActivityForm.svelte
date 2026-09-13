@@ -346,7 +346,7 @@
 <style>
   .hintbtn { font-size: var(--text-sm); color: var(--accent); padding: var(--space-1) 0; text-align: left; }
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
-  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
+  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
   .actions { margin-top: var(--space-2); }
   /* A positioning context for the pending badge, not a thumbnail. It was called `thumb`, which
      collided with the global grid-image rule in app.css and inflated it to a full-width square

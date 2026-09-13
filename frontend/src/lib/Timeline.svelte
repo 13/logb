@@ -96,5 +96,5 @@
   .head .chip { flex: none; }
   .notes { font-size: var(--text-sm); white-space: pre-wrap; }
   .more { width: 100%; margin-top: var(--space-3); }
-  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
+  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
 </style>

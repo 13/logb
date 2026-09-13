@@ -433,7 +433,7 @@
 <style>
   .fresh-token { display: grid; gap: var(--space-2); }
   /* The token is long and must be readable in full, since it can never be shown again. */
-  .fresh-token code { word-break: break-all; font-size: var(--text-sm); background: var(--surface-2); padding: var(--space-2); border-radius: 8px; }
+  .fresh-token code { word-break: break-all; font-size: var(--text-sm); background: var(--surface-2); padding: var(--space-2); border-radius: var(--radius-sm); }
   .row > button { flex: none; }
   .stack { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
   /* A host, a file path, an epoch and a driver's error message are all long and none of them

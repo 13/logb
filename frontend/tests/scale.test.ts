@@ -34,6 +34,12 @@ function styleBlocks(dir: string): Array<{ rel: string; css: string }> {
 const SPACING = /(?:(?:gap|margin|padding)(?:-[a-z]+)*|--space-[\w-]*):\s*([^;}]+)[;}]/g;
 
 /**
+ * The third scale. Corners drifted while nothing was watching them: 6px twice, 5px once, and
+ * an 8px that is `--radius-sm` spelled out. Same shape of check, same shape of exemption.
+ */
+const RADIUS = /(?:border-radius|--radius-[\w-]*):\s*([^;}]+)[;}]/g;
+
+/**
  * The values a declaration writes, with scale references and `calc()` scaffolding taken out.
  * What is left is what the component chose for itself: `calc(44px + var(--space-2) * 2)` is
  * one invented value (`44px`) and one scale reference, not five tokens.
@@ -50,6 +56,7 @@ function values(raw: string, scale: RegExp): string[] {
 }
 
 const spacingValues = (raw: string) => values(raw, /var\(--space-[\w-]*\)/g);
+const radiusValues = (raw: string) => values(raw, /var\(--radius-[\w-]*\)/g);
 
 /**
  * Values a component may hold despite not being on the scale, each with the reason. Listed by
@@ -64,10 +71,25 @@ const ALLOWED: Record<string, string> = {
   auto: 'a centring keyword, not a spacing value: `margin: 0 auto` is alignment',
 };
 
+/**
+ * Values a component may hold despite not being on the radius scale. Empty, and it has to stay
+ * honest rather than convenient: every corner in the app is one of the three steps today, and a
+ * genuine exception belongs here with its reason -- which is why the list below is read by the
+ * "still needed" test the same way ALLOWED is.
+ */
+const RADIUS_ALLOWED: Record<string, string> = {};
+
 /** Every spacing token any component writes, scale values included. */
 function spacingTokens(): string[] {
   return styleBlocks(SRC).flatMap(({ css }) =>
     [...css.matchAll(SPACING)].flatMap((m) => spacingValues(m[1])),
+  );
+}
+
+/** Every corner any component writes, token references included. */
+function radiusTokens(): string[] {
+  return styleBlocks(SRC).flatMap(({ css }) =>
+    [...css.matchAll(RADIUS)].flatMap((m) => radiusValues(m[1])),
   );
 }
 
@@ -90,6 +112,15 @@ describe('the scale', () => {
     }
   });
 
+  it('no component invents a corner', () => {
+    for (const { rel, css } of styleBlocks(SRC)) {
+      const hits = [...css.matchAll(RADIUS)]
+        .flatMap((m) => radiusValues(m[1]))
+        .filter((v) => !(v in RADIUS_ALLOWED));
+      expect(hits, `${rel} sets a corner outside the scale: ${hits.join(', ')}`).toEqual([]);
+    }
+  });
+
   it('every exemption is still needed', () => {
     // The same guard the icon test carries: an exemption whose value no longer appears anywhere
     // should come out of ALLOWED rather than sit there excusing nothing. `50%` and `100%` came
@@ -99,6 +130,13 @@ describe('the scale', () => {
       expect(
         written.has(value),
         `no component writes ${value} as spacing any more (${reason}) -- remove the exemption`,
+      ).toBe(true);
+    }
+    const corners = new Set(radiusTokens());
+    for (const [value, reason] of Object.entries(RADIUS_ALLOWED)) {
+      expect(
+        corners.has(value),
+        `no component writes ${value} as a corner any more (${reason}) -- remove the exemption`,
       ).toBe(true);
     }
   });
