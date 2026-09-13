@@ -3,7 +3,8 @@
    *  take the theme's colour through `currentColor`, and the project has no runtime dependencies. */
   export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
     | 'plus'
-    | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object';
+    | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object'
+    | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron';
   let { name, size = 20 }: { name: IconName; size?: number } = $props();
 </script>
 
@@ -73,6 +74,34 @@
     <path d="M3 8l9-5 9 5-9 5-9-5z" />
     <path d="M3 8v8l9 5 9-5V8" />
     <path d="M12 13v8" />
+  {:else if name === 'palette'}
+    <circle cx="13.5" cy="6.5" r="1.25" />
+    <circle cx="17.5" cy="10.5" r="1.25" />
+    <circle cx="6.5" cy="12.5" r="1.25" />
+    <circle cx="8.5" cy="7.5" r="1.25" />
+    <path d="M12 2a10 10 0 1 0 0 20 2 2 0 0 0 1.5-3.3 2 2 0 0 1 1.5-3.2h2.5A4.5 4.5 0 0 0 22 11c0-4.97-4.48-9-10-9z" />
+  {:else if name === 'person'}
+    <circle cx="12" cy="8" r="3.5" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  {:else if name === 'key'}
+    <circle cx="7.5" cy="15.5" r="3.5" />
+    <path d="M10 13 20 3" />
+    <path d="M17 6l2.5 2.5" />
+  {:else if name === 'box'}
+    <path d="M3 8l9-5 9 5v8l-9 5-9-5z" />
+    <path d="M3 8l9 5 9-5" />
+    <path d="M12 13v8" />
+  {:else if name === 'people'}
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+    <path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" />
+    <path d="M17.5 14.3A6.5 6.5 0 0 1 21.5 20" />
+  {:else if name === 'database'}
+    <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+    <path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13" />
+    <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+  {:else if name === 'chevron'}
+    <path d="m9 18 6-6-6-6" />
   {:else}
     {(name satisfies never)}
   {/if}
