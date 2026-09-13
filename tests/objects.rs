@@ -499,3 +499,104 @@ async fn a_deep_chain_does_not_overflow_the_stack() {
     let res = app.client.delete(app.url(&format!("/objects/{}", root["id"]))).send().await.unwrap();
     assert_eq!(res.status(), 204, "a chain 2000 deep must delete cleanly, not crash the process");
 }
+
+#[tokio::test]
+async fn creating_an_object_with_a_valid_parent_succeeds() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let garage: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(garage["parent_id"], house["id"]);
+}
+
+#[tokio::test]
+async fn reparenting_onto_a_descendant_is_refused_with_a_400() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{}", house["id"])))
+        .json(&serde_json::json!({ "name": "House", "type": "home", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": garage["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+/// Roots-only by default is the dashboard's contract, and it must hold for the overwhelmingly
+/// common case of an installation with no hierarchy at all.
+#[tokio::test]
+async fn listing_objects_with_no_parent_id_query_returns_only_roots() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let list: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<String> = list.iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, vec!["House"], "the default list must exclude Garage, which has a parent");
+}
+
+#[tokio::test]
+async fn listing_a_specific_parents_children_returns_only_those() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let bike = app.create_object(&app.client, "Bike", None).await; // stays a root
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let list: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects?archived=false&parent_id={}", house["id"])))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<String> = list.iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, vec!["Garage"]);
+    let _ = bike; // present in the account, absent from this query -- the point being tested
+}
+
+#[tokio::test]
+async fn reading_an_object_reports_its_ancestor_chain() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+    app.client.patch(app.url(&format!("/objects/{}", light["id"])))
+        .json(&serde_json::json!({ "name": "Main light", "type": "other", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": garage["id"] }))
+        .send().await.unwrap();
+
+    let read: serde_json::Value = app.client.get(app.url(&format!("/objects/{}", light["id"])))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = read["ancestors"].as_array().unwrap().iter()
+        .map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["House", "Garage"], "root first, nearest ancestor last, self excluded");
+}

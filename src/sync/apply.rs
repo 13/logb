@@ -29,6 +29,7 @@ pub fn wins(
     }
 }
 
+use crate::api::objects::PARENT_REJECTION;
 use crate::error::AppError;
 use crate::sync::record;
 use crate::sync::{syncable_field_type, Entity, FieldType, Op, OpKind, Outcome};
@@ -379,6 +380,18 @@ pub async fn apply_op(
                          WHERE a.id = $1 AND o.client_uuid = $2 AND a.deleted_at IS NULL")
                         .bind(referenced).bind(&op.entity_uuid)
                         .fetch_optional(&mut *tx).await?,
+                    // A parent is not "a row on the same object" but a row on the same
+                    // ACCOUNT that must also not be inside this object's own subtree, so it
+                    // goes through `record::parent_is_valid` -- the single copy of that rule
+                    // the REST door uses too.
+                    (Entity::Object, "parent_id") => {
+                        let object_id = record::id_of(&mut *tx, Entity::Object, &op.entity_uuid).await?;
+                        if record::parent_is_valid(&mut *tx, user_id, Some(object_id), *referenced).await? {
+                            Some(*referenced)
+                        } else {
+                            None
+                        }
+                    }
                     (Entity::Reminder, "done_activity_id") => sqlx::query_scalar(
                         "SELECT act.id FROM activities act \
                          JOIN reminders r ON r.object_id = act.object_id \
@@ -388,9 +401,15 @@ pub async fn apply_op(
                     _ => Some(*referenced),
                 };
                 if permitted.is_none() {
-                    return Ok(Outcome::Rejected {
-                        reason: format!("{field} must reference a row on the same object"),
-                    });
+                    // `parent_id` gets its own sentence, word for word the one
+                    // `objects::update` answers a bad parent with: the two doors refuse the
+                    // same write for the same stated reason rather than leaving a client to
+                    // guess why only one of them complained about "the same object".
+                    let reason = match (op.entity, field) {
+                        (Entity::Object, "parent_id") => PARENT_REJECTION.to_string(),
+                        _ => format!("{field} must reference a row on the same object"),
+                    };
+                    return Ok(Outcome::Rejected { reason });
                 }
             }
 

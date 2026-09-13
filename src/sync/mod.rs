@@ -107,7 +107,7 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             ("name", Text), ("type", Text), ("counter_unit", Text), ("fuel_unit", Text),
             ("description", Text), ("purchase_date", Text),
             ("purchase_price_cents", Integer), ("archived_at", Text),
-            ("cover_attachment_id", Integer),
+            ("cover_attachment_id", Integer), ("parent_id", Integer),
         ],
         Entity::Activity => &[
             ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
@@ -162,6 +162,7 @@ mod tests {
     const INTEGER_COLUMNS: &[(Entity, &str)] = &[
         (Entity::Object, "purchase_price_cents"),
         (Entity::Object, "cover_attachment_id"),
+        (Entity::Object, "parent_id"),
         (Entity::Activity, "counter_value"),
         (Entity::Activity, "cost_cents"),
         (Entity::Activity, "quantity_milli"),

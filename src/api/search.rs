@@ -90,7 +90,7 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
 
     let objects = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND ( \
            name {like} $2 ESCAPE '\\' OR description {like} $2 ESCAPE '\\') \
          ORDER BY archived_at IS NOT NULL, {order} LIMIT $3")))

@@ -32,6 +32,9 @@ pub struct ObjectRow {
     pub purchase_price_cents: Option<i64>,
     pub archived_at: Option<String>,
     pub cover_attachment_id: Option<i64>,
+    /// The object this one sits inside, or `None` for a root. Validated identically on both
+    /// doors -- see `record::parent_is_valid`.
+    pub parent_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -44,6 +47,14 @@ pub struct ObjectStats {
     pub due_reminder_count: i64,
 }
 
+/// One link in an object's ancestor chain, as the client needs it to draw a breadcrumb:
+/// a tuple would serialize as `[7, "House"]` and make the client index by position.
+#[derive(Serialize, Clone, Debug)]
+pub struct Ancestor {
+    pub id: i64,
+    pub name: String,
+}
+
 #[derive(Serialize)]
 pub struct ObjectOut {
     #[serde(flatten)]
@@ -51,6 +62,10 @@ pub struct ObjectOut {
     pub stats: ObjectStats,
     /// file_id of the cover attachment, so the client can build a thumbnail URL directly
     pub cover_file_id: Option<i64>,
+    /// Root first, nearest ancestor last, this object excluded. Filled in only by the
+    /// single-object paths (`read`, `create`, `update`); the list leaves it empty rather than
+    /// running one recursive query per row for a breadcrumb no list view draws.
+    pub ancestors: Vec<Ancestor>,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +90,17 @@ pub struct ObjectInput {
     /// previously only ever be set, never removed.
     #[serde(default, deserialize_with = "double_option")]
     pub cover_attachment_id: Option<Option<i64>>,
+    /// Three-state on PATCH, exactly as `cover_attachment_id` above: absent keeps the current
+    /// parent, `null` makes the object a root again, an id moves it.
+    #[serde(default, deserialize_with = "double_option")]
+    pub parent_id: Option<Option<i64>>,
 }
+
+/// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
+/// `sync::apply` as a rejection reason -- so a client cannot tell from the wording which door
+/// it knocked on.
+pub const PARENT_REJECTION: &str =
+    "parent_id must be your own, undeleted, not itself, and not a descendant";
 
 /// Deserializes a present field -- including an explicit `null` -- as `Some(..)`, leaving
 /// `None` to mean "the client did not send this field at all".
@@ -123,7 +148,7 @@ impl ObjectInput {
 pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<ObjectRow, AppError> {
     sqlx::query_as::<_, ObjectRow>(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
          FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
@@ -188,7 +213,7 @@ impl DerivedRow {
 
     fn into_out(self, object: ObjectRow) -> ObjectOut {
         let stats = self.stats();
-        ObjectOut { object, stats, cover_file_id: self.cover_file_id }
+        ObjectOut { object, stats, cover_file_id: self.cover_file_id, ancestors: Vec::new() }
     }
 }
 
@@ -201,18 +226,50 @@ pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError>
         .ok_or(AppError::NotFound)
 }
 
+/// The object's ancestor chain, root first, excluding the object itself -- empty when it has
+/// no parent, which costs nothing extra: the common case (an object with no parent) never
+/// reaches the recursive query at all.
+///
+/// Plain `UNION`, not `UNION ALL`, for the same reason `record::parent_is_valid` uses it: a
+/// cycle can never be created through either door, but if one ever got into the data anyway
+/// `UNION ALL` would walk it forever and hang the read, while `UNION`'s deduplication
+/// terminates and still answers correctly.
+async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>, AppError> {
+    let Some(_) = object.parent_id else { return Ok(Vec::new()) };
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "WITH RECURSIVE chain(id, name, parent_id, depth) AS ( \
+           SELECT id, name, parent_id, 0 FROM objects WHERE id = $1 \
+           UNION \
+           SELECT o.id, o.name, o.parent_id, c.depth + 1 FROM objects o \
+             JOIN chain c ON o.id = c.parent_id \
+         ) SELECT id, name, depth FROM chain WHERE id != $1 ORDER BY depth DESC")
+        .bind(object.id)
+        .fetch_all(&state.db).await?;
+    Ok(rows.into_iter().map(|(id, name, _)| (id, name)).collect())
+}
+
 async fn with_stats(state: &App, object: ObjectRow) -> Result<ObjectOut, AppError> {
     let id = object.id;
-    derived(state, Some(object.user_id), Some(id)).await?
+    let chain = ancestors(state, &object).await?;
+    let mut out = derived(state, Some(object.user_id), Some(id)).await?
         .remove(&id)
         .map(|d| d.into_out(object))
-        .ok_or(AppError::NotFound)
+        .ok_or(AppError::NotFound)?;
+    out.ancestors = chain.into_iter().map(|(id, name)| Ancestor { id, name }).collect();
+    Ok(out)
 }
 
 #[derive(Deserialize)]
 pub struct ListQuery {
     #[serde(default)]
     pub archived: bool,
+    /// Absent lists roots only -- the dashboard's contract. An id lists that object's direct
+    /// children.
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    /// Every object the user owns, regardless of nesting, still subject to `archived`.
+    #[serde(default)]
+    pub all: bool,
 }
 
 async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ObjectOut>>, AppError> {
@@ -223,10 +280,11 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
+           AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
-        .bind(user.id).fetch_all(&state.db).await?;
+        .bind(user.id).bind(q.parent_id).bind(q.all).fetch_all(&state.db).await?;
     let mut derived = derived(&state, Some(user.id), None).await?;
     let out = rows
         .into_iter()
@@ -242,15 +300,27 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let object_uuid = uuid::Uuid::new_v4().to_string();
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
+    // Checked inside the transaction, on its connection -- never from the pool -- for the two
+    // reasons spelled out on `update`: a pool connection taken while `begin_write` holds the
+    // write lock deadlocks on SQLite, and a check taken before the lock can go stale before
+    // the write it guards lands. `flatten()` collapses "absent" and an explicit `null` to the
+    // same `None`: on create there is no existing value for the two to mean different things
+    // about.
+    let parent_id = body.parent_id.flatten();
+    if let Some(pid) = parent_id {
+        if !record::parent_is_valid(&mut tx, user.id, None, pid).await? {
+            return Err(AppError::BadRequest(PARENT_REJECTION.into()));
+        }
+    }
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at, client_uuid) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12) \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at",
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at",
     )
     .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
-    .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(&now).bind(&now)
+    .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
     .bind(&object_uuid)
     .fetch_one(&mut *tx).await?;
     record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
@@ -284,8 +354,30 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         }
     };
 
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    // `parent_id`'s check is the one that cannot happen before the transaction opens, the way
+    // `cover_attachment_id`'s above does. Writes are serialised by `db::begin_write`'s lock
+    // precisely so a read-compare-write is atomic; a cycle check taken from a pool connection
+    // before that lock is held can pass against a tree a concurrent write then changes in the
+    // gap, letting two individually-valid reparentings combine into a real cycle once both
+    // have committed. It also has to run on `tx`'s own connection rather than the pool: a
+    // second pool connection opened while `begin_write` holds SQLite's write lock does not
+    // fail, it hangs.
+    let parent_id = match body.parent_id {
+        None => existing.parent_id,
+        Some(None) => None,
+        Some(Some(pid)) => {
+            if !record::parent_is_valid(&mut tx, user.id, Some(id), pid).await? {
+                return Err(AppError::BadRequest(PARENT_REJECTION.into()));
+            }
+            Some(pid)
+        }
+    };
+
     // Only fields whose value actually differs are logged -- see `record::record_update` --
     // so a PATCH that rewrites a field with its existing value produces no `changes` row.
+    // Every value is settled before this point, `parent_id` included, so the diff and the
+    // single `UPDATE` below always agree about what is being written.
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
     if body.name != existing.name { changed.push(("name", json!(body.name))); }
     if body.type_ != existing.type_ { changed.push(("type", json!(body.type_))); }
@@ -300,15 +392,16 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if cover_attachment_id != existing.cover_attachment_id {
         changed.push(("cover_attachment_id", json!(cover_attachment_id)));
     }
+    if parent_id != existing.parent_id { changed.push(("parent_id", json!(parent_id))); }
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
-         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, updated_at = $10 WHERE id = $11 AND deleted_at IS NULL",
+         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11 \
+         WHERE id = $12 AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
-    .bind(cover_attachment_id).bind(db::now()).bind(id)
+    .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;

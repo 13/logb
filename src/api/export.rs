@@ -143,7 +143,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-             purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
+             purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
              FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
@@ -466,6 +466,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             purchase_price_cents: o.purchase_price_cents,
             archived: None,
             cover_attachment_id: None,
+            parent_id: None,
         };
         obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
 
@@ -475,7 +476,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             id: 0, user_id: 0, name: o.name.clone(), type_: ty,
             counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description,
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
-            archived_at: o.archived_at.clone(), cover_attachment_id: None,
+            archived_at: o.archived_at.clone(), cover_attachment_id: None, parent_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
         };
 

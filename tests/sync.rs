@@ -2097,11 +2097,13 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
 
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-        // 9, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
+        // 10, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
         // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
-        // than adding a tenth. All 9 must survive the sweep untouched.
+        // than adding an eleventh. All 10 must survive the sweep untouched. It was 9 until
+        // `parent_id` joined the whitelist -- this count is deliberately a literal so that
+        // widening the whitelist has to be noticed here.
         assert_eq!(
-            kept, 9,
+            kept, 10,
             "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
         );
     }
@@ -2599,4 +2601,43 @@ async fn rotate_heals_a_missing_row_instead_of_silently_reporting_a_fake_success
         .fetch_one(&app.state.db).await
         .expect("rotate reported success, but the row it claims to have set is not there");
     assert_eq!(value, fresh, "the row actually on disk must match what rotate reported");
+}
+
+/// The sync door must refuse a cycle exactly as the REST door does -- proving the two doors
+/// agree, not just that each one independently rejects something. The legitimate reparenting
+/// is pushed first, so a blanket "parent_id is not settable" cannot pass this test by
+/// rejecting everything.
+#[tokio::test]
+async fn a_sync_push_cannot_create_a_cycle() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let house_uuid = client_uuid(&app.state.db, "objects", house["id"].as_i64().unwrap()).await;
+    let garage_uuid = client_uuid(&app.state.db, "objects", garage["id"].as_i64().unwrap()).await;
+
+    // A sync op naming another row carries that row's real integer id -- the same convention
+    // `cover_attachment_id` already uses. Garage becomes House's child.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-nest", "entity": "object", "entity_uuid": garage_uuid,
+          "op": "set", "field": "parent_id", "value": house["id"].as_i64().unwrap(),
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "a legitimate parent must land: {body}");
+
+    // Now a device tries to push the reverse: House becomes Garage's child.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-cycle", "entity": "object", "entity_uuid": house_uuid,
+          "op": "set", "field": "parent_id", "value": garage["id"].as_i64().unwrap(),
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the batch must not 500");
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "a cycle must be rejected, not applied");
+
+    let parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM objects WHERE client_uuid = $1")
+        .bind(&house_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(parent.is_none(), "the cycle must not have landed");
 }
