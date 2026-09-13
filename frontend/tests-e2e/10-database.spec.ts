@@ -29,7 +29,7 @@ test('the database section shows where the data is, and is admin only', async ({
 
   await page.goto('/settings');
   await page.getByRole('button', { name: /Account/ }).click();
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Username', { exact: true }).fill('database-plain');
   await page.getByLabel('Password', { exact: true }).fill('password123');
@@ -57,7 +57,7 @@ test('a non-administrator reaching /settings/database directly is sent back to t
 
   await page.goto('/settings');
   await page.getByRole('button', { name: /Account/ }).click();
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Username', { exact: true }).fill('database-direct');
   await page.getByLabel('Password', { exact: true }).fill('password123');

@@ -75,6 +75,19 @@ body {
 }
 a { color: var(--accent); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
+/* Sign-in and first-run setup render without the shell, so the form IS the page: a narrow
+   column in the middle of the screen both ways, instead of a 720px column pinned to the top
+   with its fields stretched across it. `min-height` rather than `height`, so a phone with the
+   keyboard up scrolls instead of clipping. */
+main.auth {
+  max-width: 400px; min-height: 100dvh;
+  display: flex; flex-direction: column; justify-content: center;
+  padding-block: var(--space-5);
+}
+main.auth > h1, main.auth > p { text-align: center; }
+main.auth > p { margin-top: var(--space-1); }
+main.auth form { width: 100%; margin-top: var(--space-4); }
+main.auth form button.primary { width: 100%; }
 h1 { font-size: var(--text-xl); } h2 { font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); }
 button, input, select, textarea { font: inherit; color: inherit; line-height: 1.25; }
 /* `.button-like` is an anchor that acts as a button -- a download link, mostly. It shares the
@@ -275,9 +288,8 @@ button, a, .chip {
     font-size: var(--text-xs); border-radius: 0;
   }
   .wordmark, .navfoot { display: none; }
-  /* The tab bar's clearance belongs to the whole column, not to `main` alone: the footer sits
-     after `main`, so padding on `main` would not protect it. `main` keeps only the clearance the
-     FAB needs to float above its last row. */
+  /* The tab bar's clearance belongs to the whole column, not to `main` alone. `main` keeps only
+     the clearance the FAB needs to float above its last row. */
   .app-content {
     display: flex; flex-direction: column; min-height: 100dvh;
     padding-bottom: calc(var(--navbar) + env(safe-area-inset-bottom));
@@ -287,12 +299,9 @@ button, a, .chip {
      and sits centred in a narrow column. */
   main { flex: 1; width: 100%; padding-bottom: 96px; }
   .fab { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
-  /* In flow, never fixed -- a version string pinned over a phone screen is chrome nobody needs
-     and it would sit on top of the list on every scroll. `margin-top: auto` against the column
-     above does the one thing a fixed position was reaching for: with a short list the footer
-     rests just above the tab bar instead of stranded halfway up an empty screen, and with a
-     long one it goes back to being the end of the content. */
-  .app-footer { margin-top: auto; padding: var(--space-3) var(--space-3) 0; }
+  /* No footer on a phone. The version at the bottom of every screen was chrome between the last
+     row and the tab bar; it lives in Settings > About now, beside the build date and the server
+     version, which is where anyone looking for it goes. */
 }
 
 /* Desktop: a sidebar, and a content area that uses the width instead of centring a phone in it.
@@ -312,7 +321,6 @@ button, a, .chip {
   }
   .appnav .dest.active { background: var(--surface-2); }
   .navfoot { margin-top: auto; }
-  .app-footer { display: none; }
   .app-content { margin-left: 240px; }
   main { max-width: 1100px; }
   /* The FAB is `position: fixed`, so `right` measures from the *viewport* edge -- fine while

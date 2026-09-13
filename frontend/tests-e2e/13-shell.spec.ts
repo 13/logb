@@ -103,16 +103,52 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
   ).toBeLessThan(4);
 });
 
-test('the version is on screen without opening Settings', async ({ page }) => {
+test('who is signed in, and the way out, are one step away', async ({ page }, testInfo) => {
   await signIn(page);
-  // The footer is rendered twice -- once inside the nav (for the sidebar) and once in the
-  // content area (for the tab bar) -- and CSS, not Svelte, decides which one is display:none
-  // at the current breakpoint (see the comment on `.appnav` in app.css). The sidebar copy is
-  // first in DOM order on both viewports, so plain `.first()` finds it on desktop, where it is
-  // the visible one, but keeps finding it -- now hidden -- on mobile, where the *other* copy is
-  // the one actually on screen. Intersecting with `:visible` follows whichever copy CSS is
-  // actually showing, instead of assuming DOM order tracks visibility.
-  await expect(page.getByText(/Version/).and(page.locator(':visible'))).toBeVisible();
+  if (testInfo.project.name === 'desktop') {
+    // The sidebar's foot: the name, the version, and sign-out, on every screen.
+    const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
+    await expect(nav.getByText('ben', { exact: true })).toBeVisible();
+    await expect(nav.getByText(/Version/)).toBeVisible();
+    await nav.getByRole('button', { name: 'Sign out' }).click();
+  } else {
+    // A phone has no footer under every list; the tab bar's Settings is where all of it is.
+    await expect(page.getByText(/Version/).and(page.locator(':visible'))).toHaveCount(0);
+    await page.getByRole('navigation', { name: /Main|Hauptnavigation/ }).getByRole('button', { name: 'Settings' }).click();
+    // The card, not the page: the Account row below it shows the username too.
+    const card = page.locator('main .signed-in');
+    await expect(card.getByText('Signed in as')).toBeVisible();
+    await expect(card.getByText('ben', { exact: true })).toBeVisible();
+    await card.getByRole('button', { name: 'Sign out', exact: true }).click();
+  }
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test('Settings says which build this is', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/settings');
+  const about = page.locator('main dl.about');
+  await expect(about).toContainText('Version');
+  await expect(about).toContainText('Built');
+  // The server answers /api/health with its own version; the e2e build and server are the same
+  // tree, so they agree.
+  await expect(about).toContainText('Server');
+  await expect(page.getByText(/Reload to get the matching app/)).toHaveCount(0);
+});
+
+test('the sign-in form sits in the middle of the screen', async ({ page }) => {
+  await page.goto('/login');
+  // First run lands on setup instead; both share the same centred layout.
+  const form = page.locator('main.auth form');
+  await expect(form).toBeVisible();
+  const box = await form.boundingBox();
+  const viewport = page.viewportSize();
+  if (!box || !viewport) throw new Error('no form or no viewport');
+  expect(Math.abs(box.x + box.width / 2 - viewport.width / 2), 'horizontally centred').toBeLessThan(4);
+  expect(box.width, 'a narrow column, not stretched across a desktop').toBeLessThanOrEqual(400);
+  const logo = await page.getByRole('img', { name: 'LogB' }).boundingBox();
+  if (!logo) throw new Error('no logo');
+  expect(logo.y, 'not pinned to the top edge').toBeGreaterThan(viewport.height * 0.08);
 });
 
 test('signing in is offered without a nav, since there is nowhere yet to go', async ({ page }) => {

@@ -19,8 +19,9 @@ test('signing out returns to the login screen', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('button', { name: /Account/ }).click();
-  // Exact: the account page also offers "Sign out everywhere".
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
+  // sidebar carries its own "Sign out" too.
+  await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
 });

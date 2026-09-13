@@ -4,7 +4,7 @@
   export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
     | 'plus'
     | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object'
-    | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron';
+    | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron' | 'logout';
   let { name, size = 20 }: { name: IconName; size?: number } = $props();
 </script>
 
@@ -102,6 +102,10 @@
     <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
   {:else if name === 'chevron'}
     <path d="m9 18 6-6-6-6" />
+  {:else if name === 'logout'}
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <path d="m16 17 5-5-5-5" />
+    <path d="M21 12H9" />
   {:else}
     {(name satisfies never)}
   {/if}

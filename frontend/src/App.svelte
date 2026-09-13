@@ -22,7 +22,6 @@
   import SettingsPeople from './routes/settings/People.svelte';
   import SettingsDatabase from './routes/settings/Database.svelte';
   import AppNav from './lib/AppNav.svelte';
-  import AppFooter from './lib/AppFooter.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -100,7 +99,6 @@
       {:else}
         <main><p class="muted">404</p><a href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>{$t('dash.title')}</a></main>
       {/if}
-      <div class="app-footer"><AppFooter /></div>
     </div>
   </div>
 {/if}

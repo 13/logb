@@ -4,6 +4,9 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend ./
+# The build copies sources, not `.git`, so Settings > About can only show a commit when one is
+# passed in: `docker build --build-arg LOGB_BUILD_COMMIT=$(git rev-parse HEAD) .`
+ARG LOGB_BUILD_COMMIT=""
 RUN npm run build
 
 # --- backend (static musl binary) ---

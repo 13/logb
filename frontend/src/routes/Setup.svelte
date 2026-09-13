@@ -27,7 +27,7 @@
   }
 </script>
 
-<main>
+<main class="auth">
   <Logo />
   <h1>{$t('setup.title')}</h1>
   <p class="muted">{$t('setup.intro')}</p>

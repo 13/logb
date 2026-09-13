@@ -20,7 +20,7 @@
   }
 </script>
 
-<main>
+<main class="auth">
   <Logo />
   <h1>{$t('login.title')}</h1>
   <form onsubmit={submit}>

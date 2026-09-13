@@ -3,9 +3,22 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { pwaIcons } from './scripts/pwa-icons.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+
+/** The commit this bundle was built from, for Settings > About. `LOGB_BUILD_COMMIT` wins, for a
+ *  build that runs without the repository (a container build copies the sources, not `.git`);
+ *  otherwise git is asked, and a build with neither simply shows no commit. */
+function buildCommit(): string {
+  if (process.env.LOGB_BUILD_COMMIT) return process.env.LOGB_BUILD_COMMIT.slice(0, 12);
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return '';
+  }
+}
 
 export default defineConfig({
   plugins: [
@@ -58,7 +71,11 @@ export default defineConfig({
       },
     }),
   ],
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+    __BUILD_COMMIT__: JSON.stringify(buildCommit()),
+  },
   server: { proxy: { '/api': 'http://localhost:8080' } },
   test: { environment: 'node', include: ['tests/**/*.test.ts'] },
 });
