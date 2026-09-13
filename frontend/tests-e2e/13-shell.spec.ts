@@ -106,14 +106,33 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
 test('who is signed in, and the way out, are one step away', async ({ page }, testInfo) => {
   await signIn(page);
   if (testInfo.project.name === 'desktop') {
+    // The top bar's initial is the phone's version of this; the sidebar already says it all.
+    await expect(page.getByRole('button', { name: 'Signed in as ben' })).toBeHidden();
     // The sidebar's foot: the name, the version, and sign-out, on every screen.
     const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
     await expect(nav.getByText('ben', { exact: true })).toBeVisible();
     await expect(nav.getByText(/Version/)).toBeVisible();
     await nav.getByRole('button', { name: 'Sign out' }).click();
   } else {
-    // A phone has no footer under every list; the tab bar's Settings is where all of it is.
+    // A phone has no footer under every list, and no version outside Settings.
     await expect(page.getByText(/Version/).and(page.locator(':visible'))).toHaveCount(0);
+
+    // But who is signed in, and the way out, are on every screen: the initial in the top bar.
+    const avatar = page.getByRole('button', { name: 'Signed in as ben' });
+    await expect(avatar).toBeVisible();
+    await avatar.click();
+    const panel = page.getByRole('group', { name: 'Signed in as ben' });
+    await expect(panel.getByText('Signed in as')).toBeVisible();
+    await expect(panel.getByText('ben', { exact: true })).toBeVisible();
+    // Escape closes it without doing anything.
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
+    await avatar.click();
+    await panel.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(page).toHaveURL(/\/login$/);
+
+    // Settings still says the same, for anyone who looks there.
+    await signIn(page);
     await page.getByRole('navigation', { name: /Main|Hauptnavigation/ }).getByRole('button', { name: 'Settings' }).click();
     // The card, not the page: the Account row below it shows the username too.
     const card = page.locator('main .signed-in');

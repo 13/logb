@@ -242,6 +242,8 @@ export default {
   'settings.server': 'Server',
   'settings.server-differs': 'The server runs {version}. Reload to get the matching app.',
   'account.signed-in-as': 'Signed in as',
+  'account.menu': 'Signed in as {name}',
+  'account.settings': 'Account settings',
   'db.title': 'Database',
   'db.current': 'Where the data is now',
   'db.backend-sqlite': 'SQLite',

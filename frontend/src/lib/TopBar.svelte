@@ -3,6 +3,7 @@
   import { onOutboxFlushed, outboxDeadCount, outboxPending } from './api';
   import { t } from '../i18n';
   import Icon, { type IconName } from './Icon.svelte';
+  import AccountMenu from './AccountMenu.svelte';
   let { title, backTo = null, icon = null, children }: {
     title: string; backTo?: string | null; icon?: IconName | null; children?: import('svelte').Snippet;
   } = $props();
@@ -39,6 +40,7 @@
   {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
   {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}
+  <AccountMenu />
 </header>
 
 <style>
