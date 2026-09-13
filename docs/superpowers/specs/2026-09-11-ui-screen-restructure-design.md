@@ -1,6 +1,8 @@
 # Interface: screens that earn their space
 
-Status: approved design, not yet implemented. Second of two slices; depends on the system and
+Status: SUPERSEDED by `2026-09-13-consistent-controls-design.md`, which merges both slices and
+names the controls neither of them mentioned. Kept as the record of how the work was first
+scoped. Second of two slices; depends on the system and
 states slice, and reads better after object types land, since the dashboard shows a type icon.
 
 ## Problem

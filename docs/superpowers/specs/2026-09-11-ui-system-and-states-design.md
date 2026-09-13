@@ -1,6 +1,8 @@
 # Interface: system adoption and states
 
-Status: approved design, not yet implemented. First of two slices; the second restructures
+Status: SUPERSEDED by `2026-09-13-consistent-controls-design.md`, which merges both slices and
+names the controls neither of them mentioned. Kept as the record of how the work was first
+scoped. First of two slices; the second restructures
 screens on top of this one.
 
 ## Problem
