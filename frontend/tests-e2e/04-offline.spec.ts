@@ -275,7 +275,8 @@ test('a queued write survives somebody else signing in on the same device', asyn
 
   // The owner comes back, and their entry is still there to send.
   await page.getByRole('button', { name: 'Settings' }).click();
-  // Exact: the account section also offers "Sign out everywhere".
+  await page.getByRole('button', { name: /Account/ }).click();
+  // Exact: the account page also offers "Sign out everywhere".
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await signIn(page);

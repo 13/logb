@@ -12,18 +12,23 @@ import { signIn } from './helpers';
 test('the database section shows where the data is, and is admin only', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: /Database/ }).click();
   await expect(page.getByRole('heading', { name: /Database/ })).toBeVisible();
   // SQLite is the default, and the section says so rather than showing a connection string.
   await expect(page.getByText(/SQLite/)).toBeVisible();
 
   // "Admin only" is a claim about somebody who is not one, so it is only proved by creating
-  // such a user and looking again as them -- through the "Add user" form Settings already
+  // such a user and looking again as them -- through the "Add user" form the Users page
   // offers, rather than reaching for a second way to make a user just for this spec.
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /Users/ }).click();
   await page.getByLabel('Username', { exact: true }).fill('database-plain');
   await page.getByLabel('Password', { exact: true }).fill('password123');
   await page.getByRole('button', { name: 'Add user' }).click();
   await expect(page.getByText('database-plain')).toBeVisible();
 
+  await page.goto('/settings');
+  await page.getByRole('button', { name: /Account/ }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Username', { exact: true }).fill('database-plain');
@@ -31,8 +36,10 @@ test('the database section shows where the data is, and is admin only', async ({
   await page.getByRole('button', { name: /^Sign in$/ }).click();
   await page.waitForURL('**/');
 
+  // The instance group -- Users, Database -- does not exist on this hub at all for a
+  // non-admin, rather than existing and refusing entry.
   await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('heading', { name: /Database/ })).not.toBeVisible();
+  await expect(page.getByRole('button', { name: /Database/ })).not.toBeVisible();
 });
 
 // The Playwright suite runs on SQLite with no backup directory configured, so this is the "off"
@@ -41,6 +48,7 @@ test('the database section shows where the data is, and is admin only', async ({
 test('settings says whether backups are being taken', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: /Database/ }).click();
   await expect(page.getByRole('heading', { name: /Backup/ })).toBeVisible();
   await expect(page.getByText(/LOGB_BACKUP_DIR/)).toBeVisible();
 });
