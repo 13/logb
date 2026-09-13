@@ -55,19 +55,43 @@ test('the quick-log action belongs to its row', async ({ page }) => {
   await page.getByLabel('Name').fill('Row shape probe');
   await page.getByLabel('Type').selectOption('car');
   await page.getByRole('button', { name: 'Save' }).click();
+  // Save's own navigation to the object page happens after its POST resolves, not when the
+  // click event fires -- clicking "Back" before that lands the click on the *form's* Back
+  // button (also bound to "/"), and the form's own post-save navigation can then fire after and
+  // override it, leaving the object page on screen instead of the dashboard. Waiting for the
+  // object's heading closes that window.
+  await expect(page.getByRole('heading', { name: 'Row shape probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
 
   const row = page.locator('.card-row', { hasText: 'Row shape probe' });
   const card = row.locator('.list-card');
   const quick = row.getByRole('button', { name: /Log|Erfassen/ });
 
-  const [rowBox, cardBox, quickBox] = await Promise.all([
-    row.boundingBox(), card.boundingBox(), quick.boundingBox(),
-  ]);
-  // One card, the width of the row: the action is inside it, not a sibling with a gap.
-  expect(cardBox!.width).toBeCloseTo(rowBox!.width, 0);
-  expect(quickBox!.x).toBeGreaterThan(cardBox!.x);
-  expect(quickBox!.x + quickBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+  // The dashboard list re-renders as its data settles after "Back" remounts it, so the row and
+  // its two children need to be genuinely present -- not just resolvable -- before any of them
+  // is measured. Under a full-suite run the remount + reload can outrun the default 5s
+  // assertion timeout, so this is given the same generous budget `boundingBox()` used to get
+  // implicitly (capped only by the test timeout).
+  await expect(row).toBeVisible({ timeout: 20000 });
+  await expect(card).toBeVisible({ timeout: 20000 });
+  await expect(quick).toBeVisible({ timeout: 20000 });
+
+  // Even once each element is individually visible, three separate boundingBox() calls can
+  // still land on different renders of a list that is mid-layout. Retrying the whole
+  // measurement -- not loosening it -- is what closes that race; the assertions inside are
+  // exactly as strict as before.
+  await expect(async () => {
+    const [rowBox, cardBox, quickBox] = await Promise.all([
+      row.boundingBox(), card.boundingBox(), quick.boundingBox(),
+    ]);
+    expect(rowBox).not.toBeNull();
+    expect(cardBox).not.toBeNull();
+    expect(quickBox).not.toBeNull();
+    // One card, the width of the row: the action is inside it, not a sibling with a gap.
+    expect(cardBox!.width).toBeCloseTo(rowBox!.width, 0);
+    expect(quickBox!.x).toBeGreaterThan(cardBox!.x);
+    expect(quickBox!.x + quickBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+  }).toPass();
   // And it is an icon, not a glyph standing in for one.
   expect(await quick.locator('svg').count()).toBe(1);
 });
@@ -92,6 +116,11 @@ test('every control in a form is the same height', async ({ page }) => {
   await page.getByLabel('Name').fill('Control height probe');
   await page.getByLabel('Type').selectOption('car');
   await page.getByRole('button', { name: 'Save' }).click();
+  // Same race the two geometry tests below had: Save navigates after its POST resolves, not
+  // when the click fires, so a "Back" click sent before then lands on the form's own Back
+  // button and Save's navigation can override it afterwards. Waiting for the object's heading
+  // closes the window. This test has not been seen to flake, but the hazard is identical.
+  await expect(page.getByRole('heading', { name: 'Control height probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
   await page
     .locator('.card-row', { hasText: 'Control height probe' })
@@ -128,20 +157,41 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await page.getByLabel('Name').fill('Chip gap probe');
   await page.getByLabel('Type').selectOption('bike');
   await page.getByRole('button', { name: 'Save' }).click();
+  // Save's own navigation to the object page happens after its POST resolves, not when the
+  // click event fires -- clicking "Back" before that lands the click on the *form's* Back
+  // button (also bound to "/"), and the form's own post-save navigation can then fire after and
+  // override it, leaving the object page on screen instead of the dashboard. Waiting for the
+  // object's heading closes that window.
+  await expect(page.getByRole('heading', { name: 'Chip gap probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
-  await expect(page.locator('.card-row', { hasText: 'Chip gap probe' })).toBeVisible();
+  // The remount + reload after "Back" can outrun the default 5s assertion timeout under a
+  // full-suite run, so this gets the same generous budget the geometry checks below use.
+  await expect(page.locator('.card-row', { hasText: 'Chip gap probe' })).toBeVisible({ timeout: 20000 });
 
-  const gaps = await page.evaluate(() => {
-    const box = (el: Element) => el.getBoundingClientRect();
-    const chips = document.querySelector('.chips')!;
-    const chip = chips.querySelector('button')!;
-    // What is actually above the chip is the topbar's last control, not the topbar's box. The
-    // dashboard's topbar carries no buttons of its own any more -- both used to live there, and
-    // now live in the app nav instead -- so its last control is the title.
-    const above = box(chip).top - box(document.querySelector('.topbar h1')!).bottom;
-    const below = box(chips.nextElementSibling!).top - box(chip).bottom;
-    return { above, below };
-  });
+  // The dashboard re-runs its load whenever it (re)mounts, and while that is in flight
+  // `.chips`'s next element sibling is the "Loading..." paragraph, not `.list` -- reading
+  // `nextElementSibling` blind can measure that paragraph instead of the list. `.chips + .list`
+  // matches only once the list is actually the element right after the chips row, so a null
+  // result here means the load has not settled yet and the measurement is retried rather than
+  // taken against the wrong element.
+  let gaps!: { above: number; below: number };
+  await expect(async () => {
+    const result = await page.evaluate(() => {
+      const box = (el: Element) => el.getBoundingClientRect();
+      const chips = document.querySelector('.chips')!;
+      const chip = chips.querySelector('button')!;
+      const list = document.querySelector('.chips + .list');
+      if (!list) return null;
+      // What is actually above the chip is the topbar's last control, not the topbar's box. The
+      // dashboard's topbar carries no buttons of its own any more -- both used to live there, and
+      // now live in the app nav instead -- so its last control is the title.
+      const above = box(chip).top - box(document.querySelector('.topbar h1')!).bottom;
+      const below = box(list).top - box(chip).bottom;
+      return { above, below };
+    });
+    expect(result).not.toBeNull();
+    gaps = result!;
+  }).toPass();
   expect(gaps.below, `the chips row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
 });
 
