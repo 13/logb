@@ -318,18 +318,20 @@ type check, unit tests and bundle, Playwright end-to-end, and a Docker build
 whose image has to answer `/api/health`. There is no `cargo fmt` gate: the
 codebase uses single-line guard clauses that stable rustfmt cannot express.
 
-End-to-end tests run the real binary against the built SPA on port 8099 with a
-scratch data directory (`.e2e-data`, wiped on each run):
+End-to-end tests run the real binary against the built SPA, once per viewport:
+a mobile project on port 8099 with its own scratch data directory
+(`.e2e-data-mobile`) and a desktop project on port 8100 with its own
+(`.e2e-data-desktop`), both wiped on each run:
 
 ```bash
 cd frontend && npm run e2e
 ```
 
-Every spec must also pass on its own (`npx playwright test 03-search`). One
-server and one database are shared across the whole run, so it is easy to write
-a spec that quietly depends on data an earlier one left behind — and then a
-single-spec run, which is what you reach for when investigating a failure,
-fails for an unrelated reason.
+Every spec must also pass on its own (`npx playwright test 03-search`). Within
+each project, one server and one database are still shared across that
+project's whole run, so it is easy to write a spec that quietly depends on
+data an earlier one left behind — and then a single-spec run, which is what
+you reach for when investigating a failure, fails for an unrelated reason.
 
 ### Two rules learned the hard way
 

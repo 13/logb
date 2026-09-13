@@ -2,6 +2,8 @@ export default {
   'app.name': 'LogB',
   'nav.back': 'Zurück',
   'nav.settings': 'Einstellungen',
+  'nav.objects': 'Objekte',
+  'nav.primary': 'Hauptnavigation',
   'nav.save': 'Speichern',
   'nav.cancel': 'Abbrechen',
   'nav.delete': 'Löschen',

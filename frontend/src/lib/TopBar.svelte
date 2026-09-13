@@ -3,8 +3,8 @@
   import { onOutboxFlushed, outboxDeadCount, outboxPending } from './api';
   import { t } from '../i18n';
   import Icon, { type IconName } from './Icon.svelte';
-  let { title, backTo = null, showSettings = false, icon = null, children }: {
-    title: string; backTo?: string | null; showSettings?: boolean; icon?: IconName | null; children?: import('svelte').Snippet;
+  let { title, backTo = null, icon = null, children }: {
+    title: string; backTo?: string | null; icon?: IconName | null; children?: import('svelte').Snippet;
   } = $props();
 
   let pending = $state(0);
@@ -39,9 +39,6 @@
   {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
   {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}
-  {#if showSettings}
-    <button class="ghost" aria-label={$t('nav.settings')} onclick={() => go('/settings')}><Icon name="settings" /></button>
-  {/if}
 </header>
 
 <style>

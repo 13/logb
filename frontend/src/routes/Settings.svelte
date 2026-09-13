@@ -426,8 +426,6 @@
        for when they mean "keep a copy", and it is genuinely useful -- just not a backup of the
        database. -->
   <p class="muted">{$t('settings.export-not-backup')}</p>
-
-  <p class="muted version">{$t('settings.version')} {__APP_VERSION__}</p>
 </main>
 
 <style>
@@ -452,5 +450,4 @@
   .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .danger-text { color: var(--danger); }
-  .version { margin-top: var(--space-5); }
 </style>

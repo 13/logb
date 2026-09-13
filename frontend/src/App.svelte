@@ -14,6 +14,8 @@
   import ReminderForm from './routes/ReminderForm.svelte';
   import Search from './routes/Search.svelte';
   import Settings from './routes/Settings.svelte';
+  import AppNav from './lib/AppNav.svelte';
+  import AppFooter from './lib/AppFooter.svelte';
 
   onMount(() => { loadSession(); });
 
@@ -61,9 +63,19 @@
   <Setup />
 {:else if $path === '/login'}
   <Login />
-{:else if $user && current}
-  {@const Page = current.comp}
-  <Page {...current.params} />
 {:else if $user}
-  <main><p class="muted">404</p><a href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>{$t('dash.title')}</a></main>
+  <!-- The shell is for signed-in users. There is nowhere to navigate to before you are signed
+       in, and a nav whose every destination bounces off the route guard is worse than no nav. -->
+  <div class="app">
+    <AppNav />
+    <div class="app-content">
+      {#if current}
+        {@const Page = current.comp}
+        <Page {...current.params} />
+      {:else}
+        <main><p class="muted">404</p><a href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>{$t('dash.title')}</a></main>
+      {/if}
+      <div class="app-footer"><AppFooter /></div>
+    </div>
+  </div>
 {/if}

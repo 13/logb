@@ -33,6 +33,7 @@
      left to themselves they stood at 46, 48, 50 and 50 in a single form. This is the height
      they are all given; 48 clears the 44px tap-target floor with the border included. */
   --control: 48px;
+  --navbar: 56px;
 
   /* Three steps, not one. A control and a container should not read as the same object. */
   --radius-sm: 8px;
@@ -239,3 +240,96 @@ button, a, .chip {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- The app shell -------------------------------------------------------------------- */
+
+.appnav { position: fixed; z-index: 7; background: var(--surface); }
+.appnav ul { list-style: none; margin: 0; padding: 0; }
+.appnav .dest {
+  display: flex; align-items: center; width: 100%;
+  background: none; color: var(--muted);
+}
+.appnav .dest.active { color: var(--accent); font-weight: 600; }
+.wordmark { font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
+
+/* Mobile: a bottom tab bar. The top of a phone screen is the one place a thumb cannot reach,
+   which is exactly where every navigation control in this app used to live.
+   Range syntax (`width < 900px` / `width >= 900px` below), not `max-width: 899px` /
+   `min-width: 900px`: those two are only complementary at whole-number widths, and a viewport
+   is routinely fractional under OS display scaling or browser zoom. At e.g. 899.4px the old
+   pair both failed to match, and `.appnav` -- fixed, but with no inset and no `display` set
+   outside these blocks -- fell back to its static position: three unstyled buttons stacked in
+   flow at the top of the page. Leave this as range syntax; do not "tidy" it back to
+   899px/900px. */
+@media (width < 900px) {
+  .appnav {
+    left: 0; right: 0; bottom: 0;
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .appnav ul { display: flex; }
+  .appnav li { flex: 1; }
+  .appnav .dest {
+    flex-direction: column; gap: 2px; justify-content: center;
+    min-height: var(--navbar); padding: var(--space-1);
+    font-size: var(--text-xs); border-radius: 0;
+  }
+  .wordmark, .navfoot { display: none; }
+  /* The tab bar's clearance belongs to the whole column, not to `main` alone: the footer sits
+     after `main`, so padding on `main` would not protect it. `main` keeps only the clearance the
+     FAB needs to float above its last row. */
+  .app-content {
+    display: flex; flex-direction: column; min-height: 100dvh;
+    padding-bottom: calc(var(--navbar) + env(safe-area-inset-bottom));
+  }
+  /* `width: 100%` matters: `main` carries `margin: 0 auto`, and an auto margin on a flex
+     item's cross axis cancels the default stretch, so without this it collapses to fit-content
+     and sits centred in a narrow column. */
+  main { flex: 1; width: 100%; padding-bottom: 96px; }
+  .fab { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
+  /* In flow, never fixed -- a version string pinned over a phone screen is chrome nobody needs
+     and it would sit on top of the list on every scroll. `margin-top: auto` against the column
+     above does the one thing a fixed position was reaching for: with a short list the footer
+     rests just above the tab bar instead of stranded halfway up an empty screen, and with a
+     long one it goes back to being the end of the content. */
+  .app-footer { margin-top: auto; padding: var(--space-3) var(--space-3) 0; }
+}
+
+/* Desktop: a sidebar, and a content area that uses the width instead of centring a phone in it.
+   `width >= 900px`, the exact complement of the mobile query's `width < 900px` above -- see the
+   comment there for why this is range syntax rather than `min-width: 900px`. */
+@media (width >= 900px) {
+  .appnav {
+    top: 0; bottom: 0; left: 0; width: 240px;
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: var(--space-4);
+    padding: var(--space-4) var(--space-3);
+  }
+  .appnav ul { display: flex; flex-direction: column; gap: var(--space-1); }
+  .appnav .dest {
+    gap: var(--space-3); min-height: var(--control);
+    padding: var(--space-3); border-radius: var(--radius-sm);
+  }
+  .appnav .dest.active { background: var(--surface-2); }
+  .navfoot { margin-top: auto; }
+  .app-footer { display: none; }
+  .app-content { margin-left: 240px; }
+  main { max-width: 1100px; }
+  /* The FAB is `position: fixed`, so `right` measures from the *viewport* edge -- fine while
+     `main` fills the content pane, but past ~1340px of viewport width (240px sidebar + 1100px
+     of capped `main`) a gutter opens between `main`'s right edge and the viewport's, and a
+     plain `var(--space-5)` here leaves the FAB stranded in it, detached from the list it acts
+     on. The fix is not `position: absolute` on a relatively-positioned `.app-content`: that
+     container has no fixed height of its own, so `bottom` would resolve against the bottom of
+     all its (possibly long, scrolling) content instead of the bottom of the screen -- the FAB
+     would park at the end of the list rather than floating over it. Staying `fixed` and
+     computing the offset keeps the float; the `calc()` is half the gutter width (mirroring
+     `main`'s own `margin: 0 auto` centring) plus the usual clearance, and `max()` collapses it
+     back to the plain `var(--space-5)` once the gutter closes below the cap. */
+  .fab { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
+}
+
+/* Wider is not better everywhere. A list or a grid is what a wide screen genuinely helps; a
+   text input stretched across a 27" monitor is worse than one that is not. Capping the form
+   rather than each screen means no screen has to opt in, and none can forget to. */
+form { max-width: 68ch; }

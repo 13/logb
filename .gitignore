@@ -1,7 +1,8 @@
 /target
 /data
 /dist
-/.e2e-data
+/.e2e-data-mobile
+/.e2e-data-desktop
 frontend/node_modules
 frontend/dist/*
 # Tracked placeholder: src/spa.rs embeds frontend/dist/ with rust-embed, so the directory
