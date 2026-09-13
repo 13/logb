@@ -70,7 +70,12 @@ a { color: var(--accent); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
 h1 { font-size: var(--text-xl); } h2 { font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); }
 button, input, select, textarea { font: inherit; color: inherit; }
-button { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: 44px; cursor: pointer; background: var(--surface-2); }
+/* `.button-like` is an anchor that acts as a button -- a download link, mostly. It shares the
+   button's box rather than approximating it: two copies of that approximation had drifted to a
+   different radius and no min-height, so an export link stood 2px taller than the buttons
+   beside it. */
+button, .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: 44px; cursor: pointer; background: var(--surface-2); }
+.button-like { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; width: 100%; }
 button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 button.ghost { background: transparent; }

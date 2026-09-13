@@ -452,6 +452,5 @@
   .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .danger-text { color: var(--danger); }
-  .button-like { display: block; text-align: center; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
   .version { margin-top: var(--space-5); }
 </style>
