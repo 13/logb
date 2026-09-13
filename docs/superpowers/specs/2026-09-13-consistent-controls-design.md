@@ -1,6 +1,6 @@
 # Consistent controls, and a dashboard that earns its width
 
-Status: approved design, not yet implemented. Supersedes `2026-09-11-ui-system-and-states-design.md`
+Status: implemented. Supersedes `2026-09-11-ui-system-and-states-design.md`
 and `2026-09-11-ui-screen-restructure-design.md`, which split this work across two slices and
 never named the controls.
 
