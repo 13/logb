@@ -28,6 +28,12 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* One height for every control. A button, a text field, a select and a date field are four
+     different boxes to a browser -- different borders, different internal line boxes -- and
+     left to themselves they stood at 46, 48, 50 and 50 in a single form. This is the height
+     they are all given; 48 clears the 44px tap-target floor with the border included. */
+  --control: 48px;
+
   /* Three steps, not one. A control and a container should not read as the same object. */
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -69,12 +75,12 @@ body {
 a { color: var(--accent); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
 h1 { font-size: var(--text-xl); } h2 { font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; line-height: 1.25; }
 /* `.button-like` is an anchor that acts as a button -- a download link, mostly. It shares the
    button's box rather than approximating it: two copies of that approximation had drifted to a
    different radius and no min-height, so an export link stood 2px taller than the buttons
    beside it. */
-button, .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: 44px; cursor: pointer; background: var(--surface-2); }
+button, .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: var(--control); cursor: pointer; background: var(--surface-2); }
 .button-like { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; width: 100%; }
 button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
@@ -90,10 +96,16 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
-  min-height: 44px;
+  min-height: var(--control);
   width: 100%;
   appearance: none;
 }
+/* A minimum is not enough to make these agree. Chrome's select ignores `line-height` outright
+   and a date input's editor is taller than a plain text run, so the same padding produced a
+   50px select and a 48px date field beside a 46px text field. A single-line control has one
+   right height, so it is given one -- the textarea is excluded because it is the one control
+   that is meant to grow, and checkbox and radio below keep their own size. */
+input, select { height: var(--control); }
 /* `appearance: none` does not reach this: Chrome draws its own ✕ inside a search input, in its
    own blue. Ours is a button beside the field, in the app's colours. */
 input[type='search']::-webkit-search-cancel-button { appearance: none; display: none; }
@@ -106,7 +118,7 @@ select { appearance: auto; }
 /* A checkbox with `appearance: none` is an invisible box, so these keep the platform control --
    it is the one native widget that already reads correctly in both themes. */
 input[type='checkbox'], input[type='radio'] {
-  appearance: auto; width: auto; min-height: 0; padding: 0;
+  appearance: auto; width: auto; height: auto; min-height: 0; padding: 0;
 }
 .field textarea { min-height: 88px; resize: vertical; }
 .field .hint { font-size: var(--text-xs); color: var(--muted); }

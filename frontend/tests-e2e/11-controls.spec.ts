@@ -82,3 +82,39 @@ test('an empty search says so, and an unrun search does not', async ({ page }) =
   await page.getByRole('searchbox').fill('zzzz-nothing-matches-this');
   await expect(page.getByText(/No matches|Keine Treffer/)).toBeVisible();
 });
+
+// A button stood 46px tall, a text field 48 and a select and a date field 50 -- three heights
+// in one form, from three different internal line boxes rather than from anything anyone chose.
+// The numbers are the assertion: "they look consistent" is what the last fix claimed.
+test('every control in a form is the same height', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Control height probe');
+  await page.getByLabel('Type').selectOption('car');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Back' }).click();
+  await page
+    .locator('.card-row', { hasText: 'Control height probe' })
+    .getByRole('button', { name: /Log|Erfassen/ })
+    .click();
+
+  const title = page.locator('input#ti');
+  await expect(title).toBeVisible();
+  const heights = await page.evaluate(() =>
+    Object.fromEntries(
+      Object.entries({
+        button: 'button.primary',
+        input: 'input#ti',
+        select: 'select#c',
+        date: 'input#d',
+      }).map(([name, sel]) => [
+        name,
+        Math.round((document.querySelector(sel) as HTMLElement).getBoundingClientRect().height),
+      ]),
+    ),
+  );
+  const distinct = [...new Set(Object.values(heights))];
+  expect(distinct, `controls stand at different heights: ${JSON.stringify(heights)}`).toHaveLength(1);
+  // And the one height they share still clears the tap-target floor.
+  expect(distinct[0]).toBeGreaterThanOrEqual(44);
+});
