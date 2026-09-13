@@ -66,8 +66,13 @@ export interface ActivityHit {
   notes: string; counter_value: number | null; cost_cents: number | null;
 }
 /** An object hit carries the name of the object it sits inside, so a list of four things
- *  called "Filter" can be told apart without opening any of them. `null` is a root object. */
-export interface ObjectHit extends MemObject { parent_name: string | null }
+ *  called "Filter" can be told apart without opening any of them. `null` is a root object.
+ *
+ *  Search sends the object row and `parent_name`, and nothing else -- no `stats`, no
+ *  `cover_file_id` (see `ObjectHit` in `src/api/search.rs`). So this is deliberately not a
+ *  `MemObject`: claiming those fields would license handing a hit to `ObjectCard`, which reads
+ *  `object.stats.due_reminder_count` and would throw on the first one. */
+export type ObjectHit = Omit<MemObject, 'stats' | 'cover_file_id'> & { parent_name: string | null };
 export interface SearchResults { objects: ObjectHit[]; activities: ActivityHit[] }
 
 export interface Bucket { bucket: string; cost_cents: number; count: number }

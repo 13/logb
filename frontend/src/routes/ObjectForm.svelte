@@ -18,9 +18,21 @@
   let priceText = $state('');
   let error = $state('');
   let busy = $state(false);
-  /** The objects that may legally become this one's parent: everything the user owns, minus
-   *  this object and its descendants, which the server would refuse as a cycle. */
+  /** The objects offered as this one's parent: everything the user owns, minus this object and
+   *  its descendants (which the server would refuse as a cycle), minus anything archived. */
   let parentChoices = $state<MemObject[]>([]);
+  /** Name by id across the *whole* tree, archived rows included, so an option can say which
+   *  object it sits inside even when that container is itself archived. */
+  let nameById = $state(new Map<number, string>());
+
+  /** An option's text: the object's name plus the name of the object it sits inside, in the
+   *  same idiom the search results use for the same job. A flat list of bare names is
+   *  unreadable the moment two rooms both hold a "Filter", and this is the one screen where
+   *  picking the wrong one silently misfiles an object instead of just showing the wrong page. */
+  function optionLabel(o: MemObject): string {
+    const parent = o.parent_id === null ? null : nameById.get(o.parent_id);
+    return parent ? `${o.name} · ${$t('search.in-parent', { name: parent })}` : o.name;
+  }
 
   onMount(async () => {
     if (id) {
@@ -28,8 +40,33 @@
       input = toInput(o);
       priceText = centsToInput(o.purchase_price_cents);
     }
-    const all = await api<MemObject[]>('GET', '/objects?all=true');
-    parentChoices = excludingDescendants(all, editing ? Number(id) : null);
+    // The descendant walk has to see the whole tree. `all=true` means "ignore nesting" only --
+    // `archived` is an independent either/or filter that still applies -- so one fetch returns
+    // the *unarchived* tree, and a child reachable only through an archived room is missing
+    // from it. The walk would then never reach that child, offer it as a parent, and the
+    // server, which walks the real table, would refuse the save with a raw 400. Both halves,
+    // merged, are the whole tree.
+    const [live, archived] = await Promise.all([
+      api<MemObject[]>('GET', '/objects?all=true&archived=false'),
+      api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+    ]);
+    const all = [...live, ...archived];
+    nameById = new Map(all.map((o) => [o.id, o.name]));
+    // What is *legal* is decided against that whole tree; what is *offered* is narrower on
+    // purpose. The server checks `deleted_at`, not `archived_at`, and would accept an archived
+    // parent quite happily -- but filing a live object inside an archived container is not a
+    // move worth offering, so it is left out here. This gap between the two rules is deliberate
+    // and is not the inconsistency it looks like.
+    //
+    // The one archived object that does stay on the list is whichever one this object already
+    // sits inside: dropping it would leave the field blank on an object that is in fact filed
+    // somewhere, which reads as "top-level" and is a lie about the data.
+    //
+    // `live` arrives in case-insensitive name order and neither call below reorders, so the
+    // offered list keeps that order.
+    const alreadyInside = input.parent_id ?? null;
+    parentChoices = excludingDescendants(all, editing ? Number(id) : null)
+      .filter((o) => o.archived_at === null || o.id === alreadyInside);
   });
 
   async function submit(e: SubmitEvent) {
@@ -86,7 +123,7 @@
       <label for="p">{$t('object.parent')}</label>
       <select id="p" bind:value={input.parent_id}>
         <option value={null}>{$t('object.parent-none')}</option>
-        {#each parentChoices as p}<option value={p.id}>{p.name}</option>{/each}
+        {#each parentChoices as p}<option value={p.id}>{optionLabel(p)}</option>{/each}
       </select>
     </div>
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>
