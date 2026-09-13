@@ -46,3 +46,28 @@ test('the browser draws no clear button of its own', async ({ page }) => {
     ).toBe('golf');
   }
 });
+
+// The quick-log button sat in its own full-height box beside the card, with a gap on each side,
+// so every row read as two cards -- and it was a fullwidth plus character rather than an icon.
+test('the quick-log action belongs to its row', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Row shape probe');
+  await page.getByLabel('Type').selectOption('car');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Back' }).click();
+
+  const row = page.locator('.card-row', { hasText: 'Row shape probe' });
+  const card = row.locator('.list-card');
+  const quick = row.getByRole('button', { name: /Log|Eintrag/ });
+
+  const [rowBox, cardBox, quickBox] = await Promise.all([
+    row.boundingBox(), card.boundingBox(), quick.boundingBox(),
+  ]);
+  // One card, the width of the row: the action is inside it, not a sibling with a gap.
+  expect(cardBox!.width).toBeCloseTo(rowBox!.width, 0);
+  expect(quickBox!.x).toBeGreaterThan(cardBox!.x);
+  expect(quickBox!.x + quickBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+  // And it is an icon, not a glyph standing in for one.
+  expect(await quick.locator('svg').count()).toBe(1);
+});

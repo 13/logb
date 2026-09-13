@@ -2,6 +2,7 @@
   /** Inline SVG rather than a sprite or a library: there are only a handful of them, they must
    *  take the theme's colour through `currentColor`, and the project has no runtime dependencies. */
   export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
+    | 'plus'
     | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object';
   let { name, size = 20 }: { name: IconName; size?: number } = $props();
 </script>
@@ -33,6 +34,8 @@
     <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
     <path d="m7 22-4-4 4-4" />
     <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+  {:else if name === 'plus'}
+    <path d="M12 5v14M5 12h14" />
   {:else if name === 'car'}
     <path d="M5 16V11a2 2 0 0 1 2-2h1l1.5-2h5L16 9h1a2 2 0 0 1 2 2v5" />
     <path d="M3 16h18" />
