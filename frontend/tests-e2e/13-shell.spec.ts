@@ -65,6 +65,44 @@ test('the nav sits where the viewport can afford it, and never covers the main a
   }
 });
 
+test('on a wide desktop viewport, the FAB stays anchored to the content pane, not the bare viewport edge', async ({ page }) => {
+  await signIn(page);
+  // Wide enough that `main`'s 1100px cap opens a gutter between it and the viewport edge (see
+  // the comment on `.fab` in app.css). `setViewportSize` overrides the project's own viewport
+  // for this one test.
+  await page.setViewportSize({ width: 1600, height: 900 });
+
+  // Force the FAB itself into existence regardless of run order: run alone, this spec's
+  // database has no objects yet, and the dashboard swaps the FAB for a plain inline button in
+  // that case. Toggling "archived" satisfies the same `objects.length > 0 || archived`
+  // condition the FAB is gated on without depending on data another spec left behind.
+  await page.getByRole('button', { name: /Show archived|Archivierte anzeigen/ }).click();
+
+  const main = page.locator('main');
+  const fab = page.getByRole('button', { name: /New object/ });
+  await expect(fab).toBeVisible();
+
+  const mainBox = await main.boundingBox();
+  const fabBox = await fab.boundingBox();
+  if (!mainBox || !fabBox) throw new Error('no main or no FAB box');
+  // The FAB's usual clearance from whatever edge it hugs -- `--space-5` on desktop, the same
+  // value the un-gutted case already uses between the FAB and the bare viewport edge.
+  const clearance = await page.evaluate(() =>
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-5')),
+  );
+
+  // The design spec: the FAB sits at the bottom-right of the content pane, clear of the
+  // sidebar -- a constant `--space-5` from `main`'s right edge, not drifting further out in the
+  // gutter that opens once `main` hits its 1100px cap. A `position: fixed` FAB measures `right`
+  // from the viewport, so on a wide screen that constant gap has to be computed deliberately
+  // rather than falling out of a plain `right: var(--space-5)`.
+  const gap = mainBox.x + mainBox.width - clearance - (fabBox.x + fabBox.width);
+  expect(
+    Math.abs(gap),
+    "the FAB's right edge should sit one clearance inside main's right edge, not drift out into the gutter beyond it",
+  ).toBeLessThan(4);
+});
+
 test('the version is on screen without opening Settings', async ({ page }) => {
   await signIn(page);
   // The footer is rendered twice -- once inside the nav (for the sidebar) and once in the

@@ -31,6 +31,11 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 }, baseURL: 'http://127.0.0.1:8100' },
     },
   ],
+  // Playwright's `webServer` array has no per-project binding: both entries below start on
+  // every invocation, including a filtered `npx playwright test --project=mobile` run -- there
+  // is no mechanism that starts only the server a filtered run will use. That is harmless here
+  // (different ports, no interference), but it means the mobile/desktop split lives entirely in
+  // each project's own `baseURL` above, not in which of these two servers happens to be running.
   webServer: [
     {
       // The scratch data directory is wiped by the server command itself: this config is

@@ -253,8 +253,15 @@ button, a, .chip {
 .wordmark { font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
 
 /* Mobile: a bottom tab bar. The top of a phone screen is the one place a thumb cannot reach,
-   which is exactly where every navigation control in this app used to live. */
-@media (max-width: 899px) {
+   which is exactly where every navigation control in this app used to live.
+   Range syntax (`width < 900px` / `width >= 900px` below), not `max-width: 899px` /
+   `min-width: 900px`: those two are only complementary at whole-number widths, and a viewport
+   is routinely fractional under OS display scaling or browser zoom. At e.g. 899.4px the old
+   pair both failed to match, and `.appnav` -- fixed, but with no inset and no `display` set
+   outside these blocks -- fell back to its static position: three unstyled buttons stacked in
+   flow at the top of the page. Leave this as range syntax; do not "tidy" it back to
+   899px/900px. */
+@media (width < 900px) {
   .appnav {
     left: 0; right: 0; bottom: 0;
     border-top: 1px solid var(--border);
@@ -288,8 +295,10 @@ button, a, .chip {
   .app-footer { margin-top: auto; padding: var(--space-3) var(--space-3) 0; }
 }
 
-/* Desktop: a sidebar, and a content area that uses the width instead of centring a phone in it. */
-@media (min-width: 900px) {
+/* Desktop: a sidebar, and a content area that uses the width instead of centring a phone in it.
+   `width >= 900px`, the exact complement of the mobile query's `width < 900px` above -- see the
+   comment there for why this is range syntax rather than `min-width: 900px`. */
+@media (width >= 900px) {
   .appnav {
     top: 0; bottom: 0; left: 0; width: 240px;
     border-right: 1px solid var(--border);
@@ -306,7 +315,18 @@ button, a, .chip {
   .app-footer { display: none; }
   .app-content { margin-left: 240px; }
   main { max-width: 1100px; }
-  .fab { right: var(--space-5); }
+  /* The FAB is `position: fixed`, so `right` measures from the *viewport* edge -- fine while
+     `main` fills the content pane, but past ~1340px of viewport width (240px sidebar + 1100px
+     of capped `main`) a gutter opens between `main`'s right edge and the viewport's, and a
+     plain `var(--space-5)` here leaves the FAB stranded in it, detached from the list it acts
+     on. The fix is not `position: absolute` on a relatively-positioned `.app-content`: that
+     container has no fixed height of its own, so `bottom` would resolve against the bottom of
+     all its (possibly long, scrolling) content instead of the bottom of the screen -- the FAB
+     would park at the end of the list rather than floating over it. Staying `fixed` and
+     computing the offset keeps the float; the `calc()` is half the gutter width (mirroring
+     `main`'s own `margin: 0 auto` centring) plus the usual clearance, and `max()` collapses it
+     back to the plain `var(--space-5)` once the gutter closes below the cap. */
+  .fab { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
 }
 
 /* Wider is not better everywhere. A list or a grid is what a wide screen genuinely helps; a
