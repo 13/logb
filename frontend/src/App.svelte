@@ -18,6 +18,8 @@
   import SettingsAccount from './routes/settings/Account.svelte';
   import SettingsApiAccess from './routes/settings/ApiAccess.svelte';
   import SettingsData from './routes/settings/Data.svelte';
+  import SettingsPeople from './routes/settings/People.svelte';
+  import SettingsDatabase from './routes/settings/Database.svelte';
   import AppNav from './lib/AppNav.svelte';
   import AppFooter from './lib/AppFooter.svelte';
 
@@ -38,6 +40,17 @@
     else if ($user && ($path === '/login' || $path === '/setup')) go('/', true);
   });
 
+  // An admin-only page reached by typing its URL. This is a convenience, not the security
+  // boundary -- every endpoint behind these two pages is already administrator-only on the
+  // server, and stays that way. Without it a non-admin gets a screen of controls that each
+  // fail with a 403 one at a time, which reads as the app being broken rather than as the
+  // page not being theirs.
+  const ADMIN_ONLY = ['/settings/people', '/settings/database'];
+  $effect(() => {
+    if (!$user) return;
+    if (!$user.is_admin && ADMIN_ONLY.includes($path)) go('/settings', true);
+  });
+
   // Route table: pattern → [component, param names]. Later tasks add entries here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const routes: Array<[string, Component<any>]> = [
@@ -55,6 +68,8 @@
     ['/settings/account', SettingsAccount],
     ['/settings/api', SettingsApiAccess],
     ['/settings/data', SettingsData],
+    ['/settings/people', SettingsPeople],
+    ['/settings/database', SettingsDatabase],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
