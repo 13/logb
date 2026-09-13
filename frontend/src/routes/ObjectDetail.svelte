@@ -212,8 +212,8 @@
 
 <style>
   .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
-  .desc { white-space: pre-wrap; margin: 8px 0; }
-  .info-actions { margin-top: 16px; }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
-  .tabs .chip { margin-left: 4px; }
+  .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
+  .info-actions { margin-top: var(--space-4); }
+  .button-like { display: block; text-align: center; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
+  .tabs .chip { margin-left: var(--space-1); }
 </style>

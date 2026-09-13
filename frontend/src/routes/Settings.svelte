@@ -431,11 +431,11 @@
 </main>
 
 <style>
-  .fresh-token { display: grid; gap: 8px; }
+  .fresh-token { display: grid; gap: var(--space-2); }
   /* The token is long and must be readable in full, since it can never be shown again. */
-  .fresh-token code { word-break: break-all; font-size: .85rem; background: var(--surface-2); padding: 8px; border-radius: 8px; }
+  .fresh-token code { word-break: break-all; font-size: var(--text-sm); background: var(--surface-2); padding: var(--space-2); border-radius: 8px; }
   .row > button { flex: none; }
-  .stack { display: grid; gap: 6px; margin-bottom: var(--space-3); }
+  .stack { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
   /* A host, a file path, an epoch and a driver's error message are all long and none of them
      may be cut off half way through. */
   .break { word-break: break-word; }
@@ -448,10 +448,10 @@
      database LogB does not back up is a division of responsibility, not a fault. */
   .elsewhere { border-left: 4px solid var(--accent); }
   .elsewhere b { color: var(--accent); }
-  .tables { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+  .tables { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-1); }
   .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
   .toggle input { flex: none; width: 20px; height: 20px; }
   .danger-text { color: var(--danger); }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
-  .version { margin-top: 24px; }
+  .button-like { display: block; text-align: center; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
+  .version { margin-top: var(--space-5); }
 </style>

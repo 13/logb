@@ -137,9 +137,9 @@
   .snoozed-until { margin-top: 2px; justify-content: space-between; }
   .snoozed-until span { flex: 1; }
   .snoozed-until button { flex: none; }
-  .notes { font-size: .9rem; white-space: pre-wrap; margin-top: 4px; }
+  .notes { font-size: var(--text-sm); white-space: pre-wrap; margin-top: var(--space-1); }
   .repeat-icon { display: inline-flex; vertical-align: -2px; }
-  .actions { margin-top: 8px; }
-  .more { margin-top: 16px; width: 100%; text-align: left; color: var(--muted); }
+  .actions { margin-top: var(--space-2); }
+  .more { margin-top: var(--space-4); width: 100%; text-align: left; color: var(--muted); }
   .done { opacity: .7; }
 </style>

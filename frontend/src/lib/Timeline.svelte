@@ -78,13 +78,13 @@
 {/if}
 
 <style>
-  .entry { display: flex; flex-direction: column; gap: 4px; text-align: left; width: 100%; }
+  .entry { display: flex; flex-direction: column; gap: var(--space-1); text-align: left; width: 100%; }
   .entry.pending { opacity: .55; cursor: default; }
   .pending-chip { flex: none; }
   .head { justify-content: space-between; }
   .head b { flex: 1; }
   .head .chip { flex: none; }
-  .notes { font-size: .9rem; white-space: pre-wrap; }
-  .more { width: 100%; margin-top: 12px; }
+  .notes { font-size: var(--text-sm); white-space: pre-wrap; }
+  .more { width: 100%; margin-top: var(--space-3); }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
 </style>

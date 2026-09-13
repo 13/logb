@@ -96,5 +96,5 @@
 
 <style>
   .toggle input { flex: none; width: 20px; height: 20px; }
-  .actions { margin-top: 8px; }
+  .actions { margin-top: var(--space-2); }
 </style>

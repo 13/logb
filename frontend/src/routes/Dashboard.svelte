@@ -84,11 +84,11 @@
 </main>
 
 <style>
-  .toggle { margin-top: 18px; color: var(--muted); font-size: .9rem; }
+  .toggle { margin-top: var(--space-4); color: var(--muted); font-size: var(--text-sm); }
   .toggle input { flex: none; width: 20px; height: 20px; }
-  .banner ul { margin: 6px 0 0 18px; }
+  .banner ul { margin: var(--space-2) 0 0 var(--space-4); }
   /* Upcoming is not overdue: a calm surface card, not the alarming red used for `due`. */
   .banner.soon { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
   .banner.soon a { color: var(--text); }
-  .snooze { font-size: .8rem; padding: 2px 6px; }
+  .snooze { font-size: var(--text-xs); padding: 2px var(--space-2); }
 </style>

@@ -85,7 +85,7 @@
 <style>
   .hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--surface-2); }
   .hit-title { font-weight: 600; }
-  .small { font-size: .8rem; }
-  .type-row { display: flex; align-items: center; gap: 4px; }
+  .small { font-size: var(--text-xs); }
+  .type-row { display: flex; align-items: center; gap: var(--space-1); }
   .type-row :global(svg) { flex: none; }
 </style>

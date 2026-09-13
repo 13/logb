@@ -75,10 +75,10 @@
 {/if}
 
 <style>
-  h3 { margin: 16px 0 8px; font-size: 1rem; }
-  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .label { flex: none; width: 90px; font-size: .9rem; }
+  h3 { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-base); }
+  .bar-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+  .label { flex: none; width: 90px; font-size: var(--text-sm); }
   .track { flex: 1; height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
   .fill { display: block; height: 100%; background: var(--accent); }
-  .value { flex: none; font-size: .9rem; }
+  .value { flex: none; font-size: var(--text-sm); }
 </style>

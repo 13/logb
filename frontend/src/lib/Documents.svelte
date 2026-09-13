@@ -70,9 +70,9 @@
 {/if}
 
 <style>
-  figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
-  figcaption { font-size: .8rem; display: flex; flex-direction: column; gap: 2px; }
+  figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+  figcaption { font-size: var(--text-xs); display: flex; flex-direction: column; gap: 2px; }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .small button { min-height: 32px; padding: 2px 6px; font-size: .75rem; }
+  .small button { min-height: 32px; padding: 2px var(--space-2); font-size: var(--text-xs); }
   .danger-text { color: var(--danger); }
 </style>

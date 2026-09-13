@@ -47,8 +47,12 @@
   .list-card {
     display: flex; gap: var(--space-3); align-items: center; text-align: left; width: 100%;
     background: var(--surface); border: 1px solid var(--border);
-    /* Room for the action: its own width, plus the inset on each side of it. */
-    padding-right: calc(44px + var(--space-2) * 2);
+    /* Room for the action: its own width, plus the inset on each side of it. 44px is the tap
+       target -- an accessibility floor, not a spacing step -- so this gutter is not a scale
+       value and cannot be one. It is still spacing, so it is named in the spacing namespace
+       and everything about it that the scale *can* say (the insets) comes from the scale. */
+    --space-quicklog-gutter: calc(44px + var(--space-2) * 2);
+    padding-right: var(--space-quicklog-gutter);
   }
   /* A filled square on the card's surface, not an outlined box beside it: it reads as a control
      within the object rather than as a second object. 44px is the tap target the rest of the
