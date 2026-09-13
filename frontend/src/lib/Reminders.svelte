@@ -141,7 +141,7 @@
   .head b { flex: 1; }
   .head .chip { flex: none; }
   .chip.snoozed { background: var(--surface-2); color: var(--muted); }
-  .snoozed-until { margin-top: 2px; justify-content: space-between; }
+  .snoozed-until { margin-top: var(--space-1); justify-content: space-between; }
   .snoozed-until span { flex: 1; }
   .snoozed-until button { flex: none; }
   .notes { font-size: var(--text-sm); white-space: pre-wrap; margin-top: var(--space-1); }

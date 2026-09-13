@@ -58,7 +58,7 @@ const spacingValues = (raw: string) => values(raw, /var\(--space-[\w-]*\)/g);
  */
 const ALLOWED: Record<string, string> = {
   '1px': "the pending badge's vertical inset, drawn over a 64px thumbnail: optical, not spatial",
-  '2px': 'the focus ring and badge insets are optical, not spatial',
+  '2px': "the pending badge's inset and the two chip-sized buttons' -- optical, not spatial",
   '44px': 'the tap-target floor the quick-log gutter is built from: an accessibility minimum, not a spacing step',
   '0': 'zero is zero',
   auto: 'a centring keyword, not a spacing value: `margin: 0 auto` is alignment',

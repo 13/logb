@@ -92,7 +92,7 @@
 </main>
 
 <style>
-  .hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--surface-2); }
+  .hit { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); text-align: left; background: var(--surface-2); }
   .hit-title { font-weight: 600; }
   .small { font-size: var(--text-xs); }
   .type-row { display: flex; align-items: center; gap: var(--space-1); }

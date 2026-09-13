@@ -76,7 +76,7 @@
 
 <style>
   figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
-  figcaption { font-size: var(--text-xs); display: flex; flex-direction: column; gap: 2px; }
+  figcaption { font-size: var(--text-xs); display: flex; flex-direction: column; gap: var(--space-1); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .small button { min-height: 32px; padding: 2px var(--space-2); font-size: var(--text-xs); }
   .danger-text { color: var(--danger); }
