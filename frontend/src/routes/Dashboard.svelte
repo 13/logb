@@ -40,9 +40,7 @@
 </script>
 
 <main>
-  <TopBar title={$t('dash.title')} showSettings>
-    <button class="ghost" aria-label={$t('search.title')} onclick={() => go('/search')}><Icon name="search" /></button>
-  </TopBar>
+  <TopBar title={$t('dash.title')} />
 
   {#if due.length > 0}
     <div class="banner">

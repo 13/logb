@@ -135,8 +135,10 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
     const box = (el: Element) => el.getBoundingClientRect();
     const chips = document.querySelector('.chips')!;
     const chip = chips.querySelector('button')!;
-    // What is actually above the chip is the topbar's last control, not the topbar's box.
-    const above = box(chip).top - box(document.querySelector('.topbar button')!).bottom;
+    // What is actually above the chip is the topbar's last control, not the topbar's box. The
+    // dashboard's topbar carries no buttons of its own any more -- both used to live there, and
+    // now live in the app nav instead -- so its last control is the title.
+    const above = box(chip).top - box(document.querySelector('.topbar h1')!).bottom;
     const below = box(chips.nextElementSibling!).top - box(chip).bottom;
     return { above, below };
   });
