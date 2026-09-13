@@ -164,6 +164,12 @@ input[type='checkbox'], input[type='radio'] {
   padding: 0 var(--space-1) var(--space-1);
   scrollbar-width: none;
   mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  /* A filter row is not part of the list it filters. Without this the chips sat flush against
+     the first card: 8px of air above them (the topbar's own padding) and 4px below, and that
+     4px is the focus ring's bleed rather than anything chosen. 4px of bleed plus 4px of margin
+     is the 8px above it, so the row sits in the middle of its own gap instead of leaning on
+     the content. */
+  margin-bottom: var(--space-1);
 }
 .chips::-webkit-scrollbar { display: none; }
 /* The fade is a scroll affordance; it has no business dimming a focus ring. */

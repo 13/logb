@@ -118,3 +118,27 @@ test('every control in a form is the same height', async ({ page }) => {
   // And the one height they share still clears the tap-target floor.
   expect(distinct[0]).toBeGreaterThanOrEqual(44);
 });
+
+// The chips row sat flush against the first card: 8px of air above it and 4px below, and the
+// 4px was the focus ring's bleed rather than a gap anyone chose. A row that filters a list
+// belongs between the two, not stuck to one of them.
+test('the filter row sits in the middle of its own gap', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Chip gap probe');
+  await page.getByLabel('Type').selectOption('bike');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.locator('.card-row', { hasText: 'Chip gap probe' })).toBeVisible();
+
+  const gaps = await page.evaluate(() => {
+    const box = (el: Element) => el.getBoundingClientRect();
+    const chips = document.querySelector('.chips')!;
+    const chip = chips.querySelector('button')!;
+    // What is actually above the chip is the topbar's last control, not the topbar's box.
+    const above = box(chip).top - box(document.querySelector('.topbar button')!).bottom;
+    const below = box(chips.nextElementSibling!).top - box(chip).bottom;
+    return { above, below };
+  });
+  expect(gaps.below, `the chips row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
+});
