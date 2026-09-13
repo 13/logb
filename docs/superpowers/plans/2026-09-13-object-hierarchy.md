@@ -152,10 +152,11 @@ git commit -m "feat: an object may belong inside another one"
   live — check the file list under `tests/` and follow its existing style)
 
 **Interfaces:**
-- Produces: `pub(crate) async fn id_of(tx: &mut sqlx::AnyConnection, entity: Entity, uuid: &str) -> Result<i64, AppError>` —
+- Produces: `pub async fn id_of(tx: &mut sqlx::AnyConnection, entity: Entity, uuid: &str) -> Result<i64, AppError>` —
   the reverse of the existing `uuid_of`.
-- Produces: `pub(crate) async fn parent_is_valid(tx: &mut sqlx::AnyConnection, user_id: i64, object_id: Option<i64>, candidate_parent_id: i64) -> Result<bool, AppError>`.
-  `object_id` is `None` on create (a brand-new object cannot yet be anyone's ancestor, so the
+- Produces: `pub async fn parent_is_valid(tx: &mut sqlx::AnyConnection, user_id: i64, object_id: Option<i64>, candidate_parent_id: i64) -> Result<bool, AppError>` -- `pub`, not
+  `pub(crate)`: `tests/` is a separate crate and cannot see a `pub(crate)` item, which
+  `cargo test` will only tell you once you try. `object_id` is `None` on create (a brand-new object cannot yet be anyone's ancestor, so the
   cycle half of the check is skipped) and `Some(id)` on update.
 
 This task builds the check in isolation, against the database directly, before anything in the
@@ -255,7 +256,7 @@ In `src/sync/record.rs`, beside the existing `uuid_of`:
 /// The reverse of `uuid_of`: the internal id a `client_uuid` names, for entities where a
 /// caller needs to reason about the row as an integer -- as `parent_is_valid` does, since the
 /// tree it walks is built entirely out of integer `parent_id`s.
-pub(crate) async fn id_of(
+pub async fn id_of(
     tx: &mut sqlx::AnyConnection,
     entity: Entity,
     uuid: &str,
@@ -281,7 +282,7 @@ pub(crate) async fn id_of(
 /// recursive check that can drift into disagreeing twice, which is worse here than for a plain
 /// existence check -- this is the one field in the app where the two doors disagreeing could
 /// corrupt data rather than merely let a bad value through.
-pub(crate) async fn parent_is_valid(
+pub async fn parent_is_valid(
     tx: &mut sqlx::AnyConnection,
     user_id: i64,
     object_id: Option<i64>,
@@ -784,19 +785,24 @@ and `RETURNING` list, binding `parent_id`.
 
 In `update`, alongside the existing `cover_attachment_id` three-state handling:
 
+**Do not validate this before `db::begin_write` opens, the way the existing `cover_attachment_id`
+check does.** That pattern is tolerable for a plain existence check, but the cycle check is not:
+writes on this app are serialised by `db::begin_write`'s advisory lock precisely so a
+read-compare-write is atomic (the same property `field_clock`'s last-write-wins logic depends
+on) — a check taken from a pool connection *before* that lock is acquired can pass against a
+tree that a concurrent write changes in the gap between the check and this write's own turn,
+letting two individually-valid reparentings combine into an actual cycle once both have
+committed. So `parent_id`'s validation happens **after** the transaction opens, inside it,
+using `&mut *tx` — which also means it has to move to wherever `update` currently calls
+`db::begin_write`, not stay beside the other pre-transaction checks:
+
 ```rust
+// (after `let mut tx = db::begin_write(&state.db, state.backend).await?;`)
 let parent_id = match body.parent_id {
     None => existing.parent_id,
     Some(None) => None,
     Some(Some(pid)) => {
-        // `parent_is_valid` takes `&mut sqlx::AnyConnection`, matching every other helper in
-        // `record.rs` -- there is no open transaction yet at this point in `update` (the
-        // existing `cover_attachment_id` check runs before `db::begin_write` too), so a
-        // connection is acquired from the pool just for this check. `&mut conn` coerces to
-        // `&mut AnyConnection` the same way `&mut app.state.db.acquire().await.unwrap()`
-        // already does in this task's own tests.
-        let mut conn = state.db.acquire().await?;
-        if !record::parent_is_valid(&mut conn, user.id, Some(id), pid).await? {
+        if !record::parent_is_valid(&mut tx, user.id, Some(id), pid).await? {
             return Err(AppError::BadRequest("parent_id must be your own, undeleted, not itself, and not a descendant".into()));
         }
         Some(pid)
@@ -804,7 +810,11 @@ let parent_id = match body.parent_id {
 };
 ```
 
-Add `parent_id` to the `changed` diff list
+This means `update`'s existing field-diffing (`changed.push(...)` for each field) has to move
+to after this point too, since `parent_id`'s final value is not known until the transaction is
+already open — reorder the function so every value is settled before the single `UPDATE`
+statement runs, rather than trying to keep the old top-to-bottom shape with one field validated
+out of sequence. Add `parent_id` to the `changed` diff list
 (`if parent_id != existing.parent_id { changed.push(("parent_id", json!(parent_id))); }`) and to
 the `UPDATE`'s column list and binds.
 
