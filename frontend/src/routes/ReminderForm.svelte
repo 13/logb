@@ -77,5 +77,5 @@
 </main>
 
 <style>
-  .actions { margin-top: 8px; }
+  .actions { margin-top: var(--space-2); }
 </style>

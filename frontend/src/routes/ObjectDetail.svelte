@@ -187,8 +187,16 @@
     </nav>
 
     {#if tab === 'timeline'}
-      <Timeline objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
-      <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+      <Timeline
+        objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
+        onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
+        unit={object.counter_unit} bind:category
+      />
+      <!-- The empty timeline puts this same action in the middle of the page, where the eye
+           already is; two of them would be two calls to the same action. -->
+      {#if activities.length > 0 || category !== ''}
+        <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+      {/if}
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}
@@ -212,8 +220,7 @@
 
 <style>
   .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
-  .desc { white-space: pre-wrap; margin: 8px 0; }
-  .info-actions { margin-top: 16px; }
-  .button-like { display: block; text-align: center; padding: 10px 16px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text); text-decoration: none; }
-  .tabs .chip { margin-left: 4px; }
+  .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
+  .info-actions { margin-top: var(--space-4); }
+  .tabs .chip { margin-left: var(--space-1); }
 </style>

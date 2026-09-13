@@ -68,27 +68,53 @@
     </div>
   {/if}
 
+  <!-- The archived filter is a chip, like the category chips on an object: a control that
+       narrows a list belongs above the list in the row of such controls, not as a loose
+       checkbox trailing off the bottom of the page. `aria-pressed` carries the on/off state a
+       checkbox used to carry, and the label is unchanged. -->
+  <div class="chips">
+    <button
+      class="chip"
+      class:active={archived}
+      aria-pressed={archived}
+      onclick={() => (archived = !archived)}
+    >{$t('dash.show-archived')}</button>
+  </div>
+
   {#if error}<p class="error">{error}</p>{/if}
   {#if loading}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if objects.length === 0}
-    <p class="muted">{$t('dash.empty')}</p>
+    <!-- The one screen in the app that can say what LogB is for: it is what a new user sees
+         the moment setup finishes. The archived view is a filter, not a first run, so it gets
+         the fact instead of the pitch. -->
+    <div class="empty">
+      {#if archived}
+        <p>{$t('dash.none-archived')}</p>
+      {:else}
+        <span class="empty-icon"><Icon name="object" size={40} /></span>
+        <p>{$t('dash.empty')}</p>
+        <button class="primary" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
+      {/if}
+    </div>
   {:else}
     <div class="list">
       {#each objects as o (o.id)}<ObjectCard object={o} />{/each}
     </div>
   {/if}
 
-  <label class="row toggle"><input type="checkbox" bind:checked={archived} /> {$t('dash.show-archived')}</label>
-  <button class="primary fab" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
+  <!-- Hidden while the empty state is showing: that state carries the same action as its own
+       call to action, and two buttons named "New object" on one screen is one too many -- for
+       a reader and for anything resolving that name. -->
+  {#if objects.length > 0 || archived}
+    <button class="primary fab" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
+  {/if}
 </main>
 
 <style>
-  .toggle { margin-top: 18px; color: var(--muted); font-size: .9rem; }
-  .toggle input { flex: none; width: 20px; height: 20px; }
-  .banner ul { margin: 6px 0 0 18px; }
+  .banner ul { margin: var(--space-2) 0 0 var(--space-4); }
   /* Upcoming is not overdue: a calm surface card, not the alarming red used for `due`. */
   .banner.soon { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
   .banner.soon a { color: var(--text); }
-  .snooze { font-size: .8rem; padding: 2px 6px; }
+  .snooze { font-size: var(--text-xs); padding: 2px var(--space-2); }
 </style>

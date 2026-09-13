@@ -28,6 +28,12 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* One height for every control. A button, a text field, a select and a date field are four
+     different boxes to a browser -- different borders, different internal line boxes -- and
+     left to themselves they stood at 46, 48, 50 and 50 in a single form. This is the height
+     they are all given; 48 clears the 44px tap-target floor with the border included. */
+  --control: 48px;
+
   /* Three steps, not one. A control and a container should not read as the same object. */
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -69,15 +75,51 @@ body {
 a { color: var(--accent); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
 h1 { font-size: var(--text-xl); } h2 { font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); }
-button, input, select, textarea { font: inherit; color: inherit; }
-button { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: 44px; cursor: pointer; background: var(--surface-2); }
+button, input, select, textarea { font: inherit; color: inherit; line-height: 1.25; }
+/* `.button-like` is an anchor that acts as a button -- a download link, mostly. It shares the
+   button's box rather than approximating it: two copies of that approximation had drifted to a
+   different radius and no min-height, so an export link stood 2px taller than the buttons
+   beside it. */
+button, .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: var(--control); cursor: pointer; background: var(--surface-2); }
+.button-like { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; width: 100%; }
 button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 button.ghost { background: transparent; }
 button:disabled { opacity: .5; cursor: default; }
 .field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
 .field label { font-size: var(--text-sm); color: var(--muted); }
-.field input, .field select, .field textarea { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); min-height: 44px; width: 100%; }
+/* Controls are styled because they exist, not because someone remembered to wrap them in
+   `.field`. The search box was the one input nobody wrapped, and it fell through to the
+   browser's own look -- square corners and a blue clear button, in an app with neither. */
+input, select, textarea {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  min-height: var(--control);
+  width: 100%;
+  appearance: none;
+}
+/* A minimum is not enough to make these agree. Chrome's select ignores `line-height` outright
+   and a date input's editor is taller than a plain text run, so the same padding produced a
+   50px select and a 48px date field beside a 46px text field. A single-line control has one
+   right height, so it is given one -- the textarea is excluded because it is the one control
+   that is meant to grow, and checkbox and radio below keep their own size. */
+input, select { height: var(--control); }
+/* `appearance: none` does not reach this: Chrome draws its own ✕ inside a search input, in its
+   own blue. Ours is a button beside the field, in the app's colours. */
+input[type='search']::-webkit-search-cancel-button { appearance: none; display: none; }
+/* Same reason, one control along: `appearance: none` takes the chevron off a select and Chrome
+   draws nothing in its place, so a select with the app's border and radius already on it reads
+   as a text field that happens to have words in it. The chevron is the only part of the native
+   select worth keeping -- surface, border, radius, height and width above are still ours -- and
+   it is drawn in the inherited text colour, so it follows the theme. */
+select { appearance: auto; }
+/* A checkbox with `appearance: none` is an invisible box, so these keep the platform control --
+   it is the one native widget that already reads correctly in both themes. */
+input[type='checkbox'], input[type='radio'] {
+  appearance: auto; width: auto; height: auto; min-height: 0; padding: 0;
+}
 .field textarea { min-height: 88px; resize: vertical; }
 .field .hint { font-size: var(--text-xs); color: var(--muted); }
 .field .warn { font-size: var(--text-xs); color: var(--warn); }
@@ -87,6 +129,21 @@ button:disabled { opacity: .5; cursor: default; }
 .list { display: flex; flex-direction: column; gap: var(--space-3); }
 .muted { color: var(--muted); font-size: var(--text-sm); }
 .error { color: var(--danger); margin: var(--space-2) 0; }
+/* A screen with nothing in it is still a screen. Every empty state is this block: one sentence
+   saying what belongs here, and -- where there is one -- the action that puts it there. It is
+   centred with room around it so it reads as a page that is waiting rather than one that stopped
+   loading, and the measure is capped so the sentence wraps like a sentence. The icon is muted
+   well below the text: it is furniture, not a warning. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+}
+.empty p { color: var(--muted); font-size: var(--text-sm); max-width: 34ch; }
+.empty .empty-icon { display: flex; color: var(--muted); opacity: .4; }
 .chip { display: inline-block; padding: 2px var(--space-3); border-radius: var(--radius-full); background: var(--surface-2); font-size: var(--text-xs); }
 .chip.active { background: var(--accent); color: var(--accent-text); }
 .chip.due { background: var(--danger); color: #fff; }
@@ -107,6 +164,12 @@ button:disabled { opacity: .5; cursor: default; }
   padding: 0 var(--space-1) var(--space-1);
   scrollbar-width: none;
   mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  /* A filter row is not part of the list it filters. Without this the chips sat flush against
+     the first card: 8px of air above them (the topbar's own padding) and 4px below, and that
+     4px is the focus ring's bleed rather than anything chosen. 4px of bleed plus 4px of margin
+     is the 8px above it, so the row sits in the middle of its own gap instead of leaning on
+     the content. */
+  margin-bottom: var(--space-1);
 }
 .chips::-webkit-scrollbar { display: none; }
 /* The fade is a scroll affordance; it has no business dimming a focus ring. */
@@ -125,7 +188,7 @@ button:disabled { opacity: .5; cursor: default; }
    card's cover and the documents grid. */
 img.thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-sm); background: var(--surface-2); display: block; }
 .thumb-strip { display: flex; gap: var(--space-2); overflow-x: auto; margin-top: var(--space-2); }
-.thumb-strip img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; }
+.thumb-strip img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); }
 .stat { display: flex; flex-direction: column; } .stat b { font-size: var(--text-data); } .stat span { font-size: var(--text-xs); color: var(--muted); }
 .stats {
   display: grid;

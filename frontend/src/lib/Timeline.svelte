@@ -9,10 +9,10 @@
   import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
 
-  let { objectId, type, activities, total, loadingMore = false, onmore, unit, category = $bindable('') }:
+  let { objectId, type, activities, total, loadingMore = false, onmore, onlog, unit, category = $bindable('') }:
     {
       objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
-      onmore?: () => void; unit: CounterUnit; category?: Category | '';
+      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | '';
     } = $props();
   const groups = $derived(groupByYear(activities));
   const hasMore = $derived(activities.length < total);
@@ -36,7 +36,17 @@
 </div>
 
 {#if activities.length === 0}
-  <p class="muted">{$t('timeline.empty')}</p>
+  <!-- An object with no history and an object whose filter matched nothing are not the same
+       screen: the first is an invitation, the second is a fact about the chip above it. -->
+  <div class="empty">
+    {#if category === ''}
+      <span class="empty-icon"><Icon name="edit" size={40} /></span>
+      <p>{$t('timeline.empty')}</p>
+      {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}
+    {:else}
+      <p>{$t('timeline.none-in-filter')}</p>
+    {/if}
+  </div>
 {:else}
   {#each groups as [year, items] (year)}
     <p class="year">{year}</p>
@@ -78,13 +88,13 @@
 {/if}
 
 <style>
-  .entry { display: flex; flex-direction: column; gap: 4px; text-align: left; width: 100%; }
+  .entry { display: flex; flex-direction: column; gap: var(--space-1); text-align: left; width: 100%; }
   .entry.pending { opacity: .55; cursor: default; }
   .pending-chip { flex: none; }
   .head { justify-content: space-between; }
   .head b { flex: 1; }
   .head .chip { flex: none; }
-  .notes { font-size: .9rem; white-space: pre-wrap; }
-  .more { width: 100%; margin-top: 12px; }
-  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: 6px; }
+  .notes { font-size: var(--text-sm); white-space: pre-wrap; }
+  .more { width: 100%; margin-top: var(--space-3); }
+  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
 </style>

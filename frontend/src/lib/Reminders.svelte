@@ -11,6 +11,8 @@
     { objectId: number; unit: CounterUnit; activities: Activity[]; onchanged?: () => void } = $props();
 
   let items = $state<Reminder[]>([]);
+  /** Whether the answer is known -- see Documents.svelte for why an empty list is not one. */
+  let loaded = $state(false);
   let showDone = $state(false);
   let dialog = $state<HTMLDialogElement | null>(null);
   let target = $state<Reminder | null>(null);
@@ -28,6 +30,7 @@
   async function load() {
     try { items = await api<Reminder[]>('GET', `/objects/${objectId}/reminders`); }
     catch (e) { error = (e as Error).message; }
+    finally { loaded = true; }
   }
   $effect(() => { objectId; load(); });
 
@@ -64,8 +67,15 @@
 {#if error}<p class="error">{error}</p>{/if}
 {#if toast}<p class="muted">{toast}</p>{/if}
 
-{#if items.length === 0}
-  <p class="muted">{$t('reminder.empty')}</p>
+<!-- Not `items.length === 0`: an empty list before the first answer is what the component was
+     initialised with, not what the server said, and the empty state is a whole block -- icon,
+     sentence and a primary button -- to flash and take away. -->
+{#if loaded && items.length === 0}
+  <div class="empty">
+    <span class="empty-icon"><Icon name="repeat" size={40} /></span>
+    <p>{$t('reminder.empty')}</p>
+    <button class="primary" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+  </div>
 {/if}
 
 <div class="list">
@@ -110,7 +120,10 @@
   {/if}
 {/if}
 
-<button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+<!-- The empty state carries this same action, so only one of the two is ever on screen. -->
+{#if items.length > 0}
+  <button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+{/if}
 
 <dialog bind:this={dialog}>
   <h2>{$t('reminder.done-title')}</h2>
@@ -134,12 +147,12 @@
   .head b { flex: 1; }
   .head .chip { flex: none; }
   .chip.snoozed { background: var(--surface-2); color: var(--muted); }
-  .snoozed-until { margin-top: 2px; justify-content: space-between; }
+  .snoozed-until { margin-top: var(--space-1); justify-content: space-between; }
   .snoozed-until span { flex: 1; }
   .snoozed-until button { flex: none; }
-  .notes { font-size: .9rem; white-space: pre-wrap; margin-top: 4px; }
+  .notes { font-size: var(--text-sm); white-space: pre-wrap; margin-top: var(--space-1); }
   .repeat-icon { display: inline-flex; vertical-align: -2px; }
-  .actions { margin-top: 8px; }
-  .more { margin-top: 16px; width: 100%; text-align: left; color: var(--muted); }
+  .actions { margin-top: var(--space-2); }
+  .more { margin-top: var(--space-4); width: 100%; text-align: left; color: var(--muted); }
   .done { opacity: .7; }
 </style>

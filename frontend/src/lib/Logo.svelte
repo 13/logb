@@ -10,6 +10,6 @@
 <style>
   .logo {
     display: block;
-    margin: 0 auto 12px;
+    margin: 0 auto var(--space-3);
   }
 </style>

@@ -11,5 +11,5 @@
     "moduleDetection": "force"
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"],
-  "exclude": ["tests/pwa-icons.test.ts", "tests/icons.test.ts"]
+  "exclude": ["tests/pwa-icons.test.ts", "tests/icons.test.ts", "tests/scale.test.ts"]
 }

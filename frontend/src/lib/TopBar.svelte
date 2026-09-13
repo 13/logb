@@ -45,5 +45,5 @@
 </header>
 
 <style>
-  h1 :global(svg) { vertical-align: -3px; margin-right: 6px; flex: none; }
+  h1 :global(svg) { vertical-align: -3px; margin-right: var(--space-2); flex: none; }
 </style>

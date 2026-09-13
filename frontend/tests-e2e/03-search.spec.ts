@@ -48,5 +48,7 @@ test('a query with no hits says so', async ({ page }) => {
   await signIn(page);
   await page.goto('/search');
   await page.getByLabel(/Search objects and activities/).fill('zzzznothing');
-  await expect(page.getByText('Nothing found.')).toBeVisible();
+  // The line names the query it failed to match, so this asserts the whole fact, not just
+  // that some empty state appeared.
+  await expect(page.getByText(/No matches for “zzzznothing”/)).toBeVisible();
 });

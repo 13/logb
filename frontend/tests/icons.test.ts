@@ -5,9 +5,11 @@ import { join, relative } from 'node:path';
 
 // Wider than "emoji" strictly means, deliberately: the pictographic block covers 📷 and 📄,
 // and the arrow and dingbat blocks are here for ← and ⚙, which are not emoji by any Unicode
-// property but were standing in for icons all the same. The working definition is "a glyph used
-// as an icon", and the pattern matches that rather than Emoji_Presentation.
-const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{FE0F}]/u;
+// property but were standing in for icons all the same. The Halfwidth and Fullwidth Forms block
+// is here for ＋, which stood in for the dashboard's quick-log button for weeks because this
+// pattern didn't cover it. The working definition is "a glyph used as an icon", and the pattern
+// matches that rather than Emoji_Presentation.
+const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{FE0F}\u{FF00}-\u{FFEF}]/u;
 
 const SRC_ROOT = fileURLToPath(new URL('../src', import.meta.url));
 
