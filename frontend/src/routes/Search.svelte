@@ -11,6 +11,10 @@
 
   let q = $state(new URLSearchParams(location.search).get('q') ?? '');
   let results = $state<SearchResults | null>(null);
+  /** The term `results` actually describes. `q` changes on every keystroke and the request
+   *  is debounced behind it, so quoting `q` in the no-matches line would name a query the
+   *  server has not answered yet. */
+  let searched = $state('');
   let loading = $state(false);
   let error = $state('');
 
@@ -21,10 +25,10 @@
     const url = new URL(location.href);
     if (term) url.searchParams.set('q', term); else url.searchParams.delete('q');
     history.replaceState(null, '', url.pathname + url.search);
-    if (!term) { results = null; error = ''; return; }
+    if (!term) { results = null; searched = ''; error = ''; return; }
     const timer = setTimeout(async () => {
       loading = true; error = '';
-      try { results = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}`); }
+      try { results = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}`); searched = term; }
       catch (e) { error = (e as Error).message; }
       finally { loading = false; }
     }, 200);
@@ -50,7 +54,12 @@
   {#if loading && !results}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if empty}
-    <p class="muted">{$t('search.none')}</p>
+    <!-- A report about a query, not an invitation: it names what was searched for, and there is
+         no action to offer. Before anything is typed `results` is null and nothing is drawn at
+         all -- "no matches" ahead of a query would be a claim about a search nobody ran. -->
+    <div class="empty">
+      <p>{$t('search.none', { q: searched })}</p>
+    </div>
   {:else if results}
     {#if results.objects.length > 0}
       <h2>{$t('search.objects')}</h2>

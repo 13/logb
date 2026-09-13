@@ -41,7 +41,12 @@
 <FilePicker {objectId} onuploaded={() => { load(); onchanged?.(); }} />
 
 {#if items.length === 0}
-  <p class="muted">{$t('docs.empty')}</p>
+  <!-- The picker sits right above this, so the words only have to say what is worth putting
+       into it. -->
+  <div class="empty">
+    <span class="empty-icon"><Icon name="document" size={40} /></span>
+    <p>{$t('docs.empty')}</p>
+  </div>
 {:else}
   <div class="grid">
     {#each items as a (a.id)}

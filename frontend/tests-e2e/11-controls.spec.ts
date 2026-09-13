@@ -71,3 +71,14 @@ test('the quick-log action belongs to its row', async ({ page }) => {
   // And it is an icon, not a glyph standing in for one.
   expect(await quick.locator('svg').count()).toBe(1);
 });
+
+// A screen that stops at a heading looks broken. Each empty state says what belongs there and
+// offers the action that puts something there.
+test('an empty search says so, and an unrun search does not', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: 'Search' }).click();
+  // Nothing typed yet: no result state at all, which is different from "no results".
+  await expect(page.getByText(/No matches|Keine Treffer/)).toHaveCount(0);
+  await page.getByRole('searchbox').fill('zzzz-nothing-matches-this');
+  await expect(page.getByText(/No matches|Keine Treffer/)).toBeVisible();
+});

@@ -187,8 +187,16 @@
     </nav>
 
     {#if tab === 'timeline'}
-      <Timeline objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore} onmore={loadMore} unit={object.counter_unit} bind:category />
-      <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+      <Timeline
+        objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
+        onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
+        unit={object.counter_unit} bind:category
+      />
+      <!-- The empty timeline puts this same action in the middle of the page, where the eye
+           already is; two of them would be two calls to the same action. -->
+      {#if activities.length > 0 || category !== ''}
+        <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+      {/if}
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}

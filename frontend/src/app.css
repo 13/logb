@@ -117,6 +117,21 @@ input[type='checkbox'], input[type='radio'] {
 .list { display: flex; flex-direction: column; gap: var(--space-3); }
 .muted { color: var(--muted); font-size: var(--text-sm); }
 .error { color: var(--danger); margin: var(--space-2) 0; }
+/* A screen with nothing in it is still a screen. Every empty state is this block: one sentence
+   saying what belongs here, and -- where there is one -- the action that puts it there. It is
+   centred with room around it so it reads as a page that is waiting rather than one that stopped
+   loading, and the measure is capped so the sentence wraps like a sentence. The icon is muted
+   well below the text: it is furniture, not a warning. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+}
+.empty p { color: var(--muted); font-size: var(--text-sm); max-width: 34ch; }
+.empty .empty-icon { display: flex; color: var(--muted); opacity: .4; }
 .chip { display: inline-block; padding: 2px var(--space-3); border-radius: var(--radius-full); background: var(--surface-2); font-size: var(--text-xs); }
 .chip.active { background: var(--accent); color: var(--accent-text); }
 .chip.due { background: var(--danger); color: #fff; }

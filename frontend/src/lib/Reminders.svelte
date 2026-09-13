@@ -65,7 +65,11 @@
 {#if toast}<p class="muted">{toast}</p>{/if}
 
 {#if items.length === 0}
-  <p class="muted">{$t('reminder.empty')}</p>
+  <div class="empty">
+    <span class="empty-icon"><Icon name="repeat" size={40} /></span>
+    <p>{$t('reminder.empty')}</p>
+    <button class="primary" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+  </div>
 {/if}
 
 <div class="list">
@@ -110,7 +114,10 @@
   {/if}
 {/if}
 
-<button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+<!-- The empty state carries this same action, so only one of the two is ever on screen. -->
+{#if items.length > 0}
+  <button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+{/if}
 
 <dialog bind:this={dialog}>
   <h2>{$t('reminder.done-title')}</h2>
