@@ -25,8 +25,13 @@ function styleBlocks(dir: string): Array<{ rel: string; css: string }> {
  * laundered through `--space-something: 7px` is still a spacing value the component invented,
  * so the alias is read at its declaration rather than where it is used -- otherwise one line
  * of CSS buys an exemption from the whole scale.
+ *
+ * The value ends on `[;}]`, not on `;`: CSS lets the last declaration in a block drop its
+ * semicolon, and `gap: 7px }` is exactly as much a spacing value as `gap: 7px;` is. Requiring
+ * the semicolon made that declaration invisible -- and, where a later one did carry a
+ * semicolon, made the match run past the closing brace and report the next rule's selector.
  */
-const SPACING = /(?:(?:gap|margin|padding)(?:-[a-z]+)*|--space-[\w-]*):\s*([^;]+);/g;
+const SPACING = /(?:(?:gap|margin|padding)(?:-[a-z]+)*|--space-[\w-]*):\s*([^;}]+)[;}]/g;
 
 /**
  * The values a declaration writes, with scale references and `calc()` scaffolding taken out.
@@ -69,7 +74,8 @@ function spacingTokens(): string[] {
 describe('the scale', () => {
   it('no component invents a font size', () => {
     for (const { rel, css } of styleBlocks(SRC)) {
-      const hits = [...css.matchAll(/font-size:\s*([^;]+);/g)].map((m) => m[1].trim());
+      // `[;}]` for the same reason SPACING uses it: `font-size: 13px }` is a font size.
+      const hits = [...css.matchAll(/font-size:\s*([^;}]+)[;}]/g)].map((m) => m[1].trim());
       const raw = hits.filter((v) => !v.startsWith('var(--text-'));
       expect(raw, `${rel} sets a font size outside the scale: ${raw.join(', ')}`).toEqual([]);
     }
