@@ -16,6 +16,8 @@
   import Settings from './routes/Settings.svelte';
   import SettingsAppearance from './routes/settings/Appearance.svelte';
   import SettingsAccount from './routes/settings/Account.svelte';
+  import SettingsApiAccess from './routes/settings/ApiAccess.svelte';
+  import SettingsData from './routes/settings/Data.svelte';
   import AppNav from './lib/AppNav.svelte';
   import AppFooter from './lib/AppFooter.svelte';
 
@@ -51,6 +53,8 @@
     ['/settings', Settings],
     ['/settings/appearance', SettingsAppearance],
     ['/settings/account', SettingsAccount],
+    ['/settings/api', SettingsApiAccess],
+    ['/settings/data', SettingsData],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {
