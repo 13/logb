@@ -1726,6 +1726,42 @@ async fn a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_refere
     assert_eq!(parent, 0, "once nothing names it the parent is finally purged");
 }
 
+/// The purge's one silent forever-retention, said out loud.
+///
+/// The `objects` guard asks whether any row still names this one as its parent, and carries no
+/// `c.id <> objects.id`, so a row that is its own parent answers its own guard on every run and
+/// is never purged. No validated write path can produce one -- both doors go through
+/// `record::parent_is_valid`, and `objects::update` asks it under the write lock -- so this is
+/// an import or a hand edit, and the row is planted here the same way. Being held back is the
+/// safe outcome and is not what this test changes; what it pins is that an operator can *see*
+/// it, rather than a tombstone quietly outliving its retention window with no error and no log
+/// line. Delete the `warn!` in `sync::feed::purge` and this fails while the retention assertion
+/// above it still passes.
+#[tokio::test]
+async fn a_self_parenting_tombstone_is_held_back_and_says_so() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let orphan = app.create_object(&app.client, "Ouroboros", None).await;
+    let id = orphan["id"].as_i64().unwrap();
+    app.delete_object(&orphan).await;
+    // Past the validation, exactly as an import or a hand-edited database could.
+    sqlx::query("UPDATE objects SET parent_id = id WHERE id = $1")
+        .bind(id)
+        .execute(&app.state.db).await.unwrap();
+    app.age_out_tombstones().await;
+
+    app.run_purge().await;
+
+    let still_there: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(still_there, 1, "the guard holds a self-parenting row back, which is the safe half");
+    let logs = app.captured_logs();
+    assert!(
+        logs.contains("name themselves as their own parent"),
+        "the purge must warn about a row it can never remove, not drop it silently",
+    );
+}
+
 #[tokio::test]
 async fn purge_keeps_recent_history() {
     let app = common::spawn().await;

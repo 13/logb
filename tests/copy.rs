@@ -511,3 +511,48 @@ async fn a_running_server_can_copy_its_own_database() {
     let objects: serde_json::Value = app.get_json("/objects").await;
     assert_eq!(objects[0]["name"], "Golf");
 }
+
+/// A source database written before `0010_object_hierarchy.sql` still copies.
+///
+/// `run` opens the source with `db::connect_existing`, which deliberately does not migrate it,
+/// so the objects table of an old backup -- or of a previous release's database being copied by
+/// a new binary -- simply has no `parent_id` column. `copy_table` has always coped, because it
+/// takes its column list from the rows it actually read; `parents_before_children` did not, and
+/// asked every row for a column that was not there. The copy then aborted before writing
+/// anything, with a raw `ColumnNotFound("parent_id")` that names neither the cause nor a cure.
+///
+/// Restore the unconditional `whole_number(row, "parent_id")` in `parents_before_children` and
+/// this fails with exactly that error. The column is dropped from the source rather than a
+/// pre-0010 database being built by hand, so the rest of the schema stays whatever the
+/// migrations actually produce.
+#[tokio::test]
+async fn a_source_without_the_parent_id_column_still_copies() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    // Two objects and an activity, so the copy has both an ordering decision to make in
+    // `objects` and a foreign key into it to satisfy afterwards.
+    let golf = app.create_object(&app.client, "Golf", Some("km")).await;
+    app.create_object(&app.client, "Bike", None).await;
+    app.create_activity(&golf["id"], "Ölwechsel").await;
+
+    // The index has to go first: SQLite refuses to drop a column another object still indexes.
+    sqlx::query("DROP INDEX idx_objects_parent").execute(&app.state.db).await.unwrap();
+    sqlx::query("ALTER TABLE objects DROP COLUMN parent_id").execute(&app.state.db).await.unwrap();
+
+    app.release_database().await;
+    let dest = common::scratch_database().await;
+
+    let report = logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
+    assert!(report.tables.iter().any(|(t, n)| t == "objects" && *n == 2), "{:?}", report.tables);
+
+    // The destination is migrated, so it does have the column; every row arrives without one,
+    // which is a table of roots -- exactly what a database with no hierarchy holds.
+    let pool = logb::db::connect_existing(&dest.url).await.unwrap();
+    let rows: Vec<(i64, String, Option<i64>)> =
+        sqlx::query_as("SELECT id, name, parent_id FROM objects ORDER BY id")
+            .fetch_all(&pool).await.unwrap();
+    pool.close().await;
+    let names: Vec<&str> = rows.iter().map(|(_, name, _)| name.as_str()).collect();
+    assert_eq!(names, vec!["Golf", "Bike"], "both objects must have crossed: {rows:?}");
+    assert!(rows.iter().all(|(_, _, parent)| parent.is_none()), "{rows:?}");
+}

@@ -256,7 +256,39 @@
     },
     "/objects": {
       "get": {
-        "summary": "Every object owned by this user.",
+        "summary": "Objects owned by this user, one level of the tree at a time: top-level objects by default, one object's direct children with `parent_id`, or every object the user owns regardless of nesting with `all=true`. `archived` selects which half of the tree is listed either way.",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False (the default) lists live objects, true lists archived ones. The two sets are disjoint; there is no value that returns both."
+          },
+          {
+            "name": "parent_id",
+            "in": "query",
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "description": "Omitted (or null) lists top-level objects only -- those with no parent, which is what the dashboard asks for. An id lists that object's direct children, one level deep, not its whole subtree. Ignored when `all` is true."
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Every object the user owns, at every depth, still filtered by `archived`. Overrides `parent_id`. This is what a client that builds the tree itself -- or that must not silently lose nested objects -- should send."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",
@@ -1836,6 +1868,19 @@
           "other"
         ]
       },
+      "Ancestor": {
+        "type": "object",
+        "description": "One link in an object's ancestor chain, as a breadcrumb needs it.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Object": {
         "type": "object",
         "properties": {
@@ -1903,6 +1948,14 @@
             ],
             "format": "int64"
           },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The object this one sits inside -- a garage inside a house -- or null for a top-level object."
+          },
           "cover_file_id": {
             "type": [
               "integer",
@@ -1920,6 +1973,13 @@
           },
           "stats": {
             "$ref": "#/components/schemas/ObjectStats"
+          },
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ancestor"
+            },
+            "description": "Root first, nearest ancestor last, this object excluded. Filled in only by the single-object responses (GET/POST/PATCH of one object); `GET /objects` always returns it empty, since no list view draws a breadcrumb and filling it would cost one recursive query per row."
           }
         }
       },
@@ -2009,6 +2069,14 @@
               "null"
             ],
             "format": "int64"
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Three-state on PATCH: omit the field to keep the current parent, send null to make the object top-level again, send an id to move it. On POST, omitted and null both mean top-level. The id must name one of your own undeleted objects, and must be neither this object nor one of its descendants, or the request is refused with 400."
           }
         }
       },
@@ -2442,19 +2510,156 @@
           }
         }
       },
+      "ObjectHit": {
+        "type": "object",
+        "description": "An object as `/search` returns it: the stored columns plus the parent's name, so a list of four things called \"Filter\" says which object each one lives in. Deliberately not an `Object` -- it carries no `stats`, `cover_file_id` or `ancestors`, none of which the search computes.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ObjectType"
+          },
+          "counter_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "km, mi, h, ..."
+          },
+          "fuel_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "l",
+              "gal",
+              "kwh",
+              null
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "purchase_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "purchase_price_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "cover_attachment_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "parent_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the object this one sits inside, or null for a top-level object."
+          }
+        }
+      },
+      "ActivityHit": {
+        "type": "object",
+        "description": "An activity as `/search` returns it: a subset of `Activity`'s columns plus the owning object's name. It carries no `quantity_milli`, `client_op_id`, `created_at`, `updated_at` or `attachments`; fetch the activity itself for those.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "object_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "category": {
+            "$ref": "#/components/schemas/Category"
+          },
+          "title": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "counter_value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "cost_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Money is always integer cents; never a float"
+          }
+        }
+      },
       "SearchResults": {
         "type": "object",
         "properties": {
           "objects": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Object"
+              "$ref": "#/components/schemas/ObjectHit"
             }
           },
           "activities": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Activity"
+              "$ref": "#/components/schemas/ActivityHit"
             }
           }
         }

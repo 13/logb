@@ -469,7 +469,7 @@ fn parents_before_children(rows: Vec<sqlx::any::AnyRow>) -> Result<Vec<sqlx::any
 
     let mut ids = Vec::with_capacity(rows.len());
     for row in &rows {
-        ids.push((whole_number(row, "id")?, whole_number(row, "parent_id")?));
+        ids.push((whole_number(row, "id")?, optional_whole_number(row, "parent_id")?));
     }
     // Which row holds each id, so a `parent_id` can be turned into the position that has to be
     // written first.
@@ -506,6 +506,24 @@ fn parents_before_children(rows: Vec<sqlx::any::AnyRow>) -> Result<Vec<sqlx::any
         .into_iter()
         .map(|i| rows[i].take().expect("every position is ordered exactly once"))
         .collect())
+}
+
+/// `whole_number`, but a column the source table does not have at all also reads as `None`.
+///
+/// Only `parent_id` is read this way, and only because the source is opened by
+/// `db::connect_existing`, which deliberately does not migrate it: an old backup, or the
+/// database of a previous release being copied by a new binary, predates
+/// `0010_object_hierarchy.sql` and has no `parent_id` column. `copy_table` already copes --
+/// it takes its column list from the rows it actually read, so a narrower source is written
+/// narrower -- and this is the one place that named a column instead of reading what was there,
+/// turning a copy that used to work into a raw `ColumnNotFound` naming nothing an operator
+/// could act on. A table with no hierarchy has every row a root, which is what `None` says, and
+/// the walk below then leaves the rows in the order they were read.
+fn optional_whole_number(row: &sqlx::any::AnyRow, name: &str) -> Result<Option<i64>, BoxError> {
+    if row.try_column(name).is_err() {
+        return Ok(None);
+    }
+    whole_number(row, name)
 }
 
 /// One integer column of a row, as an `i64`, or `None` where it is NULL.

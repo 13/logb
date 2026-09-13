@@ -144,16 +144,40 @@ impl ObjectInput {
     }
 }
 
-/// The object with `id` if it belongs to `user_id`; otherwise 404.
+/// The one statement both loaders below run, so a column added to `ObjectRow` cannot reach one
+/// of them and not the other -- which would show up only as a decode error on whichever path
+/// the tests happened not to cover.
+const OWNED_OBJECT: &str =
+    "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
+     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
+     FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
+
+/// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
+/// callers that only want to know the object exists and is theirs before they go on.
+///
+/// A caller that is about to *write* what it reads here wants `load_owned_object_on` instead:
+/// see the comment in `update` for what a read taken before the write lock is worth.
 pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<ObjectRow, AppError> {
-    sqlx::query_as::<_, ObjectRow>(
-        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
-         FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
-    )
-    .bind(id).bind(user_id)
-    .fetch_optional(&state.db).await?
-    .ok_or(AppError::NotFound)
+    sqlx::query_as::<_, ObjectRow>(OWNED_OBJECT)
+        .bind(id).bind(user_id)
+        .fetch_optional(&state.db).await?
+        .ok_or(AppError::NotFound)
+}
+
+/// `load_owned_object` on a connection the caller already holds -- in practice the one
+/// `db::begin_write` has just taken the write lock on.
+///
+/// It has to be the transaction's own connection rather than a second one from the pool: a pool
+/// connection acquired while `begin_write` holds SQLite's write lock does not fail, it hangs.
+pub async fn load_owned_object_on(
+    conn: &mut sqlx::AnyConnection,
+    user_id: i64,
+    id: i64,
+) -> Result<ObjectRow, AppError> {
+    sqlx::query_as::<_, ObjectRow>(OWNED_OBJECT)
+        .bind(id).bind(user_id)
+        .fetch_optional(&mut *conn).await?
+        .ok_or(AppError::NotFound)
 }
 
 /// One row of derived data per object: the stats block plus the cover's `file_id`.
@@ -229,6 +253,17 @@ pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError>
 /// The object's ancestor chain, root first, excluding the object itself -- empty when it has
 /// no parent, which costs nothing extra: the common case (an object with no parent) never
 /// reaches the recursive query at all.
+///
+/// The walk carries no `user_id` and no `deleted_at` filter, and that is deliberate rather than
+/// an oversight -- do not "fix" it here, and do not copy the pattern to a query reached any
+/// other way. Three things together are what make it safe, and all three are about the caller:
+/// the only caller is `with_stats`, whose row always came from `load_owned_object` (or
+/// `load_owned_object_on`), which filters both; every write to `parent_id` goes through
+/// `record::parent_is_valid`, which refuses a parent that is not the same user's and undeleted;
+/// and `record::cascade_object` tombstones a whole subtree at once, so no live child can outlive
+/// a tombstoned ancestor. A chain reached from an object the caller owns is therefore made
+/// entirely of undeleted objects the caller owns, and re-filtering would only cost a join. A
+/// caller that cannot make all three claims needs the filters.
 ///
 /// Plain `UNION`, not `UNION ALL`, for the same reason `record::parent_is_valid` uses it: a
 /// cycle can never be created through either door, but if one ever got into the data anyway
@@ -357,8 +392,41 @@ async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> 
 }
 
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ObjectInput>) -> Result<Json<ObjectOut>, AppError> {
-    let existing = load_owned_object(&state, user.id, id).await?;
+    // Request-shape validation first, and it is the only thing that happens before the write
+    // lock: it reads no database state at all, so a malformed body can be answered 400 without
+    // stalling every other writer in the instance for the length of a transaction.
     body.validate()?;
+
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
+
+    // EVERY read this handler makes is made here, inside the transaction holding the write
+    // lock, and on that transaction's own connection. Both halves of that are load-bearing.
+    //
+    // Inside, because a PATCH does not write only what the client sent: `archived_at`,
+    // `cover_attachment_id` and `parent_id` are each *carried over* from `existing` when the
+    // client omits the field, so a value read before the lock was granted is written back
+    // afterwards as though the client had asked for it. For `parent_id` that is not merely a
+    // lost update, it is a corrupt tree. Start with `A.parent_id = P`, and let three requests
+    // overlap (the pool is 4 on SQLite, 16 on PostgreSQL, so they do):
+    //
+    //   1. `PATCH /objects/A {"name": "X"}` -- no `parent_id` key -- reads `A.parent_id = P`,
+    //      then waits for the lock.
+    //   2. `PATCH /objects/A {"parent_id": null}` commits. `A` is a root.
+    //   3. `PATCH /objects/P {"parent_id": A}` commits: `A`'s ancestors are just `{A}`, so the
+    //      cycle check passes honestly.
+    //   4. Request 1 wakes and writes the parent it read in step 1.
+    //
+    // `A.parent_id = P` and `P.parent_id = A`: a cycle that `record::parent_is_valid` was never
+    // asked about, because request 1 sent no parent to validate. Nothing in the app can see it
+    // (both rows drop out of the root-only list), nothing purges it (the guard in `sync::feed`
+    // holds each row back for the other, forever, silently) and `--copy-to` cannot order the
+    // pair, so the documented SQLite-to-PostgreSQL migration aborts on the foreign key. The
+    // shipped PWA always sends `parent_id`; a hand-written client against the bearer-token API
+    // is exactly what omits an optional field.
+    //
+    // On `tx`'s connection, because a second pool connection acquired while `begin_write` holds
+    // SQLite's write lock does not fail, it hangs.
+    let existing = load_owned_object_on(&mut tx, user.id, id).await?;
     let archived_at = match body.archived {
         Some(true) => existing.archived_at.clone().or_else(|| Some(db::now())),
         Some(false) => None,
@@ -369,23 +437,16 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         Some(None) => None,
         Some(Some(cover)) => {
             let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = $1 AND object_id = $2 AND kind = 'photo' AND deleted_at IS NULL")
-                .bind(cover).bind(id).fetch_optional(&state.db).await?;
+                .bind(cover).bind(id).fetch_optional(&mut *tx).await?;
             if ok.is_none() {
                 return Err(AppError::BadRequest("cover_attachment_id must be a photo of this object".into()));
             }
             Some(cover)
         }
     };
-
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
-    // `parent_id`'s check is the one that cannot happen before the transaction opens, the way
-    // `cover_attachment_id`'s above does. Writes are serialised by `db::begin_write`'s lock
-    // precisely so a read-compare-write is atomic; a cycle check taken from a pool connection
-    // before that lock is held can pass against a tree a concurrent write then changes in the
-    // gap, letting two individually-valid reparentings combine into a real cycle once both
-    // have committed. It also has to run on `tx`'s own connection rather than the pool: a
-    // second pool connection opened while `begin_write` holds SQLite's write lock does not
-    // fail, it hangs.
+    // The cycle check, on the same connection and under the same lock, so a tree that passes it
+    // here is still that tree when the `UPDATE` below lands. `sync::apply`'s `Set` path asks
+    // `record::parent_is_valid` the identical question, from inside its own `begin_write`.
     let parent_id = match body.parent_id {
         None => existing.parent_id,
         Some(None) => None,

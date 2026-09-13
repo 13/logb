@@ -638,3 +638,120 @@ async fn an_ancestor_walk_over_a_data_level_cycle_still_terminates() {
     let chain = read["ancestors"].as_array().expect("an ancestors array, however truncated");
     assert!(chain.len() <= 2, "the walk must not have gone round the cycle: {chain:?}");
 }
+
+/// `all=true` must actually reach past the roots.
+///
+/// `tests/export.rs` already sends `all=true`, but the object it asserts on is a root, so its
+/// assertion holds just as well against a `list` that ignored the flag entirely: deleting
+/// `$3 OR` from the `WHERE` clause in `objects::list` failed no test in either suite. This one
+/// builds three levels and asks for all of them, so that deletion turns it red (it comes back
+/// with House alone) while the default list -- asserted here in the same test, against the same
+/// tree -- stays green, which is what says the flag is doing the reaching rather than the
+/// filter having been dropped altogether.
+#[tokio::test]
+async fn listing_with_all_returns_every_object_at_every_depth() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Garage", "type": "other", "parent_id": house["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    let light: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Main light", "type": "other", "parent_id": garage["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(light["parent_id"], garage["id"], "the three-level tree was not built");
+
+    let all: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false&all=true"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = all.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        vec!["Garage", "House", "Main light"],
+        "`all=true` must return every object regardless of nesting, name-ordered",
+    );
+
+    // The same tree without the flag: the dashboard's contract, and the half of this test that
+    // stays green when `all` is broken.
+    let roots: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = roots.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["House"], "without `all` the list is roots only");
+}
+
+/// A PATCH that never mentions `parent_id` must not write back a parent it read before it held
+/// the write lock.
+///
+/// The bug in full needs three overlapping requests: `PATCH /objects/Garage {"name": ...}` --
+/// no `parent_id` key -- reads `Garage.parent_id = House` and then waits for the lock; a second
+/// request makes Garage a root; a third moves House underneath Garage, which `parent_is_valid`
+/// passes honestly, because at that moment Garage's ancestors are just `{Garage}`; and then the
+/// first request wakes and writes the parent it read back in step one. House and Garage now
+/// name each other. Nothing in the app can see the pair (both drop out of the root-only list),
+/// the purge holds each back for the other forever without a word, and `--copy-to` cannot order
+/// them, so the documented migration to PostgreSQL aborts on the foreign key.
+///
+/// Three real requests cannot be made to interleave on demand, so the test *is* the second and
+/// third: it holds the write lock itself and performs their two writes on that transaction. The
+/// PATCH is real, and blocks on the real lock; only the timing is nailed down. Both backends
+/// serialise writes the same way, so this measures the handler rather than the database.
+///
+/// Move `load_owned_object_on(&mut tx, ..)` back out of the transaction -- a
+/// `load_owned_object(&state, ..)` before `begin_write`, as it was -- and this fails on SQLite
+/// and PostgreSQL alike, with Garage's parent restored to House on top of House's new parent.
+#[tokio::test]
+async fn a_patch_that_omits_parent_id_cannot_write_back_a_stale_parent() {
+    // Two connections are wanted at once -- the lock the test holds, and the one the blocked
+    // request eventually gets -- and the harness's default pool is exactly two. A little room
+    // above that keeps the test measuring the handler rather than pool exhaustion.
+    let app = common::spawn_with(|c| c.db_pool_size = Some(4)).await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Garage", "type": "other", "parent_id": house["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    assert_eq!(garage["parent_id"], house["id"], "Garage must start inside House");
+
+    // The lock the PATCH below will have to wait for, held before it is sent.
+    let mut lock = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+
+    let url = app.url(&format!("/objects/{garage_id}"));
+    let client = app.client.clone();
+    let patch = tokio::spawn(async move {
+        // No `parent_id` key at all: exactly what a hand-written client against the
+        // bearer-token API sends when it only means to rename something.
+        client.patch(url).json(&json!({ "name": "Garage (renamed)", "type": "other" }))
+            .send().await.unwrap()
+    });
+    // Long enough for the request to have made every read it is going to make before the lock,
+    // and to be waiting on it. Generous rather than tight: too short only makes the test pass
+    // for the wrong reason, and the fix must hold however long the wait is.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // What the other two requests would have committed while the first waited.
+    sqlx::query("UPDATE objects SET parent_id = NULL WHERE id = $1")
+        .bind(garage_id).execute(&mut *lock).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+        .bind(garage_id).bind(house_id).execute(&mut *lock).await.unwrap();
+    lock.commit().await.unwrap();
+
+    assert_eq!(patch.await.unwrap().status(), 200);
+
+    let garage_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM objects WHERE id = $1")
+            .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    let house_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM objects WHERE id = $1")
+            .bind(house_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(
+        house_parent,
+        Some(garage_id),
+        "the reparenting that committed under the lock must have stuck",
+    );
+    assert_eq!(
+        garage_parent, None,
+        "the PATCH re-read Garage under the lock, where it is a root, or it wrote back the \
+         parent it read before the lock and closed a House <-> Garage cycle",
+    );
+}
