@@ -70,6 +70,73 @@ pub(crate) async fn uuid_of(
     Ok(uuid.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
 }
 
+/// The reverse of `uuid_of`: the internal id a `client_uuid` names, for entities where a
+/// caller needs to reason about the row as an integer -- as `parent_is_valid` does, since the
+/// tree it walks is built entirely out of integer `parent_id`s.
+pub async fn id_of(
+    tx: &mut sqlx::AnyConnection,
+    entity: Entity,
+    uuid: &str,
+) -> Result<i64, AppError> {
+    let sql = format!("SELECT id FROM {} WHERE client_uuid = $1", entity.table());
+    let id: Option<i64> =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(uuid).fetch_one(&mut *tx).await?;
+    Ok(id.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
+}
+
+/// Whether `candidate_parent_id` may become `object_id`'s parent: it must exist, belong to
+/// `user_id`, and not be deleted; and it must not be `object_id` itself or a descendant of it,
+/// which would leave the object as its own ancestor once the write took effect.
+///
+/// `object_id` is `None` on create, where the object being created has no id yet and therefore
+/// cannot possibly be anyone's ancestor -- only existence and ownership are checked there.
+///
+/// Shared by the REST handler and sync's `Set` handling. A recursive check written twice is a
+/// recursive check that can drift into disagreeing twice, which is worse here than for a plain
+/// existence check -- this is the one field in the app where the two doors disagreeing could
+/// corrupt data rather than merely let a bad value through.
+pub async fn parent_is_valid(
+    tx: &mut sqlx::AnyConnection,
+    user_id: i64,
+    object_id: Option<i64>,
+    candidate_parent_id: i64,
+) -> Result<bool, AppError> {
+    let exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
+        .bind(candidate_parent_id).bind(user_id)
+        .fetch_optional(&mut *tx).await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    let Some(object_id) = object_id else { return Ok(true) };
+
+    // Walk the candidate's own ancestor chain (itself, then its parent, then its parent's
+    // parent, ...). If `object_id` ever appears in it, making the candidate `object_id`'s
+    // parent would close a loop: the candidate is already inside the subtree rooted at
+    // `object_id`, including the trivial case where the candidate IS `object_id`.
+    //
+    // Plain `UNION`, not `UNION ALL`: this function is the only thing standing between a
+    // write and an actual cycle, so if one ever got into the data anyway -- a bug, an
+    // import, someone editing the database by hand -- `UNION ALL` would walk it forever
+    // rather than answer. `UNION`'s deduplication is what makes the recursion terminate on a
+    // cycle instead of spinning; the cost is one extra dedup pass on a chain this app expects
+    // to be a handful of rows deep at most.
+    //
+    // `crate::db::Bool`, not a bare `bool`: `EXISTS(...)` decodes as an INTEGER 0/1 on SQLite
+    // and a real BOOLEAN on PostgreSQL, and `Decode<Any> for bool` only accepts the latter --
+    // the same defect that once broke every `/users` read, here on a query this project has
+    // never run before rather than a column it has always had.
+    let would_cycle: (crate::db::Bool,) = sqlx::query_as(
+        "WITH RECURSIVE ancestors(id) AS ( \
+           SELECT id FROM objects WHERE id = $1 \
+           UNION \
+           SELECT o.parent_id FROM objects o JOIN ancestors a ON o.id = a.id WHERE o.parent_id IS NOT NULL \
+         ) SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = $2)")
+        .bind(candidate_parent_id).bind(object_id)
+        .fetch_one(&mut *tx).await?;
+    Ok(!bool::from(would_cycle.0))
+}
+
 /// Inserts one `changes` row. Private: every caller goes through `record_create`,
 /// `record_update`, `record_delete` or `log_cascade`, which is what keeps `field`/`value`
 /// tied to `op` the same way `api::sync::push` ties them (NULL for anything but a `set`).
@@ -226,8 +293,9 @@ pub(crate) async fn record_delete(
         .await
 }
 
-/// Tombstones an object's activities, reminders and attachments, answering the children this
-/// call actually tombstoned so the caller can log them.
+/// Tombstones an object's activities, reminders and attachments, and everything inside it --
+/// its children, their children, and so on -- answering every row this call actually
+/// tombstoned so the caller can log them.
 ///
 /// Called by both `apply_op` (a sync `delete` op) and `api::objects::delete` (a REST delete):
 /// the same three tables, and `deleted_at IS NULL` on each so a child tombstoned earlier keeps
@@ -237,45 +305,89 @@ pub(crate) async fn record_delete(
 /// Attachments are matched on `object_id`, not on their activity, because every attachment
 /// carries the object it belongs to whether or not it also names an activity. That is the same
 /// column both callers use, so neither can reach a row the other misses.
+///
+/// The descent is a flat loop over a worklist, not a function that calls itself. A
+/// self-calling `async fn`, even boxed with `Box::pin` (which only heap-allocates the future's
+/// *state*, not the `poll` call chain), still spends one stack frame per level of the tree.
+/// Nothing in the application enforces a depth limit, so a chain built by anyone with an
+/// account -- eventually, once anything writes `parent_id` -- could overflow the stack and
+/// abort the whole process for every user on the instance. A worklist has no such limit:
+/// however deep the tree, this function's own stack usage never grows.
+///
+/// The worklist holds integer ids, not uuids, for the same reason `nameable` already treats a
+/// row's `client_uuid` as possibly absent everywhere else in this file: a child missing one
+/// must still be tombstoned and still have ITS OWN children walked -- an id every row carries,
+/// unconditionally. Keying the traversal on uuid instead would let a single NULL strand an
+/// entire live subtree, walked by nothing, forever.
+///
+/// The order the worklist produces is breadth-first, and that is load-bearing for the pull
+/// feed: a node is dequeued -- and so has its own children discovered, tombstoned and pushed
+/// onto `cascaded` -- strictly after the iteration that enqueued it, so a parent's delete is
+/// always appended before any of its descendants'. `log_cascade` inserts in that order under
+/// the write lock, which is what gives every descendant a higher `changes.seq` than its own
+/// ancestor, and a device applying the pull stream in order never sees a child's delete before
+/// the parent's.
+///
+/// `fetch_one` for the root id is safe at both call sites: `apply_op` has already rejected an
+/// `entity_uuid` that names no row (as "unknown entity_uuid") before it reaches the delete
+/// branch, and the REST handler has already loaded the object it is deleting.
 pub(crate) async fn cascade_object(
     tx: &mut sqlx::AnyConnection,
     object_uuid: &str,
     now: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
     let mut cascaded = Vec::new();
-    // Of the three cascaded tables, only `activities` carries `updated_at`
-    // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is nothing to
-    // bump on those two.
-    for (entity, has_updated_at) in
-        [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
-    {
-        // The table name comes from `Entity::table` over a closed set fixed above, never from
-        // the request, and the uuid stays a bind parameter -- the audit `AssertSqlSafe` asks
-        // the author to have made.
-        let table = entity.table();
-        // `{MINE}` carries one placeholder for `object_uuid`. Its number depends on how many
-        // placeholders precede it in the statement it's spliced into, so it takes that number
-        // as a parameter rather than fixing one -- the three call sites below bind `object_uuid`
-        // last, after zero, one or two earlier binds.
-        fn mine(placeholder: u8) -> String {
-            format!(
-                "deleted_at IS NULL AND object_id = (SELECT id FROM objects WHERE client_uuid = ${placeholder})"
-            )
+    let root_id: i64 = sqlx::query_scalar("SELECT id FROM objects WHERE client_uuid = $1")
+        .bind(object_uuid).fetch_one(&mut *tx).await?;
+    let mut queue: std::collections::VecDeque<i64> = std::collections::VecDeque::from([root_id]);
+
+    while let Some(current_id) = queue.pop_front() {
+        // Of the three cascaded tables, only `activities` carries `updated_at`
+        // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is
+        // nothing to bump on those two.
+        for (entity, has_updated_at) in
+            [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
+        {
+            // The table name comes from `Entity::table` over a closed set fixed above, never
+            // from the request, and the id stays a bind parameter -- the audit `AssertSqlSafe`
+            // asks the author to have made.
+            let table = entity.table();
+            // Read the uuids before the update, while `deleted_at IS NULL` still names exactly
+            // the rows this cascade is about to claim.
+            let select =
+                format!("SELECT client_uuid FROM {table} WHERE deleted_at IS NULL AND object_id = $1");
+            let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
+                .bind(current_id).fetch_all(&mut *tx).await?;
+            let update = if has_updated_at {
+                format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 \
+                         WHERE deleted_at IS NULL AND object_id = $3")
+            } else {
+                format!("UPDATE {table} SET deleted_at = $1 \
+                         WHERE deleted_at IS NULL AND object_id = $2")
+            };
+            let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
+            let query = if has_updated_at { query.bind(now) } else { query };
+            query.bind(current_id).execute(&mut *tx).await?;
+            cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
         }
-        // Read the uuids before the update, while `deleted_at IS NULL` still names exactly the
-        // rows this cascade is about to claim.
-        let select = format!("SELECT client_uuid FROM {table} WHERE {}", mine(1));
-        let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
-            .bind(object_uuid).fetch_all(&mut *tx).await?;
-        let update = if has_updated_at {
-            format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 WHERE {}", mine(3))
-        } else {
-            format!("UPDATE {table} SET deleted_at = $1 WHERE {}", mine(2))
-        };
-        let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
-        let query = if has_updated_at { query.bind(now) } else { query };
-        query.bind(object_uuid).execute(&mut *tx).await?;
-        cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
+
+        // Direct children of this level: tombstoned in one statement, then queued for their
+        // own turn. A child missing a uuid still gets queued by its id -- it is still
+        // tombstoned, and its own children are still walked; only its own log entry is lost,
+        // the same cost a NULL already has for the three tables above.
+        let children: Vec<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, client_uuid FROM objects WHERE deleted_at IS NULL AND parent_id = $1")
+            .bind(current_id).fetch_all(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE objects SET deleted_at = $1, updated_at = $1 \
+             WHERE deleted_at IS NULL AND parent_id = $2")
+            .bind(now).bind(current_id).execute(&mut *tx).await?;
+        for (child_id, child_uuid) in children {
+            if let Some(uuid) = child_uuid {
+                cascaded.push((Entity::Object, uuid));
+            }
+            queue.push_back(child_id);
+        }
     }
     Ok(cascaded)
 }

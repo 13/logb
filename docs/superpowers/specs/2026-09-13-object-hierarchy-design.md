@@ -1,6 +1,6 @@
 # Objects that contain other objects
 
-Status: approved design, not yet implemented.
+Status: implemented.
 
 ## Problem
 

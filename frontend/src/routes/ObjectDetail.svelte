@@ -6,6 +6,7 @@
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
   import Icon from '../lib/Icon.svelte';
+  import ObjectCard from '../lib/ObjectCard.svelte';
   import { typeIcon } from '../lib/object-types';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
@@ -27,6 +28,7 @@
   let activityTotal = $state(0);
   let loadingMore = $state(false);
   let category = $state<Category | ''>('');
+  let children = $state<MemObject[]>([]);
   let error = $state('');
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
@@ -41,6 +43,13 @@
       if (cached) object = cached;
       else error = (e as Error).message;
     }
+  }
+
+  /** The object's direct children, for the Contents section on the Info tab. Loaded only while
+   *  that tab is open -- the other tabs have no use for it. */
+  async function loadChildren() {
+    try { children = await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=false`); }
+    catch (e) { error = (e as Error).message; }
   }
 
   /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
@@ -132,6 +141,7 @@
 
   $effect(() => { oid; loadObject(); });
   $effect(() => { oid; category; loadActivities('reset'); });
+  $effect(() => { oid; if (tab === 'info') loadChildren(); });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -163,6 +173,15 @@
     <TopBar title={object.name} icon={typeIcon(object.type)} backTo="/">
       <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
+
+    {#if (object.ancestors ?? []).length > 0}
+      <p class="breadcrumb">
+        {#each object.ancestors ?? [] as a, i}
+          <a href={`/objects/${a.id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${a.id}`); }}>{a.name}</a>
+          {#if i < (object.ancestors ?? []).length - 1} › {/if}
+        {/each}
+      </p>
+    {/if}
 
     {#if object.cover_file_id}
       <img class="hero" src={fileUrl(object.cover_file_id)} alt="" />
@@ -206,6 +225,15 @@
       <p class="muted">{$t(`type.${object.type}`)}</p>
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
+      <h3>{$t('object.contents')}</h3>
+      {#if children.length === 0}
+        <p class="muted">{$t('object.contents-empty')}</p>
+      {:else}
+        <div class="list">
+          {#each children as c (c.id)}<ObjectCard object={c} />{/each}
+        </div>
+      {/if}
+      <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
       <h3>{$t('insights.title')}</h3>
       <Insights objectId={oid} unit={object.counter_unit} />
       <div class="list info-actions">
@@ -220,6 +248,8 @@
 
 <style>
   .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
+  .breadcrumb { color: var(--muted); font-size: var(--text-sm); margin: var(--space-2) 0; }
+  .breadcrumb a { color: inherit; }
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
   .info-actions { margin-top: var(--space-4); }
   .tabs .chip { margin-left: var(--space-1); }

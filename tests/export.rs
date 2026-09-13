@@ -481,3 +481,40 @@ async fn export_streams_and_leaves_no_scratch_file_behind() {
         .collect();
     assert!(leftovers.is_empty(), "scratch files left behind: {leftovers:?}");
 }
+
+/// `/export` is scoped to one object and its own activities, attachments and reminders -- a
+/// parent living outside the exported object is never in the archive. Carrying `parent_id`
+/// across an export would point at nothing on the far side, or at whatever unrelated row an
+/// id-reassigning import happens to give a completely different object. An imported object
+/// must always land with no parent, regardless of what it had.
+#[tokio::test]
+async fn an_exported_objects_parent_is_dropped_and_reimports_with_none() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let res = app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let moved: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(moved["parent_id"], house["id"], "the object really has a parent to lose");
+
+    let res = app.client.get(app.url(&format!("/export?object_id={}", garage["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let zip_bytes = res.bytes().await.unwrap().to_vec();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes.clone())).unwrap();
+    let mut data_json = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("data.json").unwrap(), &mut data_json).unwrap();
+    assert!(!data_json.contains("parent_id"), "parent_id must not appear in the archive at all: {data_json}");
+
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let imported: Vec<serde_json::Value> = anna.get(app.url("/objects?all=true")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(imported.len(), 1, "the archive held the one exported object, not its parent");
+    assert_eq!(imported[0]["name"], "Garage");
+    assert_eq!(imported[0]["parent_id"], serde_json::Value::Null, "an imported object lands as a root");
+}

@@ -69,7 +69,7 @@
             <span class="hit-title">{o.name}</span>
             <span class="muted small type-row">
               <Icon name={typeIcon(o.type)} size={14} />
-              {$t(`type.${o.type}`)}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
+              {$t(`type.${o.type}`)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
             </span>
           </button>
         {/each}

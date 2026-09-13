@@ -296,3 +296,462 @@ async fn an_unknown_type_is_refused() {
         .json(&json!({ "name": "Golf", "type": "spaceship" })).send().await.unwrap();
     assert_eq!(res.status(), 400, "the CHECK would catch it, but a 400 says which field is wrong");
 }
+
+/// A brand-new object cannot be anyone's ancestor, so creating one only needs to check that
+/// the given parent exists, belongs to the caller, and is not deleted -- no cycle is possible
+/// yet.
+#[tokio::test]
+async fn a_nonexistent_parent_is_invalid_on_create() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let ok = logb::sync::record::parent_is_valid(&mut app.state.db.acquire().await.unwrap(), 1, None, 999_999)
+        .await
+        .unwrap();
+    assert!(!ok, "a parent id that does not exist must be invalid");
+}
+
+/// The core property this task exists for: reparenting an ancestor underneath its own
+/// descendant must be refused, at every depth, including the trivial one-hop case of an object
+/// naming itself.
+#[tokio::test]
+async fn a_cycle_is_refused_at_every_depth() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    // Build House -> Garage -> Light directly, so this test is not entangled with the REST
+    // handler this task's function does not yet feed into.
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(house_id).bind(garage_id)
+        .execute(&mut *conn).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+
+    // Self-parent.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), house_id).await.unwrap());
+    // One hop: House under its own child.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), garage_id).await.unwrap());
+    // Two hops: House under its grandchild.
+    assert!(!logb::sync::record::parent_is_valid(&mut conn, 1, Some(house_id), light_id).await.unwrap());
+    // The legitimate direction must still work: Light may be reparented onto House directly.
+    assert!(logb::sync::record::parent_is_valid(&mut conn, 1, Some(light_id), house_id).await.unwrap());
+}
+
+/// Ownership is not optional: a parent id that exists and has no ancestor relationship to the
+/// object is still invalid if it belongs to someone else.
+#[tokio::test]
+async fn a_parent_belonging_to_another_user_is_invalid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let mine = app.create_object(&app.client, "Mine", None).await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let theirs_res = anna.post(app.url("/objects"))
+        .json(&serde_json::json!({ "name": "Theirs", "type": "car", "counter_unit": null, "description": "", "purchase_date": null, "purchase_price_cents": null }))
+        .send().await.unwrap();
+    let theirs: serde_json::Value = theirs_res.json().await.unwrap();
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    let ok = logb::sync::record::parent_is_valid(
+        &mut conn, 1, Some(mine["id"].as_i64().unwrap()), theirs["id"].as_i64().unwrap(),
+    ).await.unwrap();
+    assert!(!ok, "a parent owned by another account must be invalid regardless of ancestry");
+}
+
+/// Deleting an object deletes everything inside it, at every depth, and each descendant's own
+/// activities, attachments and reminders go with it -- not just the descendant itself.
+#[tokio::test]
+async fn deleting_an_object_tombstones_every_descendant_and_their_own_children() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+    app.create_activity(&light["id"], "Changed the bulb").await;
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(house_id).bind(garage_id)
+        .execute(&mut *conn).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{house_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let mut conn = app.state.db.acquire().await.unwrap();
+    for id in [garage_id, light_id] {
+        let deleted_at: Option<String> = sqlx::query_scalar("SELECT deleted_at FROM objects WHERE id = $1")
+            .bind(id).fetch_one(&mut *conn).await.unwrap();
+        assert!(deleted_at.is_some(), "object {id} must be tombstoned when its ancestor is deleted");
+    }
+    let live_activities: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL")
+        .bind(light_id).fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(live_activities, 0, "the light's own activity must be tombstoned too, not just the light");
+}
+
+/// Each cascaded descendant must appear in the change log as its own delete, or a device that
+/// only pulls Garage's delete would never learn the light inside it was removed.
+#[tokio::test]
+async fn a_cascaded_descendant_is_logged_as_its_own_delete() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+    let mut conn = app.state.db.acquire().await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2").bind(garage_id).bind(light_id)
+        .execute(&mut *conn).await.unwrap();
+    drop(conn);
+
+    app.client.delete(app.url(&format!("/objects/{garage_id}"))).send().await.unwrap();
+
+    let light_uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changes WHERE entity = 'object' AND entity_uuid = $1 AND op = 'delete'")
+        .bind(&light_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(logged, 1, "the light's own delete must reach the change log, or a device never learns it is gone");
+}
+
+/// A parent's delete must be logged before any of its descendants', at every level.
+///
+/// `changes.seq` is assigned by insertion order under the write lock, and a device applies the
+/// pull stream in `seq` order. If a child's delete ever carried a LOWER seq than its own
+/// parent's, that device would apply the child's tombstone first -- and the cascade's shape
+/// (breadth-first over a worklist, since the recursion became a loop) is the only thing that
+/// guarantees it does not. A node is dequeued, and so has its own children discovered and
+/// logged, strictly after the iteration that enqueued it; this pins that property in behaviour
+/// rather than leaving it to be re-derived from the loop.
+#[tokio::test]
+async fn a_cascaded_parents_delete_is_logged_before_its_childrens() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let mut ids = Vec::new();
+    for level in 0..4 {
+        let object = app.create_object(&app.client, &format!("Level {level}"), None).await;
+        ids.push(object["id"].as_i64().unwrap());
+    }
+    let mut conn = app.state.db.acquire().await.unwrap();
+    for pair in ids.windows(2) {
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(pair[0]).bind(pair[1]).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{}", ids[0]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let mut seqs = Vec::new();
+    for id in &ids {
+        let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+            .bind(id).fetch_one(&app.state.db).await.unwrap();
+        let seq: i64 = sqlx::query_scalar(
+            "SELECT seq FROM changes WHERE entity = 'object' AND entity_uuid = $1 AND op = 'delete'")
+            .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+        seqs.push(seq);
+    }
+    for depth in 1..seqs.len() {
+        assert!(
+            seqs[depth] > seqs[depth - 1],
+            "the delete at depth {depth} (seq {}) must be logged AFTER its parent's (seq {}), \
+             or a device applying the pull stream in order tombstones a child before its parent: {seqs:?}",
+            seqs[depth], seqs[depth - 1],
+        );
+    }
+}
+
+/// Deleting a very deep chain must not overflow the stack.
+///
+/// The cascade used to call itself once per level -- written as `Box::pin(async move { .. })`
+/// on the belief that boxing made the recursion safe. It does not: `Box::pin` heap-allocates
+/// the future's *state*, not the `poll` call chain, so every level still cost a stack frame.
+/// A chain built through the API (once anything writes `parent_id`) would then let any account
+/// abort the whole process -- every user's server, not just their own session -- with one
+/// DELETE. This is the reviewer's own recipe: a chain far deeper than the old code survived
+/// (it passed at 250 and aborted with SIGABRT at 500), against a loop whose stack usage does
+/// not grow with depth at all.
+#[tokio::test]
+async fn a_deep_chain_does_not_overflow_the_stack() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let root = app.create_object(&app.client, "Root", None).await;
+    let mut conn = app.state.db.acquire().await.unwrap();
+    let mut prev_id = root["id"].as_i64().unwrap();
+    for i in 0..2000 {
+        let child = app.create_object(&app.client, &format!("Link {i}"), None).await;
+        let child_id = child["id"].as_i64().unwrap();
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(prev_id).bind(child_id).execute(&mut *conn).await.unwrap();
+        prev_id = child_id;
+    }
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{}", root["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "a chain 2000 deep must delete cleanly, not crash the process");
+}
+
+#[tokio::test]
+async fn creating_an_object_with_a_valid_parent_succeeds() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let garage: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(garage["parent_id"], house["id"]);
+}
+
+#[tokio::test]
+async fn reparenting_onto_a_descendant_is_refused_with_a_400() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{}", house["id"])))
+        .json(&serde_json::json!({ "name": "House", "type": "home", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": garage["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+/// Roots-only by default is the dashboard's contract, and it must hold for the overwhelmingly
+/// common case of an installation with no hierarchy at all.
+#[tokio::test]
+async fn listing_objects_with_no_parent_id_query_returns_only_roots() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let list: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<String> = list.iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, vec!["House"], "the default list must exclude Garage, which has a parent");
+}
+
+#[tokio::test]
+async fn listing_a_specific_parents_children_returns_only_those() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let bike = app.create_object(&app.client, "Bike", None).await; // stays a root
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+
+    let list: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects?archived=false&parent_id={}", house["id"])))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<String> = list.iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, vec!["Garage"]);
+    let _ = bike; // present in the account, absent from this query -- the point being tested
+}
+
+#[tokio::test]
+async fn reading_an_object_reports_its_ancestor_chain() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", garage["id"])))
+        .json(&serde_json::json!({ "name": "Garage", "type": "car", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": house["id"] }))
+        .send().await.unwrap();
+    app.client.patch(app.url(&format!("/objects/{}", light["id"])))
+        .json(&serde_json::json!({ "name": "Main light", "type": "other", "counter_unit": null,
+            "description": "", "purchase_date": null, "purchase_price_cents": null,
+            "parent_id": garage["id"] }))
+        .send().await.unwrap();
+
+    let read: serde_json::Value = app.client.get(app.url(&format!("/objects/{}", light["id"])))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = read["ancestors"].as_array().unwrap().iter()
+        .map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["House", "Garage"], "root first, nearest ancestor last, self excluded");
+}
+
+/// The ancestor walk has to *stop* on a cycle, rather than answer it.
+///
+/// No write path can create one -- `parent_is_valid` refuses the write on both doors -- so the
+/// cycle here is planted straight into the table, past the validation, exactly as an import or
+/// a hand-edited database could. What is asserted is only that the read returns at all: a
+/// `WITH RECURSIVE` walk that halts on a cycle may report a partial chain, and what a partial
+/// chain says about a state that should be impossible is not worth pinning down. The failure
+/// this guards against is not a wrong answer, it is no answer -- a request that never comes
+/// back and a connection held forever.
+#[tokio::test]
+async fn an_ancestor_walk_over_a_data_level_cycle_still_terminates() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let first = app.create_object(&app.client, "First", None).await;
+    let second = app.create_object(&app.client, "Second", None).await;
+    let (first, second) = (first["id"].as_i64().unwrap(), second["id"].as_i64().unwrap());
+    for (child, parent) in [(first, second), (second, first)] {
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(parent)
+            .bind(child)
+            .execute(&app.state.db)
+            .await
+            .unwrap();
+    }
+
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        app.client.get(app.url(&format!("/objects/{first}"))).send(),
+    )
+    .await
+    .expect("reading an object inside a cycle must return, not walk the cycle forever")
+    .unwrap();
+    assert_eq!(res.status(), 200);
+    let read: serde_json::Value = res.json().await.unwrap();
+    let chain = read["ancestors"].as_array().expect("an ancestors array, however truncated");
+    assert!(chain.len() <= 2, "the walk must not have gone round the cycle: {chain:?}");
+}
+
+/// `all=true` must actually reach past the roots.
+///
+/// `tests/export.rs` already sends `all=true`, but the object it asserts on is a root, so its
+/// assertion holds just as well against a `list` that ignored the flag entirely: deleting
+/// `$3 OR` from the `WHERE` clause in `objects::list` failed no test in either suite. This one
+/// builds three levels and asks for all of them, so that deletion turns it red (it comes back
+/// with House alone) while the default list -- asserted here in the same test, against the same
+/// tree -- stays green, which is what says the flag is doing the reaching rather than the
+/// filter having been dropped altogether.
+#[tokio::test]
+async fn listing_with_all_returns_every_object_at_every_depth() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Garage", "type": "other", "parent_id": house["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    let light: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Main light", "type": "other", "parent_id": garage["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(light["parent_id"], garage["id"], "the three-level tree was not built");
+
+    let all: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false&all=true"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = all.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        vec!["Garage", "House", "Main light"],
+        "`all=true` must return every object regardless of nesting, name-ordered",
+    );
+
+    // The same tree without the flag: the dashboard's contract, and the half of this test that
+    // stays green when `all` is broken.
+    let roots: Vec<serde_json::Value> = app.client.get(app.url("/objects?archived=false"))
+        .send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = roots.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["House"], "without `all` the list is roots only");
+}
+
+/// A PATCH that never mentions `parent_id` must not write back a parent it read before it held
+/// the write lock.
+///
+/// The bug in full needs three overlapping requests: `PATCH /objects/Garage {"name": ...}` --
+/// no `parent_id` key -- reads `Garage.parent_id = House` and then waits for the lock; a second
+/// request makes Garage a root; a third moves House underneath Garage, which `parent_is_valid`
+/// passes honestly, because at that moment Garage's ancestors are just `{Garage}`; and then the
+/// first request wakes and writes the parent it read back in step one. House and Garage now
+/// name each other. Nothing in the app can see the pair (both drop out of the root-only list),
+/// the purge holds each back for the other forever without a word, and `--copy-to` cannot order
+/// them, so the documented migration to PostgreSQL aborts on the foreign key.
+///
+/// Three real requests cannot be made to interleave on demand, so the test *is* the second and
+/// third: it holds the write lock itself and performs their two writes on that transaction. The
+/// PATCH is real, and blocks on the real lock; only the timing is nailed down. Both backends
+/// serialise writes the same way, so this measures the handler rather than the database.
+///
+/// Move `load_owned_object_on(&mut tx, ..)` back out of the transaction -- a
+/// `load_owned_object(&state, ..)` before `begin_write`, as it was -- and this fails on SQLite
+/// and PostgreSQL alike, with Garage's parent restored to House on top of House's new parent.
+#[tokio::test]
+async fn a_patch_that_omits_parent_id_cannot_write_back_a_stale_parent() {
+    // Two connections are wanted at once -- the lock the test holds, and the one the blocked
+    // request eventually gets -- and the harness's default pool is exactly two. A little room
+    // above that keeps the test measuring the handler rather than pool exhaustion.
+    let app = common::spawn_with(|c| c.db_pool_size = Some(4)).await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Garage", "type": "other", "parent_id": house["id"] }))
+        .send().await.unwrap().json().await.unwrap();
+    let house_id = house["id"].as_i64().unwrap();
+    let garage_id = garage["id"].as_i64().unwrap();
+    assert_eq!(garage["parent_id"], house["id"], "Garage must start inside House");
+
+    // The lock the PATCH below will have to wait for, held before it is sent.
+    let mut lock = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+
+    let url = app.url(&format!("/objects/{garage_id}"));
+    let client = app.client.clone();
+    let patch = tokio::spawn(async move {
+        // No `parent_id` key at all: exactly what a hand-written client against the
+        // bearer-token API sends when it only means to rename something.
+        client.patch(url).json(&json!({ "name": "Garage (renamed)", "type": "other" }))
+            .send().await.unwrap()
+    });
+    // Long enough for the request to have made every read it is going to make before the lock,
+    // and to be waiting on it. Generous rather than tight: too short only makes the test pass
+    // for the wrong reason, and the fix must hold however long the wait is.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // What the other two requests would have committed while the first waited.
+    sqlx::query("UPDATE objects SET parent_id = NULL WHERE id = $1")
+        .bind(garage_id).execute(&mut *lock).await.unwrap();
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+        .bind(garage_id).bind(house_id).execute(&mut *lock).await.unwrap();
+    lock.commit().await.unwrap();
+
+    assert_eq!(patch.await.unwrap().status(), 200);
+
+    let garage_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM objects WHERE id = $1")
+            .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    let house_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM objects WHERE id = $1")
+            .bind(house_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(
+        house_parent,
+        Some(garage_id),
+        "the reparenting that committed under the lock must have stuck",
+    );
+    assert_eq!(
+        garage_parent, None,
+        "the PATCH re-read Garage under the lock, where it is a root, or it wrote back the \
+         parent it read before the lock and closed a House <-> Garage cycle",
+    );
+}

@@ -1,4 +1,3 @@
-use super::objects::ObjectRow;
 use crate::auth::AuthUser;
 use crate::error::AppError;
 use crate::state::App;
@@ -36,9 +35,33 @@ pub struct ActivityHit {
     pub cost_cents: Option<i64>,
 }
 
+/// An object hit carries its parent's name for the same reason an activity hit carries its
+/// object's: a list of four things called "Filter" is unreadable until each one says which
+/// object it lives in. `None` is a root object, which has no parent to name.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ObjectHit {
+    pub id: i64,
+    pub user_id: i64,
+    pub name: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "type")]
+    pub type_: String,
+    pub counter_unit: Option<String>,
+    pub fuel_unit: Option<String>,
+    pub description: String,
+    pub purchase_date: Option<String>,
+    pub purchase_price_cents: Option<i64>,
+    pub archived_at: Option<String>,
+    pub cover_attachment_id: Option<i64>,
+    pub parent_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub parent_name: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct SearchResults {
-    pub objects: Vec<ObjectRow>,
+    pub objects: Vec<ObjectHit>,
     pub activities: Vec<ActivityHit>,
 }
 
@@ -86,14 +109,18 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let pattern = like_pattern(term);
 
     let like = state.backend.case_insensitive_like();
-    let order = state.backend.name_order("name");
+    // Qualified: the self-join puts two `name` columns in scope, and an unqualified one is
+    // ambiguous to PostgreSQL.
+    let order = state.backend.name_order("o.name");
 
-    let objects = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, created_at, updated_at \
-         FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND ( \
-           name {like} $2 ESCAPE '\\' OR description {like} $2 ESCAPE '\\') \
-         ORDER BY archived_at IS NOT NULL, {order} LIMIT $3")))
+    let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
+        "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
+         o.purchase_date, o.purchase_price_cents, o.archived_at, o.cover_attachment_id, \
+         o.parent_id, o.created_at, o.updated_at, p.name AS parent_name \
+         FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
+         WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
+           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\') \
+         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
 

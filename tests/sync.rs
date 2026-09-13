@@ -1667,6 +1667,101 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
     assert_eq!(objects, 0, "an expired tombstone is finally a real delete");
 }
 
+/// The purge must not hard-delete a tombstoned parent while any object -- live, or itself
+/// tombstoned but not yet purged -- still names it as `parent_id`. `objects.parent_id`
+/// references `objects(id)` with no `ON DELETE` action, so taking the parent first, in any purge
+/// run where the child's own row survives that same statement -- its tombstone still fresh, or
+/// the child itself held back by one of the other three guards -- fails the entire purge on the
+/// foreign key. An ordinary cascade delete tombstones a whole subtree under one shared
+/// timestamp, so parent and child usually age out and get purged together in the same statement,
+/// where no violation occurs; this guard exists for the case where they don't, and that is the
+/// case this test stages by backdating the parent's tombstone alone. Were the reference ever
+/// relaxed it would instead leave the child pointing at a row that no longer exists. Either way
+/// the parent waits, exactly as it already waits for its activities, reminders and attachments.
+#[tokio::test]
+async fn a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light", None).await;
+    let garage_id = garage["id"].as_i64().unwrap();
+    let light_id = light["id"].as_i64().unwrap();
+
+    sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+        .bind(garage_id).bind(light_id)
+        .execute(&app.state.db).await.unwrap();
+
+    // The REST delete tombstones the garage and cascades a tombstone onto the light.
+    app.delete_object(&garage).await;
+    // Backdate the parent's tombstone alone -- the same date `age_out_tombstones` uses, applied
+    // to one row -- so the parent is eligible for this run and the child, whose tombstone is
+    // minutes old, is not. That is the only arrangement that puts a real foreign key check
+    // between two rows: with both eligible they would go in one statement, where a no-action
+    // constraint is checked at the end and sees nothing wrong.
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = $1")
+        .bind(garage_id)
+        .execute(&app.state.db).await.unwrap();
+
+    app.run_purge().await;
+
+    let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(parent, 1, "the parent must survive while a child still names it");
+    let child: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(child, 1, "the child's tombstone is still inside the window and stays");
+
+    // Once the child has aged out too it goes, and the guard -- which reads the table as the
+    // statement found it -- still holds the parent back for that run, so the parent leaves on
+    // the next one. That is the guard's whole cost: one extra run per level of nesting.
+    app.age_out_tombstones().await;
+    app.run_purge().await;
+    let child: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(child, 0, "the aged-out child goes on this run");
+
+    app.run_purge().await;
+    let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(parent, 0, "once nothing names it the parent is finally purged");
+}
+
+/// The purge's one silent forever-retention, said out loud.
+///
+/// The `objects` guard asks whether any row still names this one as its parent, and carries no
+/// `c.id <> objects.id`, so a row that is its own parent answers its own guard on every run and
+/// is never purged. No validated write path can produce one -- both doors go through
+/// `record::parent_is_valid`, and `objects::update` asks it under the write lock -- so this is
+/// an import or a hand edit, and the row is planted here the same way. Being held back is the
+/// safe outcome and is not what this test changes; what it pins is that an operator can *see*
+/// it, rather than a tombstone quietly outliving its retention window with no error and no log
+/// line. Delete the `warn!` in `sync::feed::purge` and this fails while the retention assertion
+/// above it still passes.
+#[tokio::test]
+async fn a_self_parenting_tombstone_is_held_back_and_says_so() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let orphan = app.create_object(&app.client, "Ouroboros", None).await;
+    let id = orphan["id"].as_i64().unwrap();
+    app.delete_object(&orphan).await;
+    // Past the validation, exactly as an import or a hand-edited database could.
+    sqlx::query("UPDATE objects SET parent_id = id WHERE id = $1")
+        .bind(id)
+        .execute(&app.state.db).await.unwrap();
+    app.age_out_tombstones().await;
+
+    app.run_purge().await;
+
+    let still_there: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(still_there, 1, "the guard holds a self-parenting row back, which is the safe half");
+    let logs = app.captured_logs();
+    assert!(
+        logs.contains("name themselves as their own parent"),
+        "the purge must warn about a row it can never remove, not drop it silently",
+    );
+}
+
 #[tokio::test]
 async fn purge_keeps_recent_history() {
     let app = common::spawn().await;
@@ -2097,11 +2192,13 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
 
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-        // 9, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
+        // 10, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
         // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
-        // than adding a tenth. All 9 must survive the sweep untouched.
+        // than adding an eleventh. All 10 must survive the sweep untouched. It was 9 until
+        // `parent_id` joined the whitelist -- this count is deliberately a literal so that
+        // widening the whitelist has to be noticed here.
         assert_eq!(
-            kept, 9,
+            kept, 10,
             "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
         );
     }
@@ -2599,4 +2696,43 @@ async fn rotate_heals_a_missing_row_instead_of_silently_reporting_a_fake_success
         .fetch_one(&app.state.db).await
         .expect("rotate reported success, but the row it claims to have set is not there");
     assert_eq!(value, fresh, "the row actually on disk must match what rotate reported");
+}
+
+/// The sync door must refuse a cycle exactly as the REST door does -- proving the two doors
+/// agree, not just that each one independently rejects something. The legitimate reparenting
+/// is pushed first, so a blanket "parent_id is not settable" cannot pass this test by
+/// rejecting everything.
+#[tokio::test]
+async fn a_sync_push_cannot_create_a_cycle() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = app.create_object(&app.client, "House", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let house_uuid = client_uuid(&app.state.db, "objects", house["id"].as_i64().unwrap()).await;
+    let garage_uuid = client_uuid(&app.state.db, "objects", garage["id"].as_i64().unwrap()).await;
+
+    // A sync op naming another row carries that row's real integer id -- the same convention
+    // `cover_attachment_id` already uses. Garage becomes House's child.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-nest", "entity": "object", "entity_uuid": garage_uuid,
+          "op": "set", "field": "parent_id", "value": house["id"].as_i64().unwrap(),
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "a legitimate parent must land: {body}");
+
+    // Now a device tries to push the reverse: House becomes Garage's child.
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-cycle", "entity": "object", "entity_uuid": house_uuid,
+          "op": "set", "field": "parent_id", "value": garage["id"].as_i64().unwrap(),
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the batch must not 500");
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "a cycle must be rejected, not applied");
+
+    let parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM objects WHERE client_uuid = $1")
+        .bind(&house_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(parent.is_none(), "the cycle must not have landed");
 }

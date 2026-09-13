@@ -114,3 +114,34 @@ async fn blank_and_anonymous_queries_are_refused() {
     assert_eq!(app.client.get(app.url("/search")).send().await.unwrap().status(), 400);
     assert_eq!(common::new_client().get(app.url("/search?q=golf")).send().await.unwrap().status(), 401);
 }
+
+/// An object hit says which object it sits inside, so a list of four things called "Filter"
+/// can be told apart without opening any of them.
+#[tokio::test]
+async fn a_search_hit_names_its_parent() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let light = app.create_object(&app.client, "Main light unique term", None).await;
+    app.client.patch(app.url(&format!("/objects/{}", light["id"])))
+        .json(&json!({ "name": "Main light unique term", "type": "other",
+            "counter_unit": null, "description": "", "purchase_date": null,
+            "purchase_price_cents": null, "parent_id": garage["id"] }))
+        .send().await.unwrap();
+
+    let res: serde_json::Value = app.client.get(app.url("/search?q=unique+term"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(res["objects"][0]["parent_name"], "Garage");
+}
+
+/// A root object has no parent to name, and says so with a null rather than an empty string:
+/// the UI draws the line only when there is a parent.
+#[tokio::test]
+async fn a_root_objects_search_hit_has_no_parent_name() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Solo object distinctive", None).await;
+    let res: serde_json::Value = app.client.get(app.url("/search?q=distinctive"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(res["objects"][0]["parent_name"], serde_json::Value::Null);
+}

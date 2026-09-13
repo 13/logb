@@ -400,6 +400,10 @@ async fn copy_table(
 ) -> Result<i64, BoxError> {
     let select = format!("SELECT * FROM {table}");
     let rows = sqlx::query(AssertSqlSafe(select)).fetch_all(&mut *src).await?;
+    // `TABLES` puts every foreign key's target table before the table referencing it, which is
+    // the whole of the ordering problem for ten of the eleven. `objects` points at itself, so
+    // its rows also have to be ordered against each other -- see `parents_before_children`.
+    let rows = if table == "objects" { parents_before_children(rows)? } else { rows };
     let mut copied = 0i64;
     for row in &rows {
         let mut names = Vec::with_capacity(row.columns().len());
@@ -442,6 +446,105 @@ async fn copy_table(
         copied += 1;
     }
     Ok(copied)
+}
+
+/// Orders `objects` so that every row is written after the row its `parent_id` points at.
+///
+/// `objects.parent_id` is the schema's one self-referencing foreign key -- nothing else in
+/// `migrations/postgres/0001_schema.sql` points at its own table -- and PostgreSQL checks a
+/// foreign key per statement, not at commit: the reference is not declared `DEFERRABLE`. The
+/// rows arrive in whatever order the source hands them over, which on SQLite is rowid order,
+/// which is creation order -- and creation order has nothing to do with tree order. Create a
+/// bike, create a garage afterwards, move the bike into the garage, and the child holds the
+/// lower id. Written in that order the child's `INSERT` names a parent PostgreSQL has not seen
+/// yet, and the whole copy aborts partway through.
+///
+/// A breadth-first walk outwards from the roots, rather than a sort: the tree has no bounded
+/// depth. Rows that no such walk reaches -- a `parent_id` pointing into a cycle, which no write
+/// path in this application can produce -- are appended in the order they were read rather than
+/// dropped, so a source in that state is still copied as faithfully as it can be and the
+/// database, not this function, decides what it thinks of it.
+fn parents_before_children(rows: Vec<sqlx::any::AnyRow>) -> Result<Vec<sqlx::any::AnyRow>, BoxError> {
+    use std::collections::{HashMap, VecDeque};
+
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in &rows {
+        ids.push((whole_number(row, "id")?, optional_whole_number(row, "parent_id")?));
+    }
+    // Which row holds each id, so a `parent_id` can be turned into the position that has to be
+    // written first.
+    let at: HashMap<i64, usize> =
+        ids.iter().enumerate().filter_map(|(i, (id, _))| id.map(|id| (id, i))).collect();
+
+    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    for (i, (_, parent)) in ids.iter().enumerate() {
+        match parent.and_then(|parent| at.get(&parent)) {
+            // A parent this table holds: this row waits until that one has been written.
+            Some(&parent) if parent != i => children.entry(parent).or_default().push(i),
+            // No parent at all, or one that is not in this table -- nothing here can be written
+            // before it, so it goes in the first wave.
+            _ => queue.push_back(i),
+        }
+    }
+
+    let mut order = Vec::with_capacity(rows.len());
+    let mut written = vec![false; rows.len()];
+    while let Some(i) = queue.pop_front() {
+        if std::mem::replace(&mut written[i], true) {
+            continue;
+        }
+        order.push(i);
+        for child in children.get(&i).into_iter().flatten() {
+            queue.push_back(*child);
+        }
+    }
+    order.extend((0..rows.len()).filter(|i| !written[*i]));
+
+    let mut rows: Vec<Option<sqlx::any::AnyRow>> = rows.into_iter().map(Some).collect();
+    Ok(order
+        .into_iter()
+        .map(|i| rows[i].take().expect("every position is ordered exactly once"))
+        .collect())
+}
+
+/// `whole_number`, but a column the source table does not have at all also reads as `None`.
+///
+/// Only `parent_id` is read this way, and only because the source is opened by
+/// `db::connect_existing`, which deliberately does not migrate it: an old backup, or the
+/// database of a previous release being copied by a new binary, predates
+/// `0010_object_hierarchy.sql` and has no `parent_id` column. `copy_table` already copes --
+/// it takes its column list from the rows it actually read, so a narrower source is written
+/// narrower -- and this is the one place that named a column instead of reading what was there,
+/// turning a copy that used to work into a raw `ColumnNotFound` naming nothing an operator
+/// could act on. A table with no hierarchy has every row a root, which is what `None` says, and
+/// the walk below then leaves the rows in the order they were read.
+fn optional_whole_number(row: &sqlx::any::AnyRow, name: &str) -> Result<Option<i64>, BoxError> {
+    if row.try_column(name).is_err() {
+        return Ok(None);
+    }
+    whole_number(row, name)
+}
+
+/// One integer column of a row, as an `i64`, or `None` where it is NULL.
+///
+/// The value's own type rather than the column's declared one, for the same reason
+/// `copy_table` reads it that way: SQLite carries a type per value, and the two backends do not
+/// report the same width for the same column.
+fn whole_number(row: &sqlx::any::AnyRow, name: &str) -> Result<Option<i64>, BoxError> {
+    let value = row.try_get_raw(name)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let number = match value.type_info().kind() {
+        AnyTypeInfoKind::SmallInt => i64::from(row.try_get::<i16, _>(name)?),
+        AnyTypeInfoKind::Integer => i64::from(row.try_get::<i32, _>(name)?),
+        AnyTypeInfoKind::BigInt => row.try_get::<i64, _>(name)?,
+        kind => {
+            return Err(format!("the source database's objects.{name} holds {kind:?}, not a number").into())
+        },
+    };
+    Ok(Some(number))
 }
 
 /// Moves each identity sequence past the ids that were just written into it.

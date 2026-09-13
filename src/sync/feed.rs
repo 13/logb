@@ -184,13 +184,52 @@ pub async fn purge(
     // the log rows for their window are already gone, and a purge has no device to attribute
     // them to -- so no device would ever learn of them and the next run would destroy them for
     // good. That is the same silent loss wearing a tidier hat.
+    //
+    // The last guard on `objects` is the same promise turned inward: an object may name another
+    // object as its `parent_id`, so the table is its own child table and the ordering of this
+    // list cannot separate the two. It carries no `deleted_at` condition on `c` deliberately. A
+    // LIVE child could not be there anyway -- deleting an object cascades tombstones over its
+    // whole subtree, so no live child outlives its parent's tombstone -- but a child tombstoned
+    // later than its parent, and so still inside the window, must hold the parent back all the
+    // same: `objects.parent_id` references `objects(id)` with no `ON DELETE` action, so taking
+    // the parent first, in any run where the child's own row survives that same statement --
+    // its tombstone still fresh, or the child itself held back by one of the three guards above
+    // -- fails the entire purge on the foreign key, and if that reference were ever relaxed it
+    // would silently leave the child pointing at nothing.
+    //
+    // The guard is not reserved for the runs where parent and child part company: it applies to
+    // the ordinary cascade too. An `ON DELETE CASCADE`-style tombstoning stamps a whole subtree
+    // with one shared timestamp, so parent and child do age out together -- but the `NOT EXISTS`
+    // subquery answers from the snapshot the statement began with, in which every descendant row
+    // is still present, so the parent is held back all the same. A chain unwinds one level per
+    // run, deepest first, always: measured on a four-deep chain with everything aged out, run 1
+    // leaves 1, 2 and 3, run 2 leaves 1 and 2, run 3 leaves 1, run 4 leaves nothing. That is the
+    // guard's whole cost, and it is what
+    // `a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it` in
+    // `tests/sync.rs` spells out as "one extra run per level of nesting". The parent waiting a
+    // run is what it already does for an activity, a reminder or an attachment; nesting only
+    // makes it happen more than once.
+    //
+    // What that same guard cannot unwind is a row that is its own descendant. There is no
+    // `c.id <> objects.id` condition, so an object naming itself as its `parent_id` satisfies
+    // its own `NOT EXISTS` on every run and stays in the table forever, as do both rows of a
+    // two-object cycle -- with no error and no log line, which is why the `warn!` below exists
+    // for the self-parenting case. Unreachable through any validated write path (both doors go
+    // through `record::parent_is_valid`, and `objects::update` asks it under the write lock), so
+    // only a hand-edited database or an import can produce one; and being held back forever is
+    // strictly safer than the alternative the guard replaced, which was failing the whole purge
+    // on a foreign key. It is left as it is rather than excluded, because a condition narrow
+    // enough to release a self-parent would not release a two-object cycle, and one wide enough
+    // for both is a recursive walk run per candidate row on every purge -- a real cost, every
+    // run, for a state no write path can reach. The `warn!` is the trade: an operator can see it.
     let guards = [
         ("attachments", ""),
         ("activities", "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)"),
         ("reminders", ""),
         ("objects", "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
-                     AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id)"),
+                     AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id) \
+                     AND NOT EXISTS (SELECT 1 FROM objects c WHERE c.parent_id = objects.id)"),
     ];
     // One transaction around the whole purge, and every guarded read or delete against it. Run
     // as separate autocommit statements they were separate answers to "has this parent any
@@ -235,6 +274,29 @@ pub async fn purge(
         let sql =
             format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
         sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(&mut *tx).await?;
+    }
+
+    // The one case of "held back forever" this run can name out loud. An aged-out object that is
+    // its own parent satisfies the last `objects` guard against itself on every run: it is never
+    // purged, and without this line nothing anywhere says so -- no error, no log, just a row that
+    // quietly outlives its retention window. Read after the deletes, so what it reports is what
+    // actually survived them rather than what was about to be attempted. One `SELECT` per purge
+    // run, on an indexed column, against a table this app expects to hold a household's
+    // belongings; a two-object cycle costs the same silence and is not detected here, for the
+    // reason given on the guards above.
+    let self_parents: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM objects WHERE deleted_at IS NOT NULL AND deleted_at < $1 AND parent_id = id")
+        .bind(&cutoff)
+        .fetch_all(&mut *tx)
+        .await?;
+    if !self_parents.is_empty() {
+        tracing::warn!(
+            objects = ?self_parents,
+            "tombstoned objects name themselves as their own parent, so the purge's child guard \
+             holds them back on every run and they will never be removed; no validated write \
+             path can produce this, so the rows came from an import or a hand edit -- clearing \
+             their parent_id lets the next purge take them",
+        );
     }
 
     // A field clock for a row nobody can name any more is dead weight.

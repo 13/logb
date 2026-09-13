@@ -17,7 +17,14 @@
   async function load() {
     loading = true; error = '';
     try {
-      objects = await api<MemObject[]>('GET', `/objects?archived=${archived}`);
+      // The archived view is the one screen whose job is "where archived things live", so it
+      // asks for archived objects at any depth, flat: `all=true` means "ignore nesting" and
+      // says nothing about `archived`, which stays an independent either/or filter. Without it
+      // the view returns archived *roots* only, and an archived object inside a room appears in
+      // no list in the app at all. The live view keeps the roots-only default, because there
+      // the nesting is the point -- a room is reached through the house that holds it.
+      const scope = archived ? 'archived=true&all=true' : 'archived=false';
+      objects = await api<MemObject[]>('GET', `/objects?${scope}`);
       const all = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
       due = all.filter((r) => r.due);
       soon = all.filter((r) => !r.due);
