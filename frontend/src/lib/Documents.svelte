@@ -10,8 +10,17 @@
   let { objectId, coverAttachmentId, onchanged }:
     { objectId: number; coverAttachmentId: number | null; onchanged?: () => void } = $props();
   let items = $state<Attachment[]>([]);
+  /** Whether the answer is known. `items` starts empty because it has to start as something,
+   *  and drawing the empty state from that means announcing "nothing here" before anyone has
+   *  looked -- a full icon-and-sentence block that flashes away when the list arrives. It stays
+   *  true once the first answer is in: a later reload is a refresh of a known list, not another
+   *  question about whether there is one. */
+  let loaded = $state(false);
 
-  async function load() { items = await api<Attachment[]>('GET', `/objects/${objectId}/attachments`); }
+  async function load() {
+    try { items = await api<Attachment[]>('GET', `/objects/${objectId}/attachments`); }
+    finally { loaded = true; }
+  }
   onMount(load);
 
   async function remove(a: Attachment) {
@@ -40,7 +49,9 @@
 
 <FilePicker {objectId} onuploaded={() => { load(); onchanged?.(); }} />
 
-{#if items.length === 0}
+{#if !loaded}
+  <!-- Nothing: the request is still out. -->
+{:else if items.length === 0}
   <!-- The picker sits right above this, so the words only have to say what is worth putting
        into it. -->
   <div class="empty">

@@ -11,6 +11,8 @@
     { objectId: number; unit: CounterUnit; activities: Activity[]; onchanged?: () => void } = $props();
 
   let items = $state<Reminder[]>([]);
+  /** Whether the answer is known -- see Documents.svelte for why an empty list is not one. */
+  let loaded = $state(false);
   let showDone = $state(false);
   let dialog = $state<HTMLDialogElement | null>(null);
   let target = $state<Reminder | null>(null);
@@ -28,6 +30,7 @@
   async function load() {
     try { items = await api<Reminder[]>('GET', `/objects/${objectId}/reminders`); }
     catch (e) { error = (e as Error).message; }
+    finally { loaded = true; }
   }
   $effect(() => { objectId; load(); });
 
@@ -64,7 +67,10 @@
 {#if error}<p class="error">{error}</p>{/if}
 {#if toast}<p class="muted">{toast}</p>{/if}
 
-{#if items.length === 0}
+<!-- Not `items.length === 0`: an empty list before the first answer is what the component was
+     initialised with, not what the server said, and the empty state is a whole block -- icon,
+     sentence and a primary button -- to flash and take away. -->
+{#if loaded && items.length === 0}
   <div class="empty">
     <span class="empty-icon"><Icon name="repeat" size={40} /></span>
     <p>{$t('reminder.empty')}</p>

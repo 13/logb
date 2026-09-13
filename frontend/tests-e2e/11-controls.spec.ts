@@ -142,3 +142,33 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   });
   expect(gaps.below, `the chips row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
 });
+
+// An empty list is what these tabs are initialised with, not an answer from the server. Drawing
+// the empty state from it put a full icon-sentence-button block on screen while the first
+// request was still out, and took it away again when the answer arrived -- a bigger flash than
+// the one-line "nothing yet" it replaced.
+test('an empty state waits for the answer before claiming there is nothing', async ({ page }) => {
+  await signIn(page);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Empty flash probe');
+  await page.getByLabel('Type').selectOption('bike');
+  await page.getByRole('button', { name: 'Save' }).click();
+
+  // Hold both answers back long enough that a premature empty state would be on screen.
+  for (const path of ['**/api/objects/*/attachments', '**/api/objects/*/reminders']) {
+    await page.route(path, async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+  }
+
+  const docsEmpty = page.getByText(/Receipts, manuals|Belege, Handb/);
+  await page.getByRole('button', { name: 'Documents' }).click();
+  await expect(docsEmpty, 'the documents empty state was drawn before the request answered').toHaveCount(0);
+  await expect(docsEmpty).toBeVisible({ timeout: 5000 });
+
+  const remEmpty = page.getByText(/A reminder watches|Eine Erinnerung/);
+  await page.getByRole('button', { name: 'Reminders' }).click();
+  await expect(remEmpty, 'the reminders empty state was drawn before the request answered').toHaveCount(0);
+  await expect(remEmpty).toBeVisible({ timeout: 5000 });
+});
