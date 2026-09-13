@@ -422,3 +422,80 @@ async fn a_cascaded_descendant_is_logged_as_its_own_delete() {
         .bind(&light_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(logged, 1, "the light's own delete must reach the change log, or a device never learns it is gone");
 }
+
+/// A parent's delete must be logged before any of its descendants', at every level.
+///
+/// `changes.seq` is assigned by insertion order under the write lock, and a device applies the
+/// pull stream in `seq` order. If a child's delete ever carried a LOWER seq than its own
+/// parent's, that device would apply the child's tombstone first -- and the cascade's shape
+/// (breadth-first over a worklist, since the recursion became a loop) is the only thing that
+/// guarantees it does not. A node is dequeued, and so has its own children discovered and
+/// logged, strictly after the iteration that enqueued it; this pins that property in behaviour
+/// rather than leaving it to be re-derived from the loop.
+#[tokio::test]
+async fn a_cascaded_parents_delete_is_logged_before_its_childrens() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let mut ids = Vec::new();
+    for level in 0..4 {
+        let object = app.create_object(&app.client, &format!("Level {level}"), None).await;
+        ids.push(object["id"].as_i64().unwrap());
+    }
+    let mut conn = app.state.db.acquire().await.unwrap();
+    for pair in ids.windows(2) {
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(pair[0]).bind(pair[1]).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{}", ids[0]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let mut seqs = Vec::new();
+    for id in &ids {
+        let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+            .bind(id).fetch_one(&app.state.db).await.unwrap();
+        let seq: i64 = sqlx::query_scalar(
+            "SELECT seq FROM changes WHERE entity = 'object' AND entity_uuid = $1 AND op = 'delete'")
+            .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+        seqs.push(seq);
+    }
+    for depth in 1..seqs.len() {
+        assert!(
+            seqs[depth] > seqs[depth - 1],
+            "the delete at depth {depth} (seq {}) must be logged AFTER its parent's (seq {}), \
+             or a device applying the pull stream in order tombstones a child before its parent: {seqs:?}",
+            seqs[depth], seqs[depth - 1],
+        );
+    }
+}
+
+/// Deleting a very deep chain must not overflow the stack.
+///
+/// The cascade used to call itself once per level -- written as `Box::pin(async move { .. })`
+/// on the belief that boxing made the recursion safe. It does not: `Box::pin` heap-allocates
+/// the future's *state*, not the `poll` call chain, so every level still cost a stack frame.
+/// A chain built through the API (once anything writes `parent_id`) would then let any account
+/// abort the whole process -- every user's server, not just their own session -- with one
+/// DELETE. This is the reviewer's own recipe: a chain far deeper than the old code survived
+/// (it passed at 250 and aborted with SIGABRT at 500), against a loop whose stack usage does
+/// not grow with depth at all.
+#[tokio::test]
+async fn a_deep_chain_does_not_overflow_the_stack() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let root = app.create_object(&app.client, "Root", None).await;
+    let mut conn = app.state.db.acquire().await.unwrap();
+    let mut prev_id = root["id"].as_i64().unwrap();
+    for i in 0..2000 {
+        let child = app.create_object(&app.client, &format!("Link {i}"), None).await;
+        let child_id = child["id"].as_i64().unwrap();
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(prev_id).bind(child_id).execute(&mut *conn).await.unwrap();
+        prev_id = child_id;
+    }
+    drop(conn);
+
+    let res = app.client.delete(app.url(&format!("/objects/{}", root["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "a chain 2000 deep must delete cleanly, not crash the process");
+}
