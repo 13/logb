@@ -232,20 +232,43 @@ pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError>
 ///
 /// Plain `UNION`, not `UNION ALL`, for the same reason `record::parent_is_valid` uses it: a
 /// cycle can never be created through either door, but if one ever got into the data anyway
-/// `UNION ALL` would walk it forever and hang the read, while `UNION`'s deduplication
-/// terminates and still answers correctly.
+/// `UNION ALL` would walk it forever and hang the read.
+///
+/// What makes the `UNION` actually terminate is that the CTE projects nothing but
+/// `(id, name, parent_id)` -- no depth, no step counter, nothing that distinguishes a
+/// revisited row from its first visit. `UNION` deduplicates whole *rows*, so a column that
+/// counted the walk would make every row unique by construction and silently defeat the dedup
+/// the cycle defence rests on. That is exactly what an earlier version of this query did. The
+/// ordering the caller needs is therefore reconstructed in Rust below instead of asked of SQL,
+/// and the `remove` that reconstructs it is a second, independent stop: an ancestor already
+/// consumed cannot be walked to twice, so no residual data anomaly can spin the Rust loop
+/// either, whatever the database returned.
 async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>, AppError> {
-    let Some(_) = object.parent_id else { return Ok(Vec::new()) };
-    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
-        "WITH RECURSIVE chain(id, name, parent_id, depth) AS ( \
-           SELECT id, name, parent_id, 0 FROM objects WHERE id = $1 \
+    let Some(parent_id) = object.parent_id else { return Ok(Vec::new()) };
+    let rows: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
+        "WITH RECURSIVE chain(id, name, parent_id) AS ( \
+           SELECT id, name, parent_id FROM objects WHERE id = $1 \
            UNION \
-           SELECT o.id, o.name, o.parent_id, c.depth + 1 FROM objects o \
+           SELECT o.id, o.name, o.parent_id FROM objects o \
              JOIN chain c ON o.id = c.parent_id \
-         ) SELECT id, name, depth FROM chain WHERE id != $1 ORDER BY depth DESC")
+         ) SELECT id, name, parent_id FROM chain WHERE id != $1")
         .bind(object.id)
         .fetch_all(&state.db).await?;
-    Ok(rows.into_iter().map(|(id, name, _)| (id, name)).collect())
+
+    // The query above is unordered -- a set, not a path -- so the chain is rebuilt by following
+    // `parent_id` from the object outwards, which yields nearest ancestor first, then reversed
+    // for the root-first order the breadcrumb wants.
+    let mut by_id: HashMap<i64, (String, Option<i64>)> =
+        rows.into_iter().map(|(id, name, parent_id)| (id, (name, parent_id))).collect();
+    let mut chain = Vec::with_capacity(by_id.len());
+    let mut next = Some(parent_id);
+    while let Some(id) = next {
+        let Some((name, parent_id)) = by_id.remove(&id) else { break };
+        next = parent_id;
+        chain.push((id, name));
+    }
+    chain.reverse();
+    Ok(chain)
 }
 
 async fn with_stats(state: &App, object: ObjectRow) -> Result<ObjectOut, AppError> {

@@ -600,3 +600,41 @@ async fn reading_an_object_reports_its_ancestor_chain() {
         .map(|a| a["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["House", "Garage"], "root first, nearest ancestor last, self excluded");
 }
+
+/// The ancestor walk has to *stop* on a cycle, rather than answer it.
+///
+/// No write path can create one -- `parent_is_valid` refuses the write on both doors -- so the
+/// cycle here is planted straight into the table, past the validation, exactly as an import or
+/// a hand-edited database could. What is asserted is only that the read returns at all: a
+/// `WITH RECURSIVE` walk that halts on a cycle may report a partial chain, and what a partial
+/// chain says about a state that should be impossible is not worth pinning down. The failure
+/// this guards against is not a wrong answer, it is no answer -- a request that never comes
+/// back and a connection held forever.
+#[tokio::test]
+async fn an_ancestor_walk_over_a_data_level_cycle_still_terminates() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let first = app.create_object(&app.client, "First", None).await;
+    let second = app.create_object(&app.client, "Second", None).await;
+    let (first, second) = (first["id"].as_i64().unwrap(), second["id"].as_i64().unwrap());
+    for (child, parent) in [(first, second), (second, first)] {
+        sqlx::query("UPDATE objects SET parent_id = $1 WHERE id = $2")
+            .bind(parent)
+            .bind(child)
+            .execute(&app.state.db)
+            .await
+            .unwrap();
+    }
+
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        app.client.get(app.url(&format!("/objects/{first}"))).send(),
+    )
+    .await
+    .expect("reading an object inside a cycle must return, not walk the cycle forever")
+    .unwrap();
+    assert_eq!(res.status(), 200);
+    let read: serde_json::Value = res.json().await.unwrap();
+    let chain = read["ancestors"].as_array().expect("an ancestors array, however truncated");
+    assert!(chain.len() <= 2, "the walk must not have gone round the cycle: {chain:?}");
+}

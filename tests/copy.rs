@@ -36,6 +36,60 @@ async fn every_row_and_identifier_survives_the_copy() {
     assert_eq!(src_rows, dest_rows, "activity ids or their object_id changed in the copy");
 }
 
+/// A child that was created before its parent still crosses.
+///
+/// `objects.parent_id` is the only foreign key in the schema that points at its own table, and
+/// it is not `DEFERRABLE`: both backends check it as each row is written, not at commit. The
+/// rows come out of the source in creation order, and creation order says nothing about tree
+/// order -- buy a bike, build a garage a year later, put the bike in the garage, and the child
+/// holds the lower id. Written in that order the child names a parent the destination has not
+/// been given yet, and the copy aborts partway through with a foreign key violation.
+///
+/// The seeding is deliberately the shape `seeded()` cannot produce: its objects are all roots,
+/// so it would pass against a copy that wrote them in any order at all.
+#[tokio::test]
+async fn a_child_created_before_its_parent_still_copies() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    // The child first, so the database hands it the lower id.
+    let bike = app.create_object(&app.client, "Bike", None).await;
+    let garage = app.create_object(&app.client, "Garage", None).await;
+    let (bike, garage) = (bike["id"].as_i64().unwrap(), garage["id"].as_i64().unwrap());
+    assert!(bike < garage, "the child must have been created first: {bike} and {garage}");
+
+    // Moved in through the real API, so the row is one the application actually produces.
+    let res = app
+        .client
+        .patch(app.url(&format!("/objects/{bike}")))
+        .json(&serde_json::json!({ "name": "Bike", "type": "bike", "parent_id": garage }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "reparenting failed: {}", res.text().await.unwrap());
+
+    // As every copy test does: the source has to be let go of before it can be copied out of.
+    app.release_database().await;
+    let dest = common::scratch_database().await;
+
+    let report = logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
+    assert!(report.tables.iter().any(|(t, n)| t == "objects" && *n == 2), "{:?}", report.tables);
+
+    // Not merely "it did not fail": both rows are there, with the same ids, and the bike is
+    // still inside the garage.
+    let pool = logb::db::connect_existing(&dest.url).await.unwrap();
+    let rows: Vec<(i64, String, Option<i64>)> =
+        sqlx::query_as("SELECT id, name, parent_id FROM objects ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(
+        rows,
+        vec![(bike, "Bike".to_string(), Some(garage)), (garage, "Garage".to_string(), None)],
+        "the copied tree must hold the same ids and the same parent link"
+    );
+}
+
 #[tokio::test]
 async fn a_destination_that_already_holds_data_is_refused() {
     let app = seeded().await;
@@ -246,6 +300,24 @@ async fn seed_every_awkward_shape(app: &common::TestApp) -> i64 {
     // A second user's object, with no counter at all, so `counter_unit` is NULL somewhere.
     app.create_object(&anna, "Fahrrad", None).await;
 
+    // A child created *before* its parent, which is the ordinary shape of a tree built up over
+    // time: an object bought first and moved into something bought later. `objects.parent_id`
+    // is the schema's one self-referencing foreign key and PostgreSQL checks it as each row is
+    // written, so a copy that wrote these two in the order they were created would name a
+    // parent the destination has not been given yet and abort. See
+    // `a_child_created_before_its_parent_still_copies`, which asserts the property directly;
+    // this is the same shape crossing engines.
+    let trailer = app.create_object(&app.client, "Anhänger", None).await;
+    let shed = app.create_object(&app.client, "Scheune", None).await;
+    let res = app
+        .client
+        .patch(app.url(&format!("/objects/{}", trailer["id"])))
+        .json(&serde_json::json!({ "name": "Anhänger", "type": "other", "parent_id": shed["id"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "reparenting failed: {}", res.text().await.unwrap());
+
     app.create_activity(&object["id"], "Ölwechsel").await;
     let res = app
         .client
@@ -335,6 +407,8 @@ async fn the_awkward_shapes_are_really_in_the_source(source: &str) {
         ("objects", "description=\"\""),
         ("objects", "purchase_date=NULL"),
         ("objects", "counter_unit=NULL"),
+        // A child whose parent was created after it, so the parent holds the higher id.
+        ("objects", "id=3 name=\"Anhänger\" parent_id=4"),
         // Non-ASCII text, and numbers that are not ids.
         ("activities", "title=\"Ölwechsel\""),
         ("activities", "quantity_milli=38500"),
