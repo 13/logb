@@ -1669,10 +1669,15 @@ async fn purge_drops_old_log_rows_and_old_tombstones() {
 
 /// The purge must not hard-delete a tombstoned parent while any object -- live, or itself
 /// tombstoned but not yet purged -- still names it as `parent_id`. `objects.parent_id`
-/// references `objects(id)` with no `ON DELETE` action, so taking the parent first is a foreign
-/// key violation that fails the whole purge; and were the constraint ever relaxed it would
-/// instead leave the child pointing at a row that no longer exists. Either way the parent waits,
-/// exactly as it already waits for its activities, reminders and attachments.
+/// references `objects(id)` with no `ON DELETE` action, so taking the parent first, in any purge
+/// run where the child's own row survives that same statement -- its tombstone still fresh, or
+/// the child itself held back by one of the other three guards -- fails the entire purge on the
+/// foreign key. An ordinary cascade delete tombstones a whole subtree under one shared
+/// timestamp, so parent and child usually age out and get purged together in the same statement,
+/// where no violation occurs; this guard exists for the case where they don't, and that is the
+/// case this test stages by backdating the parent's tombstone alone. Were the reference ever
+/// relaxed it would instead leave the child pointing at a row that no longer exists. Either way
+/// the parent waits, exactly as it already waits for its activities, reminders and attachments.
 #[tokio::test]
 async fn a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it() {
     let app = common::spawn().await;
@@ -1688,24 +1693,37 @@ async fn a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_refere
 
     // The REST delete tombstones the garage and cascades a tombstone onto the light.
     app.delete_object(&garage).await;
-    // Backdate both tombstones past the retention window, the only way a test can reach the
-    // state the purge is about.
-    app.age_out_tombstones().await;
+    // Backdate the parent's tombstone alone -- the same date `age_out_tombstones` uses, applied
+    // to one row -- so the parent is eligible for this run and the child, whose tombstone is
+    // minutes old, is not. That is the only arrangement that puts a real foreign key check
+    // between two rows: with both eligible they would go in one statement, where a no-action
+    // constraint is checked at the end and sees nothing wrong.
+    sqlx::query("UPDATE objects SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = $1")
+        .bind(garage_id)
+        .execute(&app.state.db).await.unwrap();
 
     app.run_purge().await;
 
     let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
         .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(parent, 1, "the parent must survive a purge that is still clearing its child");
+    assert_eq!(parent, 1, "the parent must survive while a child still names it");
     let child: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
         .bind(light_id).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(child, 0, "the child itself had aged out and goes on this run");
+    assert_eq!(child, 1, "the child's tombstone is still inside the window and stays");
 
-    // Nothing references the garage any more, so the next run finishes the job.
+    // Once the child has aged out too it goes, and the guard -- which reads the table as the
+    // statement found it -- still holds the parent back for that run, so the parent leaves on
+    // the next one. That is the guard's whole cost: one extra run per level of nesting.
+    app.age_out_tombstones().await;
+    app.run_purge().await;
+    let child: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
+        .bind(light_id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(child, 0, "the aged-out child goes on this run");
+
     app.run_purge().await;
     let parent: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE id = $1")
         .bind(garage_id).fetch_one(&app.state.db).await.unwrap();
-    assert_eq!(parent, 0, "once the child is gone the parent is finally purged");
+    assert_eq!(parent, 0, "once nothing names it the parent is finally purged");
 }
 
 #[tokio::test]

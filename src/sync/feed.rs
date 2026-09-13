@@ -192,9 +192,14 @@ pub async fn purge(
     // whole subtree, so no live child outlives its parent's tombstone -- but a child tombstoned
     // later than its parent, and so still inside the window, must hold the parent back all the
     // same: `objects.parent_id` references `objects(id)` with no `ON DELETE` action, so taking
-    // the parent first fails the entire purge on the foreign key, and if that reference were
-    // ever relaxed it would silently leave the child pointing at nothing. The parent waits a
-    // run, which is what it already does for an activity, a reminder or an attachment.
+    // the parent first, in any run where the child's own row survives that same statement --
+    // its tombstone still fresh, or the child itself held back by one of the three guards above
+    // -- fails the entire purge on the foreign key, and if that reference were ever relaxed it
+    // would silently leave the child pointing at nothing. An ordinary cascade delete tombstones
+    // a whole subtree under one shared timestamp, so parent and child usually age out and are
+    // purged together in the same statement, where a no-action constraint is checked at the end
+    // and sees nothing wrong; this guard is for the runs where they part company. The parent
+    // waits a run, which is what it already does for an activity, a reminder or an attachment.
     let guards = [
         ("attachments", ""),
         ("activities", "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)"),
