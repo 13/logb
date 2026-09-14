@@ -277,6 +277,11 @@ PWA has no sync client), so nothing could fail on the new entity.
 ### 2026-09-14: a `set` on a deleted row is rejected
 
 - A pushed `set` naming a row whose `deleted_at` is already non-null is rejected with reason
-  "this item was deleted", checked once the op's own shape and every value it references are
-  valid but before `field_clock` is read -- last-write-wins is never consulted for it, so a
-  stale edit cannot win its way into resurrecting a field on a row the user already removed.
+  "this item was deleted", checked first among a `set`'s validation -- before the field
+  whitelist, the value's shape and content, tags normalisation, an object type's own
+  name-collision check, and the foreign-key checks, and well before `field_clock` is read.
+  Checking it first means a deleted row is always reported as deleted, never as some other
+  validation failure a live row with the same edit would also have hit (an invalid value, or a
+  rename that collides with a DIFFERENT, live row's name) -- and last-write-wins is never
+  consulted for it either, so a stale edit cannot win its way into resurrecting a field on a row
+  the user already removed.

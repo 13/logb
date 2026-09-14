@@ -515,6 +515,30 @@ pub async fn apply_op(
         }
 
         OpKind::Set => {
+            // A row already tombstoned (by a delete this same device raced with, or one that
+            // reached the server first from another device) refuses every `set` outright, and
+            // has to be the very first thing checked -- before the op's field is even looked
+            // at. Every check below it (the field whitelist, `binding`, `validate_value`, tags
+            // normalisation, `type_field`'s own-name-taken check, the FK checks) can fail for
+            // reasons that have nothing to do with deletion, and a client renaming a deleted
+            // type to a name a DIFFERENT, live type now holds must not be told "you already
+            // have a type with this name" -- it must be told the row it named is gone. Ownership
+            // is already settled above (the `owner` match), so this only has to ask about
+            // `deleted_at`, and it asks before `field_clock` is anywhere near read: rejecting a
+            // deleted row is not a race last-write-wins decides, so it does not need
+            // `field_clock`'s serialisation and a rejected op must not advance the clock or add
+            // a `changes` row regardless.
+            let deleted_at: Option<(Option<String>,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT deleted_at FROM {} WHERE client_uuid = $1",
+                op.entity.table()
+            )))
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if deleted_at.and_then(|(d,)| d).is_some() {
+                return Ok(Outcome::Rejected { reason: "this item was deleted".into() });
+            }
+
             let Some(field) = op.field.as_deref() else {
                 return Ok(Outcome::Rejected { reason: "set requires a field".into() });
             };
@@ -639,26 +663,6 @@ pub async fn apply_op(
                     };
                     return Ok(Outcome::Rejected { reason });
                 }
-            }
-
-            // A row already tombstoned (by a delete this same device raced with, or one that
-            // reached the server first from another device) refuses every `set` outright,
-            // whatever `wins` would have said about the timestamps: last-write-wins between two
-            // edits is not a rule for reviving content a delete already removed. Checked here,
-            // after the op's own shape and every value it references are valid -- rejecting an
-            // op for a deleted row is not a race to win, so it does not need `field_clock`'s
-            // serialisation and belongs after everything that does not -- and before
-            // `field_clock` and the `UPDATE`, since a rejected op must not advance the clock or
-            // add a `changes` row.
-            let deleted_at: Option<(Option<String>,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT deleted_at FROM {} WHERE client_uuid = $1",
-                op.entity.table()
-            )))
-            .bind(&op.entity_uuid)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if deleted_at.and_then(|(d,)| d).is_some() {
-                return Ok(Outcome::Rejected { reason: "this item was deleted".into() });
             }
 
             // Read, decide with `wins`, then write: three statements that have to behave as

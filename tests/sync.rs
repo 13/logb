@@ -3096,6 +3096,18 @@ async fn rest_type_writes_appear_in_the_change_feed() {
         .json(&json!({ "name": "Kickscooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" }))
         .send().await.unwrap();
     assert_eq!(res.status(), 200);
+
+    // The REST create/update stamped the clock, so a stale offline rename loses -- pushed while
+    // the row is still live, because this is the only place left that proves a REST type write
+    // stamps `field_clock` at all. Once the row is deleted below, the very same push would be
+    // rejected for being on a deleted row before `field_clock` is ever read, and would no
+    // longer exercise last-write-wins.
+    let body: serde_json::Value = app.push_raw(&push_body(json!([{
+        "client_op_id": "stale", "entity": "object_type", "entity_uuid": uuid, "op": "set",
+        "field": "icon", "value": "tool", "edited_at": before_now(3600), "device_id": "phone"
+    }]))).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
+
     let res = app.client.delete(app.url(&format!("/types/{id}"))).send().await.unwrap();
     assert_eq!(res.status(), 204);
 
@@ -3111,16 +3123,20 @@ async fn rest_type_writes_appear_in_the_change_feed() {
         ("create".to_string(), None, Some(id)),
         ("set".to_string(), Some("name".to_string()), Some(id)),
         ("set".to_string(), Some("counter_unit".to_string()), Some(id)),
+        // Unchanged by the PATCH above (same "e-bike" both times, so that write logged
+        // nothing), but the superseded push above named it explicitly with a different value --
+        // a superseded op is still part of the log, only a REJECTED one is not.
+        ("set".to_string(), Some("icon".to_string()), Some(id)),
         ("delete".to_string(), None, Some(id)),
-    ], "unchanged icon and categories log nothing: {feed}");
+    ], "unchanged categories log nothing, and only a rejected op is absent from the log: {feed}");
 
-    // The type was deleted above, so a stale offline rename is refused outright -- it does not
-    // even reach last-write-wins to lose there, since a `set` on a tombstoned row is rejected
-    // before `field_clock` is ever read. `an_older_edit_is_superseded_but_still_recorded` pins
-    // the ordinary LWW loss on a still-live row; this is the other rejection this same op shape
-    // can hit once the row it names is gone.
+    // The type was deleted above, so the identical op shape is refused outright now -- it does
+    // not even reach last-write-wins to lose there, since a `set` on a tombstoned row is
+    // rejected before `field_clock` is ever read. The push above pins the ordinary LWW loss on
+    // a still-live row; this pins the other rejection this same op shape can hit once the row
+    // it names is gone.
     let body: serde_json::Value = app.push_raw(&push_body(json!([{
-        "client_op_id": "stale", "entity": "object_type", "entity_uuid": uuid, "op": "set",
+        "client_op_id": "stale-after-delete", "entity": "object_type", "entity_uuid": uuid, "op": "set",
         "field": "icon", "value": "tool", "edited_at": before_now(3600), "device_id": "phone"
     }]))).await.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
@@ -3168,6 +3184,13 @@ async fn assert_set_on_deleted_row_is_rejected(
 ) {
     let before_value = stored_field(&app.state.db, table, uuid, field).await;
     let before_clock = field_clock_of(&app.state.db, entity, uuid, field).await;
+    // Every caller below names a field from the entity's own whitelist on a row that was just
+    // created over REST, and `record::record_create` stamps `field_clock` for *every*
+    // whitelisted field at creation (see its doc comment) -- so a clock row must already exist
+    // here. Asserting that is what makes the "unchanged" comparison below mean something: an
+    // absent-before-and-after clock would equal itself trivially and prove nothing about the
+    // rejected op leaving `field_clock` alone.
+    assert!(before_clock.is_some(), "{entity}: field_clock must already hold a row for {field}, stamped by record_create");
     let op_id = format!("op-deleted-{entity}");
 
     let body: serde_json::Value = app.push_raw(&push_body(json!([{
@@ -3232,4 +3255,66 @@ async fn a_set_on_a_deleted_row_is_rejected_for_every_entity() {
     let res = app.client.delete(app.url(&format!("/types/{type_id}"))).send().await.unwrap();
     assert_eq!(res.status(), 204, "delete type: {}", res.text().await.unwrap());
     assert_set_on_deleted_row_is_rejected(&app, "object_type", "object_types", &type_uuid, "name").await;
+}
+
+/// The deleted check has to run before every other `set` validation, or a deleted row's op
+/// comes back with a reason that belongs to a completely different failure. Two ways that could
+/// happen if the check were placed after even one of the checks it now precedes:
+///
+/// - An invalid VALUE: `validate_value` would answer "name is required" for an empty object
+///   name, live row or not, if it ran first.
+/// - A name collision on an unrelated row: `type_field`'s own name-taken check would answer
+///   "you already have a type with this name" for a rename that happens to collide with some
+///   OTHER, still-live type -- exactly the scenario a deleted type getting reused as a name
+///   produces -- if it ran first.
+///
+/// Both are pinned here rather than only in `assert_set_on_deleted_row_is_rejected` above,
+/// whose op value ("should never land") and field (each entity's own whitelisted text field)
+/// are deliberately unremarkable -- they would pass every other check just fine, so that test
+/// alone cannot tell "deleted checked first" apart from "deleted checked last, but nothing else
+/// happened to object".
+#[tokio::test]
+async fn a_set_on_a_deleted_row_is_rejected_before_any_other_set_validation() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // An invalid value on a deleted row.
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_uuid = client_uuid(&app.state.db, "objects", car["id"].as_i64().unwrap()).await;
+    app.delete_object(&car).await;
+    let body: serde_json::Value = app.push_raw(&push_body(json!([{
+        "client_op_id": "op-invalid-on-deleted", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "name", "value": "",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(
+        body["results"][0]["reason"], "this item was deleted",
+        "an invalid value must not preempt the deleted check: {body}"
+    );
+
+    // A rename that collides with a DIFFERENT, live type's name.
+    let old_type = app.post_json("/types", &json!({
+        "name": "Scooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km"
+    })).await;
+    let old_id = old_type["id"].as_i64().unwrap();
+    let old_uuid = old_type["client_uuid"].as_str().unwrap().to_string();
+    let res = app.client.delete(app.url(&format!("/types/{old_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete type: {}", res.text().await.unwrap());
+    // A live type takes the exact name the deleted one is about to be renamed to, after the
+    // deletion -- so this is genuinely a name only a live row holds now, not a leftover
+    // collision with the deleted row's own former name.
+    app.post_json("/types", &json!({
+        "name": "Trailer", "icon": "car", "categories": ["repair"], "counter_unit": "km"
+    })).await;
+    let body: serde_json::Value = app.push_raw(&push_body(json!([{
+        "client_op_id": "op-taken-on-deleted", "entity": "object_type", "entity_uuid": old_uuid,
+        "op": "set", "field": "name", "value": "Trailer",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(
+        body["results"][0]["reason"], "this item was deleted",
+        "a name collision on another row must not preempt the deleted check: {body}"
+    );
 }

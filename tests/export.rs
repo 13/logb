@@ -723,6 +723,29 @@ async fn import_reports_how_many_types_were_created_and_how_many_were_merged() {
     assert_eq!(types.as_array().unwrap().len(), 2, "the merged type is not duplicated: {types}");
 }
 
+/// The same fold applies WITHIN one archive, not only against the account's pre-existing types:
+/// the loop re-reads `object_types` on every iteration, so a type it just inserted is "live" for
+/// the very next one. An empty account importing "Trailer" then "trailer" must create the first
+/// and merge the second onto it, not create two types that differ only by case.
+#[tokio::test]
+async fn two_archive_types_folding_to_each_other_create_one_and_merge_the_other() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let mut data = export_shell(base_object());
+    data["objects"] = json!([]);
+    data["types"] = json!([
+        { "client_uuid": uuid::Uuid::new_v4().to_string(), "name": "Trailer", "icon": "car", "categories": ["repair"], "counter_unit": "km" },
+        { "client_uuid": uuid::Uuid::new_v4().to_string(), "name": "trailer", "icon": "car", "categories": ["repair"], "counter_unit": "km" },
+    ]);
+    let counts = import_as(&app, &app.client, zip_data_json(&data)).await;
+    assert_eq!(counts["types_created"], 1, "{counts}");
+    assert_eq!(counts["types_merged"], 1, "{counts}");
+
+    let types = app.get_json("/types").await;
+    assert_eq!(types.as_array().unwrap().len(), 1, "the two archive types must fold to one: {types}");
+}
+
 #[tokio::test]
 async fn an_unknown_custom_key_imports_as_other_with_the_key_noted() {
     let app = common::spawn().await;
