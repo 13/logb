@@ -14,6 +14,7 @@
   import ReminderForm from './routes/ReminderForm.svelte';
   import ReadingForm from './routes/ReadingForm.svelte';
   import Search from './routes/Search.svelte';
+  import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
   import SettingsAppearance from './routes/settings/Appearance.svelte';
   import SettingsAccount from './routes/settings/Account.svelte';
@@ -78,6 +79,7 @@
     ['/objects/:id/reminders/:rid', ReminderForm],
     ['/objects/:id/reading', ReadingForm],
     ['/search', Search],
+    ['/stats', Stats],
     ['/settings', Settings],
     ['/settings/appearance', SettingsAppearance],
     ['/settings/account', SettingsAccount],

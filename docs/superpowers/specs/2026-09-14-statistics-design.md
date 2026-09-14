@@ -1,6 +1,6 @@
 # Statistics
 
-Status: approved, not implemented. Phase 1 of two.
+Status: phase 1 implemented. Phase 2 not started.
 
 Today every number LogB shows is about one object: the Info tab's Insights (cost by year and
 category, cost per unit, fuel, usage). Nothing answers "what did everything cost me this year" or
