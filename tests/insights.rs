@@ -1,4 +1,5 @@
 mod common;
+use chrono::NaiveDate;
 use serde_json::json;
 
 #[tokio::test]
@@ -82,5 +83,92 @@ async fn insights_of_another_users_object_are_404() {
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
     let res = anna.get(app.url(&format!("/objects/{id}/insights"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
+
+async fn object(app: &common::TestApp, body: serde_json::Value) -> i64 {
+    let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap()
+}
+
+async fn entry(app: &common::TestApp, object_id: i64, body: serde_json::Value) {
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities"))).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+}
+
+#[tokio::test]
+async fn contents_add_every_descendants_costs_but_leave_counter_figures_alone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = object(&app, json!({ "name": "House", "type": "home", "description": "",
+        "purchase_date": "2024-05-01", "purchase_price_cents": 300_000 })).await;
+    let boiler = object(&app, json!({ "name": "Boiler", "type": "appliance", "description": "", "parent_id": house,
+        "purchase_date": "2025-01-01", "purchase_price_cents": 50_000 })).await;
+    let bulb = object(&app, json!({ "name": "Bulb", "type": "appliance", "description": "", "parent_id": boiler })).await;
+    let today = logb::db::today();
+    entry(&app, house, json!({ "date": "2025-03-10", "category": "repair", "title": "Roof", "notes": "", "cost_cents": 100_000 })).await;
+    entry(&app, boiler, json!({ "date": "2026-02-01", "category": "maintenance", "title": "Service", "notes": "", "cost_cents": 25_000 })).await;
+    entry(&app, bulb, json!({ "date": today, "category": "repair", "title": "Swap", "notes": "", "cost_cents": 3_000 })).await;
+
+    let own = app.get_json(&format!("/objects/{house}/insights")).await;
+    assert_eq!(own["has_contents"], true);
+    assert_eq!(own["ownership"]["total_cents"], 400_000);
+    assert_eq!(own["ownership"]["purchase_cents"], 300_000);
+    assert_eq!(own["ownership"]["since"], "2024-05-01");
+    let days = (NaiveDate::parse_from_str(&today, "%Y-%m-%d").unwrap() - NaiveDate::from_ymd_opt(2024, 5, 1).unwrap()).num_days();
+    assert_eq!(own["ownership"]["per_year_cents"], 400_000 * 365 / days);
+    let months = own["by_month"].as_array().unwrap();
+    assert_eq!(months.len(), 12);
+    assert_eq!(months[11], json!({ "bucket": &today[..7], "cost_cents": 0 }), "the bulb is not the house's own");
+    assert_eq!(own["by_year"].as_array().unwrap().len(), 1, "only the house's own 2025");
+
+    let all = app.get_json(&format!("/objects/{house}/insights?contents=true")).await;
+    assert_eq!(all["ownership"]["total_cents"], 478_000);
+    assert_eq!(all["ownership"]["purchase_cents"], 350_000);
+    assert_eq!(all["ownership"]["since"], "2024-05-01", "since stays the house's own");
+    assert_eq!(all["by_month"][11]["cost_cents"], 3_000);
+    let cats = all["by_category"].as_array().unwrap();
+    assert!(cats.iter().any(|c| c["bucket"] == "maintenance" && c["cost_cents"] == 25_000), "{cats:?}");
+    for field in ["counter_span", "cost_per_counter_milli", "fuel", "counter_per_day_milli", "usage_by_month"] {
+        assert_eq!(all[field], own[field], "{field} must ignore contents");
+    }
+
+    let leaf = app.get_json(&format!("/objects/{bulb}/insights")).await;
+    assert_eq!(leaf["has_contents"], false);
+}
+
+#[tokio::test]
+async fn fills_draw_a_trend_and_a_purchase_entry_is_the_purchase() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = object(&app, json!({ "name": "Car", "type": "car", "counter_unit": "km", "description": "",
+        "purchase_price_cents": 900_000 })).await;
+    entry(&app, car, json!({ "date": "2023-01-15", "category": "purchase", "title": "Bought", "notes": "", "cost_cents": 900_000 })).await;
+    for (date, counter, qty) in [("2026-01-01", 10_000, 40_000), ("2026-02-01", 10_500, 30_000), ("2026-03-01", 11_000, 25_000)] {
+        entry(&app, car, json!({ "date": date, "category": "fuel", "title": "Fuel", "notes": "",
+            "counter_value": counter, "quantity_milli": qty })).await;
+    }
+
+    let out = app.get_json(&format!("/objects/{car}/insights?contents=true")).await;
+    assert_eq!(out["has_contents"], false);
+    assert_eq!(out["ownership"]["purchase_cents"], 0, "the purchase entry already counts it");
+    assert_eq!(out["ownership"]["total_cents"], 900_000);
+    assert!(out["ownership"]["per_year_cents"].is_null(), "created today: under 90 days owned");
+    assert_eq!(out["fuel"]["fills"], json!([
+        { "date": "2026-02-01", "per_100_milli": 6_000 },
+        { "date": "2026-03-01", "per_100_milli": 5_000 },
+    ]));
+}
+
+#[tokio::test]
+async fn contents_must_be_a_boolean_and_another_users_object_stays_hidden() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = object(&app, json!({ "name": "House", "type": "home", "description": "" })).await;
+    let res = app.client.get(app.url(&format!("/objects/{house}/insights?contents=maybe"))).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.get(app.url(&format!("/objects/{house}/insights?contents=true"))).send().await.unwrap();
     assert_eq!(res.status(), 404);
 }

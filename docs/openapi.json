@@ -426,6 +426,16 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "contents",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Include every non-deleted descendant in by_year, by_category, by_month and ownership. Counter and fuel figures always stay the object's own."
           }
         ],
         "responses": {
@@ -2733,6 +2743,26 @@
                   "null"
                 ],
                 "format": "int64"
+              },
+              "fills": {
+                "type": "array",
+                "description": "Consumption per fill for up to the twelve newest fills, oldest first",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "date",
+                    "per_100_milli"
+                  ],
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "per_100_milli": {
+                      "type": "integer",
+                      "format": "int64"
+                    }
+                  }
+                }
               }
             }
           },
@@ -2763,6 +2793,50 @@
                   "description": "Null when no reading in the month, or none before it to measure from"
                 }
               }
+            }
+          },
+          "has_contents": {
+            "type": "boolean",
+            "description": "Whether the object has any non-deleted child"
+          },
+          "ownership": {
+            "type": "object",
+            "required": [
+              "total_cents",
+              "purchase_cents",
+              "since",
+              "per_year_cents"
+            ],
+            "properties": {
+              "total_cents": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Running costs plus purchase_cents"
+              },
+              "purchase_cents": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Purchase prices counted; an object with a costed purchase entry contributes 0"
+              },
+              "since": {
+                "type": "string",
+                "description": "YYYY-MM-DD: purchase date, else creation date"
+              },
+              "per_year_cents": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "total_cents per 365 days owned, until the archive date or today; null under 90 days"
+              }
+            }
+          },
+          "by_month": {
+            "type": "array",
+            "description": "Twelve calendar months ending with the current one, oldest first, zeros included",
+            "items": {
+              "$ref": "#/components/schemas/StatsAmount"
             }
           }
         }
