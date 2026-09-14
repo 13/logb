@@ -81,3 +81,17 @@ async fn search_finds_tags() {
     let out = app.get_json("/search?q=leasing").await;
     assert_eq!(out["objects"][0]["name"], "Golf");
 }
+
+/// Tags are stored as JSON text, so a LIKE over the column would match its punctuation:
+/// `[` would find every row and `"` every tagged one. Such terms skip the tags match.
+#[tokio::test]
+async fn search_for_json_punctuation_does_not_match_the_tags_column() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    assert_eq!(post(&app, &app.client, "/objects", json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease"] })).await.status(), 201);
+    assert_eq!(post(&app, &app.client, "/objects", json!({ "name": "Bike", "type": "bike", "description": "" })).await.status(), 201);
+    for q in ["%5B", "%5D", "%22", "%2C", "%5C", "%5BLease"] {
+        let out = app.get_json(&format!("/search?q={q}")).await;
+        assert_eq!(out["objects"], json!([]), "q={q}: {out}");
+    }
+}

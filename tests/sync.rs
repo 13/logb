@@ -2192,13 +2192,13 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
 
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-        // 10, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
+        // 11, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
         // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
-        // than adding an eleventh. All 10 must survive the sweep untouched. It was 9 until
-        // `parent_id` joined the whitelist -- this count is deliberately a literal so that
-        // widening the whitelist has to be noticed here.
+        // than adding a twelfth. All 11 must survive the sweep untouched. It was 9 until
+        // `parent_id` joined the whitelist and 10 until `tags` did -- this count is deliberately
+        // a literal so that widening the whitelist has to be noticed here.
         assert_eq!(
-            kept, 10,
+            kept, 11,
             "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
         );
     }
@@ -2819,4 +2819,112 @@ async fn deleting_a_done_activity_logs_the_reminder_being_unlinked() {
         c["entity"] == "reminder" && c["op"] == "set" && c["field"] == "done_activity_id");
     assert!(unlinked.is_some(), "the unlink is in the feed");
     assert_eq!(unlinked.unwrap()["entity_id"], reminder["id"]);
+}
+
+/// The server's own id and uuid for an object, as sync addresses it.
+async fn object_uuid(app: &common::TestApp, id: i64) -> String {
+    client_uuid(&app.state.db, "objects", id).await
+}
+
+/// Tags reach other devices both ways a device learns about a row: the bootstrap snapshot ships
+/// the column verbatim (JSON text, like every other TEXT column), and a REST edit is logged as a
+/// `set` whose value is that text, double-encoded like any string value (see
+/// `a_pulled_change_rows_fields_match_the_op_that_produced_it`).
+#[tokio::test]
+async fn tags_travel_through_pull() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease", "winter"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["objects"][0]["tags"], "[\"Lease\",\"winter\"]", "{body}");
+
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease", "winter", "Tax"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let row = body["changes"].as_array().unwrap().iter()
+        .find(|c| c["op"] == "set" && c["field"] == "tags")
+        .unwrap_or_else(|| panic!("no set/tags row in {body}"));
+    assert_eq!(row["value"], json!("[\"Lease\",\"winter\",\"Tax\"]").to_string());
+}
+
+#[tokio::test]
+async fn a_pushed_set_op_on_tags_is_normalised() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let uuid = object_uuid(&app, id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-tags", "entity": "object", "entity_uuid": uuid,
+        "op": "set", "field": "tags", "value": "[\" Winter \",\"winter\",\"Lease\"]",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let obj = app.get_json(&format!("/objects/{id}")).await;
+    assert_eq!(obj["tags"], json!(["Winter", "Lease"]));
+
+    // Other devices must learn the stored tags, not the spelling this device happened to send.
+    let body: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let row = body["changes"].as_array().unwrap().iter()
+        .find(|c| c["op"] == "set" && c["field"] == "tags")
+        .unwrap_or_else(|| panic!("no set/tags row in {body}"));
+    assert_eq!(row["value"], json!("[\"Winter\",\"Lease\"]").to_string());
+
+    // Entries take the same field.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-03-01", "category": "repair", "title": "Tyres", "notes": "" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let activity_id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-act-tags", "entity": "activity", "entity_uuid": activity_uuid,
+        "op": "set", "field": "tags", "value": "[\"tax 2026\",\"  TAX   2026 \"]",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.json::<serde_json::Value>().await.unwrap()["results"][0]["outcome"], "accepted");
+    let act = app.get_json(&format!("/activities/{activity_id}")).await;
+    assert_eq!(act["tags"], json!(["tax 2026"]));
+}
+
+#[tokio::test]
+async fn a_pushed_set_op_with_too_many_tags_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+    let uuid = object_uuid(&app, id).await;
+
+    let many: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
+        { "client_op_id": "op-many", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "tags", "value": serde_json::to_string(&many).unwrap(),
+          "edited_at": after_now(60), "device_id": "phone" },
+        { "client_op_id": "op-not-json", "entity": "object", "entity_uuid": uuid,
+          "op": "set", "field": "tags", "value": "Lease, winter",
+          "edited_at": after_now(60), "device_id": "phone" }
+    ]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "the batch must not 500: {}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert!(body["results"][0]["reason"].as_str().unwrap().contains("10"), "{body}");
+    assert_eq!(body["results"][1]["outcome"], "rejected", "{body}");
+
+    let obj = app.get_json(&format!("/objects/{id}")).await;
+    assert_eq!(obj["tags"], json!(["Lease"]));
 }

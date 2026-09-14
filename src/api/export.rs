@@ -5,6 +5,7 @@ use super::reminders::{select_reminders, ReminderInput, ReminderRow};
 use super::settings;
 use crate::auth::AuthUser;
 use crate::db;
+use crate::domain::tags;
 use crate::error::AppError;
 use crate::files;
 use crate::object_type::{self, Legacy};
@@ -52,6 +53,9 @@ struct ActivityExport {
     quantity_milli: Option<i64>,
     created_at: String,
     attachments: Vec<AttachmentExport>,
+    // Added with tags; an older archive's entries are untagged.
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,6 +105,9 @@ struct ObjectExport {
     activities: Vec<ActivityExport>,
     attachments: Vec<AttachmentExport>,
     reminders: Vec<ReminderExport>,
+    // Added with tags; an older archive's objects are untagged.
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -176,12 +183,14 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             None => None,
         };
         out.push(ObjectExport {
+            tags: tags::from_json(&o.tags),
             name: o.name, type_: Some(o.type_), category: None, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
             activities: acts.iter().map(|a| Ok(ActivityExport {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
                 counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
+                tags: tags::from_json(&a.tags),
                 attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             })).collect::<Result<Vec<_>, AppError>>()?,
             attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
@@ -378,10 +387,10 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let (ty, description) = resolve_type(&o);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at, client_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12) RETURNING id")
+             archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .bind(&object_uuid)
+            .bind(&object_uuid).bind(normalised_tags(&o.tags)?)
             .fetch_one(&mut *tx).await?;
         record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
         counts.objects += 1;
@@ -390,11 +399,11 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         for a in &o.activities {
             let activity_uuid = uuid::Uuid::new_v4().to_string();
             let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id")
+                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
-                .bind(&activity_uuid)
+                .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
                 .fetch_one(&mut *tx).await?;
             record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
             activity_ids.push(aid);
@@ -474,7 +483,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             cover_attachment_id: None,
             parent_id: None,
             client_uuid: None,
-            tags: None,
+            tags: Some(o.tags.clone()),
         };
         obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
 
@@ -494,7 +503,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
                 quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None, client_uuid: None,
-                tags: None,
+                tags: Some(a.tags.clone()),
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;
@@ -526,6 +535,13 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+/// An archive's tags as the column stores them. `validate_import` has already run the same
+/// `normalize` over every object and entry (naming where a failure is), so the error arm here
+/// is only a fallback that keeps a bad value from ever being written.
+fn normalised_tags(input: &[String]) -> Result<String, AppError> {
+    tags::normalize(input).map(|t| tags::to_json(&t)).map_err(AppError::BadRequest)
 }
 
 /// Mirrors the `attachments` table's `CHECK (kind IN ('photo', 'document'))`.

@@ -518,3 +518,106 @@ async fn an_exported_objects_parent_is_dropped_and_reimports_with_none() {
     assert_eq!(imported[0]["name"], "Garage");
     assert_eq!(imported[0]["parent_id"], serde_json::Value::Null, "an imported object lands as a root");
 }
+
+/// Exports the caller's whole library and returns the archive bytes.
+async fn export_zip(app: &common::TestApp) -> Vec<u8> {
+    let res = app.client.get(app.url("/export")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    res.bytes().await.unwrap().to_vec()
+}
+
+/// Creates an object and one entry, both tagged, and returns the object's id.
+async fn tagged_object_with_entry(app: &common::TestApp) -> i64 {
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease", "winter"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&json!({ "date": "2026-03-01", "category": "repair", "title": "Tyres", "notes": "", "tags": ["Winter", "tax 2026"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    id
+}
+
+#[tokio::test]
+async fn tags_survive_export_and_import() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    tagged_object_with_entry(&app).await;
+    let zip = export_zip(&app).await;
+
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    let res = fresh.client.post(fresh.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objects = fresh.get_json("/objects").await;
+    assert_eq!(objects[0]["tags"], json!(["Lease", "winter"]));
+    let nid = objects[0]["id"].as_i64().unwrap();
+    let acts = fresh.get_json(&format!("/objects/{nid}/activities")).await;
+    assert_eq!(acts[0]["tags"], json!(["Winter", "tax 2026"]));
+}
+
+/// Archives written before tags carry no `tags` key anywhere; they import as untagged.
+#[tokio::test]
+async fn an_archive_without_tags_imports_with_none() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    tagged_object_with_entry(&app).await;
+    let zip = export_zip(&app).await;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut data_json = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("data.json").unwrap(), &mut data_json).unwrap();
+    let mut data: serde_json::Value = serde_json::from_str(&data_json).unwrap();
+    fn strip_tags(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                map.remove("tags");
+                map.values_mut().for_each(strip_tags);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_tags),
+            _ => {}
+        }
+    }
+    strip_tags(&mut data);
+    assert!(!data.to_string().contains("\"tags\""), "{data}");
+
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    let res = fresh.client.post(fresh.url("/import")).header("content-type", "application/zip").body(zip_data_json(&data)).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objects = fresh.get_json("/objects").await;
+    assert_eq!(objects[0]["tags"], json!([]));
+    let nid = objects[0]["id"].as_i64().unwrap();
+    let acts = fresh.get_json(&format!("/objects/{nid}/activities")).await;
+    assert_eq!(acts[0]["tags"], json!([]));
+}
+
+/// Import goes through the same normalising as every other write: a hand-edited archive's
+/// spelling is tidied, and one over the limit is refused whole.
+#[tokio::test]
+async fn imported_tags_are_normalised_and_limits_answer_400() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "type": "car", "category": null, "tags": [" Lease ", "lease", "winter"] }));
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(app.get_json("/objects").await[0]["tags"], json!(["Lease", "winter"]));
+
+    let anna = app.create_user_client("anna", "password123").await;
+    let many: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
+    let mut object = base_object();
+    object["activities"] = json!([{
+        "date": "2024-01-01", "category": "repair", "title": "Brakes", "notes": "",
+        "counter_value": null, "cost_cents": null, "created_at": "2024-01-01T00:00:00Z", "attachments": [],
+        "tags": many
+    }]);
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_data_json(&export_shell(object))).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    let text = res.text().await.unwrap();
+    assert!(text.contains("activity 0") && text.contains("10"), "{text}");
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(objs.len(), 0, "rejected import must not persist anything");
+}

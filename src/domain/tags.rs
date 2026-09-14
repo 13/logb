@@ -38,10 +38,12 @@ pub fn normalize(input: &[String]) -> Result<Vec<String>, String> {
         }
         seen.push(key);
         out.push(tag);
-    }
-    // Counted after dropping duplicates: "Winter, winter" is one tag, not two.
-    if out.len() > MAX_TAGS {
-        return Err(format!("an object or entry can carry at most {MAX_TAGS} tags"));
+        // Counted after dropping duplicates: "Winter, winter" is one tag, not two. Checked
+        // inside the loop so a huge input (sync ops and archives are client-written) stops at
+        // the eleventh distinct tag instead of folding and comparing all of it.
+        if out.len() > MAX_TAGS {
+            return Err(format!("an object or entry can carry at most {MAX_TAGS} tags"));
+        }
     }
     Ok(out)
 }
@@ -90,6 +92,14 @@ mod tests {
         let many: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
         assert!(normalize(&many).unwrap_err().contains("10"));
         assert!(normalize(&v(&[&"é".repeat(32)])).is_ok(), "the limit counts characters, not bytes");
+    }
+
+    #[test]
+    fn a_huge_input_is_refused_without_reading_all_of_it() {
+        let many: Vec<String> = (0..10_000).map(|i| format!("t{i}")).collect();
+        let started = std::time::Instant::now();
+        assert!(normalize(&many).unwrap_err().contains("10"));
+        assert!(started.elapsed() < std::time::Duration::from_millis(200), "took {:?}", started.elapsed());
     }
 
     #[test]

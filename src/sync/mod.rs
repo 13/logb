@@ -108,10 +108,13 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             ("description", Text), ("purchase_date", Text),
             ("purchase_price_cents", Integer), ("archived_at", Text),
             ("cover_attachment_id", Integer), ("parent_id", Integer),
+            // JSON text; `apply::canonical_tags` normalises it before it is logged or stored.
+            ("tags", Text),
         ],
         Entity::Activity => &[
             ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
             ("counter_value", Integer), ("cost_cents", Integer), ("quantity_milli", Integer),
+            ("tags", Text),
         ],
         Entity::Reminder => &[
             ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
@@ -143,6 +146,8 @@ mod tests {
         assert!(syncable_field_type(Entity::Activity, "quantity_milli").is_some());
         assert!(syncable_field_type(Entity::Reminder, "snoozed_until").is_some());
         assert!(syncable_field_type(Entity::Attachment, "caption").is_some());
+        assert_eq!(syncable_field_type(Entity::Object, "tags"), Some(FieldType::Text));
+        assert_eq!(syncable_field_type(Entity::Activity, "tags"), Some(FieldType::Text));
     }
 
     #[test]

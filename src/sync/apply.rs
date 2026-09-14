@@ -30,6 +30,7 @@ pub fn wins(
 }
 
 use crate::api::objects::PARENT_REJECTION;
+use crate::domain::tags;
 use crate::error::AppError;
 use crate::sync::record;
 use crate::sync::{syncable_field_type, Entity, FieldType, Op, OpKind, Outcome};
@@ -137,6 +138,39 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         _ => {}
     }
     Ok(())
+}
+
+/// Whether `field` is a `tags` column, the one field whose pushed text is rewritten rather than
+/// only checked.
+fn is_tags(entity: Entity, field: &str) -> bool {
+    matches!((entity, field), (Entity::Object | Entity::Activity, "tags"))
+}
+
+/// The stored spelling of a pushed `tags` value: JSON text holding an array of strings, run
+/// through the same `domain::tags::normalize` REST uses, so the two doors store the same tags.
+/// `Err` is the rejection reason.
+pub fn canonical_tags(text: &str) -> Result<String, String> {
+    let parsed: Vec<String> = serde_json::from_str(text)
+        .map_err(|_| "tags must be JSON text holding an array of strings".to_string())?;
+    tags::normalize(&parsed).map(|t| tags::to_json(&t))
+}
+
+/// A `set` op's value as it should be logged. The push handler writes `changes` BEFORE the op
+/// is applied, so without this the log would carry the device's raw spelling of `tags` while
+/// the row holds the normalised one, and every other device would pull a value the server
+/// never stored. A value that does not normalise is returned untouched: `apply_op` rejects it,
+/// and a rejected op's log row is removed.
+pub fn canonical_value(
+    entity: Entity,
+    field: Option<&str>,
+    value: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (field, value) {
+        (Some(field), Some(serde_json::Value::String(text))) if is_tags(entity, field) => {
+            Some(serde_json::Value::String(canonical_tags(&text).unwrap_or(text)))
+        }
+        (_, value) => value,
+    }
 }
 
 /// Rewrites a client-supplied timestamp into the one canonical form `wins` can compare.
@@ -337,6 +371,19 @@ pub async fn apply_op(
             if let Err(reason) = validate_value(op.entity, field, &bound) {
                 return Ok(Outcome::Rejected { reason });
             }
+
+            // Tags are normalised, not merely checked: a REST write stores the normalised
+            // spelling, so a sync write has to store the same one. Done again here, even though
+            // the push handler already rewrote the logged value, so `apply_op` never relies on
+            // its caller for what reaches the column. A NULL falls through to the NOT NULL
+            // constraint and is rejected there.
+            let bound = match bound {
+                Binding::Text(text) if is_tags(op.entity, field) => match canonical_tags(&text) {
+                    Ok(normalised) => Binding::Text(normalised),
+                    Err(reason) => return Ok(Outcome::Rejected { reason }),
+                },
+                other => other,
+            };
 
             // The whitelist lets `kind` change freely, but `objects::update` refuses to point
             // `cover_attachment_id` at anything but a live `photo` attachment (`AND kind =

@@ -116,6 +116,13 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     // Qualified: the self-join puts two `name` columns in scope, and an unqualified one is
     // ambiguous to PostgreSQL.
     let order = state.backend.name_order("o.name");
+    // `tags` holds JSON text, so a term containing JSON punctuation would match the encoding
+    // rather than a tag: `[` finds every row, `"` every tagged one. Such a term cannot be part
+    // of a tag the user means, so the tags match is left out of the statement for it. Only
+    // these fixed fragments are spliced in; the term itself stays a bind parameter.
+    let match_tags = !term.contains(['[', ']', '"', ',', '\\']);
+    let object_tags = if match_tags { format!(" OR o.tags {like} $2 ESCAPE '\\'") } else { String::new() };
+    let activity_tags = if match_tags { format!(" OR a.tags {like} $2 ESCAPE '\\'") } else { String::new() };
 
     let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
         "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
@@ -123,7 +130,7 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
          o.parent_id, o.created_at, o.updated_at, p.name AS parent_name, o.tags \
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
          WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
-           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\' OR o.tags {like} $2 ESCAPE '\\') \
+           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\'{object_tags}) \
          ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
@@ -133,7 +140,7 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
          a.counter_value, a.cost_cents, a.tags \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\' OR a.tags {like} $2 ESCAPE '\\') \
+           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\'{activity_tags}) \
          ORDER BY a.date DESC, a.id DESC LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;

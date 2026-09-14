@@ -7,7 +7,7 @@ use crate::state::App;
 use crate::sync::feed;
 use crate::sync::record;
 use crate::sync::{
-    apply::{apply_op, canonical_edited_at},
+    apply::{apply_op, canonical_edited_at, canonical_value},
     Op, OpKind, Outcome,
 };
 use axum::extract::{Query, State};
@@ -93,6 +93,9 @@ async fn push(
         // thing entirely -- that is a field being cleared, and `apply::binding` reads it as
         // NULL -- so the two are kept apart rather than bundled.)
         let (field, value) = if op.op == OpKind::Set {
+            // The log must carry what will be stored, not the device's spelling -- see
+            // `apply::canonical_value`.
+            op.value = canonical_value(op.entity, op.field.as_deref(), op.value.take());
             (op.field.as_deref(), op.value.as_ref().map(|v| v.to_string()))
         } else {
             (None, None)
