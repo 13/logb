@@ -1,5 +1,6 @@
 use crate::auth::AuthUser;
 use crate::db;
+use crate::domain::tags;
 use crate::error::AppError;
 use crate::state::App;
 use crate::sync::{record, Entity};
@@ -39,6 +40,10 @@ pub struct ObjectRow {
     pub updated_at: String,
     /// The row's sync identity, so a client can name it in an op without a bootstrap first.
     pub client_uuid: Option<String>,
+    /// The stored JSON text, kept as text so sync and export can pass it through untouched;
+    /// responses carry it as the array it holds.
+    #[serde(serialize_with = "tags::serialize_json_text")]
+    pub tags: String,
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -108,6 +113,10 @@ pub struct ObjectInput {
     /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
     #[serde(default)]
     pub client_uuid: Option<String>,
+    /// Absent on create means no tags; absent on PATCH keeps the current ones. `validate`
+    /// replaces a present list with its normalised form.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 /// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
@@ -154,6 +163,9 @@ impl ObjectInput {
         if matches!(self.purchase_price_cents, Some(p) if p < 0) {
             return Err(AppError::BadRequest("purchase_price_cents must be >= 0".into()));
         }
+        if let Some(t) = &self.tags {
+            self.tags = Some(tags::normalize(t).map_err(AppError::BadRequest)?);
+        }
         Ok(())
     }
 }
@@ -163,7 +175,7 @@ impl ObjectInput {
 /// the tests happened not to cover.
 const OWNED_OBJECT: &str =
     "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid \
+     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags \
      FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
 
 /// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
@@ -409,7 +421,7 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
            AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
@@ -463,14 +475,14 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     }
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid",
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags",
     )
     .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
-    .bind(&object_uuid)
+    .bind(&object_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
     .fetch_one(&mut *tx).await;
     let row = match row {
         Ok(row) => row,
@@ -578,15 +590,19 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         changed.push(("cover_attachment_id", json!(cover_attachment_id)));
     }
     if parent_id != existing.parent_id { changed.push(("parent_id", json!(parent_id))); }
+    // Absent keeps the stored tags. The change is logged as the JSON text the column holds, the
+    // same shape a sync `set` op carries for any other text field.
+    let tags = body.tags.as_deref().map(tags::to_json).unwrap_or_else(|| existing.tags.clone());
+    if tags != existing.tags { changed.push(("tags", json!(tags))); }
 
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
-         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11 \
-         WHERE id = $12 AND deleted_at IS NULL",
+         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11, tags = $12 \
+         WHERE id = $13 AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
-    .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(id)
+    .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(&tags).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;

@@ -594,6 +594,14 @@
               "type": "string",
               "format": "date"
             }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only activities carrying this tag, compared ignoring case and accents. `X-Total-Count` counts the same matches.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1314,7 +1322,7 @@
     },
     "/search": {
       "get": {
-        "summary": "Objects (by name and description) and activities (by title and notes) matching `q`. An object's `type` is an identifier, not searchable text.",
+        "summary": "Objects (by name, description and tags) and activities (by title, notes and tags) matching `q`. An object's `type` is an identifier, not searchable text.",
         "parameters": [
           {
             "name": "q",
@@ -1332,6 +1340,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchResults"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tags": {
+      "get": {
+        "summary": "Every tag the caller uses on non-deleted objects and entries (archived objects included), with how many carry it. Tags equal ignoring case and accents count as one, shown in the most used spelling. Sorted by count, most used first, then by tag.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "tag",
+                      "count"
+                    ],
+                    "properties": {
+                      "tag": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2260,6 +2300,15 @@
             },
             "description": "Root first, nearest ancestor last, this object excluded. Filled in only by the single-object responses (GET/POST/PATCH of one object); `GET /objects` always returns it empty, since no list view draws a breadcrumb and filling it would cost one recursive query per row."
           },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "description": "Free-text tags, normalised: trimmed, whitespace collapsed, no duplicates ignoring case and accents (first spelling kept)."
+          },
           "client_uuid": {
             "type": [
               "string",
@@ -2381,6 +2430,15 @@
             "format": "int64",
             "description": "Three-state on PATCH: omit the field to keep the current parent, send null to make the object top-level again, send an id to move it. On POST, omitted and null both mean top-level. The id must name one of your own undeleted objects, and must be neither this object nor one of its descendants, or the request is refused with 400."
           },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "description": "Omitted on POST means no tags; omitted on PATCH keeps the current ones. Normalised before the limits are checked; more than 10 tags or a tag over 32 characters answers 400."
+          },
           "client_uuid": {
             "type": "string",
             "minLength": 8,
@@ -2456,6 +2514,15 @@
               "$ref": "#/components/schemas/Attachment"
             }
           },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "description": "Free-text tags, normalised: trimmed, whitespace collapsed, no duplicates ignoring case and accents (first spelling kept)."
+          },
           "client_uuid": {
             "type": [
               "string",
@@ -2515,6 +2582,15 @@
             "type": "string",
             "format": "date-time",
             "description": "PATCH only: when an edit was made, for one sent later (queued offline). Each field it changes is kept only if nothing changed that field after this moment. Capped at the server's now"
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "description": "Omitted on POST means no tags; omitted on PATCH keeps the current ones. Normalised before the limits are checked; more than 10 tags or a tag over 32 characters answers 400. With `edited_at`, kept only if nothing changed the tags after that moment."
           },
           "client_uuid": {
             "type": "string",
@@ -3223,6 +3299,12 @@
               "null"
             ],
             "description": "The name of the object this one sits inside, or null for a top-level object."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -3268,6 +3350,12 @@
             ],
             "format": "int64",
             "description": "Money is always integer cents; never a float"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

@@ -11,6 +11,7 @@ pub mod search;
 pub mod settings;
 pub mod stats;
 pub mod sync;
+pub mod tags;
 pub mod users;
 
 use crate::error::AppError;
@@ -33,6 +34,7 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
         .merge(activities::router())
         .merge(reminders::router())
         .merge(search::router())
+        .merge(tags::router())
         .merge(stats::router())
         .merge(sync::router())
         .merge(attachments::router(max_upload_bytes))

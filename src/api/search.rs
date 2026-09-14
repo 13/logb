@@ -33,6 +33,8 @@ pub struct ActivityHit {
     pub notes: String,
     pub counter_value: Option<i64>,
     pub cost_cents: Option<i64>,
+    #[serde(serialize_with = "crate::domain::tags::serialize_json_text")]
+    pub tags: String,
 }
 
 /// An object hit carries its parent's name for the same reason an activity hit carries its
@@ -57,6 +59,8 @@ pub struct ObjectHit {
     pub created_at: String,
     pub updated_at: String,
     pub parent_name: Option<String>,
+    #[serde(serialize_with = "crate::domain::tags::serialize_json_text")]
+    pub tags: String,
 }
 
 #[derive(Serialize)]
@@ -116,20 +120,20 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
         "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
          o.purchase_date, o.purchase_price_cents, o.archived_at, o.cover_attachment_id, \
-         o.parent_id, o.created_at, o.updated_at, p.name AS parent_name \
+         o.parent_id, o.created_at, o.updated_at, p.name AS parent_name, o.tags \
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
          WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
-           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\') \
+           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\' OR o.tags {like} $2 ESCAPE '\\') \
          ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
 
     let activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
-         a.counter_value, a.cost_cents \
+         a.counter_value, a.cost_cents, a.tags \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\') \
+           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\' OR a.tags {like} $2 ESCAPE '\\') \
          ORDER BY a.date DESC, a.id DESC LIMIT $3")))
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;

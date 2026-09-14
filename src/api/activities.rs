@@ -2,6 +2,7 @@ use super::attachments::{self, AttachmentOut};
 use super::objects::{load_owned_object, validate_date, ObjectRow};
 use crate::auth::AuthUser;
 use crate::db;
+use crate::domain::tags;
 use crate::error::AppError;
 use crate::state::App;
 use crate::sync::apply::{canonical_edited_at, wins};
@@ -46,6 +47,9 @@ pub struct ActivityRow {
     pub updated_at: String,
     /// The row's sync identity, so a client can name it in an op without a bootstrap first.
     pub client_uuid: Option<String>,
+    /// Stored JSON text, answered as the array it holds -- see `ObjectRow::tags`.
+    #[serde(serialize_with = "tags::serialize_json_text")]
+    pub tags: String,
 }
 
 #[derive(Deserialize)]
@@ -73,6 +77,10 @@ pub struct ActivityInput {
     /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
     #[serde(default)]
     pub client_uuid: Option<String>,
+    /// Absent on create means no tags; absent on PATCH keeps the current ones. `validate`
+    /// replaces a present list with its normalised form.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 impl ActivityInput {
@@ -102,6 +110,9 @@ impl ActivityInput {
                 return Err(AppError::BadRequest("quantity_milli needs an object with a counter".into()));
             }
         }
+        if let Some(t) = &self.tags {
+            self.tags = Some(tags::normalize(t).map_err(AppError::BadRequest)?);
+        }
         Ok(())
     }
 }
@@ -129,7 +140,7 @@ async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError>
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
-         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid FROM activities a JOIN objects o ON o.id = a.object_id \
+         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid, a.tags FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
@@ -152,11 +163,32 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default)]
     pub offset: Option<i64>,
+    /// Only entries carrying this tag, compared ignoring case and accents.
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
+/// The `tag` filter as the key `domain::tags::fold` compares by, or `None` when there is no
+/// filter. A blank value is no filter, not a filter nothing matches.
+fn wanted_tag(q: &ListQuery) -> Option<String> {
+    let tag = q.tag.as_deref()?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!tag.is_empty()).then(|| tags::fold(&tag))
 }
 
 /// How many activities match the filters, ignoring the page window -- the client needs it to
 /// know whether a "load more" button belongs on screen.
 pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
+    if let Some(wanted) = wanted_tag(q) {
+        // Counted in Rust with the same `carries` the page uses, so the header and the page can
+        // never disagree -- see `list_for_object` for why SQL cannot do this match.
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT tags FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+             AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
+        )
+        .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+        .fetch_all(&state.db).await?;
+        return Ok(rows.iter().filter(|(t,)| tags::carries(t, &wanted)).count() as i64);
+    }
     let (n,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
@@ -171,14 +203,27 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     if let Some(d) = &q.to { validate_date(d)?; }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    Ok(sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid \
+    // A tag matches ignoring case and accents, which neither backend's LIKE does reliably
+    // (SQLite folds ASCII only, and neither strips accents). So with a tag filter SQL returns
+    // every row the other filters allow and the match and the page window are applied here. One
+    // object's timeline is hundreds of rows at most, so that costs nothing noticeable.
+    let wanted = wanted_tag(q);
+    let (sql_limit, sql_offset) = if wanted.is_some() { (i64::MAX, 0) } else { (limit, offset) };
+    let rows = sqlx::query_as::<_, ActivityRow>(
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
          ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
     )
-    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(limit).bind(offset)
-    .fetch_all(&state.db).await?)
+    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(sql_limit).bind(sql_offset)
+    .fetch_all(&state.db).await?;
+    Ok(match wanted {
+        None => rows,
+        Some(wanted) => rows.into_iter()
+            .filter(|r| tags::carries(&r.tags, &wanted))
+            .skip(offset as usize).take(limit as usize)
+            .collect(),
+    })
 }
 
 async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Query(q): Query<ListQuery>) -> Result<Response, AppError> {
@@ -253,7 +298,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     if let Some(op) = body.client_op_id.as_deref() {
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-             quantity_milli, client_op_id, created_at, updated_at, client_uuid \
+             quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
              FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
         )
         .bind(op)
@@ -285,13 +330,13 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
-        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid",
+        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
-    .bind(&activity_uuid)
+    .bind(&activity_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
     .fetch_one(&mut *tx).await;
     let row = match inserted {
         Ok(row) => row,
@@ -309,7 +354,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             };
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-                 quantity_milli, client_op_id, created_at, updated_at, client_uuid \
+                 quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
                  FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
             )
             .bind(op)
@@ -381,6 +426,8 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         if body.counter_value != existing.counter_value && changed_since(&mut tx, &uuid, "counter_value", at).await? { body.counter_value = existing.counter_value; }
         if body.cost_cents != existing.cost_cents && changed_since(&mut tx, &uuid, "cost_cents", at).await? { body.cost_cents = existing.cost_cents; }
         if body.quantity_milli != existing.quantity_milli && changed_since(&mut tx, &uuid, "quantity_milli", at).await? { body.quantity_milli = existing.quantity_milli; }
+        // `None` is "keep the stored tags", so losing to a newer edit is spelled by dropping them.
+        if body.tags.as_deref().is_some_and(|t| tags::to_json(t) != existing.tags) && changed_since(&mut tx, &uuid, "tags", at).await? { body.tags = None; }
         // Keeping some fields and not others can combine into something no single edit said --
         // a reading without its value -- so the merge is held to the same rules as either edit.
         body.validate(&object)?;
@@ -396,12 +443,15 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if body.counter_value != existing.counter_value { changed.push(("counter_value", json!(body.counter_value))); }
     if body.cost_cents != existing.cost_cents { changed.push(("cost_cents", json!(body.cost_cents))); }
     if body.quantity_milli != existing.quantity_milli { changed.push(("quantity_milli", json!(body.quantity_milli))); }
+    // Logged as the JSON text the column holds, as `objects::update` does.
+    let tags = body.tags.as_deref().map(tags::to_json).unwrap_or_else(|| existing.tags.clone());
+    if tags != existing.tags { changed.push(("tags", json!(tags))); }
 
     sqlx::query(
-        "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8 WHERE id = $9 AND deleted_at IS NULL",
+        "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8, tags = $9 WHERE id = $10 AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
-    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(id)
+    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(&tags).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
