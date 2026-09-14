@@ -446,6 +446,10 @@ same data over the API, both parameters optional. An object's purchase price cou
 `purchases` toggle on, dated by its purchase date or else the day it was created, and is skipped
 when a costed `purchase` activity already records that money.
 
+An object's Info tab shows the same rules for one object: total cost of ownership (≈ per year
+once owned 90 days), spend per month, consumption per fill, and an "Include contents" switch on
+objects that have others inside them.
+
 ## API
 
 JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which

@@ -1,6 +1,6 @@
 # Object cost depth (statistics phase 2)
 
-Status: approved, not implemented. Follows `2026-09-14-statistics-design.md` (phase 1, the
+Status: implemented. Follows `2026-09-14-statistics-design.md` (phase 1, the
 Statistics screen).
 
 An object's Info tab answers "what did this cost to run" but not "what has owning it cost me",
@@ -95,7 +95,8 @@ already refuses cycles.
     when on.
   - `sinceLabel(date, locale)` -- "May 2024" from `YYYY-MM-DD`.
   - `fillLabel(date, locale)` -- a short day and month ("10 Jan") for a fill bar.
-  Month bars reuse `periodLabel` from `lib/stats.ts`.
+  Month bars use `monthLabel` (short month and two-digit year): a twelve-month window crosses a
+  year, and two bars both labelled "Sep" would be ambiguous.
 - `ObjectDetail.svelte` passes whether the object has children (it already loads them for the Info
   tab) so the switch can hide without a request.
 - en/de strings for every new label.

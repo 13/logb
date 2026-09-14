@@ -235,7 +235,7 @@
       {/if}
       <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
       <h3>{$t('insights.title')}</h3>
-      <Insights objectId={oid} unit={object.counter_unit} />
+      <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0} />
       <div class="list info-actions">
         <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
         <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>
