@@ -112,6 +112,18 @@ mod tests {
         assert_eq!(fold("Élan Vital"), fold("elan vital"));
     }
 
+    /// The same table is asserted against `foldTag` in frontend/tests/tags.test.ts: a tag must
+    /// fold identically on the server and on every device, whatever the device's locale.
+    #[test]
+    fn folding_matches_the_frontend_parity_table() {
+        for (input, folded) in [
+            ("ß", "ß"), ("ẞ", "ß"), ("İ", "i"), ("ΟΔΟΣ", "οδος"),
+            ("Fahrräder", "fahrrader"), ("Élan Vital", "elan vital"), ("INFO", "info"),
+        ] {
+            assert_eq!(fold(input), folded, "fold({input})");
+        }
+    }
+
     #[test]
     fn json_round_trips_and_bad_text_reads_empty() {
         let tags = v(&["a \"quoted\" tag", "Zweite"]);

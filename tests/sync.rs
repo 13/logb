@@ -2909,6 +2909,9 @@ async fn a_pushed_set_op_with_too_many_tags_is_rejected() {
     assert_eq!(res.status(), 201);
     let id = res.json::<serde_json::Value>().await.unwrap()["id"].as_i64().unwrap();
     let uuid = object_uuid(&app, id).await;
+    let before: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let since = before["next_seq"].as_i64().unwrap();
+    let epoch = before["epoch"].as_str().unwrap().to_string();
 
     let many: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
     let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([
@@ -2927,4 +2930,15 @@ async fn a_pushed_set_op_with_too_many_tags_is_rejected() {
 
     let obj = app.get_json(&format!("/objects/{id}")).await;
     assert_eq!(obj["tags"], json!(["Lease"]));
+
+    // A rejected op must not leak into the change feed either.
+    let body: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&epoch={epoch}")))
+        .send().await.unwrap().json().await.unwrap();
+    // Either as sent or double-encoded like any logged string value.
+    let raw = [serde_json::to_string(&many).unwrap(), "Lease, winter".to_string()];
+    let rejected: Vec<String> = raw.iter().flat_map(|r| [r.clone(), json!(r).to_string()]).collect();
+    let leaked = body["changes"].as_array().unwrap().iter().any(|c| {
+        c["op"] == "set" && c["field"] == "tags" && c["value"].as_str().is_some_and(|v| rejected.iter().any(|r| r == v))
+    });
+    assert!(!leaked, "a rejected tags value reached the feed: {body}");
 }

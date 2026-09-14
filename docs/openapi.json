@@ -1323,6 +1323,7 @@
     "/search": {
       "get": {
         "summary": "Objects (by name, description and tags) and activities (by title, notes and tags) matching `q`. An object's `type` is an identifier, not searchable text.",
+        "description": "Terms containing `[`, `]`, `\"`, `,` or `\\` do not match tags.",
         "parameters": [
           {
             "name": "q",

@@ -6,8 +6,10 @@ export const TAG_PALETTE_SIZE = 8;
 export const MAX_TAGS = 10;
 export const MAX_TAG_CHARS = 32;
 
+/** Not `toLocaleLowerCase`: that follows the device's locale (Turkish "INFO" becomes "ınfo"),
+ *  while the server's `domain::tags::fold` does not. */
 export function foldTag(tag: string): string {
-  return tag.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+  return tag.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }
 
 /** A tag's palette slot, from its folded name: the same tag gets the same colour on every device

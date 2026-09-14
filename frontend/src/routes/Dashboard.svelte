@@ -148,7 +148,7 @@
       <p class="muted">{$t('dash.no-match', { q: query.trim() || (tagFilter ?? '') })}</p>
     {:else}
       <div class="list">
-        {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} />{/each}
+        {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}
       </div>
     {/if}
   {/if}

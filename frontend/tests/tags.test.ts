@@ -65,6 +65,11 @@ describe('palette contrast', () => {
 
 describe('foldTag / contrastRatio', () => {
   it('folds', () => expect(foldTag('Élan')).toBe('elan'));
+  // The same table is asserted against Rust's `fold` in src/domain/tags.rs.
+  it.each([
+    ['ß', 'ß'], ['ẞ', 'ß'], ['İ', 'i'], ['ΟΔΟΣ', 'οδος'],
+    ['Fahrräder', 'fahrrader'], ['Élan Vital', 'elan vital'], ['INFO', 'info'],
+  ])('folds %s like the server does', (input, folded) => expect(foldTag(input)).toBe(folded));
   it('computes WCAG contrast', () => {
     expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 0);
     expect(contrastRatio('#777777', '#ffffff')).toBeCloseTo(4.48, 1);

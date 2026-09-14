@@ -15,7 +15,8 @@ export function parseTab(value: string | null | undefined): ListTab {
 
 /** Lower case with accents removed, so "fahrrader" finds "Fahrräder". */
 function fold(s: string): string {
-  return s.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+  // Not `toLocaleLowerCase`, which depends on the device's locale; see `foldTag`.
+  return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }
 
 export function matchesQuery(o: MemObject, query: string, typeLabel: (t: ObjectType) => string): boolean {

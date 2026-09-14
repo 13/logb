@@ -90,8 +90,55 @@ async fn search_for_json_punctuation_does_not_match_the_tags_column() {
     app.setup("ben", "correct horse").await;
     assert_eq!(post(&app, &app.client, "/objects", json!({ "name": "Golf", "type": "car", "description": "", "tags": ["Lease"] })).await.status(), 201);
     assert_eq!(post(&app, &app.client, "/objects", json!({ "name": "Bike", "type": "bike", "description": "" })).await.status(), 201);
-    for q in ["%5B", "%5D", "%22", "%2C", "%5C", "%5BLease"] {
+    let car = app.create_object(&app.client, "Van", Some("km")).await;
+    let res = post(&app, &app.client, &format!("/objects/{}/activities", car["id"]), json!({
+        "date": "2026-03-01", "category": "repair", "title": "Tyres", "notes": "", "tags": ["Lease"]
+    })).await;
+    assert_eq!(res.status(), 201);
+    // `%22Lease` is `"Lease`, which the raw JSON text `["Lease"]` contains.
+    for q in ["%5B", "%5D", "%22", "%2C", "%5C", "%22Lease"] {
         let out = app.get_json(&format!("/search?q={q}")).await;
         assert_eq!(out["objects"], json!([]), "q={q}: {out}");
     }
+    for q in ["%5B", "%22Lease"] {
+        let out = app.get_json(&format!("/search?q={q}")).await;
+        assert_eq!(out["activities"], json!([]), "q={q}: {out}");
+    }
+}
+
+async fn titles_and_total(app: &common::TestApp, path: &str) -> (Vec<String>, String) {
+    let res = app.client.get(app.url(path)).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let total = res.headers()["x-total-count"].to_str().unwrap().to_string();
+    let rows: Value = res.json().await.unwrap();
+    (rows.as_array().unwrap().iter().map(|a| a["title"].as_str().unwrap().to_string()).collect(), total)
+}
+
+/// The tag filter runs after the query, so paging and the total must count only tagged rows.
+#[tokio::test]
+async fn the_tag_filter_pages_and_counts_only_tagged_entries() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    // Tagged T1..T5 on days 1..5 interleaved with untagged U1..U5 on days 11..15; categories mixed.
+    for i in 1..=5 {
+        let category = if i % 2 == 0 { "fuel" } else { "repair" };
+        let res = post(&app, &app.client, &format!("/objects/{id}/activities"), json!({
+            "date": format!("2026-03-{:02}", i * 2 - 1), "category": category, "title": format!("T{i}"), "notes": "", "tags": ["Winter"]
+        })).await;
+        assert_eq!(res.status(), 201);
+        let res = post(&app, &app.client, &format!("/objects/{id}/activities"), json!({
+            "date": format!("2026-03-{:02}", i * 2), "category": category, "title": format!("U{i}"), "notes": ""
+        })).await;
+        assert_eq!(res.status(), 201);
+    }
+
+    let (titles, total) = titles_and_total(&app, &format!("/objects/{id}/activities?tag=winter&limit=2&offset=2")).await;
+    assert_eq!(titles, ["T3", "T2"], "date DESC: T5, T4 | T3, T2 | T1");
+    assert_eq!(total, "5");
+
+    let (titles, total) = titles_and_total(&app, &format!("/objects/{id}/activities?tag=winter&category=repair")).await;
+    assert_eq!(titles, ["T5", "T3", "T1"]);
+    assert_eq!(total, "3");
 }

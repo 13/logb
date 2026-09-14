@@ -9,7 +9,8 @@
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
   /** `ontag` makes the chips buttons that filter by their tag; without it they are plain labels. */
-  let { object, parentName = null, ontag }: { object: MemObject; parentName?: string | null; ontag?: (tag: string) => void } = $props();
+  /** `activeTag`: the list's tag filter, so the chip it matches shows as pressed. */
+  let { object, parentName = null, ontag, activeTag = null }: { object: MemObject; parentName?: string | null; ontag?: (tag: string) => void; activeTag?: string | null } = $props();
 </script>
 
 <!-- The quick-log action belongs to this object, so it sits inside the object's card rather than
@@ -51,7 +52,7 @@
           onclick={() => go(`/objects/${object.id}/activities/new`)}><Icon name="plus" /></button>
   </div>
   {#if (object.tags ?? []).length > 0}
-    <div class="card-tags"><TagChips tags={object.tags} onselect={ontag} /></div>
+    <div class="card-tags"><TagChips tags={object.tags} onselect={ontag} active={activeTag} /></div>
   {/if}
 </div>
 

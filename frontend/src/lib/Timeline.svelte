@@ -100,7 +100,14 @@
             </div>
           {/if}
         {:else if row.activity.category === 'reading'}
-          {@render readingRow(row.activity)}
+          {@const a = row.activity}
+          <!-- A single reading shows its chips like any entry; a folded run stays one line each. -->
+          <div class="entry-row">
+          {@render readingRow(a)}
+          {#if (a.tags ?? []).length > 0}
+            <div class="entry-tags"><TagChips tags={a.tags} onselect={(tag) => (tagFilter = tag)} active={tagFilter} /></div>
+          {/if}
+          </div>
         {:else}
           {@const a = row.activity}
           <!-- The chips can be buttons, and a button cannot sit inside the entry's button, so they

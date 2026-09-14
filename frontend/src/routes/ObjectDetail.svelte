@@ -110,6 +110,11 @@
   /// reading and assigning its state, the offline-cache fallback, and the supersede check.
   async function loadActivities(mode: LoadMode = 'reset') {
     const token = ++loadSeq;
+    // The offline cache holds one page per object: the unfiltered one. A filtered page written
+    // there would later show as the whole timeline offline, and reading it back under a filter
+    // would show unfiltered entries as if they matched -- so a filtered load neither writes nor
+    // reads it.
+    const filtered = category !== '' || tagFilter !== null;
     // `untrack`: this runs synchronously inside the `oid`/`category` $effect below, so reading
     // `activities` here made that effect depend on the very list it goes on to assign. The
     // effect then re-ran on its own result and started over from page one -- which is why
@@ -133,7 +138,7 @@
       fetched = true;
     } catch (e) {
       if (append) throw e;
-      const cached = isRejection(e) ? undefined : getCachedActivities(oid);
+      const cached = isRejection(e) || filtered ? undefined : getCachedActivities(oid);
       items = cached?.items ?? [];
       total = cached?.total ?? 0;
     }
@@ -143,7 +148,7 @@
     // resolved first. Only on success: the catch above produces an EMPTY list for a rejection,
     // and caching that would replace a good page with nothing, so the next offline load would
     // show an empty timeline instead of the last one the user actually saw.
-    if (!append && fetched) setCachedActivities(oid, { items, total });
+    if (!append && fetched && !filtered) setCachedActivities(oid, { items, total });
     activities = mergeWindow(append, activities, pending, items);
     activityTotal = total + pending.length;
   }
