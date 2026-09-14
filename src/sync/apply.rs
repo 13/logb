@@ -127,6 +127,13 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
             if text.trim().is_empty() {
                 return Err(format!("{field} is required"));
             }
+            // The objects CHECK used to refuse any other type here (0014 on SQLite, 0005 on
+            // PostgreSQL dropped it for custom types). Until sync carries custom types, a pushed
+            // `type` is held to the built-in keys that CHECK listed, so this door opens no wider
+            // than it was.
+            if field == "type" && !crate::object_type::is_valid(text) {
+                return Err(crate::api::objects::TYPE_REJECTION.into());
+            }
         }
         (Entity::Object, "purchase_date")
         | (Entity::Activity, "date")

@@ -1,16 +1,43 @@
 //! What kind of thing an object is.
 //!
-//! The nine types are a closed set with a `CHECK` behind them, because behaviour keys off this
-//! value: the icon a row shows, and which activity categories its form offers. A free-text
-//! field cannot carry that -- `Fahrrad`, `bike` and a typo were three different values.
+//! The nine built-in types are a closed set, because behaviour keys off this value: the icon a
+//! row shows, and which activity categories its form offers. A free-text field cannot carry
+//! that -- `Fahrrad`, `bike` and a typo were three different values. Beyond them, a user may
+//! define their own (`domain::custom_type`), referred to as `custom:<uuid>`; the schema's CHECK
+//! could not list those, so it is gone and `is_valid_for_user` is the one rule.
+
+use crate::domain::custom_type::custom_uuid;
+use crate::error::AppError;
 
 /// The nine types, in the order the picker offers them.
 pub const OBJECT_TYPES: [&str; 9] = [
     "car", "e_bike", "bike", "motorcycle", "home", "appliance", "tool", "body", "other",
 ];
 
+/// Whether `t` is a built-in type. Needs no database, and says nothing about custom types.
 pub fn is_valid(t: &str) -> bool {
     OBJECT_TYPES.contains(&t)
+}
+
+/// Whether `user_id` may give an object the type `type_key`: a built-in key, or `custom:` plus
+/// the uuid of one of that user's own non-deleted types. Another user's type is refused exactly
+/// like one that does not exist, so the answer does not reveal which uuids are taken.
+pub async fn is_valid_for_user<'e, E: sqlx::Executor<'e, Database = sqlx::Any>>(
+    db: E,
+    user_id: i64,
+    type_key: &str,
+) -> Result<bool, AppError> {
+    if is_valid(type_key) {
+        return Ok(true);
+    }
+    let Some(uuid) = custom_uuid(type_key) else { return Ok(false) };
+    let found: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM object_types WHERE client_uuid = $1 AND user_id = $2 AND deleted_at IS NULL")
+        .bind(uuid.to_string())
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(found.is_some())
 }
 
 #[derive(Debug, PartialEq, Eq)]

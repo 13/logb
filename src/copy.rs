@@ -16,9 +16,9 @@ use sqlx::{Any, AnyPool, AssertSqlSafe, Column, Row, ValueRef};
 /// silently: a table missing from it is copied nowhere *and* invisible to the verification
 /// below, which reads the same list. `tests/schema_parity.rs` asserts it names exactly the
 /// tables the schema has.
-pub const TABLES: [&str; 12] = [
-    "users", "push_subscriptions", "settings", "api_tokens", "sessions", "objects", "activities", "files",
-    "attachments", "reminders", "changes", "field_clock",
+pub const TABLES: [&str; 13] = [
+    "users", "object_types", "push_subscriptions", "settings", "api_tokens", "sessions", "objects", "activities",
+    "files", "attachments", "reminders", "changes", "field_clock",
 ];
 
 /// Shown when something else still holds the source. Copying out from under a running server
@@ -615,6 +615,7 @@ mod tests {
         }
         for (table, target) in [
             ("sessions", "users"),
+            ("object_types", "users"),
             ("push_subscriptions", "users"),
             ("api_tokens", "users"),
             ("objects", "users"),

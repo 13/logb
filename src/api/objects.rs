@@ -125,6 +125,20 @@ pub struct ObjectInput {
 pub const PARENT_REJECTION: &str =
     "parent_id must be your own, undeleted, not itself, and not a descendant";
 
+/// The 400 for a `type` that is neither built in nor one of the caller's own types. The same
+/// sentence as before custom types existed, so no client has to learn a new one.
+pub const TYPE_REJECTION: &str = "type is not one of the known object types";
+
+/// Refuses a type the caller may not use. On the write transaction's connection, so a type
+/// deleted concurrently cannot slip in between this check and the write (see `types::delete`).
+async fn check_type(conn: &mut sqlx::AnyConnection, user_id: i64, type_key: &str) -> Result<(), AppError> {
+    if crate::object_type::is_valid_for_user(&mut *conn, user_id, type_key).await? {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(TYPE_REJECTION.into()))
+    }
+}
+
 /// Deserializes a present field -- including an explicit `null` -- as `Some(..)`, leaving
 /// `None` to mean "the client did not send this field at all".
 fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
@@ -145,10 +159,9 @@ impl ObjectInput {
     pub(crate) fn validate(&mut self) -> Result<(), AppError> {
         self.name = self.name.trim().to_string();
         if self.name.is_empty() { return Err(AppError::BadRequest("name is required".into())); }
+        // Only normalised here: whether the type exists depends on the caller's own types, which
+        // takes the database, so `create` and `update` check it inside their write transaction.
         self.type_ = self.type_.trim().to_lowercase();
-        if !crate::object_type::is_valid(&self.type_) {
-            return Err(AppError::BadRequest("type is not one of the known object types".into()));
-        }
         if let Some(u) = &self.counter_unit {
             if !matches!(u.as_str(), "km" | "mi" | "h") {
                 return Err(AppError::BadRequest("counter_unit must be km, mi, h or null".into()));
@@ -461,6 +474,7 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let object_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
+    check_type(&mut tx, user.id, &body.type_).await?;
     // Checked inside the transaction, on its connection -- never from the pool -- for the two
     // reasons spelled out on `update`: a pool connection taken while `begin_write` holds the
     // write lock deadlocks on SQLite, and a check taken before the lock can go stale before
@@ -540,6 +554,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // On `tx`'s connection, because a second pool connection acquired while `begin_write` holds
     // SQLite's write lock does not fail, it hangs.
     let existing = load_owned_object_on(&mut tx, user.id, id).await?;
+    check_type(&mut tx, user.id, &body.type_).await?;
     let archived_at = match body.archived {
         Some(true) => existing.archived_at.clone().or_else(|| Some(db::now())),
         Some(false) => None,

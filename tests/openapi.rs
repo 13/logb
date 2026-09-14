@@ -145,15 +145,22 @@ fn the_documented_activity_categories_are_the_real_ones() {
 /// `Category` was guarded from the day it was found stale; its sibling `ObjectType`, added a
 /// release later, was not -- removing `body` from it failed nothing. A type missing from the
 /// spec is a client that never offers it, and one invented in the spec is a client whose POST
-/// is rejected by a CHECK.
+/// is rejected with 400.
+///
+/// The built-in keys are `examples`, not an `enum`, since a user's own `custom:<uuid>` types are
+/// valid too -- but they must still be exactly the built-in list, in order.
 #[test]
 fn the_documented_object_types_are_the_real_ones() {
     let doc: Value = serde_json::from_str(
         &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
     )
     .expect("docs/openapi.json should be valid JSON");
-    let documented = find_enum_containing(&doc, "e_bike")
-        .expect("the document should describe object types");
+    let documented: Vec<String> = doc["components"]["schemas"]["ObjectType"]["examples"]
+        .as_array()
+        .expect("the document should describe object types")
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
     let real: Vec<String> = logb::object_type::OBJECT_TYPES.iter().map(|t| t.to_string()).collect();
     assert_eq!(documented, real, "docs/openapi.json disagrees with object_type::OBJECT_TYPES");
 }

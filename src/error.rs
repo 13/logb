@@ -29,6 +29,10 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Internal(String),
+    /// A delete refused because `count` rows still use the thing. The count travels in the body
+    /// so a client can say "used by 2 objects" without a second request.
+    #[error("still used by {0} object(s)")]
+    InUse(i64),
 }
 
 impl AppError {
@@ -39,6 +43,7 @@ impl AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            AppError::InUse(_) => (StatusCode::CONFLICT, "in_use"),
             AppError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             AppError::Gone => (StatusCode::GONE, "gone"),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
@@ -60,7 +65,11 @@ impl IntoResponse for AppError {
         } else {
             self.to_string()
         };
-        (status, Json(json!({ "error": code, "message": message }))).into_response()
+        let body = match self {
+            AppError::InUse(count) => json!({ "error": code, "message": message, "count": count }),
+            _ => json!({ "error": code, "message": message }),
+        };
+        (status, Json(body)).into_response()
     }
 }
 
