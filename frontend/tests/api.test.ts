@@ -22,6 +22,30 @@ function mockFetch(status: number, body: unknown, dateHeader: string | null = nu
   globalThis.fetch = vi.fn(async () => res as unknown as Response);
 }
 
+/** Like `mockFetch`, but the response only resolves once the returned function is called --
+ *  for a test that needs to act (a simulated route change) while a request is still in flight. */
+function deferredMockFetch(status: number, body: unknown, dateHeader: string | null = null): () => void {
+  const res = {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get: (k: string) => {
+        const key = k.toLowerCase();
+        if (key === 'content-type') return body !== undefined ? 'application/json' : null;
+        if (key === 'date') return dateHeader;
+        return null;
+      },
+    },
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
+  // A property, not a bare `let`: TypeScript's control-flow narrowing loses track of a plain
+  // variable reassigned only from inside a nested closure like the Promise executor below.
+  const gate: { resolve: (() => void) | null } = { resolve: null };
+  globalThis.fetch = vi.fn(() => new Promise<Response>((r) => { gate.resolve = () => r(res); }));
+  return () => gate.resolve?.();
+}
+
 describe('api', () => {
   beforeEach(() => setUnauthorizedHandler(() => {}));
 
@@ -204,5 +228,21 @@ describe('servingSaved', () => {
     mockFetch(200, { items: [] }, new Date(Date.now() - skewMs - 65_000).toUTCString());
     await api('GET', '/objects');
     expect(get(servingSaved)).toBe(true);
+  });
+
+  // The route-generation counter this guards: a request sent for the screen just left, whose
+  // stale answer only arrives after the user has already navigated elsewhere, must not resurrect
+  // a note for a screen nobody is looking at any more.
+  it('a stale response captured before a route change adds nothing to the set', async () => {
+    const sentAt = Date.now();
+    const resolve = deferredMockFetch(200, { items: [] }, new Date(sentAt - 61_000).toUTCString());
+    const pending = api('GET', '/objects'); // captures the CURRENT route generation and sentAt
+
+    clearServingSaved(); // simulates a route change -- also bumps the route generation
+
+    resolve(); // the in-flight request, sent before the route change, finally answers -- stale
+    await pending;
+
+    expect(get(servingSaved)).toBe(false); // ignored: its captured generation is stale
   });
 });

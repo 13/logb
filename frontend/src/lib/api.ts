@@ -24,9 +24,23 @@ const staleKeys = new Set<string>();
 const servingSavedState = writable(false);
 export const servingSaved: Readable<boolean> = readonly(servingSavedState);
 
-/** Drops all tracked staleness and hides the note. Idempotent, so calling it when nothing is
- *  stale (the common case) does not needlessly re-notify `servingSaved`'s subscribers. */
+/**
+ * Bumped every time `clearServingSaved` runs (a route change, or a session ending). A request
+ * captures the CURRENT generation next to `sentAt` when it is sent; `handle` below only touches
+ * `staleKeys` for a response whose captured generation still matches -- otherwise the request
+ * was sent for a screen the user has since navigated away from (or a session that has since
+ * ended), and a stale answer arriving late for it must not re-add a key `clearServingSaved` has
+ * already dropped, resurrecting a note for a screen nobody is looking at any more.
+ */
+let routeGeneration = 0;
+
+/** Drops all tracked staleness, hides the note, and starts a new generation (see
+ *  `routeGeneration`) so a response already in flight for the screen just left cannot re-add
+ *  its key once it finally arrives. The generation bump is unconditional -- a route change with
+ *  nothing currently stale still needs to invalidate anything already in flight -- but the set
+ *  clear and store update are skipped when there is nothing to do. */
 export function clearServingSaved(): void {
+  routeGeneration++;
   if (staleKeys.size === 0) return;
   staleKeys.clear();
   servingSavedState.set(false);
@@ -118,25 +132,33 @@ function isOurs(op: QueuedOp): boolean {
 }
 
 /**
- * `sentAt` is optional only so this stays callable without it (there is no response to have come
- * from a cache before one exists); every real call site below passes it. Recorded here, the one
- * place every fetch wrapper's response passes through, rather than in each of them, so every path
- * is tracked the same way regardless of which wrapper fetched it.
+ * `sentAt`/`gen` are optional only so this stays callable without them (there is no response to
+ * have come from a cache before one exists); every real call site below passes both, captured
+ * together at the moment the request went out. Recorded here, the one place every fetch
+ * wrapper's response passes through, rather than in each of them, so every path is tracked the
+ * same way regardless of which wrapper fetched it.
  */
-async function handle<T>(res: Response, path: string, sentAt?: number): Promise<T> {
+async function handle<T>(res: Response, path: string, sentAt?: number, gen?: number): Promise<T> {
   if (sentAt !== undefined && res.ok) {
     const dateHeader = res.headers.get('date');
     // Calibrate the clock-skew estimate from a response that is never a cache hit (see
     // `clockSkewMs`) BEFORE judging this one -- harmless for an auth/settings response itself
     // (never cacheable, so never added to `staleKeys` regardless), but keeps every path's
-    // judgement working off the freshest skew reading available.
+    // judgement working off the freshest skew reading available. Not gated on `gen`: clock skew
+    // is a property of the server, not of any one screen, so a late answer still calibrates it.
     if ((path.startsWith('/auth/') || path.startsWith('/settings')) && dateHeader !== null) {
       const t = Date.parse(dateHeader);
       if (!Number.isNaN(t)) clockSkewMs = sentAt - t;
     }
-    if (servedFromCache(dateHeader, sentAt, clockSkewMs)) staleKeys.add(path);
-    else staleKeys.delete(path);
-    servingSavedState.set(staleKeys.size > 0);
+    // Skip touching `staleKeys` for a response whose captured generation is stale (see
+    // `routeGeneration`) -- a route change (or session end) has already happened since this
+    // request was sent, so neither adding nor removing its path means anything for what is on
+    // screen now.
+    if (gen === undefined || gen === routeGeneration) {
+      if (servedFromCache(dateHeader, sentAt, clockSkewMs)) staleKeys.add(path);
+      else staleKeys.delete(path);
+      servingSavedState.set(staleKeys.size > 0);
+    }
   }
   if (res.status === 204) return undefined as T;
   const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
@@ -165,8 +187,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     init.body = JSON.stringify(body);
   }
   const sentAt = Date.now();
+  const gen = routeGeneration;
   const res = await fetch(`/api${path}`, init);
-  return handle<T>(res, path, sentAt);
+  return handle<T>(res, path, sentAt, gen);
 }
 
 /**
@@ -176,8 +199,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
  */
 export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; total: number }> {
   const sentAt = Date.now();
+  const gen = routeGeneration;
   const res = await fetch(`/api${path}`, { method: 'GET', credentials: 'same-origin' });
-  const items = await handle<T[]>(res, path, sentAt);
+  const items = await handle<T[]>(res, path, sentAt, gen);
   const header = res.headers.get('x-total-count');
   const total = header === null ? items.length : Number(header);
   return { items, total: Number.isFinite(total) ? total : items.length };
@@ -185,14 +209,16 @@ export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; 
 
 export async function upload<T = unknown>(path: string, form: FormData): Promise<T> {
   const sentAt = Date.now();
+  const gen = routeGeneration;
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', body: form });
-  return handle<T>(res, path, sentAt);
+  return handle<T>(res, path, sentAt, gen);
 }
 
 export async function uploadRaw<T = unknown>(path: string, blob: Blob, contentType: string): Promise<T> {
   const sentAt = Date.now();
+  const gen = routeGeneration;
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': contentType }, body: blob });
-  return handle<T>(res, path, sentAt);
+  return handle<T>(res, path, sentAt, gen);
 }
 
 export function fileUrl(fileId: number, thumb = false): string {

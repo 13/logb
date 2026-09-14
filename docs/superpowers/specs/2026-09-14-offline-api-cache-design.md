@@ -135,10 +135,11 @@ takes the current estimate as its third argument and subtracts it before compari
 never reaches the server (they simply propagate the fetch error). Their callers -- `SignedIn.svelte`
 and `settings/Account.svelte`, both the "Sign out" and "Sign out everywhere" buttons -- show
 `nav.signout-offline` ("Signing out needs a connection." / "Zum Abmelden ist eine Verbindung
-nötig.") for that case, and the server's own message for an `ApiError`. `signOutErrorMessage(e)`
-(`../stores/session.ts`) tells the two apart by `instanceof ApiError`, returning the i18n *key*
-for a connectivity failure and the plain message otherwise -- `$t()` on a key it does not
-recognise renders it unchanged, so both callers use `$t(signOutErrorMessage(e))` uniformly.
+nötig.") for that case, and the server's own message for an `ApiError`. `signOutErrorMessage(e,
+$t)` (`../stores/session.ts`) tells the two apart by `instanceof ApiError` and takes the translate
+function so it always returns the finished, displayable string -- the server's message unchanged
+for an `ApiError`, `$t('nav.signout-offline')` otherwise -- so both callers just do
+`error = signOutErrorMessage(e, $t)`.
 
 ### A3. Stuck in offline mode
 

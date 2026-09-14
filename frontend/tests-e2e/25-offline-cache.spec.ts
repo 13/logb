@@ -174,7 +174,7 @@ test('signing out with no connection says so, and leaves the user signed in', as
  */
 test('shows saved data while online when the network is slower than the cache timeout', async ({ page, context }) => {
   await signInFresh(page, '25-slow-network');
-  await object(page, 'Slow Network Bike');
+  const id = await object(page, 'Slow Network Bike');
   await page.goto('/');
   await underServiceWorker(page);
   await expect(page.getByText('Slow Network Bike')).toBeVisible();
@@ -182,28 +182,28 @@ test('shows saved data while online when the network is slower than the cache ti
   let calls = 0;
   await context.route('**/api/objects?all=true&archived=false', async (route) => {
     calls++;
+    if (calls === 1) {
+      // Seeds `logb-api` with a response that is already stale on arrival, so the FALLBACK
+      // below (not this direct answer) is what the page ends up seeing. A failure here is a
+      // real test bug (the seeding never happened), so it is left to fail the test loudly.
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), date: new Date(Date.now() - 70_000).toUTCString(), 'cache-control': 'no-store' },
+        body: await response.body(),
+      });
+      return;
+    }
+    // NetworkFirst's own timeout is 4s; outlasting it is what makes it fall back to the cache
+    // entry seeded above instead of waiting for this (otherwise perfectly fine) response.
+    await new Promise((r) => setTimeout(r, 4_500));
     try {
-      if (calls === 1) {
-        // Seeds `logb-api` with a response that is already stale on arrival, so the FALLBACK
-        // below (not this direct answer) is what the page ends up seeing.
-        const response = await route.fetch();
-        await route.fulfill({
-          response,
-          headers: { ...response.headers(), date: new Date(Date.now() - 70_000).toUTCString(), 'cache-control': 'no-store' },
-          body: await response.body(),
-        });
-        return;
-      }
-      // NetworkFirst's own timeout is 4s; outlasting it is what makes it fall back to the cache
-      // entry seeded above instead of waiting for this (otherwise perfectly fine) response.
-      await new Promise((r) => setTimeout(r, 4_500));
       await route.continue();
     } catch {
       // A reload can cancel a still-in-flight request out from under this handler (or, on a
-      // slower viewport, a second genuine request to the same path can race this one) -- either
-      // way Playwright then refuses a further continue/fulfill on that same route. Harmless for
-      // this test: its assertions are about what the PAGE ends up showing, not about every
-      // individual route dispatch completing cleanly.
+      // slower viewport, a second genuine request to the same path can race this one), and
+      // Playwright then refuses a further continue on that same route -- harmless here, since
+      // this branch's own outcome is never what the test asserts on.
     }
   });
 
@@ -211,10 +211,17 @@ test('shows saved data while online when the network is slower than the cache ti
   await page.reload();
   await expect(page.getByText('Slow Network Bike')).toBeVisible();
 
+  // Renamed AFTER the cache is seeded: the second reload below must still show the OLD name,
+  // proving it really answers from what was cached a moment ago rather than merely looking like
+  // it (a fresh response would show the new name).
+  const renamed = await page.request.patch(`/api/objects/${id}`, { data: { name: 'Renamed Bike', type: 'bike' } });
+  expect(renamed.ok()).toBe(true);
+
   // This request is deliberately slow: `NetworkFirst` falls back to the cache entry instead.
   await page.reload();
   await expect(page.getByRole('status').filter({ hasText: /Offline/ })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText('Slow Network Bike')).toBeVisible();
+  await expect(page.getByText('Renamed Bike')).toHaveCount(0);
 
-  await context.unroute('**/api/objects?all=true&archived=false');
+  await context.unrouteAll({ behavior: 'ignoreErrors' });
 });

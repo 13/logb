@@ -121,13 +121,15 @@ globalThis.addEventListener?.('visibilitychange', () => {
  *
  * `startOfflineRetry` is idempotent -- `openOffline` may run again on every failed retry attempt
  * while nothing about the situation has changed, and must not stack a second interval each time.
- * It also refuses to start once `sessionKnown` is already true: `adoptUser` (awaiting a cache
- * clear) and `openOffline` (awaiting the same) both have a real `await` between their last
- * `sessionKnown` check and their next synchronous step, so a session confirmed by one racing
- * `loadSession` attempt while another is unwinding must not leave a timer running for a question
- * that has already been answered. `stopOfflineRetry` is called from every place `sessionKnown`
- * becomes true (`endSession`, `adoptUser`, and the setup-required branch of `doLoadSession`) for
- * the ordinary case; this is the belt-and-suspenders for the gap between those.
+ * It also refuses to start once `sessionKnown` is already true: `openOffline` has a real `await`
+ * (the cache clear) between its last `sessionKnown` check and its next synchronous step, so a
+ * session confirmed by a racing `adoptUser` call while `openOffline` is unwinding must not leave
+ * a timer running for a question that has already been answered. `stopOfflineRetry` is called
+ * from every place `sessionKnown` becomes true (`endSession`, `adoptUser` -- which sets it BEFORE
+ * calling `stopOfflineRetry`, precisely so `login()`, which has no `inFlight` guard of its own,
+ * cannot have a stray tick start a genuinely concurrent `doLoadSession()` while it awaits
+ * `adoptUser` -- and the setup-required branch of `doLoadSession`) for the ordinary case; this is
+ * the belt-and-suspenders for `openOffline`'s own remaining gap.
  */
 let offlineRetryTimer: ReturnType<typeof setInterval> | null = null;
 function startOfflineRetry(): void {
@@ -210,6 +212,14 @@ async function adoptUser(me: User): Promise<void> {
   const previous = rememberedProfile();
   const carryCurrency = previous?.id === me.id ? previous.currency : undefined;
   rememberProfile(carryCurrency !== undefined ? { ...me, currency: carryCurrency } : me);
+  // Set HERE, not left to the caller: `login()` does not go through `loadSession`'s `inFlight`
+  // guard at all, so while this was only set after `await adoptUser(me)` returned, a 30s offline
+  // retry tick landing during `login`'s own call to this function (`sessionKnown` still false the
+  // whole time) started a genuinely concurrent, unrelated `doLoadSession()` -- not merely a
+  // wasted no-op call the way it is everywhere `loadSession`'s guard applies. The session IS
+  // confirmed the moment the server handed back `me`; this says so before either of the two
+  // statements right below can matter to anything reading `sessionKnown`.
+  sessionKnown = true;
   offlineState.set(false);
   stopOfflineRetry();
   user.set(me);
@@ -293,8 +303,7 @@ async function doLoadSession(): Promise<boolean> {
     await openOffline();
     return false;
   }
-  await adoptUser(me);
-  sessionKnown = true;
+  await adoptUser(me); // sets sessionKnown = true itself, before it returns
   // The flush `main.ts` fires at module load happens before this, so it knows no user and
   // deliberately sends nothing (see `doFlushOutbox`). This is the boot flush that counts --
   // and after offline mode, the one that finally sends what was queued meanwhile.
@@ -324,8 +333,7 @@ async function doLoadSession(): Promise<boolean> {
 
 export async function login(username: string, password: string): Promise<void> {
   const me = await api<User>('POST', '/auth/login', { username, password });
-  await adoptUser(me);
-  sessionKnown = true;
+  await adoptUser(me); // sets sessionKnown = true itself, before it returns
   const s = await api<Settings>('GET', '/settings');
   currency.set(s.currency);
   rememberProfile({ ...me, currency: s.currency }); // see the matching comment in doLoadSession
