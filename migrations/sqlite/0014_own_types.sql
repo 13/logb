@@ -1,11 +1,15 @@
 -- no-transaction
 --
--- Each user's own object types. Two changes:
+-- Each user's own object types. Three changes:
 --
 -- 1. `object_types` holds them. An object refers to one as `custom:<client_uuid>` -- the uuid,
 --    not the id, so a type and the objects using it can be created offline in one go.
 -- 2. `objects.type` loses its CHECK: a custom key cannot be listed in one, so validity moves to
 --    `object_type::is_valid_for_user`. The column stays NOT NULL.
+-- 3. `changes.entity` also admits `object_type`, so type writes reach the sync log. Nothing
+--    references `changes`, so it is rebuilt the same way; its AUTOINCREMENT counter is carried
+--    over, because a device's cursor must never see a `seq` handed out twice, and an emptied log
+--    would otherwise restart from 1.
 --
 -- SQLite cannot drop a CHECK in place, so `objects` is rebuilt following 0009 exactly, for the
 -- reasons it spells out in full: foreign keys off (a DROP with enforcement on cascades into every
@@ -66,6 +70,46 @@ ALTER TABLE objects_new RENAME TO objects;
 CREATE INDEX idx_objects_user ON objects(user_id);
 CREATE UNIQUE INDEX idx_objects_uuid ON objects(client_uuid);
 CREATE INDEX idx_objects_parent ON objects(parent_id);
+
+CREATE TABLE changes_new (
+    seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity       TEXT NOT NULL CHECK (entity IN ('object','activity','reminder','attachment','file','object_type')),
+    entity_uuid  TEXT NOT NULL,
+    op           TEXT NOT NULL CHECK (op IN ('create','set','delete')),
+    field        TEXT,
+    value        TEXT,
+    edited_at    TEXT NOT NULL,
+    applied_at   TEXT NOT NULL,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id    TEXT NOT NULL,
+    client_op_id TEXT NOT NULL
+);
+INSERT INTO changes_new (seq, entity, entity_uuid, op, field, value, edited_at, applied_at, user_id,
+                         device_id, client_op_id)
+SELECT seq, entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, device_id,
+       client_op_id
+FROM changes;
+DELETE FROM sqlite_sequence WHERE name = 'changes_new';
+INSERT INTO sqlite_sequence (name, seq) SELECT 'changes_new', seq FROM sqlite_sequence WHERE name = 'changes';
+DROP TABLE changes;
+ALTER TABLE changes_new RENAME TO changes;
+CREATE INDEX idx_changes_user_seq ON changes(user_id, seq);
+CREATE UNIQUE INDEX idx_changes_user_op ON changes(user_id, client_op_id);
+
+-- With foreign keys off, nothing checked that every child still points at a real object. A bare
+-- `PRAGMA foreign_key_check` only returns rows, which the migrator ignores, so the count goes
+-- into a CHECK instead: any violation fails this statement and the migration with it, before the
+-- COMMIT, so the rebuild never lands. Scoped to the tables the rebuild touches, so an unrelated
+-- old inconsistency elsewhere does not block an upgrade.
+CREATE TEMP TABLE fk_guard_0014 (violations INTEGER NOT NULL CHECK (violations = 0));
+INSERT INTO fk_guard_0014 (violations)
+SELECT (SELECT count(*) FROM pragma_foreign_key_check('objects'))
+     + (SELECT count(*) FROM pragma_foreign_key_check('activities'))
+     + (SELECT count(*) FROM pragma_foreign_key_check('reminders'))
+     + (SELECT count(*) FROM pragma_foreign_key_check('attachments'))
+     + (SELECT count(*) FROM pragma_foreign_key_check('object_types'))
+     + (SELECT count(*) FROM pragma_foreign_key_check('changes'));
+DROP TABLE fk_guard_0014;
 
 COMMIT;
 

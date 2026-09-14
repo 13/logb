@@ -621,3 +621,93 @@ async fn imported_tags_are_normalised_and_limits_answer_400() {
     let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
     assert_eq!(objs.len(), 0, "rejected import must not persist anything");
 }
+
+/// Reads `data.json` out of an export archive.
+fn data_of(zip: &[u8]) -> serde_json::Value {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(zip.to_vec())).unwrap();
+    let mut data_json = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("data.json").unwrap(), &mut data_json).unwrap();
+    serde_json::from_str(&data_json).unwrap()
+}
+
+async fn import_as(app: &common::TestApp, client: &reqwest::Client, zip: Vec<u8>) {
+    let res = client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+}
+
+#[tokio::test]
+async fn own_types_survive_export_and_import() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair", "fuel"], "counter_unit": "km" })).await;
+    app.post_json("/objects", &json!({ "name": "Kick", "type": scooter["key"], "counter_unit": "km" })).await;
+    let zip = export_zip(&app).await;
+    let data = data_of(&zip);
+    assert_eq!(data["types"], json!([{
+        "client_uuid": scooter["client_uuid"], "name": "E-scooter", "icon": "e-bike",
+        "categories": ["repair", "fuel", "other"], "counter_unit": "km"
+    }]), "{data}");
+    assert_eq!(data["objects"][0]["type"], scooter["key"]);
+
+    // A fresh instance: the type arrives as it was, and the object uses it.
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    import_as(&fresh, &fresh.client, zip.clone()).await;
+    let types = fresh.get_json("/types").await;
+    assert_eq!(types.as_array().unwrap().len(), 1, "{types}");
+    for field in ["name", "icon", "categories", "counter_unit", "key"] {
+        assert_eq!(types[0][field], scooter[field], "{field}");
+    }
+    assert_eq!(fresh.get_json("/objects").await[0]["type"], types[0]["key"]);
+
+    // Another account on the same instance: the uuid is taken, so the type gets a fresh one and
+    // her object follows it.
+    let anna = app.create_user_client("anna", "password123").await;
+    import_as(&app, &anna, zip.clone()).await;
+    let hers: serde_json::Value = anna.get(app.url("/types")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(hers.as_array().unwrap().len(), 1, "{hers}");
+    assert_eq!(hers[0]["name"], "E-scooter");
+    assert_ne!(hers[0]["client_uuid"], scooter["client_uuid"]);
+    let her_objects: serde_json::Value = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(her_objects[0]["type"], hers[0]["key"]);
+    assert_eq!(app.get_json("/types").await[0]["client_uuid"], scooter["client_uuid"], "ben's type is untouched");
+
+    // Ben restoring into his own account: the name already exists, so the import uses his type
+    // rather than making a second one with the same name.
+    import_as(&app, &app.client, zip).await;
+    assert_eq!(app.get_json("/types").await.as_array().unwrap().len(), 1);
+    let objects = app.get_json("/objects").await;
+    assert_eq!(objects.as_array().unwrap().len(), 2);
+    assert!(objects.as_array().unwrap().iter().all(|o| o["type"] == scooter["key"]), "{objects}");
+}
+
+#[tokio::test]
+async fn an_archive_without_types_imports() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let zip = archive_with_object_json(json!({ "type": "bike", "category": null }));
+    assert!(data_of(&zip).get("types").is_none());
+    import_as(&app, &app.client, zip).await;
+    assert_eq!(app.get_json("/objects").await[0]["type"], "bike");
+    assert_eq!(app.get_json("/types").await, json!([]));
+}
+
+#[tokio::test]
+async fn an_unknown_custom_key_imports_as_other_with_the_key_noted() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let key = format!("custom:{}", uuid::Uuid::new_v4());
+    let zip = archive_with_object_json(json!({ "type": key, "category": null, "description": "blue" }));
+    import_as(&app, &app.client, zip).await;
+    let object = &app.get_json("/objects").await[0];
+    assert_eq!(object["type"], "other");
+    assert_eq!(object["description"], format!("blue\n{key}"));
+
+    // A type in the archive that breaks the rules refuses the whole import.
+    let mut data = export_shell(base_object());
+    data["types"] = json!([{ "client_uuid": uuid::Uuid::new_v4().to_string(), "name": "Boat", "icon": "rocket", "categories": ["repair"], "counter_unit": null }]);
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip_data_json(&data)).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    assert!(res.text().await.unwrap().contains("icon"));
+    assert_eq!(app.get_json("/types").await, json!([]));
+}

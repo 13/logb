@@ -9,11 +9,13 @@ use crate::domain::custom_type::{self, TypeInput, CUSTOM_PREFIX};
 use crate::domain::tags::fold;
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::{record, Entity};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -22,7 +24,7 @@ pub fn router() -> Router<App> {
 }
 
 /// The one sentence a name collision answers with, on create and on rename alike.
-const NAME_TAKEN: &str = "you already have a type with this name";
+pub(crate) const NAME_TAKEN: &str = "you already have a type with this name";
 
 #[derive(sqlx::FromRow)]
 struct TypeRow {
@@ -93,8 +95,8 @@ impl TypeBody {
 /// strips accents, and a user has a handful of types, not thousands.
 ///
 /// On the write transaction's own connection, so two creates racing with one name cannot both
-/// pass it.
-async fn name_taken(conn: &mut sqlx::AnyConnection, user_id: i64, name: &str, except: Option<i64>) -> Result<bool, AppError> {
+/// pass it. Sync apply and import ask it too, so every door holds the same rule.
+pub(crate) async fn name_taken(conn: &mut sqlx::AnyConnection, user_id: i64, name: &str, except: Option<i64>) -> Result<bool, AppError> {
     let rows: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, name FROM object_types WHERE user_id = $1 AND deleted_at IS NULL")
             .bind(user_id)
@@ -170,6 +172,9 @@ async fn create(user: AuthUser, State(state): State<App>, Json(body): Json<TypeB
         }
         Err(e) => return Err(e.into()),
     };
+    // Logged like an object create, so a device pulls the new type and a stale offline edit
+    // stamped before this moment loses to it.
+    record::record_create(&mut tx, user.id, Entity::ObjectType, &uuid, &record::edited_at_now()).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(row.into())))
 }
@@ -177,25 +182,36 @@ async fn create(user: AuthUser, State(state): State<App>, Json(body): Json<TypeB
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(body): Json<TypeBody>) -> Result<Json<TypeOut>, AppError> {
     let (input, _) = body.normalized()?;
     let mut tx = db::begin_write(&state.db, state.backend).await?;
-    let owned: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM object_types WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
-            .bind(id).bind(user.id)
-            .fetch_optional(&mut *tx).await?;
-    if owned.is_none() {
+    let existing: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT client_uuid, name, icon, categories, counter_unit FROM object_types \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
+        .bind(id).bind(user.id)
+        .fetch_optional(&mut *tx).await?;
+    let Some((uuid, old_name, old_icon, old_categories, old_unit)) = existing else {
         return Err(AppError::NotFound);
-    }
+    };
     // Its own row excluded: renaming "E-scooter" to "E-Scooter" is not a collision.
     if name_taken(&mut tx, user.id, &input.name, Some(id)).await? {
         return Err(AppError::BadRequest(NAME_TAKEN.into()));
     }
+    let categories = serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into());
+    // PATCH replaces every field, but only the ones that differ are logged -- see
+    // `record::record_update`. `categories` is logged as the JSON text the column holds.
+    let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
+    if input.name != old_name { changed.push(("name", json!(input.name))); }
+    if input.icon != old_icon { changed.push(("icon", json!(input.icon))); }
+    if categories != old_categories { changed.push(("categories", json!(categories))); }
+    if input.counter_unit != old_unit { changed.push(("counter_unit", json!(input.counter_unit))); }
     let row = sqlx::query_as::<_, TypeRow>(
         "UPDATE object_types SET name = $1, icon = $2, categories = $3, counter_unit = $4, updated_at = $5 \
          WHERE id = $6 \
          RETURNING id, client_uuid, name, icon, categories, counter_unit, created_at, updated_at")
-        .bind(&input.name).bind(&input.icon)
-        .bind(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into()))
+        .bind(&input.name).bind(&input.icon).bind(&categories)
         .bind(&input.counter_unit).bind(db::now()).bind(id)
         .fetch_one(&mut *tx).await?;
+    if !changed.is_empty() {
+        record::record_update(&mut tx, user.id, Entity::ObjectType, &uuid, &changed, &record::edited_at_now()).await?;
+    }
     tx.commit().await?;
     Ok(Json(row.into()))
 }
@@ -221,6 +237,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     sqlx::query("UPDATE object_types SET deleted_at = $1, updated_at = $2 WHERE id = $3")
         .bind(&now).bind(&now).bind(id)
         .execute(&mut *tx).await?;
+    record::record_delete(&mut tx, user.id, Entity::ObjectType, &uuid, &record::edited_at_now()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

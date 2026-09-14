@@ -33,6 +33,7 @@ pub async fn pull(
            WHEN 'reminder'   THEN (SELECT id FROM reminders   WHERE client_uuid = c.entity_uuid) \
            WHEN 'attachment' THEN (SELECT id FROM attachments WHERE client_uuid = c.entity_uuid) \
            WHEN 'file'       THEN (SELECT id FROM files       WHERE client_uuid = c.entity_uuid) \
+           WHEN 'object_type' THEN (SELECT id FROM object_types WHERE client_uuid = c.entity_uuid) \
          END AS entity_id \
          FROM changes c WHERE c.user_id = $1 AND c.seq > $2 ORDER BY c.seq LIMIT $3")
         .bind(user_id)
@@ -104,6 +105,9 @@ pub async fn snapshot(
         "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
          WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
     let files = rows(db, "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
+    // Added with own types. A client must ignore snapshot keys it does not know, so an older
+    // client reads this snapshot as before.
+    let object_types = rows(db, "SELECT * FROM object_types WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
 
     Ok((seq, serde_json::json!({
         "objects": objects,
@@ -111,6 +115,7 @@ pub async fn snapshot(
         "reminders": reminders,
         "attachments": attachments,
         "files": files,
+        "object_types": object_types,
     })))
 }
 
@@ -241,6 +246,9 @@ pub async fn purge(
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM objects c WHERE c.parent_id = objects.id)"),
+        // Nothing references a type by foreign key (objects name it by uuid in `type`), and a
+        // type is only tombstoned while no live object uses it, so it needs no guard.
+        ("object_types", ""),
     ];
     // One transaction around the whole purge, and every guarded read or delete against it. Run
     // as separate autocommit statements they were separate answers to "has this parent any
@@ -331,7 +339,8 @@ pub async fn purge(
            AND NOT EXISTS (SELECT 1 FROM activities WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid)")
+           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid) \
+           AND NOT EXISTS (SELECT 1 FROM object_types WHERE client_uuid = field_clock.entity_uuid)")
         .execute(&mut *tx)
         .await?;
 

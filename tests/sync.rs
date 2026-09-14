@@ -2942,3 +2942,182 @@ async fn a_pushed_set_op_with_too_many_tags_is_rejected() {
     });
     assert!(!leaked, "a rejected tags value reached the feed: {body}");
 }
+
+/// A pushed `create` of an object type, as a device that made the type offline sends it.
+fn type_create_op(op_id: &str, uuid: &str, name: &str) -> serde_json::Value {
+    json!({
+        "client_op_id": op_id, "entity": "object_type", "entity_uuid": uuid, "op": "create",
+        "value": { "name": name, "icon": "e-bike", "categories": ["repair", "fuel"], "counter_unit": "km" },
+        "edited_at": after_now(60), "device_id": "phone"
+    })
+}
+
+/// Ops apply in order inside one transaction, so an object can take a type the same push
+/// created. The object row itself comes from REST, as every object does today (a sync `create`
+/// only announces an existing row), so the object's side is its `set type`.
+#[tokio::test]
+async fn a_type_and_an_object_using_it_in_one_push() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let kick = app.create_object(&app.client, "Kick", Some("km")).await;
+    let kick_uuid = object_uuid(&app, kick["id"].as_i64().unwrap()).await;
+    let type_uuid = uuid::Uuid::new_v4().to_string();
+    let key = format!("custom:{type_uuid}");
+
+    let res = app.push_raw(&push_body(json!([
+        type_create_op("op-type", &type_uuid, " E-scooter "),
+        { "client_op_id": "op-object", "entity": "object", "entity_uuid": kick_uuid, "op": "create",
+          "edited_at": after_now(61), "device_id": "phone" },
+        { "client_op_id": "op-use", "entity": "object", "entity_uuid": kick_uuid, "op": "set",
+          "field": "type", "value": key, "edited_at": after_now(62), "device_id": "phone" }
+    ]))).await;
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    for i in 0..3 {
+        assert_eq!(body["results"][i]["outcome"], "accepted", "{body}");
+    }
+    assert!(body["ids"][&type_uuid].is_i64(), "the push names the new type's id: {body}");
+
+    let snapshot = app.get_json("/sync/bootstrap").await;
+    let types = snapshot["object_types"].as_array().unwrap_or_else(|| panic!("no object_types in {snapshot}"));
+    assert_eq!(types.len(), 1, "{snapshot}");
+    assert_eq!(types[0]["client_uuid"], type_uuid);
+    assert_eq!(types[0]["name"], "E-scooter");
+    assert_eq!(types[0]["categories"], "[\"repair\",\"fuel\",\"other\"]");
+    assert_eq!(snapshot["objects"][0]["type"], key);
+    assert_eq!(app.get_json("/types").await[0]["key"], key);
+
+    // A replay of the create answers accepted without a second row, and a type key nobody made
+    // is still refused.
+    let res = app.push_raw(&push_body(json!([
+        type_create_op("op-type-again", &type_uuid, "E-scooter"),
+        { "client_op_id": "op-ghost", "entity": "object", "entity_uuid": kick_uuid, "op": "set",
+          "field": "type", "value": format!("custom:{}", uuid::Uuid::new_v4()), "edited_at": after_now(63), "device_id": "phone" }
+    ]))).await;
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    assert_eq!(body["results"][1]["outcome"], "rejected", "{body}");
+    assert_eq!(app.get_json("/types").await.as_array().unwrap().len(), 1);
+
+    // Another user can neither use the type nor create one under its uuid.
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.post(app.url("/sync/push")).json(&push_body(json!([
+        type_create_op("anna-type", &type_uuid, "Mine"),
+    ]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+}
+
+#[tokio::test]
+async fn a_set_op_renaming_a_type_is_validated() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair"] })).await;
+    app.post_json("/types", &json!({ "name": "Boat", "icon": "box", "categories": ["repair"] })).await;
+    let uuid = scooter["client_uuid"].as_str().unwrap().to_string();
+    let set = |op_id: &str, field: &str, value: serde_json::Value, secs: i64| json!({
+        "client_op_id": op_id, "entity": "object_type", "entity_uuid": uuid, "op": "set",
+        "field": field, "value": value, "edited_at": after_now(secs), "device_id": "phone"
+    });
+
+    let res = app.push_raw(&push_body(json!([
+        set("rename", "name", json!("  Kickscooter "), 60),
+        set("bad-icon", "icon", json!("rocket"), 61),
+        set("taken", "name", json!("boat"), 62),
+        set("cats", "categories", json!("[\"fuel\",\"fuel\"]"), 63),
+        set("bad-cats", "categories", json!("[\"sailing\"]"), 64),
+        set("no-name", "name", json!(null), 65),
+        set("unit", "counter_unit", json!(null), 66),
+    ]))).await;
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    let outcomes: Vec<&str> = body["results"].as_array().unwrap().iter().map(|r| r["outcome"].as_str().unwrap()).collect();
+    assert_eq!(outcomes, ["accepted", "rejected", "rejected", "accepted", "rejected", "rejected", "accepted"], "{body}");
+    assert!(body["results"][1]["reason"].as_str().unwrap().contains("icon"), "{body}");
+
+    let stored = app.get_json("/types").await;
+    let stored = stored.as_array().unwrap().iter().find(|t| t["client_uuid"] == uuid).unwrap().clone();
+    assert_eq!(stored["name"], "Kickscooter");
+    assert_eq!(stored["icon"], "e-bike");
+    assert_eq!(stored["categories"], json!(["fuel", "other"]));
+    assert_eq!(stored["counter_unit"], serde_json::Value::Null);
+
+    // The feed carries what was stored, not the device's spelling.
+    let feed = app.pull(0).await;
+    let logged: Vec<(String, String)> = feed["changes"].as_array().unwrap().iter()
+        .filter(|c| c["entity"] == "object_type" && c["op"] == "set")
+        .map(|c| (c["field"].as_str().unwrap().to_string(), c["value"].as_str().unwrap_or("null").to_string()))
+        .collect();
+    assert!(logged.contains(&("name".into(), json!("Kickscooter").to_string())), "{feed}");
+    assert!(logged.contains(&("categories".into(), json!("[\"fuel\",\"other\"]").to_string())), "{feed}");
+    assert!(!logged.iter().any(|(f, _)| f == "icon"), "a rejected set must not reach the feed: {feed}");
+
+    // Another user's type is not theirs to rename.
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.post(app.url("/sync/push")).json(&push_body(json!([set("anna", "name", json!("Stolen"), 70)])))
+        .send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+}
+
+#[tokio::test]
+async fn deleting_a_type_in_use_is_rejected_over_sync() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair"] })).await;
+    let uuid = scooter["client_uuid"].as_str().unwrap().to_string();
+    let object = app.post_json("/objects", &json!({ "name": "Kick", "type": scooter["key"] })).await;
+    let delete = |op_id: &str, secs: i64| push_body(json!([{
+        "client_op_id": op_id, "entity": "object_type", "entity_uuid": uuid, "op": "delete",
+        "edited_at": after_now(secs), "device_id": "phone"
+    }]));
+
+    let body: serde_json::Value = app.push_raw(&delete("del-1", 60)).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert!(body["results"][0]["reason"].as_str().unwrap().contains("in use"), "{body}");
+    assert_eq!(app.get_json("/types").await.as_array().unwrap().len(), 1);
+    assert_eq!(app.count_changes_of("del-1").await, 0);
+
+    app.delete_object(&object).await;
+    let body: serde_json::Value = app.push_raw(&delete("del-2", 61)).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+    assert_eq!(app.get_json("/types").await, json!([]));
+    let snapshot = app.get_json("/sync/bootstrap").await;
+    assert_eq!(snapshot["object_types"], json!([]));
+}
+
+#[tokio::test]
+async fn rest_type_writes_appear_in_the_change_feed() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair"] })).await;
+    let (id, uuid) = (scooter["id"].as_i64().unwrap(), scooter["client_uuid"].as_str().unwrap().to_string());
+    let res = app.client.patch(app.url(&format!("/types/{id}")))
+        .json(&json!({ "name": "Kickscooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let res = app.client.delete(app.url(&format!("/types/{id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let feed = app.pull(0).await;
+    let rows: Vec<(String, Option<String>, Option<i64>)> = feed["changes"].as_array().unwrap().iter()
+        .filter(|c| c["entity"] == "object_type")
+        .map(|c| {
+            assert_eq!(c["entity_uuid"], uuid, "{feed}");
+            (c["op"].as_str().unwrap().to_string(), c["field"].as_str().map(str::to_string), c["entity_id"].as_i64())
+        })
+        .collect();
+    assert_eq!(rows, [
+        ("create".to_string(), None, Some(id)),
+        ("set".to_string(), Some("name".to_string()), Some(id)),
+        ("set".to_string(), Some("counter_unit".to_string()), Some(id)),
+        ("delete".to_string(), None, Some(id)),
+    ], "unchanged icon and categories log nothing: {feed}");
+
+    // The REST create stamped the clock, so a stale offline rename loses.
+    let body: serde_json::Value = app.push_raw(&push_body(json!([{
+        "client_op_id": "stale", "entity": "object_type", "entity_uuid": uuid, "op": "set",
+        "field": "icon", "value": "box", "edited_at": before_now(3600), "device_id": "phone"
+    }]))).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
+}

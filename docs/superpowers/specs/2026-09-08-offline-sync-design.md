@@ -239,3 +239,34 @@ The choice is open. What is not open is ignoring it — the failure is silent, a
 - `client_uuid` is nullable at the schema level and backfilled rows carry a 32-character hex
   value while newly minted ones are 36-character hyphenated v4. Nothing may validate it as a
   strict UUID shape.
+
+## Later additions
+
+### 2026-09-14: own object types
+
+Users can define their own object types (`docs/superpowers/specs/2026-09-14-own-types-design.md`).
+What that changes on the wire:
+
+- **Snapshot.** `GET /sync/bootstrap` gains an `object_types` array: the user's non-deleted rows
+  of `object_types`, shipped verbatim like the other tables (`categories` is JSON text).
+- **Object types.** `objects.type` is a built-in key or `custom:<uuid>`, where the uuid is an
+  `object_types.client_uuid`. The key never changes when the type is renamed.
+- **Entity.** Ops and pulled changes may name the entity `object_type`. Settable fields are
+  `name`, `icon`, `categories` (JSON text, stored normalised) and `counter_unit`. A `set` is
+  checked against the whole type (the stored row plus the changed field), and so is a rename
+  against the user's other type names. A `delete` is rejected with reason "in use by N object(s)"
+  while any live object uses the type.
+- **Create is real for types.** Other entities' `create` ops only announce a row made over REST.
+  An `object_type` create inserts the row: `entity_uuid` is the new type's lower-case
+  `client_uuid`, and `value` carries `{name, icon, categories, counter_unit}`. Ops in one push
+  apply in order in one transaction, so a later op in the same push (an object's `set type`) can
+  use the type. Replaying the create for the caller's own live type is `accepted` and inserts
+  nothing. A uuid already used by anyone else, or by a deleted type, is rejected. As with every
+  create op, the logged change carries no value, so a pulling device reads the row through
+  bootstrap or `GET /types`, using `entity_id`.
+- **REST writes are logged.** `POST`/`PATCH`/`DELETE /types` record create/set/delete changes and
+  stamp field clocks, like every other REST write.
+
+Compatibility rule for clients: **ignore unknown snapshot keys and unknown entities, and show an
+unknown type key as "other".** No epoch rotation was needed. No client consumes the feed yet (the
+PWA has no sync client), so nothing could fail on the new entity.

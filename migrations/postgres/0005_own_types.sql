@@ -18,3 +18,9 @@ CREATE INDEX idx_object_types_user ON object_types(user_id);
 -- `object_type::is_valid_for_user`; the column stays NOT NULL. The name is PostgreSQL's default
 -- for the unnamed CHECK in 0001, confirmed against a migrated database.
 ALTER TABLE objects DROP CONSTRAINT objects_type_check;
+
+-- Type writes are logged like every other synced row, so the log's entity list gains them.
+-- `changes_entity_check` is PostgreSQL's default name for the unnamed CHECK in 0001.
+ALTER TABLE changes DROP CONSTRAINT changes_entity_check;
+ALTER TABLE changes ADD CONSTRAINT changes_entity_check
+    CHECK (entity IN ('object','activity','reminder','attachment','file','object_type'));

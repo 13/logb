@@ -30,6 +30,7 @@ pub fn wins(
 }
 
 use crate::api::objects::PARENT_REJECTION;
+use crate::domain::custom_type::{self, TypeInput, CUSTOM_PREFIX};
 use crate::domain::tags;
 use crate::error::AppError;
 use crate::sync::record;
@@ -91,9 +92,10 @@ fn binding(
 /// which says nothing about whether the value itself makes sense: `name = ""`,
 /// `purchase_price_cents = -999` and `purchase_date = "not-a-date"` are all shaped correctly and
 /// would sail through `binding` untouched. Only a handful of columns happen to carry a SQLite
-/// CHECK that catches this by accident (`counter_unit`, `fuel_unit`, `objects.type`,
-/// `activities.category`, `attachments.kind`); everything else has nothing standing between a
-/// client and the row without this.
+/// CHECK that catches this by accident (`counter_unit`, `fuel_unit`, `activities.category`,
+/// `attachments.kind`); everything else has nothing standing between a client and the row without
+/// this. `objects.type` needs the database (a user's own types), so `apply_op` checks it, and an
+/// object type's fields need the rest of the stored type -- see `type_field`.
 ///
 /// Null is always left alone: it means "clear the field", exactly as `binding` already treats
 /// it, and whether a given column tolerates it is the schema's NOT NULL constraint to answer.
@@ -126,13 +128,6 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         | (Entity::Reminder, "title") => {
             if text.trim().is_empty() {
                 return Err(format!("{field} is required"));
-            }
-            // The objects CHECK used to refuse any other type here (0014 on SQLite, 0005 on
-            // PostgreSQL dropped it for custom types). Until sync carries custom types, a pushed
-            // `type` is held to the built-in keys that CHECK listed, so this door opens no wider
-            // than it was.
-            if field == "type" && !crate::object_type::is_valid(text) {
-                return Err(crate::api::objects::TYPE_REJECTION.into());
             }
         }
         (Entity::Object, "purchase_date")
@@ -176,8 +171,144 @@ pub fn canonical_value(
         (Some(field), Some(serde_json::Value::String(text))) if is_tags(entity, field) => {
             Some(serde_json::Value::String(canonical_tags(&text).unwrap_or(text)))
         }
+        // An object type's name is stored trimmed and its categories normalised, so they are
+        // logged that way too. Whatever fails here is rejected by `type_field`, and its log row
+        // removed.
+        (Some("name"), Some(serde_json::Value::String(text))) if entity == Entity::ObjectType => {
+            Some(serde_json::Value::String(text.trim().to_string()))
+        }
+        (Some("categories"), Some(serde_json::Value::String(text))) if entity == Entity::ObjectType => {
+            Some(serde_json::Value::String(canonical_categories(&text).unwrap_or(text)))
+        }
         (_, value) => value,
     }
+}
+
+const CATEGORIES_SHAPE: &str = "categories must be JSON text holding an array of strings";
+
+/// The stored spelling of a pushed object type `categories` value. `Err` is the rejection reason.
+fn canonical_categories(text: &str) -> Result<String, String> {
+    let parsed: Vec<String> = serde_json::from_str(text).map_err(|_| CATEGORIES_SHAPE.to_string())?;
+    custom_type::normalize_categories(parsed).map(|c| serde_json::to_string(&c).unwrap_or_else(|_| "[]".into()))
+}
+
+/// The four fields a pushed object type `create` carries in `value`.
+#[derive(serde::Deserialize)]
+struct TypeValue {
+    name: String,
+    icon: String,
+    categories: Vec<String>,
+    #[serde(default)]
+    counter_unit: Option<String>,
+}
+
+/// A pushed `create` of an object type. Unlike every other entity's create, which only announces
+/// a row already made over REST, this inserts the row. Types are what a device makes offline
+/// together with the objects that use them, and the objects refer to the type by this uuid. The
+/// same rules as `POST /types` apply: `custom_type::normalize` and a unique name.
+///
+/// Applied in push order inside the push's one transaction, so a later op in the same batch
+/// (`set object.type = custom:<uuid>`) already sees the row through `is_valid_for_user`.
+async fn create_type(tx: &mut sqlx::AnyConnection, user_id: i64, op: &Op) -> Result<Outcome, AppError> {
+    fn rejected(reason: impl Into<String>) -> Result<Outcome, AppError> {
+        Ok(Outcome::Rejected { reason: reason.into() })
+    }
+    // Lower case only: the uuid becomes part of an object's `type`, which REST lower-cases, so
+    // a mixed-case uuid would name a type no object could ever use.
+    let shape_ok = crate::api::normalize_client_uuid(Some(op.entity_uuid.clone()))
+        .is_ok_and(|u| u.as_deref() == Some(op.entity_uuid.as_str()));
+    if !shape_ok || op.entity_uuid != op.entity_uuid.to_lowercase() {
+        return rejected("an object type's entity_uuid must be 8-64 lower-case characters with no whitespace");
+    }
+    let existing: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT user_id, deleted_at FROM object_types WHERE client_uuid = $1")
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match existing {
+        // A replay of a create that already landed, for example through `POST /types`.
+        Some((owner, None)) if owner == user_id => return Ok(Outcome::Accepted),
+        // Another account's uuid, or a deleted type's: the uuid is spoken for, as on REST.
+        Some(_) => return rejected("entity_uuid is already taken"),
+        None => {}
+    }
+    let Some(value) = op.value.clone() else {
+        return rejected("an object type create carries name, icon, categories and counter_unit in value");
+    };
+    let Ok(value) = serde_json::from_value::<TypeValue>(value) else {
+        return rejected("an object type create carries name, icon, categories and counter_unit in value");
+    };
+    let input = TypeInput { name: value.name, icon: value.icon, categories: value.categories, counter_unit: value.counter_unit };
+    let input = match custom_type::normalize(input) {
+        Ok(input) => input,
+        Err(reason) => return rejected(reason),
+    };
+    if crate::api::types::name_taken(tx, user_id, &input.name, None).await? {
+        return rejected(crate::api::types::NAME_TAKEN);
+    }
+    let now = crate::db::now();
+    sqlx::query(
+        "INSERT INTO object_types (user_id, client_uuid, name, icon, categories, counter_unit, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
+        .bind(user_id).bind(&op.entity_uuid).bind(&input.name).bind(&input.icon)
+        .bind(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into()))
+        .bind(&input.counter_unit).bind(&now).bind(&now)
+        .execute(&mut *tx).await?;
+    // Every field was set by this create, at the op's own clock, for the reason
+    // `record::record_create` gives: an unstamped field loses to nothing.
+    for (field, _) in super::whitelist(Entity::ObjectType) {
+        record::stamp_field_clock(tx, Entity::ObjectType, &op.entity_uuid, field, &op.edited_at, &op.device_id).await?;
+    }
+    Ok(Outcome::Accepted)
+}
+
+/// Checks a pushed `set` on an object type against the whole type: the stored row with this one
+/// field replaced goes through `custom_type::normalize`, as a `PATCH /types` body would, and a
+/// new name must not collide with the user's other types. Answers the value to store (trimmed,
+/// normalised) or the rejection reason.
+async fn type_field(
+    tx: &mut sqlx::AnyConnection,
+    user_id: i64,
+    uuid: &str,
+    field: &str,
+    bound: Binding,
+) -> Result<Result<Binding, String>, AppError> {
+    let (id, name, icon, categories, counter_unit): (i64, String, String, String, Option<String>) = sqlx::query_as(
+        "SELECT id, name, icon, categories, counter_unit FROM object_types WHERE client_uuid = $1")
+        .bind(uuid)
+        .fetch_one(&mut *tx)
+        .await?;
+    let mut input = TypeInput { name, icon, categories: serde_json::from_str(&categories).unwrap_or_default(), counter_unit };
+    let text = match bound {
+        Binding::Text(text) => Some(text),
+        Binding::Null => None,
+        // `binding` has already refused anything but text or null for these TEXT fields.
+        Binding::Integer(_) => return Ok(Err(format!("{field} must be a string"))),
+    };
+    match (field, text) {
+        ("counter_unit", unit) => input.counter_unit = unit,
+        (_, None) => return Ok(Err(format!("{field} is required"))),
+        ("name", Some(text)) => input.name = text,
+        ("icon", Some(text)) => input.icon = text,
+        ("categories", Some(text)) => match serde_json::from_str::<Vec<String>>(&text) {
+            Ok(parsed) => input.categories = parsed,
+            Err(_) => return Ok(Err(CATEGORIES_SHAPE.into())),
+        },
+        _ => return Ok(Err(format!("{field} is not settable"))),
+    }
+    let input = match custom_type::normalize(input) {
+        Ok(input) => input,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if field == "name" && crate::api::types::name_taken(tx, user_id, &input.name, Some(id)).await? {
+        return Ok(Err(crate::api::types::NAME_TAKEN.into()));
+    }
+    Ok(Ok(match field {
+        "name" => Binding::Text(input.name),
+        "icon" => Binding::Text(input.icon),
+        "categories" => Binding::Text(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into())),
+        _ => input.counter_unit.map_or(Binding::Null, Binding::Text),
+    }))
 }
 
 /// Rewrites a client-supplied timestamp into the one canonical form `wins` can compare.
@@ -250,6 +381,11 @@ pub async fn apply_op(
         return Ok(Outcome::Rejected { reason: "entity_uuid and device_id are required".into() });
     }
 
+    // The one create that inserts, and so the one op whose row need not exist yet.
+    if op.entity == Entity::ObjectType && op.op == OpKind::Create {
+        return create_type(tx, user_id, op).await;
+    }
+
     // Does this uuid exist, and does it belong to the caller?
     let owner: Option<i64> = match op.entity {
         Entity::Object => sqlx::query_scalar(
@@ -269,6 +405,9 @@ pub async fn apply_op(
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
         Entity::File => sqlx::query_scalar(
             "SELECT user_id FROM files WHERE client_uuid = $1")
+            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
+        Entity::ObjectType => sqlx::query_scalar(
+            "SELECT user_id FROM object_types WHERE client_uuid = $1")
             .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
     };
     match owner {
@@ -317,12 +456,25 @@ pub async fn apply_op(
                 });
             }
 
+            // The same refusal as `DELETE /types/{id}`: an object whose type vanished would have no
+            // icon and no categories. Counted under the push's write lock, so no object can take
+            // the type between this count and the tombstone.
+            if op.entity == Entity::ObjectType {
+                let in_use: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM objects WHERE user_id = $1 AND type = $2 AND deleted_at IS NULL")
+                    .bind(user_id).bind(format!("{CUSTOM_PREFIX}{}", op.entity_uuid))
+                    .fetch_one(&mut *tx).await?;
+                if in_use > 0 {
+                    return Ok(Outcome::Rejected { reason: format!("in use by {in_use} object(s)") });
+                }
+            }
+
             let now = crate::db::now();
-            // Only `objects` and `activities` carry `updated_at` (migrations/sqlite/0001_init.sql);
+            // Only `objects`, `activities` and `object_types` carry `updated_at`;
             // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
             // alongside `deleted_at` wherever the column exists, so this has to too, or a row
             // tombstoned over sync keeps whatever `updated_at` it had before the delete.
-            let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity);
+            let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity | Entity::ObjectType);
             let sql = if has_updated_at {
                 format!(
                     "UPDATE {} SET deleted_at = $1, updated_at = $2 \
@@ -352,6 +504,8 @@ pub async fn apply_op(
                 // A reminder has no children of its own, and nothing else keeps a stray
                 // reference to it that a delete would need to clean up.
                 Entity::Reminder => Vec::new(),
+                // Nothing points at a type by id; objects that use it were refused above.
+                Entity::ObjectType => Vec::new(),
                 Entity::File => unreachable!("a file delete is refused above, before reaching this match"),
             };
             record::log_cascade(&mut *tx, user_id, &op.edited_at, &op.device_id, &cascaded).await?;
@@ -390,6 +544,24 @@ pub async fn apply_op(
                     Err(reason) => return Ok(Outcome::Rejected { reason }),
                 },
                 other => other,
+            };
+
+            // A type key needs the database: a built-in key, or one of the caller's own live types
+            // -- including one a create earlier in this same push inserted, on this transaction.
+            if op.entity == Entity::Object && field == "type" {
+                if let Binding::Text(key) = &bound {
+                    if !crate::object_type::is_valid_for_user(&mut *tx, user_id, key).await? {
+                        return Ok(Outcome::Rejected { reason: crate::api::objects::TYPE_REJECTION.into() });
+                    }
+                }
+            }
+            let bound = if op.entity == Entity::ObjectType {
+                match type_field(&mut *tx, user_id, &op.entity_uuid, field, bound).await? {
+                    Ok(bound) => bound,
+                    Err(reason) => return Ok(Outcome::Rejected { reason }),
+                }
+            } else {
+                bound
             };
 
             // The whitelist lets `kind` change freely, but `objects::update` refuses to point

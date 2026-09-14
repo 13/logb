@@ -3710,7 +3710,8 @@
               "activity",
               "reminder",
               "attachment",
-              "file"
+              "file",
+              "object_type"
             ]
           },
           "entity_uuid": {
@@ -3816,7 +3817,8 @@
               "activity",
               "reminder",
               "attachment",
-              "file"
+              "file",
+              "object_type"
             ]
           },
           "entity_uuid": {

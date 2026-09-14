@@ -5,6 +5,7 @@ use super::reminders::{select_reminders, ReminderInput, ReminderRow};
 use super::settings;
 use crate::auth::AuthUser;
 use crate::db;
+use crate::domain::custom_type::{self, TypeInput, CUSTOM_PREFIX};
 use crate::domain::tags;
 use crate::error::AppError;
 use crate::files;
@@ -110,11 +111,25 @@ struct ObjectExport {
     tags: Vec<String>,
 }
 
+/// A user's own type. Objects keep `type` as `custom:<client_uuid>`, so the uuid is what ties
+/// them together inside the archive.
+#[derive(Serialize, Deserialize)]
+struct TypeExport {
+    client_uuid: String,
+    name: String,
+    icon: String,
+    categories: Vec<String>,
+    counter_unit: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Export {
     version: u32,
     exported_at: String,
     currency: String,
+    // Added with own types; an older archive has none.
+    #[serde(default)]
+    types: Vec<TypeExport>,
     objects: Vec<ObjectExport>,
 }
 
@@ -203,7 +218,19 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             }).collect(),
         });
     }
-    let data = Export { version: 1, exported_at: db::now(), currency: settings::currency(&state).await?, objects: out };
+    let type_rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT client_uuid, name, icon, categories, counter_unit FROM object_types \
+         WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
+        .bind(user.id).fetch_all(&state.db).await?;
+    // A one-object export carries only the type that object uses, so importing it elsewhere does
+    // not bring along every type the account has.
+    let types = type_rows.into_iter()
+        .filter(|(uuid, ..)| q.object_id.is_none() || out.iter().any(|o| o.type_.as_deref() == Some(&format!("{CUSTOM_PREFIX}{uuid}"))))
+        .map(|(client_uuid, name, icon, categories, counter_unit)| TypeExport {
+            client_uuid, name, icon, categories: serde_json::from_str(&categories).unwrap_or_default(), counter_unit,
+        })
+        .collect();
+    let data = Export { version: 1, exported_at: db::now(), currency: settings::currency(&state).await?, types, objects: out };
     let json = serde_json::to_vec_pretty(&data).map_err(|e| AppError::Internal(e.to_string()))?;
 
     blobs.sort();
@@ -317,10 +344,20 @@ fn join_unmapped(description: &str, extra: &str) -> String {
 ///   second `CASE` applied.
 /// - Neither field present is a corrupt or hand-written archive; `other` with the description
 ///   untouched, same as a legal `type`.
-fn resolve_type(o: &ObjectExport) -> (String, String) {
+/// - A `custom:<uuid>` type whose uuid is one of the archive's own types becomes
+///   `custom:<the uuid that type was given here>`; `types` maps one to the other (see
+///   `import`, which may hand out a fresh uuid). A `custom:` key the archive does not define is
+///   illegal like any other unknown text: `other`, with the key kept in the description.
+fn resolve_type(o: &ObjectExport, types: &HashMap<String, String>) -> (String, String) {
     match (o.type_.as_deref(), o.category.as_deref()) {
         (Some(t), _) if object_type::is_valid(t) => (t.to_string(), o.description.clone()),
-        (Some(t), _) => ("other".to_string(), join_unmapped(&o.description, t)),
+        (Some(t), _) => {
+            let lower = t.trim().to_lowercase();
+            match custom_type::custom_uuid(&lower).and_then(|uuid| types.get(uuid)) {
+                Some(uuid) => (format!("{CUSTOM_PREFIX}{uuid}"), o.description.clone()),
+                None => ("other".to_string(), join_unmapped(&o.description, t)),
+            }
+        }
         (None, Some(c)) => match object_type::from_legacy(c) {
             Legacy::Mapped(t) => (t.to_string(), o.description.clone()),
             Legacy::Unmapped => ("other".to_string(), join_unmapped(&o.description, c)),
@@ -373,6 +410,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     }).await.map_err(|e| AppError::Internal(e.to_string()))??;
 
     validate_import(&data)?;
+    let archive_types = archive_types(&data)?;
 
     let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0 };
     // One instant for the whole import: every row it creates is "set" at the moment the
@@ -381,10 +419,43 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     // only).
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
+
+    // Types before objects, so every `custom:` key has somewhere to point. `type_uuids` maps the
+    // archive's uuid to the one the type has in this account.
+    let mut type_uuids: HashMap<String, String> = HashMap::new();
+    for (archive_uuid, input) in archive_types {
+        // A type with this name already exists here (a backup restored into the account it came
+        // from, or two archive types folding to one name): use it. A second type with the same
+        // name is exactly what `POST /types` refuses.
+        let live: Vec<(String, String)> =
+            sqlx::query_as("SELECT client_uuid, name FROM object_types WHERE user_id = $1 AND deleted_at IS NULL")
+                .bind(user.id).fetch_all(&mut *tx).await?;
+        let wanted = tags::fold(&input.name);
+        if let Some((uuid, _)) = live.iter().find(|(_, name)| tags::fold(name) == wanted) {
+            type_uuids.insert(archive_uuid, uuid.clone());
+            continue;
+        }
+        // The uuid is unique across every account and survives deletion, so one already taken
+        // (the same archive imported by another user, or a deleted type) gets a fresh uuid.
+        let taken: Option<(i64,)> = sqlx::query_as("SELECT id FROM object_types WHERE client_uuid = $1")
+            .bind(&archive_uuid).fetch_optional(&mut *tx).await?;
+        let uuid = if taken.is_some() { uuid::Uuid::new_v4().to_string() } else { archive_uuid.clone() };
+        let now = db::now();
+        sqlx::query(
+            "INSERT INTO object_types (user_id, client_uuid, name, icon, categories, counter_unit, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
+            .bind(user.id).bind(&uuid).bind(&input.name).bind(&input.icon)
+            .bind(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into()))
+            .bind(&input.counter_unit).bind(&now).bind(&now)
+            .execute(&mut *tx).await?;
+        record::record_create(&mut tx, user.id, Entity::ObjectType, &uuid, &edited_at).await?;
+        type_uuids.insert(archive_uuid, uuid);
+    }
+
     for o in data.objects {
         let now = db::now();
         let object_uuid = uuid::Uuid::new_v4().to_string();
-        let (ty, description) = resolve_type(&o);
+        let (ty, description) = resolve_type(&o, &type_uuids);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
              archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) RETURNING id")
@@ -466,11 +537,14 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
 /// `ActivityInput::validate`, `ReminderInput::validate`), so the rules stay identical to
 /// what `POST /objects`, `POST .../activities` and `POST .../reminders` already enforce.
 fn validate_import(data: &Export) -> Result<(), AppError> {
+    // Each archive type maps to itself here. Whether a type is kept or remapped at insert time
+    // changes the uuid in an object's key, never whether the key resolves.
+    let known: HashMap<String, String> = archive_types(data)?.into_iter().map(|(uuid, _)| (uuid.clone(), uuid)).collect();
     for (oi, o) in data.objects.iter().enumerate() {
         // `resolve_type` is pure, so calling it again at insert time (the loop in `import`)
         // reaches the same answer; computed once here so `obj_input` and `object_stub` below
         // -- both stand-ins for the same object -- can't disagree with each other.
-        let (ty, description) = resolve_type(o);
+        let (ty, description) = resolve_type(o, &known);
         let mut obj_input = ObjectInput {
             name: o.name.clone(),
             type_: ty.clone(),
@@ -535,6 +609,22 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+/// The archive's types, each checked by `custom_type::normalize` exactly as `POST /types` checks
+/// a body, with its uuid lower-cased (objects' `custom:` keys are). A bad type refuses the whole
+/// import with a 400 that names it.
+fn archive_types(data: &Export) -> Result<Vec<(String, TypeInput)>, AppError> {
+    data.types.iter().enumerate().map(|(i, t)| {
+        let location = format!("type {i} ({})", t.name);
+        let uuid = super::normalize_client_uuid(Some(t.client_uuid.clone()))
+            .map_err(|e| tag(e, &location))?
+            .ok_or_else(|| AppError::BadRequest(format!("{location}: client_uuid is required")))?
+            .to_lowercase();
+        let input = TypeInput { name: t.name.clone(), icon: t.icon.clone(), categories: t.categories.clone(), counter_unit: t.counter_unit.clone() };
+        let input = custom_type::normalize(input).map_err(|e| AppError::BadRequest(format!("{location}: {e}")))?;
+        Ok((uuid, input))
+    }).collect()
 }
 
 /// An archive's tags as the column stores them. `validate_import` has already run the same

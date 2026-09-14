@@ -44,11 +44,23 @@ pub fn normalize(input: TypeInput) -> Result<TypeInput, String> {
     if !CUSTOM_TYPE_ICONS.contains(&input.icon.as_str()) {
         return Err(format!("icon must be one of {}", CUSTOM_TYPE_ICONS.join(", ")));
     }
-    if input.categories.is_empty() {
+    let categories = normalize_categories(input.categories)?;
+    if let Some(unit) = &input.counter_unit {
+        if !matches!(unit.as_str(), "km" | "mi" | "h") {
+            return Err("counter_unit must be km, mi, h or null".into());
+        }
+    }
+    Ok(TypeInput { name, icon: input.icon, categories, counter_unit: input.counter_unit })
+}
+
+/// The category half of `normalize`, on its own so sync can log a pushed `categories` value in
+/// its stored spelling without a whole type to hand.
+pub fn normalize_categories(input: Vec<String>) -> Result<Vec<String>, String> {
+    if input.is_empty() {
         return Err("categories must name at least one category".into());
     }
-    let mut categories: Vec<String> = Vec::with_capacity(input.categories.len() + 1);
-    for category in input.categories {
+    let mut categories: Vec<String> = Vec::with_capacity(input.len() + 1);
+    for category in input {
         if !CATEGORIES.contains(&category.as_str()) {
             return Err(format!("category must be one of {}", CATEGORIES.join(", ")));
         }
@@ -59,12 +71,7 @@ pub fn normalize(input: TypeInput) -> Result<TypeInput, String> {
     if !categories.iter().any(|c| c == "other") {
         categories.push("other".into());
     }
-    if let Some(unit) = &input.counter_unit {
-        if !matches!(unit.as_str(), "km" | "mi" | "h") {
-            return Err("counter_unit must be km, mi, h or null".into());
-        }
-    }
-    Ok(TypeInput { name, icon: input.icon, categories, counter_unit: input.counter_unit })
+    Ok(categories)
 }
 
 /// `"custom:<uuid>"` -> `Some("<uuid>")`; a built-in key, or a bare prefix, -> `None`.

@@ -160,3 +160,15 @@ async fn a_years_purchase_price_lands_in_its_own_month() {
     assert_eq!(out["over_time"][4], json!({ "bucket": "2024-05", "cost_cents": 300_000 }));
     assert_eq!(out["years"], json!(["2026", "2025", "2024"]));
 }
+
+#[tokio::test]
+async fn by_type_buckets_carry_custom_keys() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair"] })).await;
+    let key = scooter["key"].as_str().unwrap().to_string();
+    let kick = object(&app, json!({ "name": "Kick", "type": key, "description": "" })).await;
+    cost(&app, kick, "2026-03-01", "repair", 4_200).await;
+    let out = app.get_json("/stats").await;
+    assert_eq!(buckets(&out["by_type"]), [(key, 4_200)]);
+}

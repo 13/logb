@@ -462,6 +462,7 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
                 .await?;
         match existing {
             Some((id, owner, None)) if owner == user.id => {
+                // By design a replay answers with the row the first attempt created, before the type and parent checks below.
                 let row = load_owned_object(&state, user.id, id).await?;
                 return Ok((StatusCode::OK, Json(with_stats(&state, row).await?)));
             }

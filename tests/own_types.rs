@@ -193,6 +193,103 @@ async fn migration_keeps_built_in_types() {
     assert_eq!(app.create_object(&app.client, "Golf", Some("km")).await["type"], "car");
 }
 
+/// Builds an in-memory SQLite database migrated up to (excluding) 0014, seeded by `seed`, and
+/// answers the pool plus the result of running 0014 and everything after it.
+async fn migrate_0014_over(seed: &str) -> (sqlx::SqlitePool, Result<(), String>) {
+    let opts = SqliteConnectOptions::new().in_memory(true).foreign_keys(true);
+    let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+    let mut files: Vec<String> = std::fs::read_dir("migrations/sqlite").unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".sql"))
+        .collect();
+    files.sort();
+    let (before, after): (Vec<_>, Vec<_>) = files.into_iter().partition(|f| f.as_str() < "0014_own_types.sql");
+    for file in before {
+        let sql = std::fs::read_to_string(format!("migrations/sqlite/{file}")).unwrap();
+        sqlx::raw_sql(AssertSqlSafe(sql)).execute(&pool).await.unwrap_or_else(|e| panic!("{file}: {e}"));
+    }
+    sqlx::raw_sql(AssertSqlSafe(seed.to_string())).execute(&pool).await.unwrap();
+    for file in after {
+        let sql = std::fs::read_to_string(format!("migrations/sqlite/{file}")).unwrap();
+        if let Err(e) = sqlx::raw_sql(AssertSqlSafe(sql)).execute(&pool).await {
+            return (pool, Err(format!("{file}: {e}")));
+        }
+    }
+    (pool, Ok(()))
+}
+
+/// The rebuild runs with foreign keys off, so 0014 checks them itself before committing. A clean
+/// database with parents, activities and attachments migrates; one whose children already point
+/// at nothing makes the migration fail rather than commit silently.
+#[tokio::test]
+async fn the_rebuild_checks_foreign_keys_before_committing() {
+    let (pool, result) = migrate_0014_over(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, 'ben', 'x', 1, 't');
+         INSERT INTO objects (id, user_id, name, type, created_at, updated_at, client_uuid) VALUES
+           (1, 1, 'House', 'home', 't', 't', 'u1'), (2, 1, 'Boiler', 'appliance', 't', 't', 'u2');
+         UPDATE objects SET parent_id = 1 WHERE id = 2;
+         INSERT INTO activities (id, object_id, date, category, title, created_at, updated_at)
+           VALUES (1, 2, '2026-02-01', 'repair', 'Valve', 't', 't');
+         INSERT INTO files (id, user_id, sha256, original_name, mime, size, created_at) VALUES (1, 1, 'abc', 'a', 'image/png', 1, 't');
+         INSERT INTO attachments (id, object_id, activity_id, file_id, kind, caption, created_at) VALUES (1, 2, 1, 1, 'photo', 'a', 't');
+         INSERT INTO changes (seq, entity, entity_uuid, op, edited_at, applied_at, user_id, device_id, client_op_id)
+           VALUES (6, 'object', 'u1', 'create', 't', 't', 1, 'rest', 'op-6'), (7, 'object', 'u2', 'create', 't', 't', 1, 'rest', 'op-7');
+         DELETE FROM changes WHERE seq = 7;",
+    ).await;
+    result.expect("a consistent database migrates");
+    let violations = sqlx::query("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap();
+    assert!(violations.is_empty(), "{} foreign key violations after the rebuild", violations.len());
+    // The rebuilt log keeps its rows and its counter (7 was handed out and purged), and takes
+    // type writes.
+    let seqs: Vec<i64> = sqlx::query_scalar("SELECT seq FROM changes ORDER BY seq").fetch_all(&pool).await.unwrap();
+    assert_eq!(seqs, [6]);
+    let next: i64 = sqlx::query_scalar(
+        "INSERT INTO changes (entity, entity_uuid, op, edited_at, applied_at, user_id, device_id, client_op_id) \
+         VALUES ('object_type', 't1', 'create', 't', 't', 1, 'rest', 'op-next') RETURNING seq")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(next, 8, "a seq a device may have seen is never handed out again");
+    let bad = sqlx::query("INSERT INTO changes (entity, entity_uuid, op, edited_at, applied_at, user_id, device_id, client_op_id) \
+         VALUES ('nonsense', 't1', 'create', 't', 't', 1, 'rest', 'op-bad')").execute(&pool).await;
+    assert!(bad.is_err(), "the entity CHECK still refuses unknown entities");
+
+    let (pool, result) = migrate_0014_over(
+        "PRAGMA foreign_keys = off;
+         INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, 'ben', 'x', 1, 't');
+         INSERT INTO objects (id, user_id, name, type, created_at, updated_at, client_uuid) VALUES (1, 1, 'Golf', 'car', 't', 't', 'u1');
+         INSERT INTO activities (id, object_id, date, category, title, created_at, updated_at)
+           VALUES (1, 99, '2026-02-01', 'repair', 'Orphan', 't', 't');
+         PRAGMA foreign_keys = on;",
+    ).await;
+    let err = result.expect_err("an orphaned activity must fail the migration");
+    assert!(err.contains("0014") && err.contains("CHECK"), "{err}");
+    // The failure left 0014's transaction open on this one connection; a migrator that gives up
+    // drops the connection, which is this rollback. Succeeding proves the COMMIT never ran, and
+    // afterwards the objects table still carries the old CHECK on `type`.
+    sqlx::query("ROLLBACK").execute(&pool).await.expect("0014's transaction was still open, not committed");
+    let schema: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'objects'").fetch_one(&pool).await.unwrap();
+    assert!(schema.contains("'car'"), "the rebuild must not have committed: {schema}");
+}
+
+#[tokio::test]
+async fn another_users_type_cannot_be_changed_or_deleted() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let created = create_scooter(&app, &app.client).await;
+    let id = created["id"].as_i64().unwrap();
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let res = anna.patch(app.url(&format!("/types/{id}")))
+        .json(&json!({ "name": "Mine now", "icon": "box", "categories": ["repair"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    let res = anna.delete(app.url(&format!("/types/{id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+
+    assert_eq!(app.get_json("/types").await, json!([created]), "ben's type is unchanged");
+    let hers: Value = anna.get(app.url("/types")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(hers, json!([]));
+}
+
 #[tokio::test]
 async fn client_uuid_replays_idempotently() {
     let app = common::spawn().await;

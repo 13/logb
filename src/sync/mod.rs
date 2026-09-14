@@ -9,7 +9,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Entity { Object, Activity, Reminder, Attachment, File }
+pub enum Entity {
+    Object,
+    Activity,
+    Reminder,
+    Attachment,
+    File,
+    /// A user's own object type (`domain::custom_type`). Spelled with an underscore on the wire,
+    /// which `lowercase` alone would have run together.
+    #[serde(rename = "object_type")]
+    ObjectType,
+}
 
 impl Entity {
     pub fn as_str(&self) -> &'static str {
@@ -19,6 +29,7 @@ impl Entity {
             Entity::Reminder => "reminder",
             Entity::Attachment => "attachment",
             Entity::File => "file",
+            Entity::ObjectType => "object_type",
         }
     }
 
@@ -31,6 +42,7 @@ impl Entity {
             Entity::Reminder => "reminders",
             Entity::Attachment => "attachments",
             Entity::File => "files",
+            Entity::ObjectType => "object_types",
         }
     }
 }
@@ -127,6 +139,11 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
         Entity::Attachment => &[("kind", Text), ("caption", Text)],
         // Content-addressed and written once. A file changes by being replaced, never edited.
         Entity::File => &[],
+        // The four fields `api::types` edits. `categories` is JSON text, normalised by
+        // `apply::canonical_value` like `tags`; `client_uuid` is fixed because objects refer to it.
+        Entity::ObjectType => &[
+            ("name", Text), ("icon", Text), ("categories", Text), ("counter_unit", Text),
+        ],
     }
 }
 
@@ -138,6 +155,9 @@ mod tests {
     fn entities_round_trip() {
         assert_eq!(Entity::Activity.as_str(), "activity");
         assert_eq!(Entity::Activity.table(), "activities");
+        assert_eq!(Entity::ObjectType.as_str(), "object_type");
+        assert_eq!(Entity::ObjectType.table(), "object_types");
+        assert_eq!(serde_json::to_value(Entity::ObjectType).unwrap(), "object_type");
     }
 
     #[test]
@@ -185,6 +205,7 @@ mod tests {
     fn every_whitelisted_field_carries_its_schema_type() {
         let entities = [
             Entity::Object, Entity::Activity, Entity::Reminder, Entity::Attachment, Entity::File,
+            Entity::ObjectType,
         ];
         for entity in entities {
             for (field, ty) in whitelist(entity) {
