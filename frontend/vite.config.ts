@@ -5,6 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { pwaIcons } from './scripts/pwa-icons.ts';
+import { files, householdData, neverCached, otherApi } from './src/lib/sw-routes.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -41,28 +42,31 @@ export default defineConfig({
         // file pulled into the generated worker, so the rest of it stays generated.
         importScripts: ['push-sw.js'],
         navigateFallbackDenylist: [/^\/api\//],
-        // Workbox only routes GETs, so writes always go straight to the network.
+        // Workbox only routes GETs, so writes always go straight to the network. Workbox tests
+        // a RegExp urlPattern against the whole URL, not just the path, so plain `/^\/api\//`
+        // patterns never matched here -- these function matchers check url.pathname instead.
         runtimeCaching: [
-          // Session state must never be answered from a cache: a stale /auth/me would show a
-          // signed-out user their old identity.
-          { urlPattern: /^\/api\/auth\//, handler: 'NetworkOnly' },
-          // Exports are large, one-shot downloads.
-          { urlPattern: /^\/api\/(export|import)/, handler: 'NetworkOnly' },
+          // Session, administration, exports, sync and anything that must never be answered
+          // from a cache: a stale /auth/me would show a signed-out user their old identity.
+          { urlPattern: neverCached, handler: 'NetworkOnly', method: 'GET' },
           // Blobs are content-addressed and never change under a given id.
           {
-            urlPattern: /^\/api\/files\//,
+            urlPattern: files,
             handler: 'CacheFirst',
+            method: 'GET',
             options: {
               cacheName: 'logb-files',
               expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [200] },
             },
           },
-          // Everything else: the network when it answers, the last known response when it
-          // does not, so the dashboard and a timeline stay readable on a dead connection.
+          // What a household reads with no connection: the network when it answers, the last
+          // known response when it does not, so the dashboard and a timeline stay readable on
+          // a dead connection.
           {
-            urlPattern: /^\/api\//,
+            urlPattern: householdData,
             handler: 'NetworkFirst',
+            method: 'GET',
             options: {
               cacheName: 'logb-api',
               networkTimeoutSeconds: 4,
@@ -70,6 +74,9 @@ export default defineConfig({
               cacheableResponse: { statuses: [200] },
             },
           },
+          // Anything else under /api: network only, so a new endpoint is never cached by
+          // accident.
+          { urlPattern: otherApi, handler: 'NetworkOnly', method: 'GET' },
         ],
       },
     }),
