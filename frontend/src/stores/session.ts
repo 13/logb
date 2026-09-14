@@ -1,8 +1,8 @@
 import { get, readonly, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
 import { api, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
-import { claimCaches, forgetCacheOwner, forgetProfile, rememberedProfile, rememberProfile } from '../lib/cache-owner';
-import { clearObjectCache } from '../lib/object-cache';
+import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberedProfile, rememberProfile, userSwitchNeedsReload } from '../lib/cache-owner';
+import { clearObjectCache, clearObjectMemory } from '../lib/object-cache';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
@@ -92,6 +92,25 @@ globalThis.addEventListener?.('visibilitychange', () => {
   if (globalThis.document?.visibilityState === 'visible') retrySession();
 });
 
+/**
+ * Another tab of this app changed who is signed in -- signed in as someone else, signed out, or
+ * found setup required -- and wrote that to `localStorage`. This tab would otherwise go on
+ * showing the previous user's screens, and loading into the caches the other tab now owns for
+ * someone else. So it stops the safe way: shell hidden, in-memory caches dropped, and a reload to
+ * the root, which runs the session check against the current cookie and the owner guard again.
+ * The on-disk caches are left to the tab that changed the user: it has already cleared them.
+ * `userSwitchNeedsReload` decides, and only on a real change, so tabs cannot set each other off.
+ */
+let reloading = false;
+globalThis.addEventListener?.('storage', (e: StorageEvent) => {
+  if (reloading || !userSwitchNeedsReload(e.key, e.oldValue, e.newValue, get(user)?.id)) return;
+  reloading = true;
+  user.set(undefined);
+  clearObjectMemory();
+  clearCustomTypes();
+  globalThis.location?.replace('/');
+});
+
 /** Resolves to whether the session is now KNOWN -- signed in or signed out, as opposed to
  *  still unreachable. Callers that have to show something either way (`Setup`) need to tell
  *  those apart; the retry listeners above only care that it eventually becomes true. */
@@ -102,14 +121,20 @@ export function loadSession(): Promise<boolean> {
 
 /** Drops the on-disk and in-memory caches when they are not `userId`'s (see ./cache-owner).
  *  Resolves only once the service-worker caches are really gone, so a caller that then sets the
- *  user cannot have the first load for them answered from the previous person's cache. */
+ *  user cannot have the first load for them answered from the previous person's cache.
+ *
+ *  The owner is recorded LAST, once the deletes have succeeded. A delete that rejects twice
+ *  rejects this too -- the user is then never set, and the owner stays whoever it was, so the
+ *  next attempt clears again instead of keeping the previous person's caches as `userId`'s. */
 async function clearCachesUnlessOwnedBy(userId: number): Promise<boolean> {
-  if (!claimCaches(userId)) return false;
-  await clearObjectCache();
+  if (cachesBelongTo(userId)) return false;
+  // One retry: a transient failure should not leave the app on "Loading…" until a reload.
+  await clearObjectCache().catch(() => clearObjectCache());
   clearCustomTypes();
   // `clearCustomTypes` forgets only the list of the owner it knows in this tab; after a reload
   // that is nobody, so the previous person's stored list would otherwise stay on disk.
   clearStoredTypeLists();
+  recordCacheOwner(userId);
   return true;
 }
 
@@ -208,7 +233,14 @@ async function doLoadSession(): Promise<boolean> {
     const s = await api<Settings>('GET', '/settings');
     currency.set(s.currency);
   } catch (e) {
-    if (isRejection(e)) { user.set(null); sessionKnown = true; }
+    // `/auth/me` has just confirmed the session, so a 4xx here is not the session ending: it is
+    // only the settings that could not be read. Signing the user out without forgetting them
+    // (as this once did) left a signed-out screen over a remembered profile and owned caches.
+    // Settings are optional -- the default currency serves -- so the user stays.
+    if (isRejection(e)) {
+      console.warn('settings could not be loaded; using the default currency', e);
+      currency.set('EUR');
+    }
   }
   return sessionKnown;
 }

@@ -54,18 +54,57 @@ export function forgetProfile(storage?: Storage): void {
   try { storageOf(storage)?.removeItem(PROFILE_KEY); } catch { /* nothing stored to forget */ }
 }
 
-/** True when the caches belong to someone else (or to nobody recorded) and must be cleared; records `userId` as the owner. */
-export function claimCaches(userId: number, storage?: Storage): boolean {
+/**
+ * True only when the caches are recorded as `userId`'s. Anything else -- someone else, nobody
+ * recorded, storage that cannot be read -- means they must be cleared before `userId` sees them.
+ *
+ * Deliberately only a check: the owner is recorded separately (`recordCacheOwner`), and only
+ * once the clear has finished. Recording first left a rejected `caches.delete`, or a tab closed
+ * mid-delete, with the new user on record as owner of the previous user's caches -- which the
+ * next start then kept.
+ */
+export function cachesBelongTo(userId: number, storage?: Storage): boolean {
   try {
-    const s = storageOf(storage);
-    // No storage means no record of whose the caches are, and "unknown" must clear.
-    if (!s) return true;
-    const same = s.getItem(OWNER_KEY) === String(userId);
-    s.setItem(OWNER_KEY, String(userId));
-    return !same;
+    return storageOf(storage)?.getItem(OWNER_KEY) === String(userId);
   } catch {
-    return true;
+    return false;
   }
+}
+
+/** Records `userId` as the owner of the caches. Call only once they are provably theirs (emptied). */
+export function recordCacheOwner(userId: number, storage?: Storage): void {
+  try { storageOf(storage)?.setItem(OWNER_KEY, String(userId)); } catch { /* unrecorded: the next start clears again */ }
+}
+
+/** The user id a stored `logb.cache.user` or `logb.session.profile` value names, or null. */
+function userIdIn(key: string, value: string | null): number | null {
+  if (value === null) return null;
+  if (key === OWNER_KEY) return /^\d+$/.test(value) ? Number(value) : null;
+  try {
+    const id = (JSON.parse(value) as { id?: unknown } | null)?.id;
+    return Number.isInteger(id) ? (id as number) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a `storage` event -- another tab of this app writing `localStorage` -- means this tab
+ * has to stop showing what it shows. It does when another tab moved the cache owner or the
+ * remembered profile to a different user, or removed them (a sign-out, a session that ended,
+ * setup being required), while this tab holds a user.
+ *
+ * Pure, and deliberately narrow so it cannot loop: a tab never receives its own writes, an
+ * unchanged value is not a change, and a write naming the user this tab already holds (the same
+ * person signing in elsewhere, a language change) is no reason to reload. `key` null is
+ * `localStorage.clear()`.
+ */
+export function userSwitchNeedsReload(key: string | null, oldValue: string | null, newValue: string | null, heldUserId: number | null | undefined): boolean {
+  if (heldUserId === null || heldUserId === undefined) return false; // nothing of anyone's on screen
+  if (key === null) return true;
+  if (key !== OWNER_KEY && key !== PROFILE_KEY) return false;
+  if (oldValue === newValue) return false;
+  return userIdIn(key, newValue) !== heldUserId;
 }
 
 export function forgetCacheOwner(storage?: Storage): void {

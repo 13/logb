@@ -370,6 +370,13 @@ else downloads — an SVG is an image by MIME type and a scriptable document in
 practice. The app itself is served under a policy that permits no off-origin
 resource at all.
 
+For use without a connection, the app keeps the signed-in user's recently read
+objects, entries, reminders, types, tags and files on the device (in the
+service worker's cache and local storage) until that user signs out. An app
+started offline opens as the last user who signed in. On a shared device,
+another person should sign in only after the previous user has signed out:
+signing out removes that data from the device.
+
 ## Time
 
 Set `LOGB_TIMEZONE` to the household's own zone. Reminder due dates are

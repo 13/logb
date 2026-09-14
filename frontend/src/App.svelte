@@ -26,6 +26,7 @@
   import SettingsTypes from './routes/settings/Types.svelte';
   import { api } from './lib/api';
   import { loadCustomTypes } from './lib/type-registry';
+  import { rememberProfile } from './lib/cache-owner';
   import type { User } from './lib/types';
   import AppNav from './lib/AppNav.svelte';
 
@@ -44,7 +45,18 @@
     const l = $locale;
     if (!u || u.lang === l) return;
     api<User>('PATCH', `/users/${u.id}`, { lang: l })
-      .then((saved) => user.set({ ...u, lang: saved.lang }))
+      .then((saved) => {
+        // The PATCH can outlive the user it was for (a sign-out, another person signing in):
+        // only the same person gets the new language, never the old user written back.
+        let updated: User | null = null;
+        user.update((cur) => {
+          if (!cur || cur.id !== saved.id) return cur;
+          updated = { ...cur, lang: saved.lang };
+          return updated;
+        });
+        // Remembered too, or every offline start would open in the old language and PATCH again.
+        if (updated) rememberProfile(updated);
+      })
       .catch(() => { /* the digest stays in the old language until the next load tries again */ });
   });
   $effect(() => {

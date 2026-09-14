@@ -1,11 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { ADMIN, signInFresh } from './helpers';
 
 /** The service worker must control the page before an offline reload can be served from it. */
 async function underServiceWorker(page: Page) {
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
-  // A first visit is not controlled even once the worker is active (no `clients.claim` on the
-  // very first page): only a load that starts under the worker is.
+  // The built `sw.js` calls `clientsClaim()`, so an open page is taken over once the worker
+  // activates -- but that can land a moment after `ready` resolves. A page still uncontrolled is
+  // reloaded, because a load that starts under an active worker is controlled for certain.
   if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
 }
@@ -52,18 +53,31 @@ test('another user never sees the previous user\'s saved objects', async ({ page
   // first, then B through the login form).
   await context.clearCookies();
   await signInFresh(page, '25-offline-b');
+  await object(page, 'Own Of B');
   await page.goto('/');
+  // B's list is really on screen -- not a blank or "Loading…" page that would show nothing of A's
+  // either.
+  await expect(page.getByText('Own Of B')).toBeVisible();
   await expect(page.getByText('Private Of A')).toHaveCount(0);
   await context.setOffline(true);
   await page.goto('/');
+  await expect(page.getByRole('status').filter({ hasText: /Offline/ })).toBeVisible();
+  await expect(page.getByText('Own Of B')).toBeVisible();
   await expect(page.getByText('Private Of A')).toHaveCount(0);
   await context.setOffline(false);
 });
 
-test('after signing out, an offline start shows the sign-in screen, not the old session', async ({ page, context }) => {
+/**
+ * With no connection the session check cannot answer, and signing out forgot the profile an
+ * offline start would open as -- so the app cannot tell who (if anyone) is signed in and stays on
+ * its loading screen. It shows no sign-in form either: that needs the server's answer.
+ */
+test('after signing out, an offline start stays on the loading screen and shows nothing of the old session', async ({ page, context }) => {
   await signInFresh(page, '25-offline-out');
+  await object(page, 'Private Of Out');
   await page.goto('/');
   await underServiceWorker(page);
+  await expect(page.getByText('Private Of Out')).toBeVisible();
   // The app's own sign-out, not an API call: the point is that IT forgets the profile.
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('button', { name: /Account/ }).click();
@@ -73,6 +87,44 @@ test('after signing out, an offline start shows the sign-in screen, not the old 
   await expect(page).toHaveURL(/\/login$/);
   await context.setOffline(true);
   await page.goto('/');
+  await expect(page.getByText(/^(Loading…|Lädt…)$/)).toBeVisible();
   await expect(page.getByText(/My objects|Meine Objekte/)).toHaveCount(0);
+  await expect(page.getByText('Private Of Out')).toHaveCount(0);
+  await context.setOffline(false);
+});
+
+/**
+ * The owner check on its own, with no 401 anywhere to clear the caches first: A's session is
+ * simply replaced by B's cookie, and the only thing standing between B and A's cached objects is
+ * the recorded owner.
+ */
+test('the cache owner alone keeps the previous user\'s saved objects from the next one', async ({ page, context }) => {
+  await signInFresh(page, '25-owner-a');
+  const id = await object(page, 'Owner Check A');
+  await page.goto('/');
+  await underServiceWorker(page);
+  await expect(page.getByText('Owner Check A')).toBeVisible();
+  await page.goto(`/objects/${id}`);
+  await expect(page.getByRole('heading', { name: 'Owner Check A' })).toBeVisible();
+
+  // Off the app while the cookies change hands, so no screen of A's can make a request that 401s.
+  await page.goto('about:blank');
+  await context.clearCookies();
+  const b = `e2e-owner-b-${Date.now().toString(36).slice(-6)}`;
+  expect((await page.request.post('/api/auth/login', { data: ADMIN })).ok()).toBe(true);
+  expect((await page.request.post('/api/users', { data: { username: b, password: 'password123', is_admin: false } })).ok()).toBe(true);
+  expect((await page.request.post('/api/auth/logout')).ok()).toBe(true);
+  expect((await page.request.post('/api/auth/login', { data: { username: b, password: 'password123' } })).ok()).toBe(true);
+  await object(page, 'Owner Check B');
+
+  await page.goto('/');
+  await expect(page.getByText('Owner Check B')).toBeVisible();
+  await expect(page.getByText('Owner Check A')).toHaveCount(0);
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: /Offline/ })).toBeVisible();
+  await expect(page.getByText('Owner Check B')).toBeVisible();
+  await expect(page.getByText('Owner Check A')).toHaveCount(0);
   await context.setOffline(false);
 });

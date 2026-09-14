@@ -25,9 +25,10 @@ import type { Activity, MemObject } from './types';
  *
  * Ending a session is not the only way to change hands: a session can simply expire, with no
  * logout to run, and the Workbox caches outlive the tab. So every session START checks whose
- * data the caches hold too (`claimCaches` in `./cache-owner.ts`, called from
+ * data the caches hold too (`cachesBelongTo` in `./cache-owner.ts`, called from
  * `../stores/session.ts`) and clears here, before the new user is set and anything loads for
- * them, when that is anyone else -- or nobody recorded.
+ * them, when that is anyone else -- or nobody recorded. Only once the clear has finished is the
+ * new user recorded as the owner (`recordCacheOwner`).
  */
 const objects = new Map<number, MemObject>();
 const activityPages = new Map<number, { items: Activity[]; total: number }>();
@@ -48,6 +49,14 @@ export function setCachedActivities(id: number, page: { items: Activity[]; total
   activityPages.set(id, page);
 }
 
+/** Drops only this tab's in-memory objects and activities pages, leaving the service worker's
+ *  caches alone -- for a tab that is about to reload because another tab changed the user, and
+ *  already owns (and has cleared) those caches for them. */
+export function clearObjectMemory(): void {
+  objects.clear();
+  activityPages.clear();
+}
+
 /** Drop every cached object and activities page, plus the service worker's `logb-api` and
  *  `logb-files` Workbox caches (see the invariant above) -- names must match vite.config.ts
  *  exactly, or a stale SW response keeps answering after this call and this cache gets
@@ -60,8 +69,7 @@ export function setCachedActivities(id: number, page: { items: Activity[]; total
  *  are actually gone. A caller about to load data for a DIFFERENT user must await it: until a
  *  `caches.delete` settles, the service worker can still answer from the old cache. */
 export function clearObjectCache(): Promise<void> {
-  objects.clear();
-  activityPages.clear();
+  clearObjectMemory();
   const store = globalThis.caches;
   if (!store) return Promise.resolve();
   return Promise.all([store.delete('logb-api'), store.delete('logb-files')]).then(() => {});

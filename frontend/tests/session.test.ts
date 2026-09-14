@@ -153,6 +153,24 @@ describe('loadSession', () => {
   });
 });
 
+describe('settings after a confirmed session', () => {
+  /** `/auth/me` has confirmed the session; unreadable settings are no reason to show a
+   *  signed-out screen over a remembered profile and owned caches. */
+  it('keeps the user, with the default currency, when /settings answers 403 or 404', async () => {
+    for (const status of [403, 404]) {
+      serve({ ...signedIn, '/settings': () => jsonResponse(status, { code: 'nope', message: 'no' }) });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const session = await freshSession();
+
+      expect(await session.loadSession()).toBe(true);
+      expect(get(session.user)).toEqual(ME);
+      expect(get(session.currency)).toBe('EUR');
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    }
+  });
+});
+
 describe('ending a session', () => {
   it('detaches the queue rather than clearing it, and stops it being sent', async () => {
     const store = memoryStore();
@@ -353,6 +371,32 @@ describe('offline start and cache ownership', () => {
     expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
     expect(storage.getItem('logb.cache.user')).toBe('7');
     expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(PROFILE);
+  });
+
+  /**
+   * The owner is recorded only once the old caches are gone. Recorded first, a delete that failed
+   * left the new user on record as owner of the previous user's caches, and the next start kept
+   * them.
+   */
+  it('records no new owner when the caches cannot be deleted, and clears again next time', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.cache.user', '9');
+    const failing = vi.fn(async () => { throw new DOMException('quota', 'UnknownError'); });
+    globalThis.caches = { delete: failing } as unknown as CacheStorage;
+    serve({ ...signedIn, '/auth/login': () => jsonResponse(200, { ...PROFILE }) });
+    const session = await freshSession();
+
+    await expect(session.login('ben', 'pw')).rejects.toThrow();
+    expect(failing).toHaveBeenCalled();
+    expect(storage.getItem('logb.cache.user')).toBe('9');
+    expect(get(session.user)).toBeUndefined();
+
+    const log: string[] = [];
+    installCaches(log);
+    await session.login('ben', 'pw');
+    expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
+    expect(storage.getItem('logb.cache.user')).toBe('7');
+    expect(get(session.user)).toMatchObject(PROFILE);
   });
 
   it('a 401 from the real check ends the offline session and forgets the profile', async () => {

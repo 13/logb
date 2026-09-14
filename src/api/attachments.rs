@@ -8,7 +8,7 @@ use crate::state::App;
 use crate::sync::{record, Entity};
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -432,12 +432,19 @@ async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, 
 /// might execute here runs with access to the session. `nosniff` stops it from ignoring the
 /// declared type and guessing something scriptable, and the sandbox CSP strips scripts,
 /// plugins and same-origin privileges from whatever does get rendered.
-fn file_response(bytes: Vec<u8>, mime: &str, disposition: String) -> Response {
+///
+/// `private, no-cache` rather than a long `immutable` lifetime: file ids are sequential, and a
+/// response the browser may reuse without asking would hand the next person signed in on the
+/// same browser the previous person's bytes for `/api/files/N` without `load_owned_file` ever
+/// running. With `no-cache` every reuse is revalidated, and the 304 that makes that cheap is
+/// only ever answered after the ownership check (see `not_modified`).
+fn file_response(bytes: Vec<u8>, mime: &str, disposition: String, etag: &str) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
             (header::CONTENT_DISPOSITION, HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("inline"))),
-            (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable")),
+            (header::CACHE_CONTROL, HeaderValue::from_static(FILE_CACHE_CONTROL)),
+            (header::ETAG, HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""))),
             (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
             (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")),
         ],
@@ -486,17 +493,56 @@ fn content_disposition(inline: bool, original_name: &str) -> String {
     format!("{kind}; filename=\"{ascii}\"; filename*=UTF-8\'\'{}", encode_ext_value(original_name))
 }
 
-async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
-    let f = load_owned_file(&state, user.id, id).await?;
-    let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
-    let inline = may_render_inline(&f.mime);
-    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name)))
+const FILE_CACHE_CONTROL: &str = "private, no-cache";
+
+/// A strong validator for one stored file: its content hash, which already names the blob. The
+/// thumbnail is different bytes under the same hash, so it carries its own suffix.
+fn file_etag(sha256: &str, thumb: bool) -> String {
+    if thumb { format!("\"{sha256}-thumb\"") } else { format!("\"{sha256}\"") }
 }
 
-async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Response, AppError> {
+/// Whether `If-None-Match` names `etag` (or is `*`). Weak comparison, as RFC 9110 prescribes for
+/// this header, so a `W/` prefix a proxy added still matches.
+fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
+    headers.get_all(header::IF_NONE_MATCH).iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .any(|tag| tag == "*" || tag.strip_prefix("W/").unwrap_or(tag) == etag)
+}
+
+/// The 304 for a revalidation. Only ever built after `load_owned_file` has passed: a 304 tells
+/// the browser to reuse what it holds, so answering one before the ownership check would let
+/// another user's cached bytes through exactly as the old `immutable` lifetime did.
+fn not_modified(etag: &str) -> Response {
+    (
+        StatusCode::NOT_MODIFIED,
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static(FILE_CACHE_CONTROL)),
+            (header::ETAG, HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""))),
+        ],
+    ).into_response()
+}
+
+async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, headers: HeaderMap) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
-    let bytes = tokio::fs::read(state.storage.thumb_path(f.id)).await.map_err(|_| AppError::NotFound)?;
-    Ok(file_response(bytes, "image/jpeg", "inline".to_string()))
+    let etag = file_etag(&f.sha256, false);
+    if if_none_match_hits(&headers, &etag) { return Ok(not_modified(&etag)); }
+    let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    let inline = may_render_inline(&f.mime);
+    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name), &etag))
+}
+
+async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, headers: HeaderMap) -> Result<Response, AppError> {
+    let f = load_owned_file(&state, user.id, id).await?;
+    let etag = file_etag(&f.sha256, true);
+    // A thumbnail only exists for images; the 304 must not claim one that was never made.
+    let path = state.storage.thumb_path(f.id);
+    if if_none_match_hits(&headers, &etag) && tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        return Ok(not_modified(&etag));
+    }
+    let bytes = tokio::fs::read(path).await.map_err(|_| AppError::NotFound)?;
+    Ok(file_response(bytes, "image/jpeg", "inline".to_string(), &etag))
 }
 
 #[cfg(test)]

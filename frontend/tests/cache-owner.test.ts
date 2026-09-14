@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { claimCaches, forgetCacheOwner, forgetProfile, rememberProfile, rememberedProfile } from '../src/lib/cache-owner';
+import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberProfile, rememberedProfile, userSwitchNeedsReload } from '../src/lib/cache-owner';
 
 /** An in-memory `Storage`, so the module is tested without a browser. */
 function memoryStorage(): Storage {
@@ -55,33 +55,64 @@ describe('remembered profile', () => {
   });
 });
 
-describe('claimCaches', () => {
-  it('asks for a clear when no owner is recorded, and records the claimant', () => {
+describe('cache owner', () => {
+  it('does not count as the owner when none is recorded, and checking records nothing', () => {
     const s = memoryStorage();
-    expect(claimCaches(7, s)).toBe(true);
+    expect(cachesBelongTo(7, s)).toBe(false);
+    expect(s.getItem('logb.cache.user')).toBeNull();
+  });
+
+  it('belongs to the recorded user only', () => {
+    const s = memoryStorage();
+    recordCacheOwner(7, s);
     expect(s.getItem('logb.cache.user')).toBe('7');
+    expect(cachesBelongTo(7, s)).toBe(true);
+    expect(cachesBelongTo(8, s)).toBe(false);
+    recordCacheOwner(8, s);
+    expect(cachesBelongTo(8, s)).toBe(true);
+    expect(cachesBelongTo(7, s)).toBe(false);
   });
 
-  it('keeps the caches for the same user', () => {
+  it('belongs to nobody again once the owner is forgotten', () => {
     const s = memoryStorage();
-    claimCaches(7, s);
-    expect(claimCaches(7, s)).toBe(false);
-  });
-
-  it('asks for a clear when someone else owns them, and records the new owner', () => {
-    const s = memoryStorage();
-    claimCaches(7, s);
-    expect(claimCaches(8, s)).toBe(true);
-    expect(s.getItem('logb.cache.user')).toBe('8');
-    expect(claimCaches(8, s)).toBe(false);
-  });
-
-  it('asks for a clear again once the owner is forgotten', () => {
-    const s = memoryStorage();
-    claimCaches(7, s);
+    recordCacheOwner(7, s);
     forgetCacheOwner(s);
     expect(s.getItem('logb.cache.user')).toBeNull();
-    expect(claimCaches(7, s)).toBe(true);
+    expect(cachesBelongTo(7, s)).toBe(false);
+  });
+});
+
+describe('userSwitchNeedsReload', () => {
+  const profile = (id: number, lang = 'de') => JSON.stringify({ id, username: `u${id}`, is_admin: false, lang });
+
+  it('reloads when another tab records a different cache owner or profile', () => {
+    expect(userSwitchNeedsReload('logb.cache.user', '7', '8', 7)).toBe(true);
+    expect(userSwitchNeedsReload('logb.session.profile', profile(7), profile(8), 7)).toBe(true);
+  });
+
+  it('reloads when another tab removes them, or clears storage', () => {
+    expect(userSwitchNeedsReload('logb.cache.user', '7', null, 7)).toBe(true);
+    expect(userSwitchNeedsReload('logb.session.profile', profile(7), null, 7)).toBe(true);
+    expect(userSwitchNeedsReload(null, null, null, 7)).toBe(true);
+  });
+
+  it('does not reload for the user this tab already holds', () => {
+    expect(userSwitchNeedsReload('logb.cache.user', null, '7', 7)).toBe(false);
+    expect(userSwitchNeedsReload('logb.session.profile', null, profile(7), 7)).toBe(false);
+    // The same person's language changing in another tab.
+    expect(userSwitchNeedsReload('logb.session.profile', profile(7, 'de'), profile(7, 'en'), 7)).toBe(false);
+  });
+
+  it('does not reload for an unchanged value, another key, or a tab holding no user', () => {
+    expect(userSwitchNeedsReload('logb.cache.user', '8', '8', 7)).toBe(false);
+    expect(userSwitchNeedsReload('logb.outbox', 'a', 'b', 7)).toBe(false);
+    expect(userSwitchNeedsReload('logb.cache.user', '7', '8', null)).toBe(false);
+    expect(userSwitchNeedsReload('logb.cache.user', '7', '8', undefined)).toBe(false);
+  });
+
+  it('treats an unreadable value as not this tab\'s user', () => {
+    expect(userSwitchNeedsReload('logb.session.profile', profile(7), '{not json', 7)).toBe(true);
+    expect(userSwitchNeedsReload('logb.cache.user', '7', 'x', 7)).toBe(true);
   });
 });
 
@@ -90,8 +121,8 @@ describe('storage that throws (private mode)', () => {
     const s = throwingStorage();
     expect(() => rememberProfile(BEN, s)).not.toThrow();
     expect(rememberedProfile(s)).toBeNull();
-    expect(claimCaches(7, s)).toBe(true);
-    expect(claimCaches(7, s)).toBe(true);
+    recordCacheOwner(7, s);
+    expect(cachesBelongTo(7, s)).toBe(false);
     expect(() => forgetProfile(s)).not.toThrow();
     expect(() => forgetCacheOwner(s)).not.toThrow();
   });

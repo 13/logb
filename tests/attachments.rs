@@ -518,3 +518,50 @@ async fn an_attachment_response_names_its_own_uuid_and_its_files_uuid() {
     let boot: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
     assert!(boot["files"].as_array().unwrap().iter().any(|f| f["client_uuid"] == file_uuid));
 }
+
+/// File ids are sequential, so a response the browser may reuse without asking would give the
+/// next person signed in on that browser the previous person's bytes for `/files/N` without the
+/// ownership check ever running. Every reuse is revalidated instead, and the 304 that makes it
+/// cheap is answered only to the owner.
+#[tokio::test]
+async fn file_responses_are_revalidated_and_a_304_needs_ownership() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let a: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(png(800, 600), "front.png", "image/png")).send().await.unwrap().json().await.unwrap();
+    let fid = a["file_id"].as_i64().unwrap();
+
+    let mut etags = Vec::new();
+    for path in [format!("/files/{fid}"), format!("/files/{fid}/thumb")] {
+        let url = app.url(&path);
+        let res = app.client.get(&url).send().await.unwrap();
+        assert_eq!(res.status(), 200, "{path}");
+        assert_eq!(res.headers()["cache-control"], "private, no-cache", "{path}");
+        let etag = res.headers()["etag"].to_str().unwrap().to_string();
+        assert!(etag.starts_with('"') && etag.ends_with('"') && etag.len() > 2, "a strong ETag for {path}: {etag}");
+
+        // The owner revalidating: 304, no body, same validator.
+        let res = app.client.get(&url).header("If-None-Match", &etag).send().await.unwrap();
+        assert_eq!(res.status(), 304, "{path}");
+        assert_eq!(res.headers()["etag"], etag.as_str(), "{path}");
+        assert_eq!(res.headers()["cache-control"], "private, no-cache", "{path}");
+        assert!(res.bytes().await.unwrap().is_empty(), "{path}");
+
+        // Someone else sending the very same validator: the ownership check answers, not the cache.
+        let res = anna.get(&url).header("If-None-Match", &etag).send().await.unwrap();
+        assert_eq!(res.status(), 404, "{path}");
+        assert!(res.headers().get("etag").is_none(), "{path}");
+
+        // A different validator, or none: the bytes.
+        let res = app.client.get(&url).header("If-None-Match", "\"something-else\"").send().await.unwrap();
+        assert_eq!(res.status(), 200, "{path}");
+        assert!(!res.bytes().await.unwrap().is_empty(), "{path}");
+        let res = app.client.get(&url).send().await.unwrap();
+        assert_eq!(res.status(), 200, "{path}");
+        etags.push(etag);
+    }
+    assert_ne!(etags[0], etags[1], "the thumbnail is different bytes, so a different validator");
+}

@@ -43,8 +43,28 @@ Already true: signing out, signing out everywhere and a 401 clear `logb-api` and
 New: the id of the user whose data the caches hold is kept in `localStorage`
 (`logb.cache.user`). When a session is established (sign-in or the session check on app start)
 for a different user id -- or when none is stored yet -- both caches, the in-memory object cache
-and the stored own-type list are cleared before anything else loads, and the new id is stored.
-This covers a session that simply expired and another person signing in on the same device.
+and the stored own-type list are cleared before anything else loads, and the new id is stored
+only once that clear has finished (a failed delete records nothing, so the next start clears
+again). This covers a session that simply expired and another person signing in on the same
+device.
+
+When an app opened offline as one user turns out to be signed in as another, the shell is hidden
+("Loading…") before the caches are cleared and the new user is set, so no mounted screen keeps the
+previous user's data.
+
+When the instance reports that setup is required (a reset database, whose user ids start over),
+the stored profile and cache owner are forgotten, so a new user with an old id inherits neither.
+
+Other open tabs follow a user switch: they listen for `storage` events on `logb.cache.user` and
+`logb.session.profile`, and when another tab changes either to a different user or removes it,
+they hide the shell, drop their in-memory caches and reload to `/`, which runs the session check
+and the owner guard again. A write naming the user the tab already holds does nothing.
+
+Uploaded files (`/api/files/{id}` and `/api/files/{id}/thumb`) are served `Cache-Control: private,
+no-cache` with a strong `ETag` from the stored file's sha256 (with a `-thumb` suffix for the
+thumbnail). The browser HTTP cache therefore revalidates every reuse, and a `304` is answered only
+after the ownership check, so another user on the same browser gets a 404, never the previous
+user's bytes. The service worker's `logb-files` cache is cleared per user as above.
 
 ## Starting offline
 
@@ -82,15 +102,23 @@ corrected to say what is cached.
   `/api/objects` matches nothing; `/api/auth/me` is never cached; unknown `/api/…` paths are
   network-only.
 - Vitest: the user-change guard clears caches when the stored id differs or is missing, and not
-  when it matches.
+  when it matches; a rejected `caches.delete` leaves the owner unchanged and the next claim
+  clears again; the pure decision whether a `storage` event requires a reload; a 403/404 from
+  `/settings` after a good `/auth/me` keeps the user with the default currency.
+- Cargo (`tests/attachments.rs`, SQLite and PostgreSQL): file and thumbnail responses carry
+  `private, no-cache` and an `ETag`; the owner's matching `If-None-Match` gets 304, another user's
+  gets 404, a different or absent validator gets 200.
 - Playwright (`25-offline-cache.spec.ts`, against the production build with the service worker):
   - open the objects list and an object online; go offline (`context.setOffline(true)`); reload;
-    the list and the object page still show their data;
-  - sign out; go offline; sign in is impossible offline, so instead: sign in as user A online, load
-    the list, sign out, sign in as user B online, go offline and reload: none of A's objects
-    appear;
+    the offline note, the list and the object page still show their data;
+  - user A's session lapses (cookies cleared), B signs in through the form: B's own object is
+    shown and none of A's, online and offline;
   - `/api/auth/me` is never answered from cache: after signing out online and going offline, a
-    reload shows the sign-in screen, not A's session.
+    reload stays on the loading screen (nothing can say who is signed in), showing neither the
+    objects list nor the previous user's objects;
+  - the owner check alone, with no 401: A loads objects under the service worker, the cookies are
+    replaced by B's (signed in through the API), and a load shows B's object and not A's, online
+    and after an offline reload.
 
 ## Out of scope
 
