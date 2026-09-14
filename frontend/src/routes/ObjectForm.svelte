@@ -207,7 +207,6 @@
 </main>
 
 <style>
-  .toggle input { flex: none; width: 20px; height: 20px; }
   .actions { margin-top: var(--space-2); }
   .templates { border: none; padding: 0; margin: 0 0 var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
   .templates legend { font-size: var(--text-sm); color: var(--muted); padding: 0; margin-bottom: var(--space-1); }

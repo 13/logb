@@ -31,6 +31,9 @@ test('a row carries its current value', async ({ page }) => {
   // signed-in admin behind, so clear them first: this assertion is about the singular form,
   // not about whatever count happens to be left over from another spec.
   await page.goto('/settings/people');
+  // The list loads after the page renders. Counting Remove buttons before it arrives finds none,
+  // skips the cleanup, and the assertion below then reads every user earlier specs left behind.
+  await expect(page.locator('.card.row', { hasText: 'ben' })).toBeVisible();
   for (;;) {
     const removeButtons = page.getByRole('button', { name: /Remove|Entfernen/ });
     const remaining = await removeButtons.count();

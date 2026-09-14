@@ -117,7 +117,5 @@
 
 <style>
   h3 { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-base); }
-  /* `.row > * { flex: 1 }` in app.css would otherwise stretch the checkbox across half the row. */
-  .toggle input { flex: none; width: 20px; height: 20px; }
   .hint { font-size: var(--text-sm); margin: 0 0 var(--space-2); }
 </style>

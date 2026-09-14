@@ -54,7 +54,6 @@
 </main>
 
 <style>
-  .toggle input { flex: none; width: 20px; height: 20px; }
   .row > button { flex: none; }
   .danger-text { color: var(--danger); }
 </style>

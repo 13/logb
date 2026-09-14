@@ -139,6 +139,9 @@ input[type='checkbox'], input[type='radio'] {
 .field .warn { font-size: var(--text-xs); color: var(--warn); }
 .row { display: flex; gap: var(--space-2); align-items: center; }
 .row > * { flex: 1; }
+/* A checkbox or radio in a toggle row keeps its own size: the rule above would otherwise stretch
+   it across half the row. */
+.row.toggle input { flex: none; width: 20px; height: 20px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); box-shadow: var(--shadow); }
 .list { display: flex; flex-direction: column; gap: var(--space-3); }
 .muted { color: var(--muted); font-size: var(--text-sm); }

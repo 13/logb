@@ -116,7 +116,4 @@
   .total { font-size: var(--text-lg); margin: var(--space-3) 0; }
   /* BarList's default 90px label column fits "Fuel" but clips an object name or "Maintenance". */
   section :global(.label) { width: 140px; }
-  /* `.row > * { flex: 1; }` (app.css) stretches the checkbox into a flex item; pin it back to its
-     native size so it sits directly beside its label instead of spanning the row. */
-  .toggle input { flex: none; width: 20px; height: 20px; }
 </style>
