@@ -43,8 +43,10 @@ Rows are ordered by amount, largest first; rows of 0 are omitted. Empty state fo
 no spend at all: "No costs recorded for this period."
 
 The bar rows reuse Insights' look. That markup and CSS move into `lib/BarList.svelte`
-(`items: { key, label, value, display, href? }[]`), which `Insights.svelte` then uses too -- no
-visual change there.
+(`items: { key, label, value, display, depth?, note?, onLabel?, expanded?, onToggle?,
+toggleLabel? }[]`), which `Insights.svelte` then uses too -- no visual change there. An object's
+name is a button (`onLabel`) that navigates in-app, like the rest of the app's navigation, not a
+link.
 
 ### What counts as spend
 
@@ -85,12 +87,14 @@ Money is integer cents throughout. Every `SUM` is `CAST(... AS BIGINT)` for Post
 ### Backend structure
 
 - `src/domain/stats.rs` -- pure functions, no SQL:
-  - `roll_up(objects: &[ObjectCost]) -> Vec<ObjectNode>`: builds the tree from `(id, parent_id,
-    own_cents)`, sums descendants, sorts siblings by amount, drops zero subtrees. An object whose
-    parent is deleted or missing is treated as top-level.
-  - `months_of(year, rows) -> Vec<Bucket>`: fills the twelve months.
-  - `purchase_entries(objects, has_purchase_activity) -> Vec<(date, object_id, cents)>`: applies
-    the dating and no-double-count rules.
+  - `summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> Stats`: filters to
+    `year` if one is given, fills `over_time` (twelve months, or one bucket per year), and rolls
+    the rest up via `roll_up`.
+  - `roll_up(objects, own) -> Vec<ObjectNode>` (private): builds the tree, sums descendants, sorts
+    siblings by amount, drops zero subtrees. An object whose parent is deleted or missing is
+    treated as top-level.
+  - `purchase_spend(objects: &[ObjectRow], purchased: &HashSet<i64>) -> Vec<Spend>`: applies the
+    dating and no-double-count rules.
 - `src/api/stats.rs` -- the route, three queries: per-activity-cost grouped by `(object_id,
   period, category)` for the selection, the user's objects (`id, parent_id, name, type,
   archived_at, purchase_date, purchase_price_cents, created_at`), and the set of objects with a

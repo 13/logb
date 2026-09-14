@@ -438,6 +438,14 @@ name, category, description, title or notes contain the term (`limit`, default
 substring scan, not a full-text index: instant at household scale, and
 case-insensitive for ASCII only, so `olwechsel` will not find `Ölwechsel`.
 
+## Statistics
+
+The Statistics screen totals spend across every object you own: over time, by object (a child's
+cost rolls into its parent), by type and by category. `GET /api/stats?year=&purchases=` is the
+same data over the API, both parameters optional. An object's purchase price counts only with the
+`purchases` toggle on, dated by its purchase date or else the day it was created, and is skipped
+when a costed `purchase` activity already records that money.
+
 ## API
 
 JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which

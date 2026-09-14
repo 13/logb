@@ -25,6 +25,11 @@
   /** Bar width as a percentage of the largest value, so the widest bar always fills its track.
    *  Values are never negative: the API rejects negative costs at the boundary. */
   const max = $derived(Math.max(...items.map((b) => b.value), 1));
+
+  /** True once any row in the list can expand. When it is, every other row still needs the
+   *  toggle's width reserved so names line up -- Insights never sets `expanded` on any row, so
+   *  this is always false there and its layout is untouched. */
+  const anyToggle = $derived(items.some((b) => b.expanded !== undefined));
 </script>
 
 {#each items as b (b.key)}
@@ -34,6 +39,8 @@
         <button type="button" class="toggle" class:open={b.expanded} aria-expanded={b.expanded} aria-label={b.toggleLabel} onclick={b.onToggle}>
           <Icon name="chevron" size={14} />
         </button>
+      {:else if anyToggle}
+        <span class="toggle-space" aria-hidden="true"></span>
       {/if}
       {#if b.onLabel}
         <button type="button" class="link" onclick={b.onLabel}>{b.label}</button>
@@ -62,4 +69,7 @@
      baseline instead of centring it against the label text beside it. */
   .toggle { display: inline-flex; align-items: center; justify-content: center; transition: transform 120ms; }
   .toggle.open { transform: rotate(90deg); }
+  /* Same box as the chevron icon above, so a row without a toggle still lines its label up with
+     one that has it. */
+  .toggle-space { display: inline-block; flex: none; width: 14px; height: 14px; }
 </style>
