@@ -73,17 +73,20 @@ already refuses cycles.
 ## Backend structure
 
 - `src/domain/stats.rs` gains, pure and unit-tested:
-  - `months_ending(today: NaiveDate, months: u32, spend) -> Vec<Amount>` -- the twelve-month
-    window with zeros, sharing the month-filling code `summarize` uses for one year.
-  - `days_owned(since, until) -> i64` and `per_year_cents(total, days) -> Option<i64>`
-    (None under 90 days; integer arithmetic, `total * 365 / days`).
+  - `months_ending(today: NaiveDate, months: u32, totals: &[(String, i64)]) -> Vec<Amount>` -- the
+    twelve-month window with zeros, sharing the month-filling code `summarize` uses for one year.
+  - `ownership(running_cents, purchase_cents, since, until) -> Ownership` -- total, and per year
+    as `total * 365 / days` (None under `MIN_DAYS_FOR_PER_YEAR` = 90 days).
+  - `day_of(s) -> Option<NaiveDate>` -- the day at the start of a stored date or timestamp.
 - `src/domain/insights.rs` gains `consumption_per_fill(fills: &[DatedFill]) -> Vec<FillRate>`,
   pure and unit-tested, next to the existing tank-method consumption.
-- `src/api/insights.rs`: parses `contents`; when true, resolves the descendant ids once (one query
-  for the user's non-deleted objects' `id, parent_id`, walked in Rust) and runs the cost queries
-  with `object_id IN (...)` over that set; purchase prices come from `domain::stats::purchase_spend`
-  with the same purchased-set query phase 1 uses. `by_year`/`by_category` SQL is unchanged apart
-  from the id set. Every `SUM` is `CAST(... AS BIGINT)`.
+- `src/api/insights.rs`: parses `contents` and prefixes every cost query with a `scope` CTE, read
+  as `object_id IN (SELECT id FROM scope)`. Without contents the CTE is the object alone; with
+  contents it is `WITH RECURSIVE` over non-deleted children (`UNION`, as `objects::ancestors`
+  does). Only these two fixed fragments are ever formatted into the SQL; the id is always bound.
+  Purchase prices come from `domain::stats::purchase_spend` with the same purchased-set rule phase
+  1 uses. Counter and fuel queries stay on the object's own id. Every `SUM` is
+  `CAST(... AS BIGINT)`.
 - `docs/openapi.json`: the parameter and new fields.
 
 ## Frontend structure
