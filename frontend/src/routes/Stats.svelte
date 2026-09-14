@@ -13,7 +13,20 @@
   /** Per device and not synced: whether to count purchase prices is a way of looking, not data. */
   const includePurchases = persisted('logb.stats.purchases', false);
 
-  let year = $state<string | null>(null);
+  /** Four digits from `?year=`, or all years. Anything else in the address is ignored rather than
+   *  sent to the API to be refused. */
+  const yearFromUrl = new URLSearchParams(location.search).get('year');
+  let year = $state<string | null>(yearFromUrl && /^\d{4}$/.test(yearFromUrl) ? yearFromUrl : null);
+
+  // The year stays in the address, as Search keeps its query: a reload, a shared link or the back
+  // button from an object returns to the same year. Replaced only when it changes, so opening
+  // `/stats` does not rewrite its own address.
+  $effect(() => {
+    const url = new URL(location.href);
+    if (year) url.searchParams.set('year', year); else url.searchParams.delete('year');
+    const next = url.pathname + url.search;
+    if (next !== location.pathname + location.search) history.replaceState(null, '', next);
+  });
   let data = $state<Stats | null>(null);
   /** The last year list seen. Kept apart from `data`, which is cleared on every fetch, so the
    *  picker does not empty and reset itself while the next selection loads. */

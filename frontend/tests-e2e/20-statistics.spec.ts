@@ -45,6 +45,14 @@ test('statistics total everything, roll a boiler into its house, and remember th
   // "750.00" is also inside the all-years "1,750.00", so wait for that to go first.
   await expect(total).not.toContainText('1,750.00');
   await expect(total).toContainText('750.00');
+
+  // The year is kept in the address, so a reload -- or coming back from an object -- keeps it.
+  await expect(page).toHaveURL(/[?&]year=2026(&|$)/);
+  await page.reload();
+  await expect(page.getByLabel('Year')).toHaveValue('2026');
+  await expect(page.getByTestId('stats-total')).not.toContainText('1,750.00');
+  await expect(page.getByTestId('stats-total')).toContainText('750.00');
+
   await expect(page.getByTestId('stats-over-time').locator('.bar-row')).toHaveCount(12);
 
   // Purchase prices: off by default, on survives a reload.
@@ -57,14 +65,9 @@ test('statistics total everything, roll a boiler into its house, and remember th
   await expect(page.getByLabel('Include purchase prices')).toBeChecked();
   await expect(page.getByTestId('stats-total')).toContainText('4,750.00');
 
-  // Tapping an object opens it. The click's navigation is synchronous (no request to await),
-  // and the object page replaces its URL again right on mount to carry the open tab -- so the
-  // wait has to be armed before the click, or it can miss the plain `/objects/id` it is
-  // watching for in the instant before that replace happens.
-  await Promise.all([
-    page.waitForURL(`**/objects/${car}`),
-    page.getByTestId('stats-by-object').getByRole('button', { name: 'Stats Car' }).click(),
-  ]);
+  // Tapping an object opens it.
+  await page.getByTestId('stats-by-object').getByRole('button', { name: 'Stats Car' }).click();
+  await page.waitForURL(`**/objects/${car}`);
 });
 
 test('a new user sees the empty state', async ({ page }) => {

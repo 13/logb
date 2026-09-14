@@ -158,10 +158,14 @@
     loadActivities('refresh');
   }));
 
+  // The default tab is left out of the address, and the address is replaced only when it changes:
+  // opening `/objects/5` must not turn into `/objects/5?tab=timeline` a moment later, which
+  // breaks a back-button history entry's match and any test waiting for the plain URL.
   $effect(() => {
     const url = new URL(location.href);
-    url.searchParams.set('tab', tab);
-    history.replaceState(null, '', url.pathname + url.search);
+    if (tab === 'timeline') url.searchParams.delete('tab'); else url.searchParams.set('tab', tab);
+    const next = url.pathname + url.search;
+    if (next !== location.pathname + location.search) history.replaceState(null, '', next);
   });
 
   function setTab(x: Tab) { tab = x; }
