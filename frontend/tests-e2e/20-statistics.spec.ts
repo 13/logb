@@ -49,6 +49,7 @@ test('statistics total everything, roll a boiler into its house, and remember th
 
   // Purchase prices: off by default, on survives a reload.
   await page.getByLabel('Year').selectOption({ label: 'All years' });
+  await expect(page.getByLabel('Include purchase prices')).not.toBeChecked();
   await page.getByLabel('Include purchase prices').check();
   await expect(total).toContainText('4,750.00');
   await expect(page.getByTestId('stats-by-category')).toContainText('Purchase price');

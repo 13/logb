@@ -31,12 +31,12 @@
   <div class="bar-row" style={b.depth ? `padding-left: calc(${b.depth} * var(--space-4))` : undefined}>
     <span class="label">
       {#if b.expanded !== undefined}
-        <button class="toggle" class:open={b.expanded} aria-expanded={b.expanded} aria-label={b.toggleLabel} onclick={b.onToggle}>
+        <button type="button" class="toggle" class:open={b.expanded} aria-expanded={b.expanded} aria-label={b.toggleLabel} onclick={b.onToggle}>
           <Icon name="chevron" size={14} />
         </button>
       {/if}
       {#if b.onLabel}
-        <button class="link" onclick={b.onLabel}>{b.label}</button>
+        <button type="button" class="link" onclick={b.onLabel}>{b.label}</button>
       {:else}
         {b.label}
       {/if}
@@ -57,6 +57,9 @@
   .note { font-size: var(--text-xs, var(--text-sm)); }
   .toggle, .link { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
   .link { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .toggle { display: inline-flex; transition: transform 120ms; }
+  /* The global `button { min-height: var(--control); }` makes this a phone-sized tap target, but
+     `inline-flex` alone stretches to fill it top-to-bottom, pinning the chevron above the
+     baseline instead of centring it against the label text beside it. */
+  .toggle { display: inline-flex; align-items: center; justify-content: center; transition: transform 120ms; }
   .toggle.open { transform: rotate(90deg); }
 </style>
