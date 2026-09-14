@@ -74,9 +74,9 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
 
   // Force the FAB itself into existence regardless of run order: run alone, this spec's
   // database has no objects yet, and the dashboard swaps the FAB for a plain inline button in
-  // that case. Toggling "archived" satisfies the same `objects.length > 0 || archived`
-  // condition the FAB is gated on without depending on data another spec left behind.
-  await page.getByRole('button', { name: /Show archived|Archivierte anzeigen/ }).click();
+  // that case. The FAB now shows on the Archived tab whatever the data, so switching to it
+  // still forces the FAB into existence without depending on data another spec left behind.
+  await page.getByRole('button', { name: /^(Archived|Archiviert)/ }).click();
 
   const main = page.locator('main');
   const fab = page.getByRole('button', { name: /New object/ });

@@ -1,13 +1,13 @@
 <script lang="ts">
   import { go } from './router';
   import { fileUrl } from './api';
-  import { counter, money } from './format';
+  import { counter, money, lastActivityLabel, todayIso } from './format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { MemObject } from './types';
   import { typeIcon } from './object-types';
   import Icon from './Icon.svelte';
-  let { object }: { object: MemObject } = $props();
+  let { object, parentName = null }: { object: MemObject; parentName?: string | null } = $props();
 </script>
 
 <!-- The quick-log action belongs to this object, so it sits inside the object's card rather than
@@ -30,11 +30,15 @@
           <span class="chip due">{object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}</span>
         {/if}
       </div>
+      {#if parentName}<div class="muted small">{$t('search.in-parent', { name: parentName })}</div>{/if}
       <div class="muted tnum type-row">
         <Icon name={typeIcon(object.type)} size={16} />
         {$t(`type.${object.type}`)}
         {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
+        <!-- A month is the unit people think in; rounded like the Info tab, since it is an average. -->
+        {#if object.stats.counter_per_day_milli !== null && object.counter_unit} · {$t('insights.per-month', { amount: counter(Math.round(object.stats.counter_per_day_milli * 30.44 / 1000), object.counter_unit, $locale) })}{/if}
         {#if object.stats.total_cost_cents > 0} · {money(object.stats.total_cost_cents, $currency, $locale)}{/if}
+        {#if object.stats.last_activity_date} · {lastActivityLabel(object.stats.last_activity_date, todayIso(), $locale)}{/if}
       </div>
     </div>
   </button>

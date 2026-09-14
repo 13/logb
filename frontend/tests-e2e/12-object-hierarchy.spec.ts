@@ -65,6 +65,6 @@ test('an archived object deep inside the tree is still reachable from the archiv
   // ...and present in the archived view, which is the recovery route for everything archived
   // at any depth. Before this it asked for archived *roots* only, and a nested archived object
   // appeared in no list in the app at all.
-  await page.getByRole('button', { name: 'Show archived' }).click();
+  await page.getByRole('button', { name: /^Archived/ }).click();
   await expect(page.getByText('Attic Nest Bulb')).toBeVisible();
 });

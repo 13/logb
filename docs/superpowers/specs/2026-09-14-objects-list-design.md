@@ -1,6 +1,6 @@
 # Objects list: tabs, search, sorting, richer cards
 
-Status: approved, not implemented. First of three projects (objects list → tags → own types).
+Status: implemented. First of three projects (objects list → tags → own types).
 
 The dashboard's object list is a fixed name-ordered list of top-level objects with a "Show
 archived" chip. Finding one object among many means scrolling or leaving for the Search screen,

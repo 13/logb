@@ -1,38 +1,62 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import ObjectCard from '../lib/ObjectCard.svelte';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
   import { fmtDate } from '../lib/format';
-  import type { MemObject, Reminder } from '../lib/types';
+  import { persisted } from '../stores/persisted';
+  import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
+  import type { MemObject, ObjectType, Reminder } from '../lib/types';
   import Icon from '../lib/Icon.svelte';
 
-  let objects = $state<MemObject[]>([]);
+  let active = $state<MemObject[]>([]);
+  let archived = $state<MemObject[]>([]);
   let due = $state<Reminder[]>([]);
   let soon = $state<Reminder[]>([]);
-  let archived = $state(false);
   let loading = $state(true);
   let error = $state('');
+
+  /** Per device, like the other view preferences; the address wins when it names a sort. */
+  const rememberedSort = persisted<string>('logb.objects.sort', 'name');
+  const params = new URLSearchParams(location.search);
+  let tab = $state<ListTab>(parseTab(params.get('tab')));
+  let sort = $state<SortKey>(parseSort(params.get('sort')) ?? parseSort($rememberedSort) ?? 'name');
+  /** Session-only: a search is a moment's question, not a way of looking at the list. */
+  let query = $state('');
 
   async function load() {
     loading = true; error = '';
     try {
-      // The archived view is the one screen whose job is "where archived things live", so it
-      // asks for archived objects at any depth, flat: `all=true` means "ignore nesting" and
-      // says nothing about `archived`, which stays an independent either/or filter. Without it
-      // the view returns archived *roots* only, and an archived object inside a room appears in
-      // no list in the app at all. The live view keeps the roots-only default, because there
-      // the nesting is the point -- a room is reached through the house that holds it.
-      const scope = archived ? 'archived=true&all=true' : 'archived=false';
-      objects = await api<MemObject[]>('GET', `/objects?${scope}`);
+      // Both tabs at every depth, once: switching tabs, searching and sorting then need no
+      // request, and a search can find an object inside another. A household has tens of objects.
+      [active, archived] = await Promise.all([
+        api<MemObject[]>('GET', '/objects?all=true&archived=false'),
+        api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+      ]);
       const all = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
       due = all.filter((r) => r.due);
       soon = all.filter((r) => !r.due);
     } catch (e) { error = (e as Error).message; } finally { loading = false; }
   }
-  // one load on mount and on every toggle of `archived`
-  $effect(() => { archived; load(); });
+  onMount(load);
+
+  function setSort(next: SortKey) { sort = next; rememberedSort.set(next); }
+
+  // Tab and sort stay in the address, defaults left out, replaced only when it changes.
+  $effect(() => {
+    const url = new URL(location.href);
+    if (tab === 'active') url.searchParams.delete('tab'); else url.searchParams.set('tab', tab);
+    if (sort === 'name') url.searchParams.delete('sort'); else url.searchParams.set('sort', sort);
+    const next = url.pathname + url.search;
+    if (next !== location.pathname + location.search) history.replaceState(null, '', next);
+  });
+
+  const typeLabel = (ty: ObjectType) => $t(`type.${ty}`);
+  const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale));
+  const activeCount = $derived(visibleRows(active, archived, 'active', '', 'name', typeLabel, $locale).length);
+  const nothingYet = $derived(active.length === 0 && archived.length === 0);
 
   async function snooze(r: Reminder) {
     try { await api('POST', `/reminders/${r.id}/snooze`, { days: 7 }); await load(); }
@@ -79,45 +103,49 @@
     </div>
   {/if}
 
-  <!-- The archived filter is a chip, like the category chips on an object: a control that
-       narrows a list belongs above the list in the row of such controls, not as a loose
-       checkbox trailing off the bottom of the page. `aria-pressed` carries the on/off state a
-       checkbox used to carry, and the label is unchanged. -->
-  <div class="chips">
-    <button
-      class="chip"
-      class:active={archived}
-      aria-pressed={archived}
-      onclick={() => (archived = !archived)}
-    >{$t('dash.show-archived')}</button>
-  </div>
+  <nav class="tabs" aria-label={$t('dash.title')}>
+    <button class:active={tab === 'active'} aria-pressed={tab === 'active'} onclick={() => (tab = 'active')}>
+      {$t('dash.tab-active')} <span class="count muted">{activeCount}</span>
+    </button>
+    <button class:active={tab === 'archived'} aria-pressed={tab === 'archived'} onclick={() => (tab = 'archived')}>
+      {$t('dash.tab-archived')} <span class="count muted">{archived.length}</span>
+    </button>
+  </nav>
 
   {#if error}<p class="error">{error}</p>{/if}
   {#if loading}
     <p class="muted">{$t('nav.loading')}</p>
-  {:else if objects.length === 0}
+  {:else if tab === 'active' && nothingYet}
     <!-- The one screen in the app that can say what LogB is for: it is what a new user sees
-         the moment setup finishes. The archived view is a filter, not a first run, so it gets
-         the fact instead of the pitch. -->
+         the moment setup finishes. -->
     <div class="empty">
-      {#if archived}
-        <p>{$t('dash.none-archived')}</p>
-      {:else}
-        <span class="empty-icon"><Icon name="object" size={40} /></span>
-        <p>{$t('dash.empty')}</p>
-        <button class="primary" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
-      {/if}
+      <span class="empty-icon"><Icon name="object" size={40} /></span>
+      <p>{$t('dash.empty')}</p>
+      <button class="primary" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
     </div>
+  {:else if tab === 'archived' && archived.length === 0}
+    <div class="empty"><p>{$t('dash.none-archived')}</p></div>
   {:else}
-    <div class="list">
-      {#each objects as o (o.id)}<ObjectCard object={o} />{/each}
+    <div class="controls">
+      <input type="search" aria-label={$t('dash.search')} placeholder={$t('dash.search')} bind:value={query} />
+      <label class="sort">
+        <span>{$t('dash.sort')}</span>
+        <select value={sort} onchange={(e) => setSort(parseSort((e.currentTarget as HTMLSelectElement).value) ?? 'name')}>
+          {#each SORT_KEYS as key (key)}<option value={key}>{$t(`dash.sort-${key}`)}</option>{/each}
+        </select>
+      </label>
     </div>
+    {#if rows.length === 0}
+      <p class="muted">{$t('dash.no-match', { q: query.trim() })}</p>
+    {:else}
+      <div class="list">
+        {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} />{/each}
+      </div>
+    {/if}
   {/if}
 
-  <!-- Hidden while the empty state is showing: that state carries the same action as its own
-       call to action, and two buttons named "New object" on one screen is one too many -- for
-       a reader and for anything resolving that name. -->
-  {#if objects.length > 0 || archived}
+  <!-- Hidden while the first-run empty state carries the same action. -->
+  {#if !nothingYet || tab === 'archived'}
     <button class="primary fab" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
   {/if}
 </main>
@@ -128,4 +156,8 @@
   .banner.soon { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
   .banner.soon a { color: var(--text); }
   .snooze { font-size: var(--text-xs); padding: 2px var(--space-2); }
+  .controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-3); }
+  .controls input[type='search'] { flex: 1 1 12rem; }
+  .sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+  .tabs .count { margin-left: var(--space-1); font-weight: normal; }
 </style>
