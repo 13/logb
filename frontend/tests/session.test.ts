@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { enqueue, memoryStore, type OutboxStore } from '../src/lib/outbox';
 
@@ -180,6 +180,170 @@ describe('ending a session', () => {
     await session.logout();
 
     expect(went).toEqual(['/login']);
+  });
+});
+
+/** An in-memory `localStorage`: vitest runs in node, which has none. */
+function installStorage(): Storage {
+  const m = new Map<string, string>();
+  const s = {
+    get length() { return m.size; },
+    clear: () => m.clear(),
+    getItem: (k: string) => m.get(k) ?? null,
+    key: (i: number) => [...m.keys()][i] ?? null,
+    removeItem: (k: string) => { m.delete(k); },
+    setItem: (k: string, v: string) => { m.set(k, String(v)); },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { value: s, configurable: true });
+  return s;
+}
+
+/** Records which service-worker caches were deleted, and in what order relative to other events. */
+function installCaches(log: string[]) {
+  globalThis.caches = { delete: vi.fn(async (name: string) => { log.push(`delete:${name}`); return true; }) } as unknown as CacheStorage;
+}
+
+const PROFILE = { id: 7, username: 'ben', is_admin: true, lang: 'de' };
+
+/**
+ * The caches outlive the session (they are on disk), so they must follow whoever is signed in:
+ * kept for the same person, cleared before anything loads for a different one. And the last
+ * person's profile lets the app open offline -- without ever counting as a known session.
+ */
+describe('offline start and cache ownership', () => {
+  afterEach(() => {
+    // @ts-expect-error -- test-only cleanup of globals this suite installs
+    delete globalThis.caches;
+    // @ts-expect-error -- as above
+    delete globalThis.localStorage;
+  });
+
+  it('opens as the remembered user when the server cannot be reached, without knowing the session', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    const store = memoryStore();
+    await enqueue(store, { id: 'q', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0, userId: 7 });
+    const calls = serve({});
+    const session = await freshSession(store);
+    const api = await import('../src/lib/api');
+
+    expect(await session.loadSession()).toBe(false); // still unknown: the retry keeps trying
+    expect(get(session.user)).toMatchObject(PROFILE);
+    expect(get(session.offline)).toBe(true);
+
+    // Queued, not sent: nothing has confirmed the cookie still belongs to this person.
+    await api.flushOutbox();
+    expect(calls).not.toContain('/objects/1/activities');
+    expect(await store.all()).toHaveLength(1);
+  });
+
+  it('stays unknown, with no user, when nothing is remembered', async () => {
+    installStorage();
+    serve({});
+    const session = await freshSession();
+
+    expect(await session.loadSession()).toBe(false);
+    expect(get(session.user)).toBeUndefined();
+    expect(get(session.offline)).toBe(false);
+  });
+
+  it('keeps the caches when the real check later confirms the same user, and then sends', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    const log: string[] = [];
+    installCaches(log);
+    const store = memoryStore();
+    await enqueue(store, { id: 'q', kind: 'activity.create', path: '/objects/1/activities', body: {}, attempts: 0, userId: 7 });
+    serve({});
+    const session = await freshSession(store);
+    expect(await session.loadSession()).toBe(false);
+
+    const calls = serve({ ...signedIn, '/auth/me': () => jsonResponse(200, { ...PROFILE }), '/objects/1/activities': () => jsonResponse(201, { id: 1 }) });
+    expect(await session.loadSession()).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(get(session.offline)).toBe(false);
+    expect(log).toEqual([]);
+    expect(calls).toContain('/objects/1/activities');
+    expect(await store.all()).toEqual([]);
+  });
+
+  it('clears the caches before anything loads when a different user turns out to be signed in', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    const log: string[] = [];
+    installCaches(log);
+    serve({});
+    const session = await freshSession();
+    expect(await session.loadSession()).toBe(false);
+
+    const OTHER = { id: 8, username: 'anna', is_admin: false, lang: 'en' };
+    serve({
+      '/auth/status': () => jsonResponse(200, { setup_required: false }),
+      '/auth/me': () => jsonResponse(200, OTHER),
+      '/settings': () => { log.push('fetch:/settings'); return jsonResponse(200, { currency: 'EUR' }); },
+    });
+    session.user.subscribe((u) => { if (u && u.id === 8) log.push('user:8'); });
+    expect(await session.loadSession()).toBe(true);
+
+    expect(log.slice(0, 3)).toEqual(['delete:logb-api', 'delete:logb-files', 'user:8']);
+    expect(log.indexOf('fetch:/settings')).toBeGreaterThan(log.indexOf('user:8'));
+    expect(storage.getItem('logb.cache.user')).toBe('8');
+    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(OTHER);
+    expect(get(session.offline)).toBe(false);
+  });
+
+  it('clears on a first sign-in with no owner recorded, and remembers who signed in', async () => {
+    const storage = installStorage();
+    const log: string[] = [];
+    installCaches(log);
+    serve({ ...signedIn, '/auth/login': () => jsonResponse(200, { ...PROFILE }) });
+    const session = await freshSession();
+
+    await session.login('ben', 'pw');
+
+    expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
+    expect(storage.getItem('logb.cache.user')).toBe('7');
+    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(PROFILE);
+  });
+
+  it('a 401 from the real check ends the offline session and forgets the profile', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    serve({});
+    const session = await freshSession();
+    expect(await session.loadSession()).toBe(false);
+
+    serve({
+      '/auth/status': () => jsonResponse(200, { setup_required: false }),
+      '/auth/me': () => jsonResponse(401, { code: 'unauthorized', message: 'log in' }),
+    });
+    expect(await session.loadSession()).toBe(true);
+
+    expect(get(session.user)).toBeNull();
+    expect(get(session.offline)).toBe(false);
+    expect(storage.getItem('logb.session.profile')).toBeNull();
+    expect(storage.getItem('logb.cache.user')).toBeNull();
+  });
+
+  it('logout and logout everywhere forget the profile and the cache owner', async () => {
+    for (const end of ['logout', 'logoutEverywhere'] as const) {
+      const storage = installStorage();
+      serve({ ...signedIn, '/auth/logout': () => jsonResponse(204, null), '/auth/logout-all': () => jsonResponse(204, null) });
+      const session = await freshSession();
+      await session.loadSession();
+      expect(storage.getItem('logb.session.profile')).not.toBeNull();
+      expect(storage.getItem('logb.cache.user')).toBe('7');
+
+      await session[end]();
+
+      expect(storage.getItem('logb.session.profile')).toBeNull();
+      expect(storage.getItem('logb.cache.user')).toBeNull();
+    }
   });
 });
 

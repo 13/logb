@@ -22,6 +22,12 @@ import type { Activity, MemObject } from './types';
  * drops those too, for exactly the reason it drops the Maps below: a `NetworkFirst`/
  * `CacheFirst` hit served after logout would otherwise re-poison this module's cache with the
  * previous user's data on a shared device.
+ *
+ * Ending a session is not the only way to change hands: a session can simply expire, with no
+ * logout to run, and the Workbox caches outlive the tab. So every session START checks whose
+ * data the caches hold too (`claimCaches` in `./cache-owner.ts`, called from
+ * `../stores/session.ts`) and clears here, before the new user is set and anything loads for
+ * them, when that is anyone else -- or nobody recorded.
  */
 const objects = new Map<number, MemObject>();
 const activityPages = new Map<number, { items: Activity[]; total: number }>();

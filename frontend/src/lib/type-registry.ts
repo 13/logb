@@ -28,10 +28,15 @@ export const CUSTOM_TYPE_ICONS: IconName[] = [
 /**
  * The signed-in user's own types.
  *
- * Module scope, so the list outlives any one screen. The service worker does not cache `/types`,
- * so the last list that loaded is kept per user in `localStorage` (`logb.types.<userId>`) and
- * read back before the network answers: an app started without a connection still names and
- * draws its types. Cleared, with the object cache, whenever a session ends.
+ * Module scope, so the list outlives any one screen. The last list that loaded is kept per user
+ * in `localStorage` (`logb.types.<userId>`) and read back before the network answers: an app
+ * started without a connection still names and draws its types. The `GET /api/types` response
+ * itself is also in the service worker's `logb-api` cache (NetworkFirst), which answers the
+ * request when offline; the stored list is what shows before any answer at all.
+ *
+ * Cleared, with the object cache, whenever a session ends -- and when a session starts for
+ * someone other than the caches' recorded owner (see `../stores/session.ts`), which also drops
+ * every stored list (`clearStoredTypeLists`).
  */
 export const customTypes: Writable<CustomType[]> = writable([]);
 
@@ -94,6 +99,22 @@ export function clearCustomTypes(): void {
   owner = null;
   customTypes.set([]);
   typesLoaded.set(false);
+}
+
+/** Removes every user's stored list, not just the current owner's. After a reload this tab knows
+ *  no owner, so when the device changes hands that is the only way the previous person's list
+ *  leaves the disk. */
+export function clearStoredTypeLists(): void {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return;
+    const keys: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k?.startsWith('logb.types.')) keys.push(k);
+    }
+    for (const k of keys) ls.removeItem(k);
+  } catch { /* blocked: nothing could have been stored either */ }
 }
 
 function isBuiltin(key: string): key is BuiltinType {

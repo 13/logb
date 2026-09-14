@@ -11,6 +11,7 @@ export default {
   'nav.edit': 'Bearbeiten',
   'nav.close': 'Schließen',
   'nav.loading': 'Lädt…',
+  'nav.offline-mode': 'Offline – gespeicherte Daten',
   'nav.confirm-delete': 'Wirklich löschen? Das kann nicht rückgängig gemacht werden.',
   'error.generic': 'Etwas ist schiefgelaufen',
   'error.offline': 'Keine Verbindung',

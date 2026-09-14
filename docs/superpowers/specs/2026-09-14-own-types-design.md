@@ -32,6 +32,7 @@ and cannot be edited or deleted. Reminder templates remain built-in types only.
   form categories, statistics "By type": the custom type's name and icon, and its categories.
   One frontend lookup resolves any type key (built-in or custom) to label, icon and categories.
 - **Offline**: the type list is kept per user in the device's local storage after it first loads,
+  and API reads for types (`GET /api/types`) are also in the service-worker cache (`logb-api`),
   so an app started without a connection still names and draws its types. An own-type object
   whose type is not in that list shows "Unknown type" and the generic icon until the list loads.
 

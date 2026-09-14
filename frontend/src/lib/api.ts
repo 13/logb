@@ -22,6 +22,19 @@ export function setOutboxUser(id: number | null): void {
   currentUserId = id;
 }
 
+/**
+ * Whether a server has actually confirmed the session the outbox user comes from. In offline
+ * mode (see `../stores/session.ts`) the user is the last one remembered on this device, not one
+ * the server has vouched for: their writes may queue, but sending them under whatever cookie is
+ * there now could replay them as someone else. Injected rather than imported so `api.ts` keeps
+ * not depending on the session module. Defaults to "confirmed" so code that sets an outbox user
+ * directly (the outbox tests) behaves as before.
+ */
+let sessionConfirmed: () => boolean = () => true;
+export function setOutboxSendGate(fn: () => boolean): void {
+  sessionConfirmed = fn;
+}
+
 /** An op belongs to the session in front of us unless it is demonstrably someone else's. A
  *  record queued before `userId` existed, or one read while no user is known, counts as ours --
  *  the alternative is stranding a write nobody can ever see.
@@ -295,7 +308,10 @@ async function doFlushOutbox(): Promise<void> {
     // and `loadSession` is retried on reconnect if its own first attempt failed. Inside the
     // `try` so the `finally` still notifies -- a listener that never hears from a skipped pass
     // is a view left showing whatever it last computed.
-    if (currentUserId === null) { completed = true; changed = false; return; }
+    //
+    // The same holds for a user nobody has confirmed yet (offline mode): the flush that counts
+    // is the one `loadSession` fires once the real session check succeeds.
+    if (currentUserId === null || !sessionConfirmed()) { completed = true; changed = false; return; }
     before = await queueSnapshot();
     resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
       if (!isOurs(op)) {
