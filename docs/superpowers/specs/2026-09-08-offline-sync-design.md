@@ -264,6 +264,9 @@ What that changes on the wire:
   nothing. A uuid already used by anyone else, or by a deleted type, is rejected. As with every
   create op, the logged change carries no value, so a pulling device reads the row through
   bootstrap or `GET /types`, using `entity_id`.
+- **Keys and names on the client.** Type keys are lower case (`custom:<lowercase uuid>`). A pulled
+  `object_type` create carries no field values, so a client fetches the row via bootstrap or
+  `GET /types` before it can name objects of that type, applying the unknown-type rule until then.
 - **REST writes are logged.** `POST`/`PATCH`/`DELETE /types` record create/set/delete changes and
   stamp field clocks, like every other REST write.
 

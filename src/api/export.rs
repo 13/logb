@@ -613,14 +613,20 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
 
 /// The archive's types, each checked by `custom_type::normalize` exactly as `POST /types` checks
 /// a body, with its uuid lower-cased (objects' `custom:` keys are). A bad type refuses the whole
-/// import with a 400 that names it.
+/// import with a 400 that names it, and so does a uuid that appears twice (ignoring case): two
+/// types cannot share one key, and nothing says which of them the archive's objects mean.
 fn archive_types(data: &Export) -> Result<Vec<(String, TypeInput)>, AppError> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
     data.types.iter().enumerate().map(|(i, t)| {
         let location = format!("type {i} ({})", t.name);
         let uuid = super::normalize_client_uuid(Some(t.client_uuid.clone()))
             .map_err(|e| tag(e, &location))?
             .ok_or_else(|| AppError::BadRequest(format!("{location}: client_uuid is required")))?
             .to_lowercase();
+        if let Some(first) = seen.insert(uuid.clone(), i) {
+            return Err(AppError::BadRequest(format!(
+                "{location}: client_uuid is already used by type {first} ({})", data.types[first].name)));
+        }
         let input = TypeInput { name: t.name.clone(), icon: t.icon.clone(), categories: t.categories.clone(), counter_unit: t.counter_unit.clone() };
         let input = custom_type::normalize(input).map_err(|e| AppError::BadRequest(format!("{location}: {e}")))?;
         Ok((uuid, input))

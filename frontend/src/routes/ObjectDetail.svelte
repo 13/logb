@@ -9,7 +9,7 @@
   import ObjectCard from '../lib/ObjectCard.svelte';
   import TagChips from '../lib/TagChips.svelte';
   import { foldTag } from '../lib/tags';
-  import { customTypes, typeIcon, typeLabel } from '../lib/type-registry';
+  import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -247,7 +247,7 @@
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
-      <p class="muted">{typeLabel(object.type, $customTypes, $t)}</p>
+      <p class="muted">{typeLabel(object.type, $customTypes, $t, $typesLoaded)}</p>
       <TagChips tags={object.tags ?? []} />
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}

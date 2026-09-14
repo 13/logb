@@ -51,6 +51,21 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await page.waitForURL(`**/objects/${objectId}`);
   await expect(page.getByText('New brake pads')).toBeVisible();
 
+  // A cold load of the entry form whose own types arrive late: the default category is re-chosen
+  // from the type's own list once it lands, rather than sitting on one the type does not offer.
+  // The stored list is removed first, or it would answer before the network.
+  await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('logb.types.')) localStorage.removeItem(k); });
+  await page.context().route('**/api/types', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.goto(`/objects/${objectId}/activities/new`);
+  await page.reload();
+  const category = page.getByLabel('Category');
+  await expect(category.locator('option')).toHaveText(['Repair', 'Fuel / charge', 'Other']);
+  expect(['repair', 'fuel', 'other']).toContain(await category.inputValue());
+  await page.context().unroute('**/api/types');
+
   // Search hits name the type too.
   await page.goto('/search?q=Scooter%20One');
   await expect(page.getByRole('main')).toContainText('E-Scooter');
@@ -65,7 +80,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   // Deleting a type still in use is refused, with the count, and the type stays.
   await page.goto('/settings/types');
   page.once('dialog', (d) => d.accept());
-  await typeRow.getByRole('button', { name: 'Delete' }).click();
+  await typeRow.getByRole('button', { name: 'Delete E-Scooter' }).click();
   await expect(typeRow.getByRole('alert')).toHaveText(/Used by 1 object/);
   await page.reload();
   await expect(page.locator('.type-row', { hasText: 'E-Scooter' })).toBeVisible();

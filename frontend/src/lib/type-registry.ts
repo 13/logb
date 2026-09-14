@@ -28,23 +28,72 @@ export const CUSTOM_TYPE_ICONS: IconName[] = [
 /**
  * The signed-in user's own types.
  *
- * Cached the way objects are: module scope, so it outlives any one screen, and the `GET` goes
- * through the service worker's NetworkFirst `logb-api` cache, so a device that starts offline
- * still gets the last list it saw. Cleared with the object cache whenever a session ends.
+ * Module scope, so the list outlives any one screen. The service worker does not cache `/types`,
+ * so the last list that loaded is kept per user in `localStorage` (`logb.types.<userId>`) and
+ * read back before the network answers: an app started without a connection still names and
+ * draws its types. Cleared, with the object cache, whenever a session ends.
  */
 export const customTypes: Writable<CustomType[]> = writable([]);
 
-export async function loadCustomTypes(): Promise<void> {
+/** True once the list is known: a `GET /types` succeeded, or a stored list was read. Until then
+ *  an unknown `custom:` key is merely not loaded yet, and must not be called unknown. */
+export const typesLoaded: Writable<boolean> = writable(false);
+
+/** Whose list `customTypes` holds, so a load for someone else never shows the previous user's. */
+let owner: number | null = null;
+
+const storageKey = (userId: number) => `logb.types.${userId}`;
+
+function readStored(userId: number): CustomType[] | null {
   try {
-    customTypes.set(await api<CustomType[]>('GET', '/types'));
+    const raw = globalThis.localStorage?.getItem(storageKey(userId));
+    const list: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(list) ? (list as CustomType[]) : null;
   } catch {
-    // Keep what is already here. With no connection and nothing cached, objects of an own type
-    // show as "Deleted type" until the next load succeeds -- better than an error on every screen.
+    return null;
+  }
+}
+
+function writeStored(userId: number, list: CustomType[]): void {
+  try { globalThis.localStorage?.setItem(storageKey(userId), JSON.stringify(list)); } catch { /* full or blocked: the next load tries again */ }
+}
+
+/** Makes `userId` the list's owner: a different user's list is dropped at once, and the stored
+ *  list for this one, if any, stands in until the network answers. */
+function adopt(userId: number): void {
+  if (owner === userId) return;
+  owner = userId;
+  const stored = readStored(userId);
+  customTypes.set(stored ?? []);
+  typesLoaded.set(stored !== null);
+}
+
+/** Loads `userId`'s types; with no argument, reloads the current owner's (a screen that just
+ *  changed a type). Nothing to do when nobody owns the list yet: `App` loads it per user. */
+export async function loadCustomTypes(userId: number | null = owner): Promise<void> {
+  if (userId === null) return;
+  adopt(userId);
+  try {
+    const list = await api<CustomType[]>('GET', '/types');
+    // The session may have ended or changed hands while this was on the wire.
+    if (owner !== userId) return;
+    customTypes.set(list);
+    typesLoaded.set(true);
+    writeStored(userId, list);
+  } catch {
+    // Keep what is already here. With no connection and nothing stored, objects of an own type
+    // show a neutral placeholder until the next load succeeds -- better than an error on every
+    // screen.
   }
 }
 
 export function clearCustomTypes(): void {
+  if (owner !== null) {
+    try { globalThis.localStorage?.removeItem(storageKey(owner)); } catch { /* nothing to clear */ }
+  }
+  owner = null;
   customTypes.set([]);
+  typesLoaded.set(false);
 }
 
 function isBuiltin(key: string): key is BuiltinType {
@@ -55,11 +104,12 @@ function find(key: string, custom: CustomType[]): CustomType | undefined {
   return key.startsWith('custom:') ? custom.find((c) => c.key === key) : undefined;
 }
 
-/** Built-in: its translation. Own type: its name. An own type that is gone (deleted elsewhere,
- *  or not synced to this device yet) still needs words on the card, so it says so. */
-export function typeLabel(key: string, custom: CustomType[], t: (k: string) => string): string {
+/** Built-in: its translation. Own type: its name. An own type missing from the list still needs
+ *  words on the card: a neutral placeholder while the list is still `loaded === false`, and
+ *  "Unknown type" after -- deleted elsewhere or not synced here yet, this device cannot tell. */
+export function typeLabel(key: string, custom: CustomType[], t: (k: string) => string, loaded: boolean): string {
   if (isBuiltin(key)) return t(`type.${key}`);
-  return find(key, custom)?.name ?? t('types.deleted');
+  return find(key, custom)?.name ?? (loaded ? t('types.unknown') : t('types.loading'));
 }
 
 export function typeIcon(key: string, custom: CustomType[]): IconName {

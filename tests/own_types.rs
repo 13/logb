@@ -218,6 +218,34 @@ async fn migrate_0014_over(seed: &str) -> (sqlx::SqlitePool, Result<(), String>)
     (pool, Ok(()))
 }
 
+/// Both AUTOINCREMENT counters survive the rebuild. A purge removes the newest `changes` rows and
+/// a hard delete the newest objects; if 0014 restarted either counter from the highest row left,
+/// a device's cursor would see a `seq` twice and a new object would take a deleted one's id.
+#[tokio::test]
+async fn the_rebuild_keeps_both_counters_past_deleted_rows() {
+    let (pool, result) = migrate_0014_over(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, 'ben', 'x', 1, 't');
+         INSERT INTO objects (id, user_id, name, type, created_at, updated_at, client_uuid) VALUES
+           (1, 1, 'Golf', 'car', 't', 't', 'u1'), (2, 1, 'Gone', 'other', 't', 't', 'u2'), (3, 1, 'Gone too', 'other', 't', 't', 'u3');
+         DELETE FROM objects WHERE id IN (2, 3);
+         INSERT INTO changes (seq, entity, entity_uuid, op, edited_at, applied_at, user_id, device_id, client_op_id) VALUES
+           (1, 'object', 'u1', 'create', 't', 't', 1, 'rest', 'op-1'),
+           (2, 'object', 'u2', 'create', 't', 't', 1, 'rest', 'op-2'),
+           (3, 'object', 'u3', 'create', 't', 't', 1, 'rest', 'op-3');
+         DELETE FROM changes WHERE seq IN (2, 3);",
+    ).await;
+    result.expect("the database migrates");
+    let seq: i64 = sqlx::query_scalar(
+        "INSERT INTO changes (entity, entity_uuid, op, edited_at, applied_at, user_id, device_id, client_op_id) \
+         VALUES ('object', 'u1', 'set', 't', 't', 1, 'rest', 'op-next') RETURNING seq")
+        .fetch_one(&pool).await.unwrap();
+    assert!(seq > 3, "seq {seq} was handed out before the purge");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO objects (user_id, name, type, created_at, updated_at) VALUES (1, 'New', 'car', 't', 't') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    assert!(id > 3, "object id {id} belonged to a deleted object");
+}
+
 /// The rebuild runs with foreign keys off, so 0014 checks them itself before committing. A clean
 /// database with parents, activities and attachments migrates; one whose children already point
 /// at nothing makes the migration fail rather than commit silently.

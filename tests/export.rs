@@ -711,3 +711,24 @@ async fn an_unknown_custom_key_imports_as_other_with_the_key_noted() {
     assert!(res.text().await.unwrap().contains("icon"));
     assert_eq!(app.get_json("/types").await, json!([]));
 }
+
+/// Two types in one archive with the same uuid (in any case) would be one key for two types, and
+/// nothing says which one the objects mean. The import is refused, naming the type, before any
+/// row is written.
+#[tokio::test]
+async fn an_archive_with_one_uuid_on_two_types_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let mut data = export_shell(base_object());
+    data["types"] = json!([
+        { "client_uuid": uuid, "name": "Boat", "icon": "tool", "categories": ["repair"], "counter_unit": null },
+        { "client_uuid": uuid.to_uppercase(), "name": "Canoe", "icon": "tool", "categories": ["repair"], "counter_unit": null },
+    ]);
+    let res = app.client.post(app.url("/import")).header("content-type", "application/zip").body(zip_data_json(&data)).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    let text = res.text().await.unwrap();
+    assert!(text.contains("Canoe") && text.contains("client_uuid"), "{text}");
+    assert_eq!(app.get_json("/types").await, json!([]));
+    assert_eq!(app.get_json("/objects").await, json!([]));
+}

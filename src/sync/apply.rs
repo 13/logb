@@ -189,7 +189,9 @@ const CATEGORIES_SHAPE: &str = "categories must be JSON text holding an array of
 /// The stored spelling of a pushed object type `categories` value. `Err` is the rejection reason.
 fn canonical_categories(text: &str) -> Result<String, String> {
     let parsed: Vec<String> = serde_json::from_str(text).map_err(|_| CATEGORIES_SHAPE.to_string())?;
-    custom_type::normalize_categories(parsed).map(|c| serde_json::to_string(&c).unwrap_or_else(|_| "[]".into()))
+    custom_type::normalize_categories(parsed)
+        .map(|c| serde_json::to_string(&c).unwrap_or_else(|_| "[]".into()))
+        .map_err(String::from)
 }
 
 /// The four fields a pushed object type `create` carries in `value`.
@@ -298,7 +300,7 @@ async fn type_field(
     }
     let input = match custom_type::normalize(input) {
         Ok(input) => input,
-        Err(reason) => return Ok(Err(reason)),
+        Err(reason) => return Ok(Err(reason.message)),
     };
     if field == "name" && crate::api::types::name_taken(tx, user_id, &input.name, Some(id)).await? {
         return Ok(Err(crate::api::types::NAME_TAKEN.into()));

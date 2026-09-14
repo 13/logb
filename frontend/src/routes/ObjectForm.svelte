@@ -14,7 +14,7 @@
   import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
   import { OBJECT_TYPES, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
-  import { customTypes, defaultUnit } from '../lib/type-registry';
+  import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
@@ -160,7 +160,7 @@
             {#each $customTypes as ct (ct.key)}<option value={ct.key}>{ct.name}</option>{/each}
           </optgroup>
         {/if}
-        {#if missingType}<option value={input.type}>{$t('types.deleted')}</option>{/if}
+        {#if missingType}<option value={input.type}>{$typesLoaded ? $t('types.unknown') : $t('types.loading')}</option>{/if}
       </select>
     </div>
     <div class="field">

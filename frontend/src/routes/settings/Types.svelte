@@ -54,7 +54,7 @@
       await loadCustomTypes();
       editing = null;
     } catch (e) {
-      formError = (e as Error).message;
+      formError = errorText(e);
     } finally { busy = false; }
   }
 
@@ -69,9 +69,17 @@
       const count = e instanceof ApiError && e.code === 'in_use' ? Number(e.body?.count) : NaN;
       const message = Number.isFinite(count)
         ? (count === 1 ? $t('types.in-use-one') : $t('types.in-use', { n: count }))
-        : (e as Error).message;
+        : errorText(e);
       deleteError = { id: ty.id, message };
     }
+  }
+
+  /** The server's stable codes for a refused type, said in the reader's language. Anything else
+   *  (a code this page does not know, a dropped connection) keeps the server's own sentence. */
+  const TYPE_ERRORS = ['name_taken', 'name_invalid', 'icon_invalid', 'categories_invalid', 'unit_invalid'];
+  function errorText(e: unknown): string {
+    if (e instanceof ApiError && TYPE_ERRORS.includes(e.code)) return $t(`types.error.${e.code}`);
+    return (e as Error).message;
   }
 
   const summary = (ty: CustomType) =>
@@ -140,8 +148,8 @@
             <b>{ty.name}</b>
             <span class="muted summary">{summary(ty)}</span>
           </span>
-          <button class="ghost" onclick={() => open(ty)}>{$t('nav.edit')}</button>
-          <button class="ghost danger-text" onclick={() => remove(ty)}>{$t('types.delete')}</button>
+          <button class="ghost" aria-label={$t('types.edit-named', { name: ty.name })} onclick={() => open(ty)}>{$t('nav.edit')}</button>
+          <button class="ghost danger-text" aria-label={$t('types.delete-named', { name: ty.name })} onclick={() => remove(ty)}>{$t('types.delete')}</button>
           {#if deleteError?.id === ty.id}<p class="error full" role="alert">{deleteError.message}</p>{/if}
         </div>
       {/if}

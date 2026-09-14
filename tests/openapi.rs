@@ -183,3 +183,19 @@ fn find_enum_containing(node: &Value, marker: &str) -> Option<Vec<String>> {
         _ => None,
     }
 }
+
+/// `CustomTypeInput.icon` is the spec's copy of the icons the server accepts. The frontend's copy
+/// is compared with the server's in `frontend/tests/icons.test.ts`; this closes the triangle, so
+/// a spec still offering an icon the server refuses (it once listed `box`) fails here.
+#[test]
+fn the_spec_offers_exactly_the_icons_an_own_type_may_have() {
+    let raw = std::fs::read_to_string("docs/openapi.json").unwrap();
+    let spec: Value = serde_json::from_str(&raw).unwrap();
+    let documented: Vec<&str> = spec["components"]["schemas"]["CustomTypeInput"]["properties"]["icon"]["enum"]
+        .as_array()
+        .expect("CustomTypeInput.icon should be an enum")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(documented, logb::domain::custom_type::CUSTOM_TYPE_ICONS);
+}

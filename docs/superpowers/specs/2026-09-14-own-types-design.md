@@ -31,8 +31,9 @@ and cannot be edited or deleted. Reminder templates remain built-in types only.
 - **Everywhere a type is shown or used** -- cards, object detail, search hits, timeline, entry
   form categories, statistics "By type": the custom type's name and icon, and its categories.
   One frontend lookup resolves any type key (built-in or custom) to label, icon and categories.
-- **Offline**: the type list is cached like objects, so a device without a connection still
-  names and draws its types.
+- **Offline**: the type list is kept per user in the device's local storage after it first loads,
+  so an app started without a connection still names and draws its types. An own-type object
+  whose type is not in that list shows "Unknown type" and the generic icon until the list loads.
 
 ## Data
 
@@ -68,7 +69,7 @@ and cannot be edited or deleted. Reminder templates remain built-in types only.
 ## Statistics
 
 `by_type` buckets stay the object's `type` value; the Statistics screen labels `custom:<uuid>`
-buckets with the type's name (or "Deleted type" if it no longer exists).
+buckets with the type's name (or "Unknown type" if it is not in the list).
 
 ## Tests
 

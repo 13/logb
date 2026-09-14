@@ -26,6 +26,11 @@ pub fn router() -> Router<App> {
 /// The one sentence a name collision answers with, on create and on rename alike.
 pub(crate) const NAME_TAKEN: &str = "you already have a type with this name";
 
+/// The 400 for a name collision, with the `name_taken` code a client translates.
+fn name_taken_error() -> AppError {
+    AppError::Invalid { code: "name_taken", message: NAME_TAKEN.into() }
+}
+
 #[derive(sqlx::FromRow)]
 struct TypeRow {
     id: i64,
@@ -85,7 +90,8 @@ pub struct TypeBody {
 impl TypeBody {
     fn normalized(self) -> Result<(TypeInput, Option<String>), AppError> {
         let input = TypeInput { name: self.name, icon: self.icon, categories: self.categories, counter_unit: self.counter_unit };
-        let input = custom_type::normalize(input).map_err(AppError::BadRequest)?;
+        let input = custom_type::normalize(input)
+            .map_err(|e| AppError::Invalid { code: e.code, message: e.message })?;
         Ok((input, self.client_uuid))
     }
 }
@@ -152,7 +158,7 @@ async fn create(user: AuthUser, State(state): State<App>, Json(body): Json<TypeB
     let now = db::now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     if name_taken(&mut tx, user.id, &input.name, None).await? {
-        return Err(AppError::BadRequest(NAME_TAKEN.into()));
+        return Err(name_taken_error());
     }
     let row = sqlx::query_as::<_, TypeRow>(
         "INSERT INTO object_types (user_id, client_uuid, name, icon, categories, counter_unit, created_at, updated_at) \
@@ -192,7 +198,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     };
     // Its own row excluded: renaming "E-scooter" to "E-Scooter" is not a collision.
     if name_taken(&mut tx, user.id, &input.name, Some(id)).await? {
-        return Err(AppError::BadRequest(NAME_TAKEN.into()));
+        return Err(name_taken_error());
     }
     let categories = serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into());
     // PATCH replaces every field, but only the ones that differ are logged -- see

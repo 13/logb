@@ -35,7 +35,7 @@
   // Every screen that shows a type needs the user's own types, so they load once per signed-in
   // user rather than per screen. Keyed on the id so a language PATCH does not reload them.
   const userId = $derived($user?.id);
-  $effect(() => { if (userId !== undefined) void loadCustomTypes(); });
+  $effect(() => { if (userId !== undefined) void loadCustomTypes(userId); });
   // The daily digest is written on the server, in each person's language -- so the server has
   // to know the language they actually read the app in, which lives in this browser. Only when
   // it differs, so this is one request after a language change and none on an ordinary load.

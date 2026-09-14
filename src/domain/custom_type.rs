@@ -30,25 +30,53 @@ pub struct TypeInput {
     pub counter_unit: Option<String>,
 }
 
+/// Why a type was refused: a stable `code` a client can translate (`name_invalid`,
+/// `icon_invalid`, `categories_invalid`, `unit_invalid`; `name_taken` is added by `api::types`,
+/// which knows the user's other types) and the English sentence for everyone else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl TypeError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        TypeError { code, message: message.into() }
+    }
+}
+
+impl std::fmt::Display for TypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// Sync rejections carry the sentence only.
+impl From<TypeError> for String {
+    fn from(e: TypeError) -> String {
+        e.message
+    }
+}
+
 /// Trims the name and checks every field. Categories keep their first-seen order with later
 /// duplicates dropped, and `other` is appended when missing: every entry form needs a category
-/// that fits anything. `Err` is the sentence a 400 answers with.
-pub fn normalize(input: TypeInput) -> Result<TypeInput, String> {
+/// that fits anything. `Err` carries the code and the sentence a 400 answers with.
+pub fn normalize(input: TypeInput) -> Result<TypeInput, TypeError> {
     let name = input.name.trim().to_string();
     if name.is_empty() {
-        return Err("name is required".into());
+        return Err(TypeError::new("name_invalid", "name is required"));
     }
     // Characters, not bytes: "Gerät" is five characters however it is encoded.
     if name.chars().count() > MAX_NAME_CHARS {
-        return Err(format!("name can be at most {MAX_NAME_CHARS} characters long"));
+        return Err(TypeError::new("name_invalid", format!("name can be at most {MAX_NAME_CHARS} characters long")));
     }
     if !CUSTOM_TYPE_ICONS.contains(&input.icon.as_str()) {
-        return Err(format!("icon must be one of {}", CUSTOM_TYPE_ICONS.join(", ")));
+        return Err(TypeError::new("icon_invalid", format!("icon must be one of {}", CUSTOM_TYPE_ICONS.join(", "))));
     }
     let categories = normalize_categories(input.categories)?;
     if let Some(unit) = &input.counter_unit {
         if !matches!(unit.as_str(), "km" | "mi" | "h") {
-            return Err("counter_unit must be km, mi, h or null".into());
+            return Err(TypeError::new("unit_invalid", "counter_unit must be km, mi, h or null"));
         }
     }
     Ok(TypeInput { name, icon: input.icon, categories, counter_unit: input.counter_unit })
@@ -56,14 +84,14 @@ pub fn normalize(input: TypeInput) -> Result<TypeInput, String> {
 
 /// The category half of `normalize`, on its own so sync can log a pushed `categories` value in
 /// its stored spelling without a whole type to hand.
-pub fn normalize_categories(input: Vec<String>) -> Result<Vec<String>, String> {
+pub fn normalize_categories(input: Vec<String>) -> Result<Vec<String>, TypeError> {
     if input.is_empty() {
-        return Err("categories must name at least one category".into());
+        return Err(TypeError::new("categories_invalid", "categories must name at least one category"));
     }
     let mut categories: Vec<String> = Vec::with_capacity(input.len() + 1);
     for category in input {
         if !CATEGORIES.contains(&category.as_str()) {
-            return Err(format!("category must be one of {}", CATEGORIES.join(", ")));
+            return Err(TypeError::new("categories_invalid", format!("category must be one of {}", CATEGORIES.join(", "))));
         }
         if !categories.contains(&category) {
             categories.push(category);
@@ -98,12 +126,24 @@ mod tests {
         let out = normalize(input("  E-scooter ", "e-bike", &["repair"], None)).unwrap();
         assert_eq!(out.name, "E-scooter");
         assert!(normalize(input(&"é".repeat(MAX_NAME_CHARS), "tool", &["repair"], None)).is_ok());
-        assert!(normalize(input(&"x".repeat(MAX_NAME_CHARS + 1), "tool", &["repair"], None)).unwrap_err().contains("40"));
+        assert!(normalize(input(&"x".repeat(MAX_NAME_CHARS + 1), "tool", &["repair"], None)).unwrap_err().message.contains("40"));
     }
 
     #[test]
     fn an_empty_name_is_refused() {
         assert!(normalize(input("   ", "tool", &["repair"], None)).is_err());
+    }
+
+    /// The codes are what a client translates; the sentences may change, these may not.
+    #[test]
+    fn each_refusal_carries_its_stable_code() {
+        let code = |i| normalize(i).unwrap_err().code;
+        assert_eq!(code(input(" ", "tool", &["repair"], None)), "name_invalid");
+        assert_eq!(code(input(&"x".repeat(MAX_NAME_CHARS + 1), "tool", &["repair"], None)), "name_invalid");
+        assert_eq!(code(input("Boat", "rocket", &["repair"], None)), "icon_invalid");
+        assert_eq!(code(input("Boat", "tool", &[], None)), "categories_invalid");
+        assert_eq!(code(input("Boat", "tool", &["sailing"], None)), "categories_invalid");
+        assert_eq!(code(input("Boat", "tool", &["repair"], Some("nm"))), "unit_invalid");
     }
 
     #[test]

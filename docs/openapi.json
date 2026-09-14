@@ -2420,8 +2420,7 @@
               "appliance",
               "tool",
               "body",
-              "object",
-              "box"
+              "object"
             ]
           },
           "categories": {

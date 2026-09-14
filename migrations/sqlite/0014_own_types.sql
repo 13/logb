@@ -11,7 +11,8 @@
 --    over, because a device's cursor must never see a `seq` handed out twice, and an emptied log
 --    would otherwise restart from 1.
 --
--- SQLite cannot drop a CHECK in place, so `objects` is rebuilt following 0009 exactly, for the
+-- SQLite cannot drop a CHECK in place, so `objects` is rebuilt following 0009 exactly (its
+-- AUTOINCREMENT counter carried over the same way as `changes`'), for the
 -- reasons it spells out in full: foreign keys off (a DROP with enforcement on cascades into every
 -- activity, reminder and attachment), the `-- no-transaction` line FIRST, and create-copy-drop-
 -- rename (renaming the old table away would repoint every child's REFERENCES at the table being
@@ -63,6 +64,10 @@ SELECT id, user_id, name, type, counter_unit, description, purchase_date,
        purchase_price_cents, archived_at, cover_attachment_id, created_at,
        updated_at, fuel_unit, client_uuid, deleted_at, parent_id, tags
 FROM objects;
+-- The copy above sets `objects_new`'s counter to the highest id still present; the old counter
+-- also remembers hard-deleted rows, so it is carried over and no deleted object's id is reused.
+DELETE FROM sqlite_sequence WHERE name = 'objects_new';
+INSERT INTO sqlite_sequence (name, seq) SELECT 'objects_new', seq FROM sqlite_sequence WHERE name = 'objects';
 DROP TABLE objects;
 ALTER TABLE objects_new RENAME TO objects;
 -- Dropping a table drops its indexes; `idx_objects_uuid` is what stops sync inserting the same

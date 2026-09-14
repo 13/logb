@@ -7,6 +7,10 @@ use serde_json::json;
 pub enum AppError {
     #[error("{0}")]
     BadRequest(String),
+    /// A 400 with a stable `error` code more specific than `bad_request`, so a client can say it
+    /// in the reader's language and fall back to `message` for a code it does not know.
+    #[error("{message}")]
+    Invalid { code: &'static str, message: String },
     #[error("authentication required")]
     Unauthorized,
     #[error("forbidden")]
@@ -39,6 +43,7 @@ impl AppError {
     fn status_and_code(&self) -> (StatusCode, &'static str) {
         match self {
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            AppError::Invalid { code, .. } => (StatusCode::BAD_REQUEST, code),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),

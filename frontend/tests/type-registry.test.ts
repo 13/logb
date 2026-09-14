@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { CUSTOM_TYPE_ICONS, categoriesFor, defaultUnit, typeIcon, typeLabel } from '../src/lib/type-registry';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
+
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/api', () => ({ api: apiMock }));
+
+import {
+  CUSTOM_TYPE_ICONS, categoriesFor, clearCustomTypes, customTypes, defaultUnit, loadCustomTypes, typeIcon, typeLabel,
+  typesLoaded,
+} from '../src/lib/type-registry';
 import { CATEGORIES, OBJECT_TYPES, type CustomType } from '../src/lib/types';
 
 const t = (k: string) => `T(${k})`;
@@ -33,8 +41,8 @@ describe('type registry: built-in types', () => {
   });
 
   it('labels a built-in type through its translation key', () => {
-    expect(typeLabel('car', custom, t)).toBe('T(type.car)');
-    expect(typeLabel('other', [], t)).toBe('T(type.other)');
+    expect(typeLabel('car', custom, t, true)).toBe('T(type.car)');
+    expect(typeLabel('other', [], t, true)).toBe('T(type.other)');
   });
 
   it('gives built-in types no default unit', () => {
@@ -44,7 +52,7 @@ describe('type registry: built-in types', () => {
 
 describe('type registry: own types', () => {
   it('resolves an own type to its name, icon, categories and unit', () => {
-    expect(typeLabel(scooter.key, custom, t)).toBe('E-scooter');
+    expect(typeLabel(scooter.key, custom, t, true)).toBe('E-scooter');
     expect(typeIcon(scooter.key, custom)).toBe('e-bike');
     expect(categoriesFor(scooter.key, custom)).toEqual(['maintenance', 'repair', 'other']);
     expect(defaultUnit(scooter.key, custom)).toBe('km');
@@ -59,9 +67,10 @@ describe('type registry: own types', () => {
 
   // A type deleted on another device, or not synced here yet: the object still has to render,
   // and offering every category is the only choice that cannot hide an entry's own.
-  it('treats an unknown own type as a deleted type', () => {
+  it('treats an own type missing from a loaded list as unknown', () => {
     const gone = 'custom:00000000-0000-4000-8000-000000000000';
-    expect(typeLabel(gone, custom, t)).toBe('T(types.deleted)');
+    expect(typeLabel(gone, custom, t, true)).toBe('T(types.unknown)');
+    expect(typeLabel(gone, custom, t, false)).toBe('T(types.loading)');
     expect(typeIcon(gone, custom)).toBe('object');
     expect(categoriesFor(gone, custom)).toEqual([...CATEGORIES]);
     expect(defaultUnit(gone, custom)).toBeNull();
@@ -69,7 +78,7 @@ describe('type registry: own types', () => {
 
   it('does not let a custom type shadow a built-in key', () => {
     const odd = { ...scooter, key: 'car', name: 'Not a car' };
-    expect(typeLabel('car', [odd], t)).toBe('T(type.car)');
+    expect(typeLabel('car', [odd], t, true)).toBe('T(type.car)');
   });
 
   it('offers no UI-only icon for a type', () => {
@@ -82,5 +91,84 @@ describe('type registry: own types', () => {
   it('offers the cube once, not also as a box', () => {
     expect(CUSTOM_TYPE_ICONS).toContain('object');
     expect(CUSTOM_TYPE_ICONS as string[]).not.toContain('box');
+  });
+});
+
+describe('type registry: loading, storage and users', () => {
+  const gone = 'custom:00000000-0000-4000-8000-000000000000';
+  const label = (key: string) => typeLabel(key, get(customTypes), t, get(typesLoaded));
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    storage = new Map();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => storage.get(k) ?? null,
+      setItem: (k: string, v: string) => void storage.set(k, v),
+      removeItem: (k: string) => void storage.delete(k),
+    });
+    clearCustomTypes();
+    apiMock.mockReset();
+  });
+
+  it('says nothing definite about an own type before the list has loaded', () => {
+    expect(get(typesLoaded)).toBe(false);
+    expect(label(gone)).toBe('T(types.loading)');
+  });
+
+  it('calls a key unknown once the list has loaded without it, and stores the list', async () => {
+    apiMock.mockResolvedValue([scooter]);
+    await loadCustomTypes(1);
+    expect(get(typesLoaded)).toBe(true);
+    expect(label(scooter.key)).toBe('E-scooter');
+    expect(label(gone)).toBe('T(types.unknown)');
+    expect(JSON.parse(storage.get('logb.types.1')!)).toEqual([scooter]);
+  });
+
+  it('uses the stored list before the network answers', () => {
+    storage.set('logb.types.2', JSON.stringify([scooter]));
+    apiMock.mockReturnValue(new Promise(() => {}));
+    void loadCustomTypes(2);
+    expect(get(typesLoaded)).toBe(true);
+    expect(label(scooter.key)).toBe('E-scooter');
+  });
+
+  it('keeps the stored list when the network fails', async () => {
+    storage.set('logb.types.2', JSON.stringify([scooter]));
+    apiMock.mockRejectedValue(new TypeError('offline'));
+    await loadCustomTypes(2);
+    expect(label(scooter.key)).toBe('E-scooter');
+  });
+
+  it("never shows the previous user's types to the next one", async () => {
+    apiMock.mockResolvedValue([scooter]);
+    await loadCustomTypes(1);
+    let answerFirst: (v: unknown) => void = () => {};
+    apiMock.mockReturnValueOnce(new Promise((r) => { answerFirst = r; }));
+    const late = loadCustomTypes(1); // still on the wire when the account changes
+    apiMock.mockReturnValue(new Promise(() => {}));
+    void loadCustomTypes(3);
+    expect(get(customTypes)).toEqual([]);
+    expect(get(typesLoaded)).toBe(false);
+    answerFirst([scooter]);
+    await late;
+    expect(get(customTypes)).toEqual([]);
+    expect(label(scooter.key)).toBe('T(types.loading)');
+  });
+
+  it('forgets the stored list when the session ends', async () => {
+    apiMock.mockResolvedValue([scooter]);
+    await loadCustomTypes(1);
+    clearCustomTypes();
+    expect(storage.has('logb.types.1')).toBe(false);
+    expect(get(customTypes)).toEqual([]);
+    expect(get(typesLoaded)).toBe(false);
+  });
+
+  it('works without storage at all', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); }, removeItem: () => { throw new Error('blocked'); } });
+    apiMock.mockResolvedValue([scooter]);
+    await loadCustomTypes(4);
+    expect(label(scooter.key)).toBe('E-scooter');
+    expect(() => clearCustomTypes()).not.toThrow();
   });
 });

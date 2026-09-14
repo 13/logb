@@ -36,6 +36,9 @@
   // object was re-typed must keep its own category in the list, or saving an untouched form
   // would quietly re-file it.
   const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category));
+  /** Set once the user picks a category (the select, or a repeat chip). Until then a new entry's
+   *  category is only a default, and may be re-chosen when the object's own type loads late. */
+  let categoryTouched = false;
   /** True when `saved` exists only because the user attached a file, never because they saved. */
   let autoDraft = $state(false);
   /** False only while editing an existing activity whose GET hasn't resolved yet — blocks the
@@ -100,6 +103,17 @@
     } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
+  });
+
+  // On a cold load the own types can arrive after `onMount` picked the default above: until then
+  // an own type offers every category, so `maintenance` looked fine. Re-check when they land, as
+  // long as the entry is new and its category untouched. Built-in types never depend on the
+  // list, so they keep exactly the `onMount` behaviour.
+  $effect(() => {
+    const list = $customTypes;
+    if (aid || !object || categoryTouched || !object.type.startsWith('custom:')) return;
+    const own = categoriesFor(object.type, list);
+    if (!own.includes(untrack(() => input.category))) input.category = own[0];
   });
 
   // `saved.id` is the temp id ActivityForm minted for its own draft (see `mintTempId` below)
@@ -188,6 +202,7 @@
   function repeat(s: TitleSuggestion) {
     input.title = s.title;
     input.category = s.category;
+    categoryTouched = true;
     if (s.last_cost_cents !== null) costText = centsToInput(s.last_cost_cents);
   }
 
@@ -289,7 +304,7 @@
       <div class="field"><label for="d">{$t('activity.date')}</label><input id="d" type="date" bind:value={input.date} required /></div>
       <div class="field">
         <label for="c">{$t('activity.category')}</label>
-        <select id="c" bind:value={input.category}>
+        <select id="c" bind:value={input.category} onchange={() => (categoryTouched = true)}>
           {#each offered as c}<option value={c}>{$t(`cat.${c}`)}</option>{/each}
         </select>
       </div>

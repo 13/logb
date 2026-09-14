@@ -9,7 +9,7 @@
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
   import type { MemObject, ObjectType, Reminder } from '../lib/types';
-  import { customTypes, typeLabel as labelOf } from '../lib/type-registry';
+  import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
   import Icon from '../lib/Icon.svelte';
 
@@ -58,7 +58,7 @@
   });
 
   // Search matches what the card says, so an own type is found by its name, not its key.
-  const typeLabel = (ty: ObjectType) => labelOf(ty, $customTypes, $t);
+  const typeLabel = (ty: ObjectType) => labelOf(ty, $customTypes, $t, $typesLoaded);
   const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale, tagFilter));
   const activeCount = $derived(visibleRows(active, archived, 'active', '', 'name', typeLabel, $locale).length);
   const nothingYet = $derived(active.length === 0 && archived.length === 0);
