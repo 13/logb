@@ -12,8 +12,11 @@ screen and the Info tab never disagree about a number.
 
 Top to bottom:
 
-1. **Include contents** switch. Shown only when the object has at least one non-deleted child.
-   Off by default, remembered per device via `persisted` (`logb.insights.contents`). Not synced.
+1. **Include contents** switch. Shown only when the object has at least one child listed under
+   Contents -- non-deleted and not archived. With the switch on, archived children still count
+   toward the total, exactly as they do on the Statistics screen; a house whose only children are
+   archived shows no switch. Off by default, remembered per device via `persisted`
+   (`logb.insights.contents`). Not synced.
 2. **Total cost of ownership**, e.g. "€4,000.00 · ≈ €1,300 a year since May 2024".
    - Total = running costs (every non-deleted activity's `cost_cents`) + purchase price.
    - The purchase price follows phase 1's rule: counted unless the object has a non-deleted

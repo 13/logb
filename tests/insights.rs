@@ -139,6 +139,52 @@ async fn contents_add_every_descendants_costs_but_leave_counter_figures_alone() 
 }
 
 #[tokio::test]
+async fn an_archived_object_is_measured_to_its_archive_date_and_deleted_contents_drop_out() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let house = object(&app, json!({ "name": "House", "type": "home", "description": "",
+        "purchase_date": "2024-01-01", "purchase_price_cents": 100_000 })).await;
+    let shed = object(&app, json!({ "name": "Shed", "type": "appliance", "description": "", "parent_id": house })).await;
+    let grandchild = object(&app, json!({ "name": "Mower", "type": "appliance", "description": "", "parent_id": shed })).await;
+    entry(&app, shed, json!({ "date": "2025-03-10", "category": "repair", "title": "Fix", "notes": "", "cost_cents": 20_000 })).await;
+    entry(&app, grandchild, json!({ "date": "2025-03-10", "category": "repair", "title": "Fix", "notes": "", "cost_cents": 5_000 })).await;
+
+    let res = app.client.delete(app.url(&format!("/objects/{grandchild}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete grandchild failed: {}", res.text().await.unwrap());
+
+    let all = app.get_json(&format!("/objects/{house}/insights?contents=true")).await;
+    assert_eq!(all["ownership"]["total_cents"], 120_000, "house price + shed repair, grandchild excluded");
+    let cats = all["by_category"].as_array().unwrap();
+    let repair = cats.iter().find(|c| c["bucket"] == "repair").unwrap();
+    assert_eq!(repair["cost_cents"], 20_000, "the deleted grandchild's repair must not be counted");
+
+    // PATCH replaces the object, so every field is resent or the price is lost.
+    let res = app.client.patch(app.url(&format!("/objects/{house}"))).json(&json!({
+        "name": "House", "type": "home", "description": "",
+        "purchase_date": "2024-01-01", "purchase_price_cents": 100_000, "archived": true
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "archive failed: {}", res.text().await.unwrap());
+
+    let read = app.get_json(&format!("/objects/{house}")).await;
+    let archived_at = read["archived_at"].as_str().expect("archived_at is set");
+    let archive_day = &archived_at[..10];
+    assert_eq!(archive_day, logb::db::today(), "archiving happens today");
+
+    // Archiving happened today, so `until` = today either way -- that cannot tell the archived
+    // branch apart from the unarchived one. Backdating the row directly is the only way to prove
+    // ownership is measured to the archive date rather than to today.
+    sqlx::query("UPDATE objects SET archived_at = '2025-01-01T00:00:00Z' WHERE id = $1")
+        .bind(house)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let all = app.get_json(&format!("/objects/{house}/insights?contents=true")).await;
+    // 2024-01-01 to 2025-01-01 is 366 days (2024 is a leap year).
+    assert_eq!(all["ownership"]["per_year_cents"], 120_000 * 365 / 366);
+}
+
+#[tokio::test]
 async fn fills_draw_a_trend_and_a_purchase_entry_is_the_purchase() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

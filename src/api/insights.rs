@@ -120,6 +120,10 @@ pub struct InsightsQuery {
 /// non-deleted descendant. `UNION`, not `UNION ALL`, so even a corrupt parent loop terminates, as
 /// in `objects::ancestors`. The root was already checked to be the caller's by
 /// `load_owned_object`, and a parent can only ever be set to one of the caller's own objects.
+///
+/// The recursive step stopping at a deleted child never hides a live grandchild under it:
+/// deleting an object tombstones its whole subtree at once (`sync::record::cascade_object`), so a
+/// deleted row never has an undeleted child left to miss.
 fn scope(contents: bool) -> &'static str {
     if contents {
         "WITH RECURSIVE scope(id) AS ( \
