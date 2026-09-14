@@ -77,4 +77,10 @@ describe('type registry: own types', () => {
       expect(CUSTOM_TYPE_ICONS as string[]).not.toContain(icon);
     }
   });
+
+  // `box` and `object` draw nearly the same cube; offering both is two identical picker choices.
+  it('offers the cube once, not also as a box', () => {
+    expect(CUSTOM_TYPE_ICONS).toContain('object');
+    expect(CUSTOM_TYPE_ICONS as string[]).not.toContain('box');
+  });
 });

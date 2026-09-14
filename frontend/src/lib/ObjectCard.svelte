@@ -5,7 +5,7 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { MemObject } from './types';
-  import { typeIcon } from './object-types';
+  import { customTypes, typeIcon, typeLabel } from './type-registry';
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
   /** `ontag` makes the chips buttons that filter by their tag; without it they are plain labels. */
@@ -38,8 +38,8 @@
       </div>
       {#if parentName}<div class="muted small">{$t('search.in-parent', { name: parentName })}</div>{/if}
       <div class="muted tnum type-row">
-        <Icon name={typeIcon(object.type)} size={16} />
-        {$t(`type.${object.type}`)}
+        <Icon name={typeIcon(object.type, $customTypes)} size={16} />
+        {typeLabel(object.type, $customTypes, $t)}
         {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
         <!-- A month is the unit people think in; rounded like the Info tab, since it is an average. -->
         {#if object.stats.counter_per_day_milli !== null && object.counter_unit} · {$t('insights.per-month', { amount: counter(Math.round(object.stats.counter_per_day_milli * 30.44 / 1000), object.counter_unit, $locale) })}{/if}

@@ -59,13 +59,13 @@ async fn names_are_unique_ignoring_case_and_accents() {
     app.setup("ben", "correct horse").await;
     create_scooter(&app, &app.client).await;
     for name in ["e-SCOOTER", "É-scooter"] {
-        let res = post(&app, &app.client, "/types", json!({ "name": name, "icon": "box", "categories": ["repair"] })).await;
+        let res = post(&app, &app.client, "/types", json!({ "name": name, "icon": "tool", "categories": ["repair"] })).await;
         assert_eq!(res.status(), 400, "{name}");
     }
     // Renaming another type onto the name is the same collision.
-    let boat = app.post_json("/types", &json!({ "name": "Boat", "icon": "box", "categories": ["repair"] })).await;
+    let boat = app.post_json("/types", &json!({ "name": "Boat", "icon": "tool", "categories": ["repair"] })).await;
     let res = app.client.patch(app.url(&format!("/types/{}", boat["id"])))
-        .json(&json!({ "name": "e-scooter", "icon": "box", "categories": ["repair"] }))
+        .json(&json!({ "name": "e-scooter", "icon": "tool", "categories": ["repair"] }))
         .send().await.unwrap();
     assert_eq!(res.status(), 400);
     // Types are per user: someone else may have their own E-scooter.
@@ -79,11 +79,11 @@ async fn invalid_icon_unit_or_category_is_400() {
     app.setup("ben", "correct horse").await;
     for body in [
         json!({ "name": "Boat", "icon": "settings", "categories": ["repair"] }),
-        json!({ "name": "Boat", "icon": "box", "categories": ["repair"], "counter_unit": "nm" }),
-        json!({ "name": "Boat", "icon": "box", "categories": ["sailing"] }),
-        json!({ "name": "Boat", "icon": "box", "categories": [] }),
-        json!({ "name": "   ", "icon": "box", "categories": ["repair"] }),
-        json!({ "name": "x".repeat(41), "icon": "box", "categories": ["repair"] }),
+        json!({ "name": "Boat", "icon": "tool", "categories": ["repair"], "counter_unit": "nm" }),
+        json!({ "name": "Boat", "icon": "tool", "categories": ["sailing"] }),
+        json!({ "name": "Boat", "icon": "tool", "categories": [] }),
+        json!({ "name": "   ", "icon": "tool", "categories": ["repair"] }),
+        json!({ "name": "x".repeat(41), "icon": "tool", "categories": ["repair"] }),
     ] {
         let res = post(&app, &app.client, "/types", body.clone()).await;
         assert_eq!(res.status(), 400, "{body}");
@@ -279,7 +279,7 @@ async fn another_users_type_cannot_be_changed_or_deleted() {
     let anna = app.create_user_client("anna", "password123").await;
 
     let res = anna.patch(app.url(&format!("/types/{id}")))
-        .json(&json!({ "name": "Mine now", "icon": "box", "categories": ["repair"] }))
+        .json(&json!({ "name": "Mine now", "icon": "tool", "categories": ["repair"] }))
         .send().await.unwrap();
     assert_eq!(res.status(), 404);
     let res = anna.delete(app.url(&format!("/types/{id}"))).send().await.unwrap();

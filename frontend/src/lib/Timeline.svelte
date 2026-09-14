@@ -6,7 +6,7 @@
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
   import { foldReadings, readingSpan } from './timeline-fold';
-  import { categoriesFor } from './object-types';
+  import { categoriesFor, customTypes } from './type-registry';
   import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
@@ -26,7 +26,7 @@
   // presentation, not the source of truth for what exists.
   const present = $derived(new Set(activities.map((a) => a.category)));
   const chipCategories = $derived(
-    [...categoriesFor(type), ...CATEGORIES.filter((c) => present.has(c))]
+    [...categoriesFor(type, $customTypes), ...CATEGORIES.filter((c) => present.has(c))]
       .filter((c, i, all) => all.indexOf(c) === i),
   );
   /** Which folded runs of readings are open. */

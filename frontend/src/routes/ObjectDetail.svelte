@@ -9,7 +9,7 @@
   import ObjectCard from '../lib/ObjectCard.svelte';
   import TagChips from '../lib/TagChips.svelte';
   import { foldTag } from '../lib/tags';
-  import { typeIcon } from '../lib/object-types';
+  import { customTypes, typeIcon, typeLabel } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
@@ -195,7 +195,7 @@
 <main>
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
-    <TopBar title={object.name} icon={typeIcon(object.type)} backTo="/">
+    <TopBar title={object.name} icon={typeIcon(object.type, $customTypes)} backTo="/">
       <button class="ghost" aria-label={$t('nav.edit')} onclick={() => go(`/objects/${oid}/edit`)}><Icon name="edit" /></button>
     </TopBar>
 
@@ -247,7 +247,7 @@
       <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
-      <p class="muted">{$t(`type.${object.type}`)}</p>
+      <p class="muted">{typeLabel(object.type, $customTypes, $t)}</p>
       <TagChips tags={object.tags ?? []} />
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}

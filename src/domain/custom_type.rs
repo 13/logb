@@ -15,10 +15,11 @@ pub const CUSTOM_PREFIX: &str = "custom:";
 
 /// The icons a custom type may use: `IconName` in `frontend/src/lib/Icon.svelte` minus the
 /// icons that only mean something as interface controls (back, settings, search, ...). Kept
-/// here as well because the server must refuse an icon the client cannot draw.
+/// here as well because the server must refuse an icon the client cannot draw. `box` is left out
+/// too: next to `object` it is the same outline, so the picker would offer two identical choices.
 pub const CUSTOM_TYPE_ICONS: &[&str] = &[
     "document", "camera", "car", "e-bike", "bike", "motorcycle", "home", "appliance", "tool", "body",
-    "object", "box",
+    "object",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,41 +97,42 @@ mod tests {
     fn the_name_is_trimmed_and_limited_in_characters_not_bytes() {
         let out = normalize(input("  E-scooter ", "e-bike", &["repair"], None)).unwrap();
         assert_eq!(out.name, "E-scooter");
-        assert!(normalize(input(&"é".repeat(MAX_NAME_CHARS), "box", &["repair"], None)).is_ok());
-        assert!(normalize(input(&"x".repeat(MAX_NAME_CHARS + 1), "box", &["repair"], None)).unwrap_err().contains("40"));
+        assert!(normalize(input(&"é".repeat(MAX_NAME_CHARS), "tool", &["repair"], None)).is_ok());
+        assert!(normalize(input(&"x".repeat(MAX_NAME_CHARS + 1), "tool", &["repair"], None)).unwrap_err().contains("40"));
     }
 
     #[test]
     fn an_empty_name_is_refused() {
-        assert!(normalize(input("   ", "box", &["repair"], None)).is_err());
+        assert!(normalize(input("   ", "tool", &["repair"], None)).is_err());
     }
 
     #[test]
     fn an_unknown_icon_is_refused() {
         assert!(normalize(input("Boat", "settings", &["repair"], None)).is_err());
         assert!(normalize(input("Boat", "rocket", &["repair"], None)).is_err());
+        assert!(normalize(input("Boat", "box", &["repair"], None)).is_err(), "box looks like object");
     }
 
     #[test]
     fn unknown_or_empty_categories_are_refused() {
-        assert!(normalize(input("Boat", "box", &["repair", "sailing"], None)).is_err());
-        assert!(normalize(input("Boat", "box", &[], None)).is_err());
+        assert!(normalize(input("Boat", "tool", &["repair", "sailing"], None)).is_err());
+        assert!(normalize(input("Boat", "tool", &[], None)).is_err());
     }
 
     #[test]
     fn other_is_added_and_duplicates_removed_in_order() {
-        let out = normalize(input("Boat", "box", &["fuel", "repair", "fuel"], None)).unwrap();
+        let out = normalize(input("Boat", "tool", &["fuel", "repair", "fuel"], None)).unwrap();
         assert_eq!(out.categories, ["fuel", "repair", "other"]);
-        let out = normalize(input("Boat", "box", &["other", "repair"], None)).unwrap();
+        let out = normalize(input("Boat", "tool", &["other", "repair"], None)).unwrap();
         assert_eq!(out.categories, ["other", "repair"]);
     }
 
     #[test]
     fn the_counter_unit_is_km_mi_h_or_none() {
         for unit in [Some("km"), Some("mi"), Some("h"), None] {
-            assert_eq!(normalize(input("Boat", "box", &["repair"], unit)).unwrap().counter_unit.as_deref(), unit);
+            assert_eq!(normalize(input("Boat", "tool", &["repair"], unit)).unwrap().counter_unit.as_deref(), unit);
         }
-        assert!(normalize(input("Boat", "box", &["repair"], Some("nm"))).is_err());
+        assert!(normalize(input("Boat", "tool", &["repair"], Some("nm"))).is_err());
     }
 
     #[test]

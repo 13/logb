@@ -11,7 +11,7 @@
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
-  import { categoriesFor } from '../lib/object-types';
+  import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
   import { type Activity, type Attachment, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion } from '../lib/types';
 
@@ -35,7 +35,7 @@
   // The object's vocabulary, plus whatever this entry already says. An entry logged before its
   // object was re-typed must keep its own category in the list, or saving an untouched form
   // would quietly re-file it.
-  const offered = $derived(categoriesFor(object?.type ?? 'other', input.category));
+  const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category));
   /** True when `saved` exists only because the user attached a file, never because they saved. */
   let autoDraft = $state(false);
   /** False only while editing an existing activity whose GET hasn't resolved yet — blocks the
@@ -70,8 +70,8 @@
     // type -- a `body` object offers no `maintenance` at all -- so the select would silently
     // sit on an option that isn't in its own list. Editing overwrites `input` wholesale below,
     // so this only ever matters for a genuinely new entry.
-    if (!aid && object && !categoriesFor(object.type).includes(input.category)) {
-      input.category = categoriesFor(object.type)[0];
+    if (!aid && object && !categoriesFor(object.type, $customTypes).includes(input.category)) {
+      input.category = categoriesFor(object.type, $customTypes)[0];
     }
     try {
       allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);

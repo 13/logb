@@ -1,6 +1,6 @@
 # Own object types
 
-Status: approved, not implemented. Third of three projects (objects list → tags → own types).
+Status: implemented. Third of three projects (objects list → tags → own types).
 
 The nine built-in types cover common things, but a household owns more kinds: an e-scooter, a
 boat, a heat pump, a camera. Filing those under "Other" loses the icon, offers every entry

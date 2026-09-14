@@ -13,7 +13,8 @@
   import { readingActivity } from '../lib/reading';
   import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
-  import { OBJECT_TYPES, type MemObject, type ObjectInput, type TagCount } from '../lib/types';
+  import { OBJECT_TYPES, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
+  import { customTypes, defaultUnit } from '../lib/type-registry';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
@@ -42,6 +43,16 @@
   }
   let error = $state('');
   let busy = $state(false);
+
+  /** An own type knows the counter it usually has (an e-scooter counts km), so choosing it fills
+   *  in the unit -- but only into an empty one: a unit the user already picked is theirs. */
+  function setType(ty: ObjectType) {
+    input.type = ty;
+    if (input.counter_unit === null) input.counter_unit = defaultUnit(ty, $customTypes);
+  }
+  /** An object whose own type is gone (deleted elsewhere, not synced here yet) still has to show
+   *  something selected, or the select would sit on a blank and look like it lost the type. */
+  const missingType = $derived(input.type.startsWith('custom:') && !$customTypes.some((c) => c.key === input.type));
   /** Tags already in use, offered while typing one. */
   let tagCounts = $state<TagCount[]>([]);
   /** The objects offered as this one's parent: everything the user owns, minus this object and
@@ -142,8 +153,14 @@
     <div class="field"><label for="n">{$t('object.name')}</label><input id="n" bind:value={input.name} required /></div>
     <div class="field">
       <label for="c">{$t('object.type')}</label>
-      <select id="c" bind:value={input.type}>
+      <select id="c" bind:value={() => input.type, setType}>
         {#each OBJECT_TYPES as ty}<option value={ty}>{$t(`type.${ty}`)}</option>{/each}
+        {#if $customTypes.length > 0}
+          <optgroup label={$t('types.yours')}>
+            {#each $customTypes as ct (ct.key)}<option value={ct.key}>{ct.name}</option>{/each}
+          </optgroup>
+        {/if}
+        {#if missingType}<option value={input.type}>{$t('types.deleted')}</option>{/if}
       </select>
     </div>
     <div class="field">

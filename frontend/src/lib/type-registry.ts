@@ -18,10 +18,11 @@ const TABLE: Record<BuiltinType, { icon: IconName; categories: Category[] }> = {
 
 /** The icons an own type may have: the same list, in the same order, as `CUSTOM_TYPE_ICONS` in
  *  `src/domain/custom_type.rs` (tests/icons.test.ts compares the two). UI-only icons -- back,
- *  settings, chevron and the like -- are left out because on a card they would read as controls. */
+ *  settings, chevron and the like -- are left out because on a card they would read as controls,
+ *  and `box` because it draws almost the same cube as `object`: two identical picker choices. */
 export const CUSTOM_TYPE_ICONS: IconName[] = [
   'document', 'camera', 'car', 'e-bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body',
-  'object', 'box',
+  'object',
 ];
 
 /**

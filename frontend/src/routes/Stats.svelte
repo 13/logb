@@ -9,6 +9,7 @@
   import { locale, t } from '../i18n';
   import { PURCHASE_PRICE, flattenTree, periodLabel, sharePct, statsPath } from '../lib/stats';
   import type { Amount, Stats } from '../lib/types';
+  import { customTypes, typeLabel } from '../lib/type-registry';
 
   /** Per device and not synced: whether to count purchase prices is a way of looking, not data. */
   const includePurchases = persisted('logb.stats.purchases', false);
@@ -113,7 +114,7 @@
 
     <section data-testid="stats-by-type">
       <h2>{$t('stats.by-type')}</h2>
-      <BarList items={bars(data.by_type, (b) => $t(`type.${b}`))} />
+      <BarList items={bars(data.by_type, (b) => typeLabel(b, $customTypes, $t))} />
     </section>
 
     <section data-testid="stats-by-category">

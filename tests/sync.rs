@@ -3013,7 +3013,7 @@ async fn a_set_op_renaming_a_type_is_validated() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let scooter = app.post_json("/types", &json!({ "name": "E-scooter", "icon": "e-bike", "categories": ["repair"] })).await;
-    app.post_json("/types", &json!({ "name": "Boat", "icon": "box", "categories": ["repair"] })).await;
+    app.post_json("/types", &json!({ "name": "Boat", "icon": "tool", "categories": ["repair"] })).await;
     let uuid = scooter["client_uuid"].as_str().unwrap().to_string();
     let set = |op_id: &str, field: &str, value: serde_json::Value, secs: i64| json!({
         "client_op_id": op_id, "entity": "object_type", "entity_uuid": uuid, "op": "set",
@@ -3117,7 +3117,7 @@ async fn rest_type_writes_appear_in_the_change_feed() {
     // The REST create stamped the clock, so a stale offline rename loses.
     let body: serde_json::Value = app.push_raw(&push_body(json!([{
         "client_op_id": "stale", "entity": "object_type", "entity_uuid": uuid, "op": "set",
-        "field": "icon", "value": "box", "edited_at": before_now(3600), "device_id": "phone"
+        "field": "icon", "value": "tool", "edited_at": before_now(3600), "device_id": "phone"
     }]))).await.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
 }

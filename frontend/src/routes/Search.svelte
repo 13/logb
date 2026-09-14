@@ -6,7 +6,7 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { SearchResults } from '../lib/types';
-  import { typeIcon } from '../lib/object-types';
+  import { customTypes, typeIcon, typeLabel } from '../lib/type-registry';
   import Icon from '../lib/Icon.svelte';
 
   let q = $state(new URLSearchParams(location.search).get('q') ?? '');
@@ -68,8 +68,8 @@
           <button class="hit" onclick={() => go(`/objects/${o.id}`)}>
             <span class="hit-title">{o.name}</span>
             <span class="muted small type-row">
-              <Icon name={typeIcon(o.type)} size={14} />
-              {$t(`type.${o.type}`)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
+              <Icon name={typeIcon(o.type, $customTypes)} size={14} />
+              {typeLabel(o.type, $customTypes, $t)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
             </span>
           </button>
         {/each}

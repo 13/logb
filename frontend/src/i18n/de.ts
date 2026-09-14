@@ -414,5 +414,4 @@ export default {
   'icon.document': 'Dokument',
   'icon.camera': 'Kamera',
   'icon.object': 'Würfel',
-  'icon.box': 'Kiste',
 } as Record<string, string>;

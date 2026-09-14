@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { OBJECT_TYPES, categoriesFor, typeIcon } from '../src/lib/object-types';
-import { CATEGORIES } from '../src/lib/types';
+import { categoriesFor as lookup, typeIcon as iconOf } from '../src/lib/type-registry';
+import { CATEGORIES, OBJECT_TYPES, type Category } from '../src/lib/types';
 import en from '../src/i18n/en';
 import de from '../src/i18n/de';
+
+// Built-in types need no own types to resolve; these tests read the built-in table alone.
+const categoriesFor = (ty: string, current?: Category) => lookup(ty, [], current);
+const typeIcon = (ty: string) => iconOf(ty, []);
 
 describe('object types', () => {
   it('offers a bike no fuel and a body no inspection', () => {
