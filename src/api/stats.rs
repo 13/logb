@@ -25,8 +25,8 @@ pub struct StatsQuery {
 /// that has to run on two databases.
 async fn read(user: AuthUser, State(state): State<App>, Query(q): Query<StatsQuery>) -> Result<Json<Stats>, AppError> {
     if let Some(y) = q.year {
-        if !(1900..=9999).contains(&y) {
-            return Err(AppError::BadRequest("year must be between 1900 and 9999".into()));
+        if !(0..=9999).contains(&y) {
+            return Err(AppError::BadRequest("year must be between 0 and 9999".into()));
         }
     }
 

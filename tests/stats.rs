@@ -132,8 +132,31 @@ async fn another_users_spend_never_appears() {
 async fn a_bad_year_is_400() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    for q in ["year=abc", "year=12", "year=10000"] {
+    for q in ["year=abc", "year=-1", "year=10000"] {
         let res = app.client.get(app.url(&format!("/stats?{q}"))).send().await.unwrap();
         assert_eq!(res.status(), 400, "{q}");
     }
+}
+
+#[tokio::test]
+async fn the_edges_of_the_year_range_are_200() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    for q in ["year=0", "year=9999"] {
+        let res = app.client.get(app.url(&format!("/stats?{q}"))).send().await.unwrap();
+        assert_eq!(res.status(), 200, "{q}");
+    }
+}
+
+#[tokio::test]
+async fn a_years_purchase_price_lands_in_its_own_month() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    seed(&app).await;
+
+    let out = app.get_json("/stats?year=2024&purchases=true").await;
+    assert_eq!(out["total_cents"], 300_000, "the house's purchase price only");
+    assert_eq!(out["over_time"].as_array().unwrap().len(), 12);
+    assert_eq!(out["over_time"][4], json!({ "bucket": "2024-05", "cost_cents": 300_000 }));
+    assert_eq!(out["years"], json!(["2026", "2025", "2024"]));
 }

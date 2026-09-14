@@ -77,11 +77,23 @@ pub fn purchase_spend(objects: &[ObjectRow], purchased: &HashSet<i64>) -> Vec<Sp
         .collect()
 }
 
+/// True for a month shaped exactly like the ones this codebase produces: four ASCII digits, a
+/// dash, two ASCII digits. A validator upstream is supposed to keep a stored date sane, but it
+/// only checks that chrono can parse it -- `0202-05-01` or `2026-5-01` both do, and a month sliced
+/// from either must not turn into a `years` entry the API then rejects (odd but well-formed years
+/// like `0202` are fine and pass through) or a mangled bucket like `202-0`.
+fn valid_month(month: &str) -> bool {
+    let b = month.as_bytes();
+    b.len() == 7 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-' && b[5..7].iter().all(u8::is_ascii_digit)
+}
+
 /// The whole statistics response for `spend`, restricted to `year` when one is given.
 ///
 /// `years` is computed before the filter, so the year picker always offers every year that has
 /// spend, whichever one is selected.
 pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> Stats {
+    let spend: Vec<&Spend> = spend.iter().filter(|s| valid_month(&s.month)).collect();
+
     let mut years: Vec<String> = spend
         .iter()
         .filter(|s| s.cost_cents > 0)
@@ -94,6 +106,7 @@ pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> S
     let prefix = year.map(|y| format!("{y:04}-"));
     let selected: Vec<&Spend> = spend
         .iter()
+        .copied()
         .filter(|s| s.cost_cents > 0)
         .filter(|s| prefix.as_deref().is_none_or(|p| s.month.starts_with(p)))
         .collect();
@@ -317,5 +330,25 @@ mod tests {
         let mut free = obj(5, None, "Gift", "tool");
         free.purchase_price_cents = Some(0);
         assert!(purchase_spend(&[obj(4, None, "Car", "car"), free], &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn a_typo_year_is_still_well_formed_and_stays_offered_and_selectable() {
+        let rows = [spend(4, "0202-05", "fuel", 40)];
+        let s = summarize(&tree(), &rows, None);
+        assert_eq!(s.years, ["0202"]);
+        let s = summarize(&tree(), &rows, Some(202));
+        assert_eq!(s.over_time.len(), 12);
+        assert_eq!(s.over_time[4], Amount { bucket: "0202-05".into(), cost_cents: 40 });
+        assert_eq!(s.total_cents, 40);
+    }
+
+    #[test]
+    fn a_malformed_month_is_ignored_everywhere() {
+        let rows = [spend(4, "202-0", "fuel", 10), spend(4, "2026-5", "fuel", 20)];
+        let s = summarize(&tree(), &rows, None);
+        assert!(s.years.is_empty(), "not counted towards years");
+        assert_eq!(s.total_cents, 0);
+        assert!(s.by_object.is_empty() && s.by_category.is_empty() && s.by_type.is_empty());
     }
 }

@@ -1224,7 +1224,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1900,
+              "minimum": 0,
               "maximum": 9999
             },
             "description": "Restrict to one year; over_time then has twelve YYYY-MM buckets. Omitted: all years, one YYYY bucket each."
@@ -1252,7 +1252,7 @@
             }
           },
           "400": {
-            "description": "year is not a number or out of range"
+            "description": "year is not a number or outside 0..=9999"
           }
         }
       }
