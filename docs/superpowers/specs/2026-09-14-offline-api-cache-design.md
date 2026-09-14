@@ -99,13 +99,35 @@ exposure as leaving the app signed in, which it effectively is.
 `NetworkFirst` (see "Matchers" above) answers from `logb-api` once the network has taken longer
 than its 4s timeout -- an ordinary slow connection, not a lost one, so `offline` mode itself
 never sees it. `frontend/src/lib/api.ts` compares a successful response's `Date` header with the
-moment the request was sent (`servedFromCache`, unit-tested directly): a response dated more
-than 60s before that came from the cache, not the network just now. A `servingSaved` store is
-set true by such a response and false by the next fresh one; the top bar shows the existing
-offline note whenever `offline` mode *or* `servingSaved` is true. A response with no `Date`
-header, or one that fails to parse, counts as fresh -- there is nothing there to prove otherwise.
-(Confirmed empirically: LogB's own HTTP stack always sends `Date`, so this only ever fires on an
-actual cache hit.)
+moment the request was sent, minus a calibrated clock-skew estimate (`servedFromCache`,
+unit-tested directly): a response dated more than 60s before that, after correction, came from
+the cache, not the network just now.
+
+Staleness is kept per REQUEST PATH -- a `Set<string>` of paths (query string included, exactly as
+passed to `api()`/`apiPage()`/etc) currently answering stale -- not as one flag. Most screens have
+several requests in flight together (the dashboard alone fires five); a single "last response
+wins" flag flapped back to false the instant any ONE of them answered fresh, even while another
+was still visibly showing data from `logb-api`. A key is added by a stale response and removed
+only by a FRESH response to that SAME path, never by an unrelated one. The whole set is cleared
+(`clearServingSaved`) on a route change -- wired to the router's `path` store, since each screen
+re-fetches what it needs and staleness recorded for the previous screen stops being meaningful --
+and when a session ends (`endSession` in ../stores/session.ts). The `servingSaved` store is true
+whenever the set is non-empty; the top bar shows the existing offline note whenever `offline` mode
+*or* `servingSaved` is true. A response with no `Date` header, or one that fails to parse, counts
+as fresh -- there is nothing there to prove otherwise. (Confirmed empirically: LogB's own HTTP
+stack always sends `Date`, so this only ever fires on an actual cache hit.)
+
+Clock skew: a self-hosted instance's server clock can be far off from the client's -- no RTC on a
+Raspberry Pi that boots believing it's 1970, or simply the wrong timezone -- by much more than the
+60s threshold above, in either direction. Uncorrected, that would show the note permanently
+(server ahead of the client) or hide a genuine cache hit forever (server behind, so a stale cached
+response still reads as "recent enough"). `api.ts` maintains a calibrated skew estimate, updated
+from every response to a path that can NEVER be a cache hit: `/api/auth/...` and `/api/settings`
+are `NetworkOnly` (see "Matchers" above), so their `Date` header always reflects a live request
+made moments ago -- any gap between it and the moment the request was sent is clock skew, not
+cache age. Both are requested on every session check, so the estimate keeps recalibrating rather
+than trusting one reading for the life of the tab. `servedFromCache(dateHeader, sentAt, skewMs)`
+takes the current estimate as its third argument and subtracts it before comparing.
 
 ### A2. Sign-out without a connection
 

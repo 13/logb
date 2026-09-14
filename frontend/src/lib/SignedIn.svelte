@@ -15,7 +15,7 @@
   async function signOut() {
     busy = true; error = '';
     try { await logout(); }
-    catch (e) { error = $t(signOutErrorMessage(e)); }
+    catch (e) { error = signOutErrorMessage(e, $t); }
     finally { busy = false; }
   }
 </script>

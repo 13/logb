@@ -1,6 +1,6 @@
 import { get, readonly, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
-import { api, ApiError, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
+import { api, ApiError, clearServingSaved, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberedProfile, rememberProfile, userSwitchNeedsReload } from '../lib/cache-owner';
 import { clearObjectCache, clearObjectMemory } from '../lib/object-cache';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
@@ -26,13 +26,13 @@ export function setNavigateForTesting(fn: (path: string, replace?: boolean) => v
  * never reached the server at all, and the honest thing to say is that signing out needs a
  * connection, not whatever the browser happened to throw.
  *
- * Returns the `nav.signout-offline` i18n KEY for that case, and the plain message for an
- * `ApiError` -- not translated here. `$t()` on a key it does not recognise renders the key
- * itself unchanged (see ../i18n/index.ts), so both callers use this the same way regardless of
- * which case fired: `error = $t(signOutErrorMessage(e))`.
+ * Takes the translate function so it always returns the finished, displayable string -- not
+ * sometimes an i18n key and sometimes a plain server message, leaving it to the caller to run the
+ * result through `$t()` either way (which happened to work only because an unrecognised key
+ * renders unchanged, see ../i18n/index.ts). Callers pass `$t`, the current value of the `t` store.
  */
-export function signOutErrorMessage(e: unknown): string {
-  return e instanceof ApiError ? e.message : 'nav.signout-offline';
+export function signOutErrorMessage(e: unknown, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  return e instanceof ApiError ? e.message : t('nav.signout-offline');
 }
 
 /** undefined = not loaded yet, null = anonymous */
@@ -67,6 +67,9 @@ function endSession(): void {
   sessionKnown = true;
   offlineState.set(false);
   stopOfflineRetry();
+  // A note earned by the ending session's own slow requests must not linger over a signed-out
+  // (or about-to-be-someone-else's) screen.
+  clearServingSaved();
   // Not awaited: nobody is signed in afterwards, so nothing loads that the old caches could
   // answer, and the next session start claims (and, being ownerless, clears) them again anyway.
   void clearObjectCache();
@@ -118,13 +121,17 @@ globalThis.addEventListener?.('visibilitychange', () => {
  *
  * `startOfflineRetry` is idempotent -- `openOffline` may run again on every failed retry attempt
  * while nothing about the situation has changed, and must not stack a second interval each time.
- * `stopOfflineRetry` is called from every place `sessionKnown` becomes true (`endSession`,
- * `adoptUser`, and the setup-required branch of `doLoadSession`), so the timer never outlives the
- * question it exists to keep asking.
+ * It also refuses to start once `sessionKnown` is already true: `adoptUser` (awaiting a cache
+ * clear) and `openOffline` (awaiting the same) both have a real `await` between their last
+ * `sessionKnown` check and their next synchronous step, so a session confirmed by one racing
+ * `loadSession` attempt while another is unwinding must not leave a timer running for a question
+ * that has already been answered. `stopOfflineRetry` is called from every place `sessionKnown`
+ * becomes true (`endSession`, `adoptUser`, and the setup-required branch of `doLoadSession`) for
+ * the ordinary case; this is the belt-and-suspenders for the gap between those.
  */
 let offlineRetryTimer: ReturnType<typeof setInterval> | null = null;
 function startOfflineRetry(): void {
-  if (offlineRetryTimer !== null) return;
+  if (sessionKnown || offlineRetryTimer !== null) return;
   offlineRetryTimer = setInterval(() => { if (!sessionKnown) void loadSession(); }, 30_000);
 }
 function stopOfflineRetry(): void {
@@ -196,11 +203,29 @@ async function adoptUser(me: User): Promise<void> {
     // Same person still on screen, so App's per-user type load will not rerun on its own.
     void loadCustomTypes(me.id);
   }
-  rememberProfile(me);
+  // Carry over a previously remembered currency for the SAME user rather than dropping it for
+  // the moment before `/settings` answers again below (`doLoadSession`/`login`, right after this
+  // returns) -- an offline start caught in that narrow window would otherwise fall back to the
+  // default currency instead of the last one actually known for this device.
+  const previous = rememberedProfile();
+  const carryCurrency = previous?.id === me.id ? previous.currency : undefined;
+  rememberProfile(carryCurrency !== undefined ? { ...me, currency: carryCurrency } : me);
   offlineState.set(false);
   stopOfflineRetry();
   user.set(me);
   setOutboxUser(me.id);
+}
+
+/**
+ * Called when the instance currency changes (`settings/Appearance.svelte`) so the currently
+ * signed-in user's remembered profile keeps up immediately -- otherwise an offline start right
+ * after the change would show the currency this device knew before it, until the next successful
+ * `/settings` load remembers it again. A no-op with nobody signed in (there is no profile to
+ * update), which cannot happen in practice since only an admin reaches that screen's save button.
+ */
+export function rememberCurrentCurrency(newCurrency: string): void {
+  const me = get(user);
+  if (me) rememberProfile({ ...me, currency: newCurrency });
 }
 
 /**

@@ -473,28 +473,92 @@ describe('offline start and cache ownership', () => {
     const stored = JSON.parse(storage.getItem('logb.session.profile')!);
     expect(stored.currency).toBe('EUR');
   });
+
+  /**
+   * `adoptUser` writes the profile once immediately (no currency yet known for THIS confirmation)
+   * and `/settings` -- a separate, slightly later request -- writes it again with the currency.
+   * Between those two writes, the profile must not go back to having no currency at all when one
+   * was already known for this same user: an offline start caught in that narrow window would
+   * otherwise show the default instead of the last one actually remembered on this device.
+   */
+  it('carries over the remembered currency across adoptUser, before /settings answers again', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify({ ...PROFILE, currency: 'USD' }));
+    storage.setItem('logb.cache.user', '7');
+    installCaches([]);
+    // A property, not a bare `let`: TypeScript's control-flow narrowing loses track of a plain
+    // variable reassigned only from inside a nested closure like the Promise executor below.
+    const settingsGate: { resolve: (() => void) | null } = { resolve: null };
+    serve({
+      '/auth/status': () => jsonResponse(200, { setup_required: false }),
+      '/auth/me': () => jsonResponse(200, PROFILE), // confirms the SAME user id
+      '/settings': () => new Promise((resolve) => { settingsGate.resolve = () => resolve(jsonResponse(200, { currency: 'USD' })); }),
+    });
+    const session = await freshSession();
+
+    const pending = session.loadSession();
+    // Lets every already-settled microtask (auth/status, auth/me, adoptUser's own awaits) run,
+    // while /settings stays deliberately pending.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(JSON.parse(storage.getItem('logb.session.profile')!).currency).toBe('USD');
+
+    settingsGate.resolve?.();
+    await pending;
+    expect(JSON.parse(storage.getItem('logb.session.profile')!).currency).toBe('USD');
+  });
+});
+
+describe('rememberCurrentCurrency', () => {
+  afterEach(() => {
+    // @ts-expect-error -- test-only cleanup of globals this suite installs
+    delete globalThis.localStorage;
+  });
+
+  it('updates the remembered profile for whoever is currently signed in', async () => {
+    const storage = installStorage();
+    serve(signedIn);
+    const session = await freshSession();
+    await session.loadSession();
+
+    session.rememberCurrentCurrency('USD');
+
+    expect(JSON.parse(storage.getItem('logb.session.profile')!).currency).toBe('USD');
+  });
+
+  it('does nothing when nobody is signed in', async () => {
+    const storage = installStorage();
+    serve({});
+    const session = await freshSession();
+
+    expect(() => session.rememberCurrentCurrency('USD')).not.toThrow();
+    expect(storage.getItem('logb.session.profile')).toBeNull();
+  });
 });
 
 /** `signOutErrorMessage` is what `SignedIn.svelte` and `settings/Account.svelte` show when
  *  `logout`/`logoutEverywhere` reject: an `ApiError`'s own message for a server refusal, and the
- *  `nav.signout-offline` i18n KEY -- not a translated string -- for anything that means the
- *  request never reached the server at all. Built via `freshSession()`, and `ApiError` from the
- *  SAME module instance it returns (see the comment on `freshSession` above `api.ts` is
- *  reimported fresh per test), so `instanceof` inside it lines up with the error under test. */
+ *  translated `nav.signout-offline` string for anything that means the request never reached the
+ *  server at all -- it takes the translate function so it always returns the finished string,
+ *  never a key a caller has to know to run through `$t()` itself. Built via `freshSession()`, and
+ *  `ApiError` from the SAME module instance it returns (see the comment on `freshSession` above --
+ *  `api.ts` is reimported fresh per test), so `instanceof` inside it lines up with the error under
+ *  test. */
 describe('signOutErrorMessage', () => {
-  it('returns the server message for an ApiError', async () => {
+  const t = (key: string) => (key === 'nav.signout-offline' ? 'Signing out needs a connection.' : key);
+
+  it('returns the server message for an ApiError, untranslated', async () => {
     const session = await freshSession();
     const api = await import('../src/lib/api');
 
-    expect(session.signOutErrorMessage(new api.ApiError(403, 'forbidden', 'not allowed'))).toBe('not allowed');
+    expect(session.signOutErrorMessage(new api.ApiError(403, 'forbidden', 'not allowed'), t)).toBe('not allowed');
   });
 
-  it('returns the nav.signout-offline key for a connectivity failure', async () => {
+  it('returns the translated connection message for a connectivity failure', async () => {
     const session = await freshSession();
 
-    expect(session.signOutErrorMessage(new TypeError('Failed to fetch'))).toBe('nav.signout-offline');
-    expect(session.signOutErrorMessage(new DOMException('aborted', 'AbortError'))).toBe('nav.signout-offline');
-    expect(session.signOutErrorMessage(new Error('anything else'))).toBe('nav.signout-offline');
+    expect(session.signOutErrorMessage(new TypeError('Failed to fetch'), t)).toBe('Signing out needs a connection.');
+    expect(session.signOutErrorMessage(new DOMException('aborted', 'AbortError'), t)).toBe('Signing out needs a connection.');
+    expect(session.signOutErrorMessage(new Error('anything else'), t)).toBe('Signing out needs a connection.');
   });
 });
 
@@ -542,9 +606,11 @@ describe('the offline retry timer', () => {
     expect(statusCalls).toBe(1);
 
     // A second failed boot attempt (e.g. `online` firing moments later) must not start a
-    // second, overlapping 30s interval.
+    // second, overlapping 30s interval -- checked directly (not just inferred from call counts,
+    // which a doubled interval would not necessarily change by itself before the next tick).
     await session.loadSession();
     expect(statusCalls).toBe(2);
+    expect(vi.getTimerCount()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(statusCalls).toBe(3);

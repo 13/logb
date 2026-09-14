@@ -9,12 +9,12 @@
   let error = $state('');
 
   async function signOut() {
-    try { await logout(); } catch (e) { error = $t(signOutErrorMessage(e)); }
+    try { await logout(); } catch (e) { error = signOutErrorMessage(e, $t); }
   }
 
   async function signOutEverywhere() {
     if (!confirm($t('settings.logout-all-confirm'))) return;
-    try { await logoutEverywhere(); } catch (e) { error = $t(signOutErrorMessage(e)); }
+    try { await logoutEverywhere(); } catch (e) { error = signOutErrorMessage(e, $t); }
   }
 
   async function changeOwnPassword() {

@@ -7,11 +7,24 @@ tags, own types and offline cache projects.
 
 1. **Saved data shown while online.** `NetworkFirst` answers from `logb-api` when the network takes
    longer than 4 s. The page cannot see that today. `frontend/src/lib/api.ts` compares a successful
-   response's `Date` header with the moment the request was sent; a response dated more than 60 s
-   before that came from the service-worker cache. A `servingSaved` store is set true by such a
-   response and false by the next fresh one; the top bar shows the existing
+   response's `Date` header with the moment the request was sent, corrected for calibrated clock
+   skew (see below); a response dated more than 60 s before that (after correction) came from the
+   service-worker cache. Staleness is tracked per REQUEST PATH (a `Set<string>` keyed by the exact
+   path + query passed to `api()`/`apiPage()`/etc), not as one flag: most screens have several
+   requests in flight at once, and a single flag flapped back to "fresh" the instant any ONE of
+   them answered quickly, even while another was still visibly showing cached data. A key is added
+   by a stale response and removed only by a fresh response to that SAME path; the whole set is
+   cleared on a route change (each screen re-fetches what it needs) and when a session ends. The
+   `servingSaved` store is true whenever the set is non-empty; the top bar shows the existing
    "Offline — showing saved data" note when offline mode *or* `servingSaved` is true. A response
-   without a `Date` header counts as fresh. (The server's HTTP stack sends `Date`; the plan checks.)
+   without a `Date` header, or one that fails to parse, counts as fresh. (The server's HTTP stack
+   sends `Date`; the plan checks.)
+
+   Clock skew: a self-hosted instance can have a server clock far off from the client's (no RTC, a
+   Raspberry Pi that boots believing it's 1970), which would otherwise show the note permanently
+   (server ahead) or hide a real cache hit forever (server behind). `api.ts` calibrates a skew
+   estimate from responses that can never be a cache hit — `/api/auth/...` and `/api/settings` are
+   `NetworkOnly` — and subtracts it before judging any path's staleness.
 2. **Sign-out without a connection.** `logout` and `logoutEverywhere` fail on a network error
    before any session state changes. The callers (`SignedIn.svelte`, `settings/Account.svelte`)
    show `nav.signout-offline` ("Signing out needs a connection." / "Zum Abmelden ist eine

@@ -2,39 +2,79 @@ import { readonly, writable, type Readable } from 'svelte/store';
 import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
+import { path as routerPath } from './router';
 
 export { ApiError, isRejection, isUnauthenticated } from './api-error';
 
 /**
- * Whether the most recent response was answered from the service worker's cache rather than
- * the network. `NetworkFirst` (see vite.config.ts / sw-routes.ts) falls back to `logb-api` only
- * once the network has taken more than 4s, so a stale `Date` header is the one signal the page
- * itself can see -- there is no other way to tell a slow-but-live answer from a cached one.
- * Flips back to false the moment a fresh response arrives. TopBar shows the offline note while
- * this is true, in addition to `offline` mode itself (see ../stores/session.ts) -- the two are
- * independent: a signed-in, online user can still be looking at last week's list because the
- * network happened to be slow just now.
+ * Which request paths (exactly as passed to `api()`/`apiPage()`/etc, query string included) are
+ * currently answering from the service worker's cache rather than the network -- see
+ * `servedFromCache` below. A per-path SET, not one flag: most screens have several requests in
+ * flight at once (the dashboard alone fires five), and a single "last response wins" flag used to
+ * flap back to false the instant any ONE of them came back fresh -- an uncached `/settings`
+ * answering in milliseconds, say -- while another was still visibly showing data from `logb-api`.
+ *
+ * A key is added by a stale response and removed only by a FRESH response to that SAME path,
+ * never by an unrelated one. The whole set is dropped on a route change (`clearServingSaved`,
+ * wired to the router's `path` below -- each screen re-fetches what it needs, so staleness
+ * recorded for the previous screen's requests stops being meaningful) and when a session ends
+ * (same function, called from `endSession` in ../stores/session.ts).
  */
+const staleKeys = new Set<string>();
 const servingSavedState = writable(false);
 export const servingSaved: Readable<boolean> = readonly(servingSavedState);
 
+/** Drops all tracked staleness and hides the note. Idempotent, so calling it when nothing is
+ *  stale (the common case) does not needlessly re-notify `servingSaved`'s subscribers. */
+export function clearServingSaved(): void {
+  if (staleKeys.size === 0) return;
+  staleKeys.clear();
+  servingSavedState.set(false);
+}
+// Each screen re-fetches what it shows on mount, so navigating away makes any staleness recorded
+// for the PREVIOUS screen's requests meaningless -- without this, a note earned by one slow load
+// on the objects list would keep showing on a completely unrelated screen that never touched that
+// path. `path` only changes on a real `popstate` (see ./router.ts), which needs a DOM `window` --
+// this subscription is inert, harmlessly, under Vitest's node test environment; `clearServingSaved`
+// is exported so a test can simulate a route change directly instead.
+routerPath.subscribe(() => clearServingSaved());
+
 /**
- * Pure so it can be unit-tested without a fetch: true only when `dateHeader` is far enough
- * before `sentAt` (the moment the request went out) that ordinary latency or clock drift cannot
- * explain it -- which, given the 4s `NetworkFirst` timeout above, only a cache hit can. A
- * missing or unparsable header counts as fresh: there is nothing there to prove otherwise, and
- * treating "we don't know" as "cached" would show the note on every response an unrelated
- * proxy happened to strip the header from.
+ * How far the SERVER's clock reads from this device's, in ms (positive: the server is behind).
+ * A self-hosted instance with no RTC (a Raspberry Pi that boots believing it's 1970, or simply the
+ * wrong timezone) can be off by far more than the 60s threshold below, in either direction --
+ * which would otherwise show the note permanently (server ahead of us) or hide a genuine cache hit
+ * forever (server behind us, so a stale cached response still looks "recent enough").
  *
- * `now` is accepted for symmetry with callers that already have the current time to hand, but
- * the comparison anchors on `sentAt` -- what a fetch wrapper actually knows when it needs an
- * answer -- not on whatever moment this function happens to run.
+ * Calibrated from responses that can NEVER be a cache hit: `/auth/...` and `/settings` are
+ * `NetworkOnly` (see vite.config.ts), so their `Date` header always reflects a live request made
+ * moments ago -- any gap between it and `sentAt` is clock skew, not cache age. Both are requested
+ * on every session check, so this recalibrates itself continuously rather than trusting one
+ * reading for the life of the tab.
  */
-export function servedFromCache(dateHeader: string | null, sentAt: number, now: number = Date.now()): boolean {
+let clockSkewMs = 0;
+
+/** Test seam only: resets the calibrated skew between tests that exercise it through
+ *  `api()`/`handle()`, so one test's calibration cannot leak into the next. Production never
+ *  calls this -- the module starts at 0 and only ever recalibrates from a real response. */
+export function resetClockSkewForTesting(): void {
+  clockSkewMs = 0;
+}
+
+/**
+ * Pure so it can be unit-tested without a fetch: true only when `dateHeader` is far enough before
+ * `sentAt` (the moment the request went out), once `skewMs` -- the server clock's known offset
+ * from this device's, see `clockSkewMs` above -- is subtracted out, that ordinary latency cannot
+ * explain it. Given the 4s `NetworkFirst` timeout, only a cache hit reads as over a minute stale
+ * after that correction. A missing or unparsable header counts as fresh: there is nothing there to
+ * prove otherwise, and treating "we don't know" as "cached" would show the note on every response
+ * an unrelated proxy happened to strip the header from.
+ */
+export function servedFromCache(dateHeader: string | null, sentAt: number, skewMs: number = 0): boolean {
   if (dateHeader === null) return false;
   const headerTime = Date.parse(dateHeader);
   if (Number.isNaN(headerTime)) return false;
-  return sentAt - headerTime > 60_000;
+  return sentAt - headerTime - skewMs > 60_000;
 }
 
 let onUnauthorized: () => void = () => {};
@@ -78,13 +118,26 @@ function isOurs(op: QueuedOp): boolean {
 }
 
 /**
- * `sentAt` is optional only so this stays callable without it (there is no response to have
- * come from a cache before one exists); every real call site below passes it. Recorded here,
- * the one place every fetch wrapper's response passes through, rather than in each of them, so
- * `servingSaved` reflects the single most recent answer regardless of which wrapper fetched it.
+ * `sentAt` is optional only so this stays callable without it (there is no response to have come
+ * from a cache before one exists); every real call site below passes it. Recorded here, the one
+ * place every fetch wrapper's response passes through, rather than in each of them, so every path
+ * is tracked the same way regardless of which wrapper fetched it.
  */
 async function handle<T>(res: Response, path: string, sentAt?: number): Promise<T> {
-  if (sentAt !== undefined && res.ok) servingSavedState.set(servedFromCache(res.headers.get('date'), sentAt));
+  if (sentAt !== undefined && res.ok) {
+    const dateHeader = res.headers.get('date');
+    // Calibrate the clock-skew estimate from a response that is never a cache hit (see
+    // `clockSkewMs`) BEFORE judging this one -- harmless for an auth/settings response itself
+    // (never cacheable, so never added to `staleKeys` regardless), but keeps every path's
+    // judgement working off the freshest skew reading available.
+    if ((path.startsWith('/auth/') || path.startsWith('/settings')) && dateHeader !== null) {
+      const t = Date.parse(dateHeader);
+      if (!Number.isNaN(t)) clockSkewMs = sentAt - t;
+    }
+    if (servedFromCache(dateHeader, sentAt, clockSkewMs)) staleKeys.add(path);
+    else staleKeys.delete(path);
+    servingSavedState.set(staleKeys.size > 0);
+  }
   if (res.status === 204) return undefined as T;
   const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
   const body = isJson ? await res.json() : null;

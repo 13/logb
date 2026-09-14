@@ -5,7 +5,7 @@
   import { t } from '../../i18n';
   import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
   import { settings } from '../../stores/settings';
-  import { currency, user } from '../../stores/session';
+  import { currency, rememberCurrentCurrency, user } from '../../stores/session';
   import type { Settings } from '../../lib/types';
 
   let currencyText = $state('');
@@ -36,6 +36,9 @@
       const s = await api<Settings>('PUT', '/settings', body);
       currency.set(s.currency);
       timezone = s.timezone;
+      // Otherwise an offline start right after this change would show the currency this device
+      // knew before it, until the next successful /settings load remembers it again.
+      rememberCurrentCurrency(s.currency);
       message = $t('object.saved');
     } catch (e) { error = (e as Error).message; }
   }

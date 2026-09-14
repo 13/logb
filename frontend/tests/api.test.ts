@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { api, ApiError, isRejection, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl } from '../src/lib/api';
+import { api, ApiError, clearServingSaved, isRejection, resetClockSkewForTesting, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl } from '../src/lib/api';
 
 /** `dateHeader` defaults to absent, matching every existing call site of this helper: none of
  *  them cared about `servingSaved` before this response header existed. */
@@ -117,10 +117,32 @@ describe('servedFromCache', () => {
   it('is false for an unparsable Date header', () => {
     expect(servedFromCache('not a date', Date.now())).toBe(false);
   });
+
+  // A self-hosted instance can have a server clock that is minutes off (no RTC, wrong timezone),
+  // which would otherwise show the note permanently (server ahead) or hide a real cache hit
+  // forever (server behind). `skewMs` is the server's known offset from this device's clock (see
+  // `clockSkewMs` in ../src/lib/api.ts), subtracted before judging staleness.
+  it('subtracts a steady clock skew before judging staleness', () => {
+    const sentAt = Date.now();
+    const skewMs = 65_000; // the server's clock reads 65s behind this device's
+    // Genuinely fresh -- answered just now -- but its Date header alone would look well over a
+    // minute old without correcting for the skew.
+    expect(servedFromCache(new Date(sentAt - skewMs - 2_000).toUTCString(), sentAt, skewMs)).toBe(false);
+    // Genuinely stale even after correcting for that very same skew.
+    expect(servedFromCache(new Date(sentAt - skewMs - 65_000).toUTCString(), sentAt, skewMs)).toBe(true);
+  });
 });
 
 describe('servingSaved', () => {
-  it('flips true on a response served from the cache, and back on the next fresh one', async () => {
+  // Each test starts from a clean slate regardless of what an earlier test in this file left
+  // behind: staleness recorded for a path (or a calibrated clock skew) must never leak between
+  // tests that otherwise look independent.
+  beforeEach(() => {
+    clearServingSaved();
+    resetClockSkewForTesting();
+  });
+
+  it('flips true on a response served from the cache, and back on the next fresh one to the SAME path', async () => {
     const sentAt = Date.now();
     mockFetch(200, { items: [] }, new Date(sentAt - 61_000).toUTCString());
     await api('GET', '/objects');
@@ -131,7 +153,7 @@ describe('servingSaved', () => {
     expect(get(servingSaved)).toBe(false);
   });
 
-  it('does not flip on a response with no Date header at all', async () => {
+  it('a response with no Date header counts as fresh', async () => {
     mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
     await api('GET', '/objects');
     expect(get(servingSaved)).toBe(true);
@@ -139,5 +161,48 @@ describe('servingSaved', () => {
     mockFetch(200, { items: [] }, null);
     await api('GET', '/objects');
     expect(get(servingSaved)).toBe(false);
+  });
+
+  // The bug this per-path Set replaced: a single "last response wins" flag flapped back to false
+  // the instant ANY response came back fresh, even one that had nothing to do with the stale one
+  // still visibly on screen (a faster sibling request on the same page, say).
+  it('a fresh response to an unrelated path does not clear staleness recorded for another', async () => {
+    const sentAt = Date.now();
+    mockFetch(200, { items: [] }, new Date(sentAt - 61_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(true);
+
+    mockFetch(200, { items: [] }, new Date().toUTCString());
+    await api('GET', '/activities'); // a different path entirely
+    expect(get(servingSaved)).toBe(true); // /objects's staleness is untouched
+  });
+
+  it('clears on a route change, regardless of what is currently stale', async () => {
+    const sentAt = Date.now();
+    mockFetch(200, { items: [] }, new Date(sentAt - 61_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(true);
+
+    // What the router's `path` store changing calls in production (see the subscription in
+    // ../src/lib/api.ts) -- exercised directly here since a real route change needs a DOM.
+    clearServingSaved();
+    expect(get(servingSaved)).toBe(false);
+  });
+
+  it('calibrates clock skew from an uncached auth/settings response before judging a cached path', async () => {
+    const skewMs = 70_000; // the server's clock reads 70s behind this device's
+    mockFetch(200, { id: 1 }, new Date(Date.now() - skewMs).toUTCString());
+    await api('GET', '/auth/me'); // never cached -- calibrates the skew, is not itself judged
+
+    // Genuinely fresh: its Date header alone would look well over a minute old, but only
+    // because of the very same server clock skew just calibrated above.
+    mockFetch(200, { items: [] }, new Date(Date.now() - skewMs - 2_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(false);
+
+    // Genuinely stale even after correcting for that same skew.
+    mockFetch(200, { items: [] }, new Date(Date.now() - skewMs - 65_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(true);
   });
 });

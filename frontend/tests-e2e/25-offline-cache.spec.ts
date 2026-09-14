@@ -157,7 +157,64 @@ test('signing out with no connection says so, and leaves the user signed in', as
   await context.setOffline(false);
 });
 
-// A1 ("saved data shown while online", `servedFromCache`/`servingSaved` in ../src/lib/api.ts) has
-// no e2e test here: see the report's "A1 e2e decision" for why an attempt was made and dropped as
-// unreliable rather than kept as a flaky test. It is covered by the `servedFromCache`/`servingSaved`
-// unit tests in tests/api.test.ts.
+/**
+ * A1: `NetworkFirst` (see docs/superpowers/specs/2026-09-14-offline-api-cache-design.md, "A1")
+ * falls back to `logb-api` once the network takes longer than 4s -- signed in, online, no
+ * `context.setOffline`. `context.route` can intercept the requests the service worker itself
+ * makes (verified against this Playwright/Chromium build), so this seeds the cache with a
+ * response whose `Date` header is already 70s old -- unambiguously "stale" regardless of how
+ * little real time separates the two requests in a fast-running test -- then makes the next
+ * request to that SAME path hang past the 4s timeout so `NetworkFirst` falls back to it.
+ *
+ * Routes only the one request the dashboard actually renders from (`?all=true&archived=false`),
+ * not the parallel `archived=true` request it also fires: `servingSaved` now tracks staleness
+ * per path (see ../src/lib/api.ts), so an unrelated sibling request answering fresh no longer
+ * races this one back to false before the assertion below runs -- which is exactly what made an
+ * earlier version of this test unreliable (see the report's "A1 e2e decision").
+ */
+test('shows saved data while online when the network is slower than the cache timeout', async ({ page, context }) => {
+  await signInFresh(page, '25-slow-network');
+  await object(page, 'Slow Network Bike');
+  await page.goto('/');
+  await underServiceWorker(page);
+  await expect(page.getByText('Slow Network Bike')).toBeVisible();
+
+  let calls = 0;
+  await context.route('**/api/objects?all=true&archived=false', async (route) => {
+    calls++;
+    try {
+      if (calls === 1) {
+        // Seeds `logb-api` with a response that is already stale on arrival, so the FALLBACK
+        // below (not this direct answer) is what the page ends up seeing.
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          headers: { ...response.headers(), date: new Date(Date.now() - 70_000).toUTCString(), 'cache-control': 'no-store' },
+          body: await response.body(),
+        });
+        return;
+      }
+      // NetworkFirst's own timeout is 4s; outlasting it is what makes it fall back to the cache
+      // entry seeded above instead of waiting for this (otherwise perfectly fine) response.
+      await new Promise((r) => setTimeout(r, 4_500));
+      await route.continue();
+    } catch {
+      // A reload can cancel a still-in-flight request out from under this handler (or, on a
+      // slower viewport, a second genuine request to the same path can race this one) -- either
+      // way Playwright then refuses a further continue/fulfill on that same route. Harmless for
+      // this test: its assertions are about what the PAGE ends up showing, not about every
+      // individual route dispatch completing cleanly.
+    }
+  });
+
+  // Populates `logb-api` with the backdated response above.
+  await page.reload();
+  await expect(page.getByText('Slow Network Bike')).toBeVisible();
+
+  // This request is deliberately slow: `NetworkFirst` falls back to the cache entry instead.
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: /Offline/ })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('Slow Network Bike')).toBeVisible();
+
+  await context.unroute('**/api/objects?all=true&archived=false');
+});
