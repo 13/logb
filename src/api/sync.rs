@@ -5,6 +5,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::state::App;
 use crate::sync::feed;
+use crate::sync::record;
 use crate::sync::{
     apply::{apply_op, canonical_edited_at},
     Op, OpKind, Outcome,
@@ -181,7 +182,7 @@ async fn push(
     }
 
     tx.commit().await?;
-    Ok(Json(PushOut { results, server_time: db::now(), ids }))
+    Ok(Json(PushOut { results, server_time: record::edited_at_now(), ids }))
 }
 
 /// A page big enough that a normal catch-up is one round trip, small enough that a phone on a
@@ -243,7 +244,7 @@ async fn pull(
     let changes = feed::pull(&state.db, user.id, params.since, limit).await?;
     let complete = (changes.len() as i64) < limit;
     let next_seq = changes.last().map(|c| c.seq).unwrap_or(params.since);
-    Ok(Json(PullOut { changes, next_seq, complete, server_time: db::now(), epoch }))
+    Ok(Json(PullOut { changes, next_seq, complete, server_time: record::edited_at_now(), epoch }))
 }
 
 async fn bootstrap(
@@ -253,7 +254,7 @@ async fn bootstrap(
     let (seq, mut snapshot) = feed::snapshot(&state.db, user.id).await?;
     let map = snapshot.as_object_mut().expect("snapshot builds a JSON object");
     map.insert("seq".into(), serde_json::json!(seq));
-    map.insert("server_time".into(), serde_json::json!(db::now()));
+    map.insert("server_time".into(), serde_json::json!(record::edited_at_now()));
     map.insert("epoch".into(), serde_json::json!(crate::sync::epoch::current(&state.db).await?));
     Ok(Json(snapshot))
 }
