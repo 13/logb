@@ -1,6 +1,6 @@
 import { addMonthsIso } from './reading';
 import { emptyReminder, readingReminder } from './reminder-form';
-import type { CounterUnit, ObjectType, ReminderInput } from './types';
+import type { BuiltinType, CounterUnit, ObjectType, ReminderInput } from './types';
 
 /**
  * Reminders a new object can start with. Offered, never created unasked: the object form lists
@@ -22,7 +22,7 @@ export interface ReminderTemplate {
 
 const READING: ReminderTemplate = { id: 'reading', title: 'reading.reminder-title', reading: true };
 
-const TEMPLATES: Record<ObjectType, ReminderTemplate[]> = {
+const TEMPLATES: Record<BuiltinType, ReminderTemplate[]> = {
   car: [
     { id: 'oil', title: 'template.oil', months: 12, counter: { km: 15_000, mi: 10_000 } },
     { id: 'inspection', title: 'template.inspection', months: 24 },
@@ -71,7 +71,8 @@ export function counterStep(t: ReminderTemplate, unit: CounterUnit): number | nu
 /** What the form offers for this type and counter: a template that only makes sense with a
  *  counter -- a reading, or one due by distance alone -- needs the object to have one. */
 export function templatesFor(type: ObjectType, unit: CounterUnit): ReminderTemplate[] {
-  return TEMPLATES[type].filter((t) => {
+  // Templates are built-in types only; an own type starts with none.
+  return (TEMPLATES[type as BuiltinType] ?? []).filter((t) => {
     if (t.reading) return unit !== null;
     return t.months !== undefined || counterStep(t, unit) !== null;
   });

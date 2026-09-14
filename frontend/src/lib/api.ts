@@ -37,7 +37,7 @@ async function handle<T>(res: Response, path: string): Promise<T> {
   const body = isJson ? await res.json() : null;
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth')) onUnauthorized();
-    throw new ApiError(res.status, body?.error ?? 'error', body?.message ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, body?.error ?? 'error', body?.message ?? `HTTP ${res.status}`, body);
   }
   return body as T;
 }

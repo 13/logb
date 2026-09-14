@@ -1,0 +1,80 @@
+import { describe, expect, it } from 'vitest';
+import { CUSTOM_TYPE_ICONS, categoriesFor, defaultUnit, typeIcon, typeLabel } from '../src/lib/type-registry';
+import { CATEGORIES, OBJECT_TYPES, type CustomType } from '../src/lib/types';
+
+const t = (k: string) => `T(${k})`;
+
+const scooter: CustomType = {
+  id: 7, client_uuid: '1b4e28ba-2fa1-11d2-883f-0016d3cca427', key: 'custom:1b4e28ba-2fa1-11d2-883f-0016d3cca427',
+  name: 'E-scooter', icon: 'e-bike', categories: ['maintenance', 'repair', 'other'], counter_unit: 'km',
+  created_at: '2026-09-14T10:00:00Z', updated_at: '2026-09-14T10:00:00Z',
+};
+const custom = [scooter];
+
+describe('type registry: built-in types', () => {
+  // The table moved here from object-types.ts; these are the values it had, so the move cannot
+  // have changed what any existing object shows or offers.
+  it('keeps every built-in icon and category list as they were', () => {
+    const icons = Object.fromEntries(OBJECT_TYPES.map((k) => [k, typeIcon(k, custom)]));
+    expect(icons).toEqual({
+      car: 'car', e_bike: 'e-bike', bike: 'bike', motorcycle: 'motorcycle', home: 'home',
+      appliance: 'appliance', tool: 'tool', body: 'body', other: 'object',
+    });
+    const vehicle = ['maintenance', 'repair', 'inspection', 'fuel', 'reading', 'modification', 'purchase', 'other'];
+    expect(categoriesFor('car', custom)).toEqual(vehicle);
+    expect(categoriesFor('e_bike', custom)).toEqual(vehicle);
+    expect(categoriesFor('motorcycle', custom)).toEqual(vehicle);
+    expect(categoriesFor('bike', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
+    expect(categoriesFor('home', custom)).toEqual(['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'other']);
+    expect(categoriesFor('appliance', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
+    expect(categoriesFor('tool', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
+    expect(categoriesFor('body', custom)).toEqual(['symptom', 'treatment', 'appointment', 'medication', 'other']);
+    expect(categoriesFor('other', custom)).toEqual([...CATEGORIES]);
+  });
+
+  it('labels a built-in type through its translation key', () => {
+    expect(typeLabel('car', custom, t)).toBe('T(type.car)');
+    expect(typeLabel('other', [], t)).toBe('T(type.other)');
+  });
+
+  it('gives built-in types no default unit', () => {
+    expect(defaultUnit('car', custom)).toBeNull();
+  });
+});
+
+describe('type registry: own types', () => {
+  it('resolves an own type to its name, icon, categories and unit', () => {
+    expect(typeLabel(scooter.key, custom, t)).toBe('E-scooter');
+    expect(typeIcon(scooter.key, custom)).toBe('e-bike');
+    expect(categoriesFor(scooter.key, custom)).toEqual(['maintenance', 'repair', 'other']);
+    expect(defaultUnit(scooter.key, custom)).toBe('km');
+  });
+
+  // Same rule as for built-in types: an entry filed before its object changed type keeps its
+  // own category in the select.
+  it('keeps the current category, once', () => {
+    expect(categoriesFor(scooter.key, custom, 'fuel')).toEqual(['maintenance', 'repair', 'other', 'fuel']);
+    expect(categoriesFor(scooter.key, custom, 'repair').filter((c) => c === 'repair')).toHaveLength(1);
+  });
+
+  // A type deleted on another device, or not synced here yet: the object still has to render,
+  // and offering every category is the only choice that cannot hide an entry's own.
+  it('treats an unknown own type as a deleted type', () => {
+    const gone = 'custom:00000000-0000-4000-8000-000000000000';
+    expect(typeLabel(gone, custom, t)).toBe('T(types.deleted)');
+    expect(typeIcon(gone, custom)).toBe('object');
+    expect(categoriesFor(gone, custom)).toEqual([...CATEGORIES]);
+    expect(defaultUnit(gone, custom)).toBeNull();
+  });
+
+  it('does not let a custom type shadow a built-in key', () => {
+    const odd = { ...scooter, key: 'car', name: 'Not a car' };
+    expect(typeLabel('car', [odd], t)).toBe('T(type.car)');
+  });
+
+  it('offers no UI-only icon for a type', () => {
+    for (const icon of ['back', 'settings', 'search', 'edit', 'plus', 'chevron', 'logout']) {
+      expect(CUSTOM_TYPE_ICONS as string[]).not.toContain(icon);
+    }
+  });
+});

@@ -9,15 +9,23 @@ function input(over: Partial<SettingsRowsInput> = {}): SettingsRowsInput {
 }
 
 describe('settingsRows', () => {
-  it('gives an ordinary user five rows, all in the "you" group', () => {
+  it('gives an ordinary user six rows, all in the "you" group', () => {
     const rows = settingsRows(input());
-    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'api', 'data']);
+    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'types', 'api', 'data']);
     expect(rows.every((r) => r.group === 'you')).toBe(true);
+  });
+
+  // Types are per user, so every user manages their own -- it is not an instance setting.
+  it('gives every user a Types row', () => {
+    for (const isAdmin of [false, true]) {
+      const row = settingsRows(input({ isAdmin })).find((r) => r.id === 'types');
+      expect(row).toEqual({ id: 'types', path: '/settings/types', icon: 'object', label: 'settings.types', value: null, group: 'you' });
+    }
   });
 
   it('adds the instance group for an administrator, after the personal rows', () => {
     const rows = settingsRows(input({ isAdmin: true }));
-    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'api', 'data', 'people', 'database']);
+    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'types', 'api', 'data', 'people', 'database']);
     expect(rows.filter((r) => r.group === 'instance').map((r) => r.id)).toEqual(['people', 'database']);
   });
 

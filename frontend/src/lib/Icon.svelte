@@ -1,10 +1,8 @@
 <script lang="ts">
   /** Inline SVG rather than a sprite or a library: there are only a handful of them, they must
    *  take the theme's colour through `currentColor`, and the project has no runtime dependencies. */
-  export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
-    | 'plus'
-    | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object'
-    | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron' | 'logout' | 'bell' | 'chart';
+  import type { IconName as Names } from './icon-names';
+  export type IconName = Names;
   let { name, size = 20 }: { name: IconName; size?: number } = $props();
 </script>
 

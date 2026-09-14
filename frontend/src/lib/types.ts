@@ -1,9 +1,18 @@
+import type { IconName } from './icon-names.js';
+
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
 export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
   'symptom', 'treatment', 'appointment', 'medication', 'reading'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
-export type ObjectType = (typeof OBJECT_TYPES)[number];
+export type BuiltinType = (typeof OBJECT_TYPES)[number];
+/** A built-in key, or `custom:<client_uuid>` naming one of the user's own types. */
+export type ObjectType = BuiltinType | `custom:${string}`;
+/** `GET /types`: one of the signed-in user's own object types. `key` is what `objects.type` holds. */
+export interface CustomType {
+  id: number; client_uuid: string; key: string; name: string; icon: IconName; categories: Category[];
+  counter_unit: CounterUnit; created_at: string; updated_at: string;
+}
 export type Kind = 'photo' | 'document';
 
 export interface User { id: number; username: string; is_admin: boolean; lang: string; created_at?: string }

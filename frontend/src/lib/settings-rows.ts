@@ -54,6 +54,11 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
       value: input.notificationsLabel, group: 'you',
     },
     {
+      // Per user, like everything in this group: nobody sees anyone else's types.
+      id: 'types', path: '/settings/types', icon: 'object', label: 'settings.types',
+      value: null, group: 'you',
+    },
+    {
       id: 'api', path: '/settings/api', icon: 'key', label: 'tokens.title',
       // Zero is not a number worth printing here: "no keys" is the default state of every
       // account, and a row that says so is noise on a screen meant to be scanned. The caller

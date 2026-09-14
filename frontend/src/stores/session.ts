@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import { api, flushOutbox, isRejection, persistStorage, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { clearObjectCache } from '../lib/object-cache';
+import { clearCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
 
@@ -27,6 +28,7 @@ setUnauthorizedHandler(() => {
   user.set(null);
   sessionKnown = true;
   clearObjectCache();
+  clearCustomTypes();
   // The queue is NOT cleared: an expired session is exactly when a write must survive until
   // the user signs back in. It is only detached from the current session, so nothing replays
   // or displays it until someone claims it by logging in (see `setOutboxUser` in ../lib/api).
@@ -126,6 +128,7 @@ export async function logout(): Promise<void> {
   user.set(null);
   sessionKnown = true;
   clearObjectCache();
+  clearCustomTypes();
   setOutboxUser(null);
   navigate('/login', true);
 }
@@ -136,6 +139,7 @@ export async function logoutEverywhere(): Promise<void> {
   user.set(null);
   sessionKnown = true;
   clearObjectCache();
+  clearCustomTypes();
   setOutboxUser(null);
   navigate('/login', true);
 }

@@ -7,7 +7,9 @@
 
 /** Thrown by `api()` when the server answered but refused the request. */
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  /** `body` is the whole JSON error, for the few answers that carry more than a sentence -- e.g.
+   *  a 409 `in_use` with the `count` of objects still using a type. */
+  constructor(public status: number, public code: string, message: string, public body: Record<string, unknown> | null = null) {
     super(message);
   }
 }

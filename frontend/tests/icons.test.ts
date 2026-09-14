@@ -46,6 +46,39 @@ const EXCLUSIONS: Record<string, { char: string; reason: string }> = {
   },
 };
 
+// Read as text rather than imported: this file is type-checked under the Node tsconfig, which
+// cannot resolve a `.svelte` import, and a type is not a value a test could iterate anyway.
+function stringList(src: string, pattern: RegExp): string[] {
+  const m = src.match(pattern);
+  if (!m) return [];
+  return [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+}
+
+describe('own type icons', () => {
+  const iconNames = stringList(readFileSync(join(SRC_ROOT, 'lib/icon-names.ts'), 'utf8'), /export type IconName =([^;]+);/);
+  const client = stringList(readFileSync(join(SRC_ROOT, 'lib/type-registry.ts'), 'utf8'), /CUSTOM_TYPE_ICONS: IconName\[\] = \[([^\]]+)\]/);
+  const server = stringList(
+    readFileSync(fileURLToPath(new URL('../../src/domain/custom_type.rs', import.meta.url)), 'utf8'),
+    /CUSTOM_TYPE_ICONS: &\[&str\] = &\[([^\]]+)\]/,
+  );
+
+  it('parsed all three lists (sanity check the patterns still match)', () => {
+    expect(iconNames.length).toBeGreaterThan(20);
+    expect(client.length).toBeGreaterThan(5);
+    expect(server.length).toBeGreaterThan(5);
+  });
+
+  // An icon the server accepts but Icon.svelte cannot draw would render as an empty square.
+  it('every icon a type may have is one Icon.svelte draws', () => {
+    for (const icon of client) expect(iconNames, icon).toContain(icon);
+  });
+
+  // The picker offering an icon the server refuses is a Save that always fails.
+  it('the picker offers exactly the icons the server accepts', () => {
+    expect(client).toEqual(server);
+  });
+});
+
 describe('icons', () => {
   const files = svelteFiles(SRC_ROOT).map((f) => ({ abs: f, rel: relative(SRC_ROOT, f) }));
 
