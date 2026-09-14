@@ -1,6 +1,6 @@
 # Object cost depth (statistics phase 2)
 
-Status: approved, not implemented. Follows `2026-09-14-statistics-design.md` (phase 1, the
+Status: implemented. Follows `2026-09-14-statistics-design.md` (phase 1, the
 Statistics screen).
 
 An object's Info tab answers "what did this cost to run" but not "what has owning it cost me",
@@ -12,20 +12,27 @@ screen and the Info tab never disagree about a number.
 
 Top to bottom:
 
-1. **Include contents** switch. Shown only when the object has at least one non-deleted child.
-   Off by default, remembered per device via `persisted` (`logb.insights.contents`). Not synced.
+1. **Include contents** switch. Shown only when the object has at least one child listed under
+   Contents -- non-deleted and not archived. With the switch on, archived children still count
+   toward the total, exactly as they do on the Statistics screen; a house whose only children are
+   archived shows no switch. Off by default, remembered per device via `persisted`
+   (`logb.insights.contents`). Not synced.
 2. **Total cost of ownership**, e.g. "€4,000.00 · ≈ €1,300 a year since May 2024".
    - Total = running costs (every non-deleted activity's `cost_cents`) + purchase price.
    - The purchase price follows phase 1's rule: counted unless the object has a non-deleted
      `purchase` activity with `cost_cents > 0`, in which case that entry already is the purchase.
    - "Since" is the purchase date, or the object's creation date when there is none.
-   - Per year = total ÷ years owned. Years owned run from "since" to the archive date if the object
-     is archived, otherwise today. The per-year figure is omitted when fewer than 90 days are owned:
-     a few weeks' spend multiplied out to a year is not a figure anyone can use.
+   - Per year = total ÷ years owned, shown in whole currency units (e.g. "€1,300", never
+     "€1,300.00"): it is an average, and cents would claim a precision it does not have. Years
+     owned run from "since" to the archive date if the object is archived, otherwise today. The
+     per-year figure is omitted when fewer than 90 days are owned: a few weeks' spend multiplied
+     out to a year is not a figure anyone can use.
    - With the switch on, every descendant's running costs and purchase price (same rule, per
      descendant) are added to the total. "Since" and years owned stay the object's own.
 3. **Per month.** The last twelve calendar months ending with the current one, oldest first, every
-   month present with 0 when nothing was spent. Running costs only.
+   month present with 0 when nothing was spent. Running costs only. When the object (with
+   descendants, if the switch is on) has no spend at all, the per-month, per-year and per-category
+   bars are replaced by "Not enough data yet." rather than twelve empty €0.00 bars.
 4. **Per year** and **Per category**, as today. Running costs only.
 5. **Cost per km, fuel totals, consumption, usage, usage per month**: unchanged and always the
    object's own. Counters belong to one object; adding a boiler's hours to a house makes no sense.
@@ -73,17 +80,20 @@ already refuses cycles.
 ## Backend structure
 
 - `src/domain/stats.rs` gains, pure and unit-tested:
-  - `months_ending(today: NaiveDate, months: u32, spend) -> Vec<Amount>` -- the twelve-month
-    window with zeros, sharing the month-filling code `summarize` uses for one year.
-  - `days_owned(since, until) -> i64` and `per_year_cents(total, days) -> Option<i64>`
-    (None under 90 days; integer arithmetic, `total * 365 / days`).
+  - `months_ending(today: NaiveDate, months: u32, totals: &[(String, i64)]) -> Vec<Amount>` -- the
+    twelve-month window with zeros, sharing the month-filling code `summarize` uses for one year.
+  - `ownership(running_cents, purchase_cents, since, until) -> Ownership` -- total, and per year
+    as `total * 365 / days` (None under `MIN_DAYS_FOR_PER_YEAR` = 90 days).
+  - `day_of(s) -> Option<NaiveDate>` -- the day at the start of a stored date or timestamp.
 - `src/domain/insights.rs` gains `consumption_per_fill(fills: &[DatedFill]) -> Vec<FillRate>`,
   pure and unit-tested, next to the existing tank-method consumption.
-- `src/api/insights.rs`: parses `contents`; when true, resolves the descendant ids once (one query
-  for the user's non-deleted objects' `id, parent_id`, walked in Rust) and runs the cost queries
-  with `object_id IN (...)` over that set; purchase prices come from `domain::stats::purchase_spend`
-  with the same purchased-set query phase 1 uses. `by_year`/`by_category` SQL is unchanged apart
-  from the id set. Every `SUM` is `CAST(... AS BIGINT)`.
+- `src/api/insights.rs`: parses `contents` and prefixes every cost query with a `scope` CTE, read
+  as `object_id IN (SELECT id FROM scope)`. Without contents the CTE is the object alone; with
+  contents it is `WITH RECURSIVE` over non-deleted children (`UNION`, as `objects::ancestors`
+  does). Only these two fixed fragments are ever formatted into the SQL; the id is always bound.
+  Purchase prices come from `domain::stats::purchase_spend` with the same purchased-set rule phase
+  1 uses. Counter and fuel queries stay on the object's own id. Every `SUM` is
+  `CAST(... AS BIGINT)`.
 - `docs/openapi.json`: the parameter and new fields.
 
 ## Frontend structure
@@ -95,7 +105,10 @@ already refuses cycles.
     when on.
   - `sinceLabel(date, locale)` -- "May 2024" from `YYYY-MM-DD`.
   - `fillLabel(date, locale)` -- a short day and month ("10 Jan") for a fill bar.
-  Month bars reuse `periodLabel` from `lib/stats.ts`.
+  Month bars use `monthLabel` (short month and two-digit year): a twelve-month window crosses a
+  year, and two bars both labelled "Sep" would be ambiguous. The usage-per-month bars now use the
+  same shared `monthLabel`, not a separate local formatter, and their heading is "Usage per month"
+  (distinct from the spend block's "Spend per month").
 - `ObjectDetail.svelte` passes whether the object has children (it already loads them for the Info
   tab) so the switch can hide without a request.
 - en/de strings for every new label.

@@ -105,11 +105,19 @@ export interface Insights {
   by_year: Bucket[]; by_category: Bucket[];
   counter_span: { from: number; to: number } | null;
   cost_per_counter_milli: number | null;
-  fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null } | null;
+  fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null;
+    /** Consumption per fill, oldest first, up to twelve. */
+    fills: { date: string; per_100_milli: number }[] } | null;
   /** Counter units per day over recent readings, ×1000; null until there is enough history. */
   counter_per_day_milli: number | null;
   /** The last twelve months, oldest first; `amount` is null for a month the readings cannot measure. */
   usage_by_month: { month: string; amount: number | null }[];
+  /** Whether the object has any non-deleted child. */
+  has_contents: boolean;
+  /** Running costs plus purchase prices counted; `per_year_cents` null under 90 days owned. */
+  ownership: { total_cents: number; purchase_cents: number; since: string; per_year_cents: number | null };
+  /** Twelve months ending with the current one, oldest first, zeros included. */
+  by_month: Amount[];
 }
 
 /** `GET /stats`. `bucket` is `YYYY`, `YYYY-MM`, an object type, a category, or `purchase_price`. */

@@ -206,7 +206,14 @@ export default {
   'reading.warn-implausible': 'Weit mehr als üblich seit {date}. Auf Tippfehler prüfen, dann erneut speichern.',
 
   'timeline.readings': '{n} Zählerstände',
-  'insights.usage-by-month': 'Pro Monat',
+  'insights.usage-by-month': 'Nutzung pro Monat',
+  'insights.contents': 'Inhalt einrechnen',
+  'insights.ownership': 'Gesamtkosten',
+  'insights.per-year-since': '≈ {amount} pro Jahr seit {since}',
+  'insights.since': 'seit {since}',
+  'insights.spend-by-month': 'Ausgaben pro Monat',
+  'insights.by-fill': 'Verbrauch pro Tankfüllung',
+  'insights.by-fill-hint': 'Setzt voraus, dass jedes Mal vollgetankt wurde.',
 
   'settings.notifications': 'Benachrichtigungen',
   'settings.timezone': 'Zeitzone',

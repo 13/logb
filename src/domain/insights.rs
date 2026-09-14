@@ -151,6 +151,46 @@ pub fn default_fuel_unit(counter_unit: Option<&str>) -> &'static str {
     }
 }
 
+/// One fuel entry with its date, as the per-fill trend needs it.
+#[derive(Clone, Debug)]
+pub struct DatedFill {
+    pub date: String,
+    pub counter: i64,
+    pub quantity_milli: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FillRate {
+    pub date: String,
+    pub per_100_milli: i64,
+}
+
+/// How many fills the trend draws.
+pub const FILL_BARS: usize = 12;
+
+/// Quantity per 100 counter units for each fill, measured from the fill before it; the newest
+/// `FILL_BARS`, oldest first.
+///
+/// The tank method one interval at a time: a fill's fuel was burned over the distance since the
+/// previous fill, so the first fill has no figure. Fills are taken in date order, not counter
+/// order, so a replaced odometer shows up as a distance that is not positive -- and that, like
+/// the same counter typed twice, gives no figure rather than a spike. The fill still starts the
+/// next interval.
+pub fn consumption_per_fill(fills: &[DatedFill]) -> Vec<FillRate> {
+    let mut sorted = fills.to_vec();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.counter.cmp(&b.counter)));
+    let mut rates: Vec<FillRate> = sorted
+        .windows(2)
+        .filter_map(|w| {
+            let distance = w[1].counter - w[0].counter;
+            (distance > 0).then(|| FillRate { date: w[1].date.clone(), per_100_milli: w[1].quantity_milli * 100 / distance })
+        })
+        .collect();
+    let skip = rates.len().saturating_sub(FILL_BARS);
+    rates.drain(..skip);
+    rates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +339,49 @@ mod tests {
         assert_eq!(default_fuel_unit(Some("mi")), "gal");
         assert_eq!(default_fuel_unit(Some("km")), "l");
         assert_eq!(default_fuel_unit(None), "l");
+    }
+
+    fn df(date: &str, counter: i64, quantity_milli: i64) -> DatedFill {
+        DatedFill { date: date.into(), counter, quantity_milli }
+    }
+
+    fn rate(date: &str, per_100_milli: i64) -> FillRate {
+        FillRate { date: date.into(), per_100_milli }
+    }
+
+    #[test]
+    fn each_fill_is_measured_from_the_one_before_it() {
+        // 30 L over 500 km, then 25 L over 500 km. The first fill only opens the window.
+        let fills = [df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_500, 30_000), df("2026-03-01", 11_000, 25_000)];
+        assert_eq!(consumption_per_fill(&fills), [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]);
+    }
+
+    #[test]
+    fn fills_are_put_in_date_order_first() {
+        let fills = [df("2026-03-01", 11_000, 25_000), df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_500, 30_000)];
+        assert_eq!(consumption_per_fill(&fills), [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]);
+    }
+
+    #[test]
+    fn a_distance_that_is_not_positive_gives_no_bar_but_starts_the_next_interval() {
+        // February repeats the counter; March is after an odometer replacement; April is 500 km on.
+        let fills = [df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_000, 30_000),
+                     df("2026-03-01", 500, 20_000), df("2026-04-01", 1_000, 25_000)];
+        assert_eq!(consumption_per_fill(&fills), [rate("2026-04-01", 5_000)]);
+    }
+
+    #[test]
+    fn only_the_newest_twelve_are_kept() {
+        let fills: Vec<DatedFill> = (0..20).map(|i| df(&format!("2026-01-{:02}", i + 1), 10_000 + i * 100, 5_000)).collect();
+        let rates = consumption_per_fill(&fills);
+        assert_eq!(rates.len(), FILL_BARS);
+        assert_eq!(rates[0].date, "2026-01-09");
+        assert_eq!(rates[11].date, "2026-01-20");
+    }
+
+    #[test]
+    fn fewer_than_two_fills_give_nothing() {
+        assert!(consumption_per_fill(&[]).is_empty());
+        assert!(consumption_per_fill(&[df("2026-01-01", 10_000, 40_000)]).is_empty());
     }
 }

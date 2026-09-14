@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { money, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity } from '../src/lib/format';
+import { money, moneyWhole, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity } from '../src/lib/format';
 
 describe('format', () => {
   it('formats cents as currency', () => {
     expect(money(123456, 'EUR', 'en')).toBe('€1,234.56');
     expect(money(123456, 'EUR', 'de').replace(/\u00a0/g, ' ')).toBe('1.234,56 €');
     expect(money(null, 'EUR', 'en')).toBe('');
+  });
+  it('formats cents as whole-unit currency, rounded', () => {
+    expect(moneyWhole(179_128, 'EUR', 'en')).toBe('\u{20ac}1,791');
+    expect(moneyWhole(150, 'EUR', 'en')).toBe('\u{20ac}2');
+    expect(moneyWhole(null, 'EUR', 'en')).toBe('');
   });
   it('formats dates per locale', () => {
     expect(fmtDate('2024-03-05', 'en')).toBe('Mar 5, 2024');

@@ -1,3 +1,4 @@
+use chrono::{Datelike, Months, NaiveDate};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -112,13 +113,10 @@ pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> S
         .collect();
 
     let over_time = match year {
-        Some(y) => (1..=12)
-            .map(|m| {
-                let bucket = format!("{y:04}-{m:02}");
-                let cost_cents = selected.iter().filter(|s| s.month == bucket).map(|s| s.cost_cents).sum();
-                Amount { bucket, cost_cents }
-            })
-            .collect(),
+        Some(y) => fill(
+            (1..=12).map(|m| format!("{y:04}-{m:02}")).collect(),
+            |b| selected.iter().filter(|s| s.month == b).map(|s| s.cost_cents).sum(),
+        ),
         None => {
             let mut per_year: BTreeMap<String, i64> = BTreeMap::new();
             for s in &selected {
@@ -196,6 +194,59 @@ fn roll_up(objects: &[ObjectRow], own: &HashMap<i64, i64>) -> Vec<ObjectNode> {
     }
 
     build(None, &children, own)
+}
+
+/// Fewer days owned than this and there is no per-year figure: a few weeks' spend multiplied out
+/// to a year is not a number anyone can plan with.
+pub const MIN_DAYS_FOR_PER_YEAR: i64 = 90;
+
+/// What owning an object has cost: running costs plus the purchase price actually counted, and
+/// that spread over the years owned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Ownership {
+    pub total_cents: i64,
+    pub purchase_cents: i64,
+    /// `YYYY-MM-DD`: the purchase date, or the day the object was created.
+    pub since: String,
+    pub per_year_cents: Option<i64>,
+}
+
+/// The day at the start of a stored date (`YYYY-MM-DD`) or timestamp (RFC 3339), or None when it
+/// does not parse.
+pub fn day_of(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok()
+}
+
+/// Ownership from `since` up to `until` -- the archive date for an object no longer in use, today
+/// otherwise. Integer arithmetic: cents × 365 ÷ days.
+pub fn ownership(running_cents: i64, purchase_cents: i64, since: NaiveDate, until: NaiveDate) -> Ownership {
+    let total_cents = running_cents + purchase_cents;
+    let days = (until - since).num_days();
+    let per_year_cents = (days >= MIN_DAYS_FOR_PER_YEAR).then(|| total_cents * 365 / days);
+    Ownership { total_cents, purchase_cents, since: since.to_string(), per_year_cents }
+}
+
+/// `months` calendar months ending with today's, oldest first, each with the sum of `totals`
+/// for that `YYYY-MM` -- 0 for a month without spend, since no cost entry does mean nothing spent.
+pub fn months_ending(today: NaiveDate, months: u32, totals: &[(String, i64)]) -> Vec<Amount> {
+    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else { return Vec::new() };
+    let buckets = (0..months)
+        .rev()
+        .filter_map(|back| this_month.checked_sub_months(Months::new(back)))
+        .map(|d| d.format("%Y-%m").to_string())
+        .collect();
+    fill(buckets, |b| totals.iter().filter(|(m, _)| m == b).map(|(_, c)| c).sum())
+}
+
+/// One `Amount` per bucket, in the order given, zeros included.
+fn fill(buckets: Vec<String>, amount_of: impl Fn(&str) -> i64) -> Vec<Amount> {
+    buckets
+        .into_iter()
+        .map(|bucket| {
+            let cost_cents = amount_of(&bucket);
+            Amount { bucket, cost_cents }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -350,5 +401,37 @@ mod tests {
         assert!(s.years.is_empty(), "not counted towards years");
         assert_eq!(s.total_cents, 0);
         assert!(s.by_object.is_empty() && s.by_category.is_empty() && s.by_type.is_empty());
+    }
+
+    fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
+
+    #[test]
+    fn the_month_window_ends_with_this_month_and_crosses_a_year() {
+        let totals = vec![("2025-11".to_string(), 500), ("2026-02".to_string(), 70), ("2026-02".to_string(), 30), ("2025-10".to_string(), 999)];
+        let w = months_ending(day("2026-02-14"), 4, &totals);
+        assert_eq!(amounts(&w), [("2025-11", 500), ("2025-12", 0), ("2026-01", 0), ("2026-02", 100)]);
+    }
+
+    #[test]
+    fn ownership_adds_the_purchase_price_and_measures_up_to_until() {
+        let o = ownership(100_000, 300_000, day("2024-05-01"), day("2026-05-01"));
+        assert_eq!((o.total_cents, o.purchase_cents, o.since.as_str()), (400_000, 300_000, "2024-05-01"));
+        // 2024-05-01 to 2026-05-01 is 730 days.
+        assert_eq!(o.per_year_cents, Some(400_000 * 365 / 730));
+    }
+
+    #[test]
+    fn no_per_year_figure_under_ninety_days_owned() {
+        assert_eq!(ownership(5_000, 0, day("2026-01-01"), day("2026-03-31")).per_year_cents, None, "89 days");
+        assert_eq!(ownership(5_000, 0, day("2026-01-01"), day("2026-04-01")).per_year_cents, Some(5_000 * 365 / 90));
+        assert_eq!(ownership(5_000, 0, day("2026-05-01"), day("2026-04-01")).per_year_cents, None, "since after until");
+    }
+
+    #[test]
+    fn day_of_reads_dates_and_timestamps() {
+        assert_eq!(day_of("2024-05-01"), Some(day("2024-05-01")));
+        assert_eq!(day_of("2023-11-02T08:00:00Z"), Some(day("2023-11-02")));
+        assert_eq!(day_of("2023-11"), None);
+        assert_eq!(day_of("not a date"), None);
     }
 }

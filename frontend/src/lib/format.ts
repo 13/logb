@@ -3,6 +3,13 @@ export function money(cents: number | null | undefined, currency: string, locale
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(cents / 100);
 }
 
+/** Like `money`, but rounded to the nearest whole currency unit -- for an average (e.g. the
+ *  per-year ownership figure), where cents claim a precision the figure does not have. */
+export function moneyWhole(cents: number | null | undefined, currency: string, locale: string): string {
+  if (cents === null || cents === undefined) return '';
+  return new Intl.NumberFormat(locale, { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
+}
+
 export function fmtDate(iso: string | null | undefined, locale: string): string {
   if (!iso) return '';
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
