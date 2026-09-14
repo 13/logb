@@ -63,7 +63,8 @@ link.
 ### API
 
 `GET /stats?year=2026&purchases=true` -- both optional; `year` absent means all years. Year outside
-1900..=9999 or not a number: 400.
+0..=9999 or not a number: 400. The range is that wide on purpose: a mistyped date such as
+`0202-05-01` still lists its year in the picker, and choosing it must not fail.
 
 ```json
 {
