@@ -1,13 +1,18 @@
-//! Daily digest of due reminders, pushed to a webhook.
+//! Daily digest of due reminders, to webhooks and to browsers.
 //!
-//! LogB has no mail transport and no push infrastructure of its own: a self-hosted instance
-//! posts to a URL the operator already runs -- an ntfy topic, a chat webhook, a home-automation
-//! endpoint -- and lets that decide how the reminder reaches a phone.
+//! LogB has no mail transport. A digest goes to a URL someone already runs -- an ntfy topic, a
+//! chat webhook, a home-automation endpoint -- and, for anyone who turned it on, to their browser
+//! as a push notification. Every recipient is decided at the same daily tick:
+//!
+//! - a user with a webhook of their own gets a digest of their own reminders, in their language;
+//! - the instance webhook (`LOGB_NOTIFY_URL`) gets everybody else's, as it always has;
+//! - every browser a user subscribed gets that user's digest as a push notification.
 
 use crate::api::reminders::due_for_user;
 use crate::db;
 use crate::domain::reminder::KIND_READING;
 use crate::error::AppError;
+use crate::push::{self, Delivery, Subscription};
 use crate::state::App;
 use serde::Serialize;
 use std::time::Duration;
@@ -39,55 +44,100 @@ pub struct Digest {
     pub reminders: Vec<DueItem>,
 }
 
-/// The heading the digest's reading section starts with.
-const READINGS_HEADING: &str = "Readings to log:";
+/// The digest's words, in the two languages the app speaks. A user's `lang` decides; anything
+/// else reads English, the same fallback the interface has.
+struct Words {
+    one_due: &'static str,
+    many_due: &'static str,
+    readings: &'static str,
+    test_title: &'static str,
+    test_body: &'static str,
+}
+
+fn words(lang: &str) -> Words {
+    match lang {
+        "de" => Words {
+            one_due: "LogB: 1 Erinnerung fällig",
+            many_due: "LogB: {n} Erinnerungen fällig",
+            readings: "Zählerstände erfassen:",
+            test_title: "LogB: Test-Benachrichtigung",
+            test_body: "Benachrichtigungen von LogB kommen hier an.",
+        },
+        _ => Words {
+            one_due: "LogB: 1 reminder due",
+            many_due: "LogB: {n} reminders due",
+            readings: "Readings to log:",
+            test_title: "LogB: test notification",
+            test_body: "Notifications from LogB reach you here.",
+        },
+    }
+}
 
 fn link(public_url: Option<&str>, object_id: i64, kind: &str) -> Option<String> {
     let base = public_url?.trim_end_matches('/');
-    Some(if kind == KIND_READING {
-        format!("{base}/objects/{object_id}/reading")
-    } else {
-        format!("{base}/objects/{object_id}?tab=reminders")
-    })
+    Some(format!("{base}{}", path(object_id, kind)))
 }
 
-/// Every due reminder across every user, or `None` when nothing is due.
-///
-/// Deliberately one digest for the whole instance rather than one per user: the webhook is
-/// the operator's, not each user's, so splitting it would send someone else's reminders to
-/// the same endpoint anyway, just in more requests.
-pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
-    let users: Vec<(i64, String)> = sqlx::query_as("SELECT id, username FROM users ORDER BY username")
-        .fetch_all(&state.db).await?;
-    let public_url = state.config.public_url.as_deref();
-    let mut items = Vec::new();
-    for (user_id, username) in users {
-        for r in due_for_user(state, user_id, 0).await? {
-            items.push(DueItem {
-                username: username.clone(),
-                object_id: r.row.object_id,
-                link: link(public_url, r.row.object_id, &r.row.kind),
-                object_name: r.row.object_name,
-                reminder_id: r.row.id,
-                title: r.row.title,
-                due_date: r.next_due_date,
-                due_counter: r.row.due_counter,
-                kind: r.row.kind,
-            });
-        }
-    }
-    if items.is_empty() {
-        return Ok(None);
-    }
-    let title = if items.len() == 1 {
-        "LogB: 1 reminder due".to_string()
+/// The same place as `link`, inside the app. A push notification opens it against the service
+/// worker's own origin, so it needs no public URL at all.
+fn path(object_id: i64, kind: &str) -> String {
+    if kind == KIND_READING {
+        format!("/objects/{object_id}/reading")
     } else {
-        format!("LogB: {} reminders due", items.len())
+        format!("/objects/{object_id}?tab=reminders")
+    }
+}
+
+/// One user, as the digest sees them.
+#[derive(sqlx::FromRow)]
+struct Recipient {
+    id: i64,
+    username: String,
+    lang: String,
+    notify_url: Option<String>,
+    notify_format: String,
+}
+
+async fn recipients(state: &App) -> Result<Vec<Recipient>, AppError> {
+    Ok(sqlx::query_as::<_, Recipient>(
+        "SELECT id, username, lang, notify_url, notify_format FROM users ORDER BY username",
+    )
+    .fetch_all(&state.db).await?)
+}
+
+async fn items_for(state: &App, r: &Recipient) -> Result<Vec<DueItem>, AppError> {
+    let public_url = state.config.public_url.as_deref();
+    Ok(due_for_user(state, r.id, 0).await?
+        .into_iter()
+        .map(|d| DueItem {
+            username: r.username.clone(),
+            object_id: d.row.object_id,
+            link: link(public_url, d.row.object_id, &d.row.kind),
+            object_name: d.row.object_name,
+            reminder_id: d.row.id,
+            title: d.row.title,
+            due_date: d.next_due_date,
+            due_counter: d.row.due_counter,
+            kind: d.row.kind,
+        })
+        .collect())
+}
+
+/// Builds the digest for `items` in `lang`, or `None` when there is nothing to say.
+pub fn digest(items: Vec<DueItem>, lang: &str) -> Option<Digest> {
+    if items.is_empty() {
+        return None;
+    }
+    let w = words(lang);
+    let title = if items.len() == 1 {
+        w.one_due.to_string()
+    } else {
+        w.many_due.replace("{n}", &items.len().to_string())
     };
 
-    // Services first, as they always were; readings below under a heading of their own, because
-    // "log the odometer" is a thirty-second job and reads differently next to "brakes are due".
-    // A reading's line carries its link, so a phone notification opens straight into the form.
+    // Services first; readings below under a heading of their own, because "log the odometer" is
+    // a thirty-second job and reads differently next to "brakes are due". A reading's line
+    // carries its link, so a phone notification opens straight into the form.
     let services: Vec<String> = items
         .iter()
         .filter(|i| i.kind != KIND_READING)
@@ -106,26 +156,52 @@ pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
         if !message.is_empty() {
             message.push_str("\n\n");
         }
-        message.push_str(READINGS_HEADING);
+        message.push_str(w.readings);
         message.push('\n');
         message.push_str(&readings.join("\n"));
     }
-    Ok(Some(Digest { title, message, reminders: items }))
+    Some(Digest { title, message, reminders: items })
 }
 
-/// POSTs the digest to the configured URL. `text` sends the plain message with the summary in
-/// a `Title` header, which is what ntfy-style services render; anything else sends JSON.
+/// A digest with nothing due in it, for "send a test notification".
+pub fn test_digest(lang: &str) -> Digest {
+    let w = words(lang);
+    Digest { title: w.test_title.to_string(), message: w.test_body.to_string(), reminders: Vec::new() }
+}
+
+/// The instance webhook's digest: every user without a webhook of their own, in the language of
+/// the first administrator -- the person who set `LOGB_NOTIFY_URL` up.
+async fn instance_digest(state: &App, recipients: &[Recipient]) -> Result<Option<Digest>, AppError> {
+    let mut items = Vec::new();
+    for r in recipients.iter().filter(|r| r.notify_url.is_none()) {
+        items.extend(items_for(state, r).await?);
+    }
+    let lang: Option<(String,)> = sqlx::query_as("SELECT lang FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1")
+        .fetch_optional(&state.db).await?;
+    Ok(digest(items, lang.map(|l| l.0).as_deref().unwrap_or("en")))
+}
+
+/// The instance webhook's digest, or `None` when nothing in it is due.
+///
+/// One digest rather than one per user: the instance webhook is the operator's, not each
+/// user's, so splitting it would send someone else's reminders to the same endpoint anyway. A
+/// user who wants their own takes themselves out of it by setting a webhook of their own.
+pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
+    let recipients = recipients(state).await?;
+    instance_digest(state, &recipients).await
+}
+
+/// POSTs a digest to one webhook. `text` sends the plain message with the summary in a `Title`
+/// header, which is what ntfy-style services render; anything else sends JSON.
 ///
 /// A text digest about exactly one reminder also sends a `Click` header naming its link, so
-/// tapping the notification opens the app where that reminder is dealt with. With several there
-/// is no single right place, and the links stay in the message.
-pub async fn send(state: &App, digest: &Digest) -> Result<(), AppError> {
-    let Some(url) = state.config.notify_url.as_deref() else { return Ok(()) };
+/// tapping the notification opens the app where that reminder is dealt with.
+pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppError> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
         .map_err(|e| AppError::Internal(format!("notify client: {e}")))?;
-    let request = if state.config.notify_format == "text" {
+    let request = if format == "text" {
         let request = client.post(url).header("Title", &digest.title).body(digest.message.clone());
         match digest.reminders.as_slice() {
             [only] => match &only.link {
@@ -137,9 +213,60 @@ pub async fn send(state: &App, digest: &Digest) -> Result<(), AppError> {
     } else {
         client.post(url).json(digest)
     };
-    let res = request.send().await.map_err(|e| AppError::Internal(format!("notify post: {e}")))?;
+    // `without_url`: a user's webhook is often an unguessable ntfy topic, which is to say a
+    // secret, and this error reaches the log.
+    let res = request.send().await
+        .map_err(|e| AppError::Internal(format!("notify post: {}", e.without_url())))?;
     if !res.status().is_success() {
         return Err(AppError::Internal(format!("notify endpoint returned {}", res.status())));
+    }
+    Ok(())
+}
+
+/// POSTs the instance digest to `LOGB_NOTIFY_URL`, when it is set.
+pub async fn send(state: &App, digest: &Digest) -> Result<(), AppError> {
+    let Some(url) = state.config.notify_url.as_deref() else { return Ok(()) };
+    post(url, &state.config.notify_format, digest).await
+}
+
+/// Pushes one message to every browser `user_id` subscribed, answering how many took it and how
+/// many failed. A subscription the push service says is gone is deleted on the way.
+pub(crate) async fn push_to(state: &App, user_id: i64, title: &str, body: &str, open: &str) -> Result<(usize, usize), AppError> {
+    let subs: Vec<(i64, String, String, String)> =
+        sqlx::query_as("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1 ORDER BY id")
+            .bind(user_id).fetch_all(&state.db).await?;
+    if subs.is_empty() {
+        return Ok((0, 0));
+    }
+    let kp = push::key_pair(state).await?;
+    let contact = push::contact(state);
+    let payload = serde_json::json!({ "title": title, "body": body, "url": open }).to_string();
+    let (mut sent, mut failed) = (0, 0);
+    for (id, endpoint, p256dh, auth) in subs {
+        let sub = Subscription { endpoint, p256dh, auth };
+        match push::send(&kp, &contact, &sub, payload.as_bytes()).await {
+            Delivery::Sent => sent += 1,
+            Delivery::Gone => {
+                sqlx::query("DELETE FROM push_subscriptions WHERE id = $1").bind(id).execute(&state.db).await?;
+            }
+            Delivery::Failed(reason) => {
+                failed += 1;
+                tracing::warn!(user_id, reason, "push notification failed");
+            }
+        }
+    }
+    Ok((sent, failed))
+}
+
+async fn push_digest(state: &App, user_id: i64, d: &Digest) -> Result<(), AppError> {
+    // One reminder opens where it is dealt with; several open the dashboard, which lists them.
+    let open = match d.reminders.as_slice() {
+        [only] => path(only.object_id, &only.kind),
+        _ => "/".to_string(),
+    };
+    let (_, failed) = push_to(state, user_id, &d.title, &d.message, &open).await?;
+    if failed > 0 {
+        return Err(AppError::Internal(format!("{failed} push notification(s) failed")));
     }
     Ok(())
 }
@@ -156,29 +283,93 @@ async fn mark_sent(state: &App, date: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// One scheduler tick. Returns the digest it sent, if any.
+/// One scheduler tick. Returns the instance digest it sent, if any.
 ///
-/// The day is marked as handled *before* the POST goes out, so an endpoint that is down or
-/// misconfigured costs one failed request per day rather than one per minute until midnight.
-/// The trade is that a digest lost to a transient failure is not retried; the reminders stay
-/// due and appear in tomorrow's.
+/// Every digest is built before anything is sent, and the day is marked as handled in between:
+/// a failure while collecting (a pool timeout, a locked database) means nothing was assembled,
+/// so the day is not burnt and the next tick tries again; a failure while *sending* costs one
+/// failed request per day per target rather than one per minute until midnight. A digest lost
+/// to a failed send is not retried; its reminders stay due and are in tomorrow's.
 ///
-/// That trade is about the POST, and the marker is therefore written only once the digest has
-/// actually been built: a failure inside `collect` (a pool timeout, a locked database) means
-/// nothing was ever assembled, so marking the day there would drop that day's reminders on
-/// the floor without a single request having left the process. A tick that collects nothing
-/// still marks the day -- "nothing was due" is a handled day, not a failed one.
+/// Each target is tried even when an earlier one failed -- one person's broken webhook must not
+/// cost everybody else their notification -- and the failures are reported together.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
-    if state.config.notify_url.is_none() || hour_now < state.config.notify_hour {
+    if hour_now < state.config.notify_hour {
         return Ok(None);
     }
     let today = db::today();
     if last_sent(state).await?.as_deref() == Some(today.as_str()) {
         return Ok(None);
     }
-    let digest = collect(state).await?;
+
+    let recipients = recipients(state).await?;
+    let instance = match state.config.notify_url {
+        Some(_) => instance_digest(state, &recipients).await?,
+        None => None,
+    };
+    let pushing: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT user_id FROM push_subscriptions")
+        .fetch_all(&state.db).await?;
+    let mut personal = Vec::new();
+    let mut pushes = Vec::new();
+    for r in &recipients {
+        let wants_push = pushing.contains(&r.id);
+        if r.notify_url.is_none() && !wants_push {
+            continue;
+        }
+        let Some(d) = digest(items_for(state, r).await?, &r.lang) else { continue };
+        if let Some(url) = &r.notify_url {
+            personal.push((url.clone(), r.notify_format.clone(), d.clone()));
+        }
+        if wants_push {
+            pushes.push((r.id, d));
+        }
+    }
     mark_sent(state, &today).await?;
-    let Some(digest) = digest else { return Ok(None) };
-    send(state, &digest).await?;
-    Ok(Some(digest))
+
+    let mut failures = Vec::new();
+    if let Some(d) = &instance {
+        if let Err(e) = send(state, d).await {
+            failures.push(e.to_string());
+        }
+    }
+    for (url, format, d) in &personal {
+        if let Err(e) = post(url, format, d).await {
+            failures.push(e.to_string());
+        }
+    }
+    for (user_id, d) in &pushes {
+        if let Err(e) = push_digest(state, *user_id, d).await {
+            failures.push(e.to_string());
+        }
+    }
+    if !failures.is_empty() {
+        return Err(AppError::Internal(failures.join("; ")));
+    }
+    Ok(instance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(kind: &str) -> DueItem {
+        DueItem {
+            username: "ben".into(), object_id: 1, object_name: "Golf".into(), reminder_id: 1,
+            title: "Oil".into(), due_date: None, due_counter: None, kind: kind.into(), link: None,
+        }
+    }
+
+    #[test]
+    fn the_digest_speaks_the_recipients_language() {
+        let d = digest(vec![item("service"), item("reading")], "de").unwrap();
+        assert_eq!(d.title, "LogB: 2 Erinnerungen fällig");
+        assert_eq!(d.message, "Golf: Oil\n\nZählerstände erfassen:\nGolf: Oil");
+        assert_eq!(digest(vec![item("service")], "de").unwrap().title, "LogB: 1 Erinnerung fällig");
+    }
+
+    #[test]
+    fn an_unknown_language_reads_english() {
+        assert_eq!(digest(vec![item("service")], "fr").unwrap().title, "LogB: 1 reminder due");
+        assert!(digest(Vec::new(), "en").is_none());
+    }
 }

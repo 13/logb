@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 async function newCar(page: Page, name: string) {
   await page.goto('/objects/new');
@@ -11,7 +11,7 @@ async function newCar(page: Page, name: string) {
 }
 
 test('a reading reminder is satisfied by logging a reading, not by marking it done', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '15-reading-reminders');
   await newCar(page, 'Reading Golf');
 
   await page.getByRole('button', { name: /^Reminders/ }).click();
@@ -40,7 +40,7 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
 });
 
 test('a reading lower than the last one asks for a second look before it is saved', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '15-reading-reminders');
   await newCar(page, 'Reading Polo');
   const id = page.url().match(/\/objects\/(\d+)/)![1];
 
@@ -64,11 +64,11 @@ test('a reading lower than the last one asks for a second look before it is save
 });
 
 test('a new object with a counter can ask for a monthly reading reminder on the way in', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '15-reading-reminders');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Reading Bike');
   await page.getByLabel('Type').selectOption('e_bike');
-  const optIn = page.getByLabel('Remind me to log the reading every month');
+  const optIn = page.getByLabel(/Log the counter reading/);
   await expect(optIn).toHaveCount(0);
   await page.getByLabel('Counter').selectOption('km');
   await optIn.check();

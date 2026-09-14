@@ -21,11 +21,25 @@
   import SettingsData from './routes/settings/Data.svelte';
   import SettingsPeople from './routes/settings/People.svelte';
   import SettingsDatabase from './routes/settings/Database.svelte';
+  import SettingsNotifications from './routes/settings/Notifications.svelte';
+  import { api } from './lib/api';
+  import type { User } from './lib/types';
   import AppNav from './lib/AppNav.svelte';
 
   onMount(() => { loadSession(); });
 
   $effect(() => { document.documentElement.lang = $locale; });
+  // The daily digest is written on the server, in each person's language -- so the server has
+  // to know the language they actually read the app in, which lives in this browser. Only when
+  // it differs, so this is one request after a language change and none on an ordinary load.
+  $effect(() => {
+    const u = $user;
+    const l = $locale;
+    if (!u || u.lang === l) return;
+    api<User>('PATCH', `/users/${u.id}`, { lang: l })
+      .then((saved) => user.set({ ...u, lang: saved.lang }))
+      .catch(() => { /* the digest stays in the old language until the next load tries again */ });
+  });
   $effect(() => {
     const pref = $settings.theme;
     const dark = pref === 'dark' || (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -71,6 +85,7 @@
     ['/settings/data', SettingsData],
     ['/settings/people', SettingsPeople],
     ['/settings/database', SettingsDatabase],
+    ['/settings/notifications', SettingsNotifications],
   ];
   const current = $derived.by(() => {
     for (const [pattern, comp] of routes) {

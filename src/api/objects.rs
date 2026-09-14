@@ -45,6 +45,8 @@ pub struct ObjectStats {
     pub activity_count: i64,
     pub current_counter: Option<i64>,
     pub due_reminder_count: i64,
+    /// The date of the newest entry with a counter value, up to `reminders::reading_horizon`.
+    pub last_reading_date: Option<String>,
 }
 
 /// One link in an object's ancestor chain, as the client needs it to draw a breadcrumb:
@@ -188,6 +190,7 @@ struct DerivedRow {
     activity_count: i64,
     current_counter: Option<i64>,
     due_reminder_count: i64,
+    last_reading_date: Option<String>,
     cover_file_id: Option<i64>,
 }
 
@@ -222,10 +225,12 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
               (r.due_date IS NOT NULL AND r.due_date <= $2) OR \
               (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL)) \
            )) AS due_reminder_count, \
+           (SELECT MAX(date) FROM activities WHERE object_id = o.id AND deleted_at IS NULL \
+              AND counter_value IS NOT NULL AND date <= $4) AS last_reading_date, \
            (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
          FROM objects o WHERE o.deleted_at IS NULL AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
     )
-    .bind(user_id).bind(db::today()).bind(only)
+    .bind(user_id).bind(db::today()).bind(only).bind(super::reminders::reading_horizon())
     .fetch_all(&state.db).await?;
     let mut rows: HashMap<i64, DerivedRow> = rows.into_iter().map(|r| (r.object_id, r)).collect();
     for (object_id, due) in due_readings(state, user_id, only).await? {
@@ -271,6 +276,7 @@ impl DerivedRow {
             activity_count: self.activity_count,
             current_counter: self.current_counter,
             due_reminder_count: self.due_reminder_count,
+            last_reading_date: self.last_reading_date.clone(),
         }
     }
 

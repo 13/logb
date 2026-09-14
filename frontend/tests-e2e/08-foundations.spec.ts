@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 test('keyboard focus is visible', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '08-foundations');
 
   // A real Tab press, not .focus(): `:focus-visible` deliberately does not match a programmatic
   // or mouse focus, so focusing by script would pass while a keyboard user still saw nothing.

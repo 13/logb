@@ -29,6 +29,9 @@ export type SettingsRowsInput = {
   userLabel: string | null;
   /** `null` until `/database` answers, e.g. "PostgreSQL". */
   backendLabel: string | null;
+  /** Already-translated, e.g. "On for 2 of your devices"; `null` until `/me/notifications`
+   *  answers, and when nothing is set up. */
+  notificationsLabel: string | null;
 };
 
 /** What the hub shows, and what each row says about itself.
@@ -45,6 +48,10 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
     {
       id: 'account', path: '/settings/account', icon: 'person', label: 'settings.account',
       value: input.username, group: 'you',
+    },
+    {
+      id: 'notifications', path: '/settings/notifications', icon: 'bell', label: 'settings.notifications',
+      value: input.notificationsLabel, group: 'you',
     },
     {
       id: 'api', path: '/settings/api', icon: 'key', label: 'tokens.title',

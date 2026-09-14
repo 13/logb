@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 // The search box was the one input in the app nobody wrapped in `.field`, so it fell through to
 // Chrome's own styling: square corners, a hard focus rectangle, and a blue clear button in a
 // colour that appears nowhere else in LogB. Styling controls by element rather than by class is
 // what makes that impossible rather than unlikely.
 test('the search box wears the app styling, not the browser default', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: 'Search' }).click();
   const box = page.getByRole('searchbox');
   await expect(box).toBeVisible();
@@ -31,7 +31,7 @@ test('the search box wears the app styling, not the browser default', async ({ p
 // end of it, so that is what is checked: with the native button present, clicking ~20px in from
 // the right edge empties the field; with it gone, the click only moves the caret.
 test('the browser draws no clear button of its own', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: 'Search' }).click();
   const box = page.getByRole('searchbox');
   await box.fill('golf');
@@ -50,7 +50,7 @@ test('the browser draws no clear button of its own', async ({ page }) => {
 // The quick-log button sat in its own full-height box beside the card, with a gap on each side,
 // so every row read as two cards -- and it was a fullwidth plus character rather than an icon.
 test('the quick-log action belongs to its row', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Row shape probe');
   await page.getByLabel('Type').selectOption('car');
@@ -99,7 +99,7 @@ test('the quick-log action belongs to its row', async ({ page }) => {
 // A screen that stops at a heading looks broken. Each empty state says what belongs there and
 // offers the action that puts something there.
 test('an empty search says so, and an unrun search does not', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: 'Search' }).click();
   // Nothing typed yet: no result state at all, which is different from "no results".
   await expect(page.getByText(/No matches|Keine Treffer/)).toHaveCount(0);
@@ -111,7 +111,7 @@ test('an empty search says so, and an unrun search does not', async ({ page }) =
 // in one form, from three different internal line boxes rather than from anything anyone chose.
 // The numbers are the assertion: "they look consistent" is what the last fix claimed.
 test('every control in a form is the same height', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Control height probe');
   await page.getByLabel('Type').selectOption('car');
@@ -152,7 +152,7 @@ test('every control in a form is the same height', async ({ page }) => {
 // 4px was the focus ring's bleed rather than a gap anyone chose. A row that filters a list
 // belongs between the two, not stuck to one of them.
 test('the filter row sits in the middle of its own gap', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Chip gap probe');
   await page.getByLabel('Type').selectOption('bike');
@@ -200,7 +200,7 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
 // request was still out, and took it away again when the answer arrived -- a bigger flash than
 // the one-line "nothing yet" it replaced.
 test('an empty state waits for the answer before claiming there is nothing', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Empty flash probe');
   await page.getByLabel('Type').selectOption('bike');

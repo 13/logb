@@ -1237,7 +1237,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Settings"
+                "$ref": "#/components/schemas/SettingsInput"
               }
             }
           }
@@ -1252,6 +1252,111 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/me/notifications": {
+      "get": {
+        "summary": "Where the caller's daily digest goes, and what a browser needs to subscribe to push.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the caller's own digest webhook and its format.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationSettingsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/notifications/test": {
+      "post": {
+        "summary": "Send a test notification now to the caller's own webhook and every browser they subscribed.",
+        "responses": {
+          "200": {
+            "description": "Where it went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationTest"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/push/subscriptions": {
+      "post": {
+        "summary": "Subscribe a browser to push notifications. An endpoint already known moves to the caller.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscription"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Subscribed"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unsubscribe one of the caller's browsers. Idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "endpoint"
+                ],
+                "properties": {
+                  "endpoint": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Unsubscribed"
           }
         }
       }
@@ -1742,6 +1847,10 @@
           "password": {
             "type": "string",
             "minLength": 8
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Setup only: the browser's IANA timezone, stored as the instance's unless `LOGB_TIMEZONE` is set. Ignored when it does not parse"
           }
         }
       },
@@ -2011,6 +2120,14 @@
               "null"
             ],
             "format": "date"
+          },
+          "last_reading_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The newest entry with a counter value"
           }
         }
       },
@@ -2196,6 +2313,11 @@
           "client_op_id": {
             "type": "string",
             "description": "Generated once per write and kept across retries; makes a replay idempotent"
+          },
+          "edited_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "PATCH only: when an edit was made, for one sent later (queued offline). Each field it changes is kept only if nothing changed that field after this moment. Capped at the server's now"
           }
         }
       },
@@ -2578,6 +2700,27 @@
             ],
             "format": "int64",
             "description": "Counter units per day, x1000, from the earliest reading in the last 180 days (or of all, when that span is under 14 days) to the newest; null without enough history"
+          },
+          "usage_by_month": {
+            "type": "array",
+            "description": "The last twelve calendar months, oldest first; empty without a counter or a measurable month",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string",
+                  "description": "YYYY-MM"
+                },
+                "amount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Null when no reading in the month, or none before it to measure from"
+                }
+              }
+            }
           }
         }
       },
@@ -2755,6 +2898,14 @@
         "properties": {
           "currency": {
             "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The instance's IANA timezone: which day a due date is read against, and when the daily digest goes out. First-run setup stores the browser's; `LOGB_TIMEZONE` overrides both"
+          },
+          "timezone_locked": {
+            "type": "boolean",
+            "description": "True when `LOGB_TIMEZONE` decides the timezone; a PUT naming another one is refused"
           }
         }
       },
@@ -3188,6 +3339,122 @@
           },
           "database": {
             "$ref": "#/components/schemas/DatabaseLocation"
+          }
+        }
+      },
+      "SettingsInput": {
+        "type": "object",
+        "required": [
+          "currency"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Optional IANA name. Refused when it is not one, or when `LOGB_TIMEZONE` sets a different one"
+          }
+        }
+      },
+      "NotificationSettings": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This user's own digest webhook. Null keeps them in the instance digest"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "push_devices": {
+            "type": "integer",
+            "description": "Browsers this user has turned push notifications on in"
+          },
+          "vapid_public_key": {
+            "type": "string",
+            "description": "`applicationServerKey` for PushManager.subscribe: an uncompressed P-256 point, base64url"
+          },
+          "instance_webhook": {
+            "type": "boolean",
+            "description": "Whether LOGB_NOTIFY_URL is set"
+          },
+          "hour": {
+            "type": "integer",
+            "description": "The hour, in the instance timezone, the digest goes out"
+          }
+        }
+      },
+      "NotificationSettingsInput": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An http(s) URL; blank or null for none"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text"
+          }
+        }
+      },
+      "NotificationTest": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sent`, why it failed, or null without a webhook of this user's own"
+          },
+          "push_sent": {
+            "type": "integer"
+          },
+          "push_failed": {
+            "type": "integer"
+          }
+        }
+      },
+      "PushSubscription": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "description": "What PushSubscription.toJSON() produces. The endpoint must be https",
+        "properties": {
+          "endpoint": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "object",
+            "required": [
+              "p256dh",
+              "auth"
+            ],
+            "properties": {
+              "p256dh": {
+                "type": "string"
+              },
+              "auth": {
+                "type": "string"
+              }
+            }
           }
         }
       }

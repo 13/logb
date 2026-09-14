@@ -37,6 +37,9 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        // Push notifications: showing one, and opening the app when it is tapped. A separate
+        // file pulled into the generated worker, so the rest of it stays generated.
+        importScripts: ['push-sw.js'],
         navigateFallbackDenylist: [/^\/api\//],
         // Workbox only routes GETs, so writes always go straight to the network.
         runtimeCaching: [

@@ -11,6 +11,7 @@ pub mod files;
 pub mod notify;
 pub mod object_type;
 pub mod pointer;
+pub mod push;
 pub mod restore;
 pub mod spa;
 pub mod state;
@@ -141,7 +142,6 @@ pub async fn build(config: Config) -> Result<Router, db::BoxError> {
 /// As `build`, but also hands back the shared state, for callers that run background work
 /// against it (the reminder digest scheduler). Tests use `build`, so they never start it.
 pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxError> {
-    db::set_timezone(config.timezone);
     let url = config.database_url()?;
     let backend = dialect::Backend::of(&url);
     // Running on PostgreSQL used to be unfinished work, and this line used to say so. It is
@@ -188,6 +188,9 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
             return Err(refuse_empty(&config.data_dir, &url));
         }
     }
+    // After the database is open, because a timezone nobody configured is the one first-run
+    // setup stored there.
+    db::load_timezone(config.timezone, &db).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();

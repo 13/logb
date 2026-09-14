@@ -4,20 +4,20 @@ import { settingsRows, type SettingsRowsInput } from '../src/lib/settings-rows';
 function input(over: Partial<SettingsRowsInput> = {}): SettingsRowsInput {
   return {
     isAdmin: false, username: 'ben', themeLabel: 'Dark', localeLabel: 'EN',
-    tokenLabel: '2 keys', userLabel: '3 users', backendLabel: 'PostgreSQL', ...over,
+    tokenLabel: '2 keys', userLabel: '3 users', backendLabel: 'PostgreSQL', notificationsLabel: 'On for 2 of your devices', ...over,
   };
 }
 
 describe('settingsRows', () => {
-  it('gives an ordinary user four rows, all in the "you" group', () => {
+  it('gives an ordinary user five rows, all in the "you" group', () => {
     const rows = settingsRows(input());
-    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'api', 'data']);
+    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'api', 'data']);
     expect(rows.every((r) => r.group === 'you')).toBe(true);
   });
 
   it('adds the instance group for an administrator, after the personal rows', () => {
     const rows = settingsRows(input({ isAdmin: true }));
-    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'api', 'data', 'people', 'database']);
+    expect(rows.map((r) => r.id)).toEqual(['appearance', 'account', 'notifications', 'api', 'data', 'people', 'database']);
     expect(rows.filter((r) => r.group === 'instance').map((r) => r.id)).toEqual(['people', 'database']);
   });
 
@@ -26,10 +26,11 @@ describe('settingsRows', () => {
   /// given. The api/people values below use labels distinct from the fixture defaults so the
   /// assertion proves passthrough rather than merely matching `input()`'s own literals.
   it('carries the current value on each row, which is the point of the hub', () => {
-    const rows = settingsRows(input({ isAdmin: true, tokenLabel: '1 Schlüssel', userLabel: '1 Benutzer' }));
+    const rows = settingsRows(input({ isAdmin: true, tokenLabel: '1 Schlüssel', userLabel: '1 Benutzer', notificationsLabel: 'Webhook' }));
     const value = (id: string) => rows.find((r) => r.id === id)?.value;
     expect(value('appearance')).toBe('Dark · EN');
     expect(value('account')).toBe('ben');
+    expect(value('notifications')).toBe('Webhook');
     expect(value('api')).toBe('1 Schlüssel');
     expect(value('people')).toBe('1 Benutzer');
     expect(value('database')).toBe('PostgreSQL');
@@ -38,11 +39,12 @@ describe('settingsRows', () => {
   /// A value that has not loaded yet must render as nothing at all. A placeholder or a zero
   /// would be a claim about the instance -- "no tokens", "SQLite" -- that nothing has checked.
   it('shows no value where the answer is not known yet, rather than guessing one', () => {
-    const rows = settingsRows(input({ isAdmin: true, tokenLabel: null, userLabel: null, backendLabel: null }));
+    const rows = settingsRows(input({ isAdmin: true, tokenLabel: null, userLabel: null, backendLabel: null, notificationsLabel: null }));
     const value = (id: string) => rows.find((r) => r.id === id)?.value;
     expect(value('api')).toBeNull();
     expect(value('people')).toBeNull();
     expect(value('database')).toBeNull();
+    expect(value('notifications')).toBeNull();
   });
 
   /// Zero used to be special-cased inside this module ("0" printed nothing). That check has

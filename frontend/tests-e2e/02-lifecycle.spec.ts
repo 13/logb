@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { pngPayload, signIn } from './helpers';
+import { pngPayload, signInFresh } from './helpers';
 
 test('an object records activities, photos and reminders', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '02-lifecycle');
 
   // create the object
   await page.getByRole('button', { name: /New object/ }).click();

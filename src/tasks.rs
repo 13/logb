@@ -30,7 +30,7 @@ pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> 
 
 pub fn spawn(state: App) {
     if state.config.notify_url.is_some() {
-        tracing::info!(hour = state.config.notify_hour, timezone = %state.config.timezone, "reminder digest enabled");
+        tracing::info!(hour = state.config.notify_hour, timezone = %crate::db::timezone(), "reminder digest enabled");
     }
     // `backup::tick` is `VACUUM INTO`, a SQLite mechanism -- calling it every tick against
     // PostgreSQL would mean running and failing every night instead of never running. Decided

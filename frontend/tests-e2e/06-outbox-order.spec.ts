@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 /** Reads the queue straight out of IndexedDB, which is where the ordering actually lives. */
 async function queue(page: import('@playwright/test').Page) {
@@ -24,7 +24,7 @@ async function queue(page: import('@playwright/test').Page) {
  */
 test('two tabs queueing at once never hand out the same seq', async ({ context }) => {
   const a = await context.newPage();
-  await signIn(a);
+  await signInFresh(a, '06-outbox-order');
   await a.getByRole('button', { name: /New object/ }).click();
   await a.getByLabel('Name').fill('Workshop');
   await a.getByLabel('Type').selectOption('other');
@@ -68,7 +68,7 @@ test('two tabs queueing at once never hand out the same seq', async ({ context }
  * whose order comes from `queued_at`, epoch milliseconds on the same scale.
  */
 test('a newly queued op sorts after a record that predates seq', async ({ page, context }) => {
-  await signIn(page);
+  await signInFresh(page, '06-outbox-order');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Shed');
   await page.getByLabel('Type').selectOption('other');

@@ -9,7 +9,7 @@
   import { settings } from '../stores/settings';
   import { user } from '../stores/session';
   import { settingsRows } from '../lib/settings-rows';
-  import type { ApiToken, DbDescription, User } from '../lib/types';
+  import type { ApiToken, DbDescription, NotificationSettings, User } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
 
   let dead = $state<QueuedOp[]>([]);
@@ -19,6 +19,7 @@
   /** The version the server reports, which can differ from this bundle's when a service worker
    *  is still serving the previous release. */
   let serverVersion = $state<string | null>(null);
+  let notificationsLabel = $state<string | null>(null);
 
   const isAdmin = $derived($user?.is_admin === true);
   const built = $derived(
@@ -44,6 +45,7 @@
     tokenLabel: countLabel(tokenCount, 'tokens.count-one', 'tokens.count'),
     userLabel: countLabel(userCount, 'settings.users-count-one', 'settings.users-count'),
     backendLabel,
+    notificationsLabel,
   }));
 
   // Each of these fills in one row's value. They fail quietly: a hub whose Database row says
@@ -53,6 +55,12 @@
     dead = await deadOps();
     try { serverVersion = (await api<{ version: string }>('GET', '/health')).version; } catch { /* About shows nothing */ }
     try { tokenCount = (await api<ApiToken[]>('GET', '/auth/tokens')).length; } catch { /* row shows nothing */ }
+    try {
+      const n = await api<NotificationSettings>('GET', '/me/notifications');
+      notificationsLabel = n.push_devices > 0
+        ? countLabel(n.push_devices, 'notify.push-devices-one', 'notify.push-devices')
+        : n.url ? $t('notify.webhook-title') : null;
+    } catch { /* row shows nothing */ }
     if (!isAdmin) return;
     try { userCount = (await api<User[]>('GET', '/users')).length; } catch { /* row shows nothing */ }
     try {

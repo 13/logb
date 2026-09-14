@@ -99,6 +99,7 @@ async fn any_entry_with_a_counter_clears_it_and_deleting_that_entry_brings_it_ba
     assert_eq!(get(&app, &format!("/objects/{id}")).await["stats"]["due_reminder_count"], 0);
     let due: Vec<serde_json::Value> = serde_json::from_value(get(&app, "/reminders/due").await).unwrap();
     assert!(due.is_empty(), "{due:#?}");
+    assert_eq!(get(&app, &format!("/objects/{id}")).await["stats"]["last_reading_date"], today().to_string());
 
     let res = app.client.delete(app.url(&format!("/activities/{}", fuel["id"]))).send().await.unwrap();
     assert_eq!(res.status(), 204);
@@ -179,6 +180,11 @@ async fn usage_estimates_when_a_mileage_service_comes_due() {
 
     let insights = get(&app, &format!("/objects/{id}/insights")).await;
     assert_eq!(insights["counter_per_day_milli"], 50_000);
+    let months = insights["usage_by_month"].as_array().unwrap();
+    assert_eq!(months.len(), 12);
+    let this_month = months.last().unwrap();
+    assert_eq!(this_month["month"], today().format("%Y-%m").to_string());
+    assert_eq!(this_month["amount"], 3_000, "the reading 60 days ago is in an earlier month, so all of it lands here");
     assert!(
         insights["by_category"].as_array().unwrap().iter().all(|b| b["bucket"] != "reading"),
         "readings carry no cost and have no place in the cost breakdown"

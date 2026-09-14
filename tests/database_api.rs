@@ -413,7 +413,7 @@ async fn last_at_names_the_snapshots_local_day_and_ignores_a_lookalike() {
     let app = common::spawn_with(|c| {
         c.backup_dir = Some(dir.path().to_path_buf());
         c.backup_hour = 3;
-        c.timezone = chrono_tz::Tz::Asia__Tokyo;
+        c.timezone = Some(chrono_tz::Tz::Asia__Tokyo);
     })
     .await;
     if common::skipped_on_postgres(

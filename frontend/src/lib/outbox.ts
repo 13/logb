@@ -3,11 +3,13 @@ import { isRejection, isUnauthenticated } from './api-error';
 /**
  * The queue of writes made while offline.
  *
- * Creates only. An edit or a delete queued offline would have to be reconciled against
- * whatever the server did in the meantime; a create cannot disagree with anything, which
- * is why the offline story stops here rather than growing a merge algorithm.
+ * Creates, uploads, and edits to an activity. A create cannot disagree with anything. An edit
+ * can -- someone may have changed the same entry since -- so a queued edit carries the moment
+ * it was made, and the server keeps each field only if nothing newer changed it (the same
+ * last-write-wins rule sync already applies per field). Deletes stay online-only: a delete that
+ * lands after someone else's edit would destroy that edit with no field to compare.
  */
-export type OpKind = 'activity.create' | 'attachment.upload' | 'reminder.done';
+export type OpKind = 'activity.create' | 'activity.update' | 'attachment.upload' | 'reminder.done';
 
 export interface QueuedOp {
   /** Also the `client_op_id` sent to the server, which is what makes a replay idempotent. */

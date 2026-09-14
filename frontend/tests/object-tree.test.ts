@@ -6,7 +6,7 @@ function obj(id: number, parent_id: number | null, archived_at: string | null = 
   return { id, user_id: 1, name: `#${id}`, type: 'other', counter_unit: null, fuel_unit: null,
     description: '', purchase_date: null, purchase_price_cents: null, archived_at,
     cover_attachment_id: null, cover_file_id: null, parent_id, created_at: '', updated_at: '',
-    stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0 } };
+    stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0, last_reading_date: null } };
 }
 
 describe('excludingDescendants', () => {

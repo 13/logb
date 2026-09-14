@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 /**
  * The timeline pages at 100 entries and "Show N older" appends the next page. An outbox flush
@@ -9,7 +9,7 @@ import { signIn } from './helpers';
  * tab silently threw away every extra page the user had loaded.
  */
 test('returning to the tab keeps the extra pages the user loaded', async ({ page, context }) => {
-  await signIn(page);
+  await signInFresh(page, '05-pagination');
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Fleet');
@@ -65,7 +65,7 @@ test('returning to the tab keeps the extra pages the user loaded', async ({ page
  * it. Asserted on a small object, since a full first page cannot tell the two conditions apart.
  */
 test('an ordinary object loads its timeline in one request', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '05-pagination');
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Kettle');

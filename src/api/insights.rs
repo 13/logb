@@ -3,7 +3,7 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::domain::insights::{
     consumption_per_100_milli, cost_per_counter_milli, daily_rate_milli, default_fuel_unit, fuel_cost_per_counter_milli,
-    latest_reading, Fill, Reading, RATE_WINDOW_DAYS,
+    latest_reading, monthly_usage, Fill, MonthUsage, Reading, RATE_WINDOW_DAYS,
 };
 use crate::error::AppError;
 use crate::state::App;
@@ -49,7 +49,13 @@ pub struct InsightsOut {
     /// Counter units per day over recent readings, scaled by 1000 -- see
     /// `domain::insights::daily_rate_milli`. Null until there is enough history.
     pub counter_per_day_milli: Option<i64>,
+    /// The last twelve calendar months, oldest first -- see `domain::insights::monthly_usage`.
+    /// Empty for an object without a counter, or without a single measurable month.
+    pub usage_by_month: Vec<MonthUsage>,
 }
+
+/// How many months the usage chart covers.
+const USAGE_MONTHS: u32 = 12;
 
 /// An object's newest reading and the rate its recent readings rise at.
 #[derive(Clone, Copy, Debug)]
@@ -170,6 +176,28 @@ async fn read(
     let counter_per_day_milli =
         usage_by_object(&state, user.id, Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
 
+    let usage_by_month = if object.counter_unit.is_some() {
+        // Every reading, not a window: the first month of the chart is measured from whatever
+        // reading came before it, however long ago that was. A household object has a few dozen.
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT date, counter_value FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND counter_value IS NOT NULL AND date <= $2",
+        )
+        .bind(object_id)
+        .bind(super::reminders::reading_horizon())
+        .fetch_all(&state.db)
+        .await?;
+        let readings: Vec<Reading> = rows
+            .into_iter()
+            .filter_map(|(date, counter)| NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok().map(|date| Reading { date, counter }))
+            .collect();
+        let today = NaiveDate::parse_from_str(&db::today(), "%Y-%m-%d").expect("server-generated date is always valid");
+        let months = monthly_usage(&readings, today, USAGE_MONTHS);
+        if months.iter().any(|m| m.amount.is_some()) { months } else { Vec::new() }
+    } else {
+        Vec::new()
+    };
+
     Ok(Json(InsightsOut {
         by_year,
         by_category,
@@ -177,5 +205,6 @@ async fn read(
         cost_per_counter_milli: overall_cost_per_counter_milli,
         fuel,
         counter_per_day_milli,
+        usage_by_month,
     }))
 }

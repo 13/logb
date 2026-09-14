@@ -139,6 +139,35 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
 }
 
 /**
+ * PATCH that survives a dead connection, for an edit to a row the server already has. Resolves
+ * `true` when the server took it, `false` when it only reached the queue.
+ *
+ * The queued body carries `edited_at` -- the moment the person made the edit, not the moment
+ * it is finally sent -- so the server can keep a newer change someone else made in the meantime
+ * instead of overwriting it with an older one (see `edited_at` on `ActivityInput`,
+ * src/api/activities.rs). An edit that goes straight through needs no such stamp: now is when
+ * it was made.
+ */
+export async function updateQueued(path: string, body: Record<string, unknown>): Promise<boolean> {
+  const id = newOpId();
+  const editedAt = new Date().toISOString();
+  // Before the request, for the same reason as in `createQueued`.
+  const userId = currentUserId ?? undefined;
+  try {
+    await api('PATCH', path, body);
+    return true;
+  } catch (e) {
+    if (isRejection(e) && !isUnauthenticated(e)) throw e;
+    try {
+      await enqueue(store, { id, kind: 'activity.update', path, body: { ...body, edited_at: editedAt }, attempts: 0, userId });
+    } catch {
+      throw new Error('outbox.queue-failed');
+    }
+    return false;
+  }
+}
+
+/**
  * Upload that survives a dead connection: the `attachment.upload` counterpart to `createQueued`
  * above. Sends multipart form data instead of JSON, and follows `createQueued` exactly
  * otherwise -- the `client_op_id` is minted once here and reused for the immediate attempt and
@@ -317,6 +346,12 @@ async function doFlushOutbox(): Promise<void> {
       if (op.kind === 'activity.create') {
         const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
         return out ?? null;
+      }
+      if (op.kind === 'activity.update') {
+        // Replaying it twice is harmless: the second arrives with the same `edited_at`, which
+        // does not beat the clock the first one left behind, so nothing changes.
+        await api('PATCH', op.path, op.body);
+        return null;
       }
       // A kind this function has no send path for at all (e.g. a queued 'reminder.done',
       // reserved for later) can never succeed no matter how many times it's retried -- treat

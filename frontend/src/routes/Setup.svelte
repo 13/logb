@@ -13,7 +13,10 @@
     e.preventDefault();
     busy = true; error = '';
     try {
-      await api('POST', '/auth/setup', { username, password });
+      // The browser's timezone becomes the instance's, unless the server was given one: the
+      // person setting it up is almost always sitting where it will be used.
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      await api('POST', '/auth/setup', { username, password, timezone });
       // The admin exists now, but the app has to be able to SAY who is signed in before it can
       // show anything: navigating with the session still unreachable lands on a permanent
       // "Loading…" with no error and no way forward. `loadSession` swallows a failed

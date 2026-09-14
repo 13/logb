@@ -285,11 +285,11 @@ until it is started by hand.
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
 | `LOGB_MAX_IMPORT_MB` | `1024`    | largest accepted import archive; an import may decompress to at most twice this                                              |
-| `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here; unset disables notifications                                                      |
-| `LOGB_NOTIFY_HOUR`   | `8`       | hour (in `LOGB_TIMEZONE`) the digest goes out                                                                                |
+| `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here, for every user without a webhook of their own (Settings > Notifications)          |
+| `LOGB_NOTIFY_HOUR`   | `8`       | hour (in the instance timezone) the digest goes out, to webhooks and browsers alike                                          |
 | `LOGB_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
 | `LOGB_PUBLIC_URL`    | unset     | the address LogB is opened at (`https://logb.example.com`); puts links into the digest, so a notification opens the right form |
-| `LOGB_TIMEZONE`      | `UTC`     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against                                                  |
+| `LOGB_TIMEZONE`      | unset     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against. Unset, first-run setup stores the browser's and an admin can change it in Settings; set, it wins and Settings shows it as fixed |
 | `LOGB_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `LOGB_LOG`           | `info`    | tracing filter                                                                                                               |
 | `LOGB_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
@@ -379,8 +379,8 @@ rendered in the reader's locale.
 ## Reminder notifications
 
 LogB sends no mail of its own. Point `LOGB_NOTIFY_URL` at a webhook you
-already run and it POSTs one digest a day, at `LOGB_NOTIFY_HOUR` UTC, listing
-every reminder that is due across all users:
+already run and it POSTs one digest a day, at `LOGB_NOTIFY_HOUR` in the
+instance timezone, listing every reminder that is due across all users:
 
 ```bash
 LOGB_NOTIFY_URL=https://ntfy.sh/my-private-topic LOGB_NOTIFY_FORMAT=text
@@ -395,8 +395,18 @@ it the path of least resistance to notifications on an Android phone: pick an
 unguessable topic name, point `LOGB_NOTIFY_URL` at it, install the ntfy app
 and subscribe to the same topic. A topic on the public server is readable by
 anyone who knows its name, so treat the name as the secret or self-host ntfy.
-LogB has no push notifications of its own and asks for no notification
-permission.
+
+Each person can also set it up for themselves under Settings > Notifications:
+
+- **Their own webhook.** Their reminders then go there, in the language they
+  use the app in, and leave the shared digest.
+- **Browser notifications.** "Turn on notifications" subscribes that browser,
+  and the digest arrives as a push notification that opens the right screen
+  when tapped. Nothing needs configuring: the instance creates its signing key
+  the first time it is asked. On an iPhone this works once LogB is added to
+  the home screen. LogB never asks for notification permission until someone
+  presses that button.
+- **A test notification**, sent at once to everywhere theirs go.
 
 Reading reminders ("log the odometer every month") come after the services,
 under `Readings to log:`. They clear themselves as soon as any entry with a

@@ -7,7 +7,7 @@
   import { counter, fmtDate, todayIso } from '../lib/format';
   import { readingActivity, readingWarning, type ReadingWarning } from '../lib/reading';
   import { locale, t } from '../i18n';
-  import type { Activity, Insights, MemObject } from '../lib/types';
+  import type { Insights, MemObject } from '../lib/types';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
@@ -33,14 +33,10 @@
       else { error = (e as Error).message; return; }
     }
     if (object.stats.current_counter !== null) valueText = String(object.stats.current_counter);
-    // Both lookups only sharpen the plausibility check; the form is complete without them.
-    try {
-      const page = await api<{ items: Activity[] } | Activity[]>('GET', `/objects/${oid}/activities?limit=20`);
-      const list = Array.isArray(page) ? page : page.items;
-      lastDate = list.filter((a) => a.counter_value !== null).map((a) => a.date).sort().at(-1) ?? null;
-    } catch { /* offline or refused: no date, no rate check */ }
+    lastDate = object.stats.last_reading_date;
+    // The rate only sharpens the plausibility check; the form is complete without it.
     try { rate = (await api<Insights>('GET', `/objects/${oid}/insights`)).counter_per_day_milli; }
-    catch { /* same */ }
+    catch { /* offline or refused: no rate check */ }
   });
 
   const value = $derived(String(valueText).trim() === '' ? NaN : Number(valueText));

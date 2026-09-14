@@ -37,9 +37,11 @@ pub struct Config {
     #[arg(long, env = "LOGB_PUBLIC_URL")]
     pub public_url: Option<String>,
     /// IANA timezone name (`Europe/Berlin`, `UTC`, ...). Decides which day a reminder's
-    /// due date is compared against, and when the daily digest goes out.
-    #[arg(long, env = "LOGB_TIMEZONE", default_value = "UTC")]
-    pub timezone: chrono_tz::Tz,
+    /// due date is compared against, and when the daily digest goes out. Unset, the timezone
+    /// comes from Settings -- first-run setup fills it in from the browser -- and is UTC until
+    /// then.
+    #[arg(long, env = "LOGB_TIMEZONE")]
+    pub timezone: Option<chrono_tz::Tz>,
     /// Write a consistent copy of the database to this path and exit, without stopping the
     /// server. Blobs under `files/` are content-addressed and never rewritten, so a plain
     /// copy of that directory pairs with it.
@@ -179,7 +181,7 @@ mod tests {
             notify_hour: 8,
             notify_format: "json".into(),
             public_url: None,
-            timezone: chrono_tz::Tz::UTC,
+            timezone: None,
             backup: None,
             backup_dir: None,
             backup_hour: 3,

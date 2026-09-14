@@ -6,21 +6,36 @@
   import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
   import { settings } from '../../stores/settings';
   import { currency, user } from '../../stores/session';
+  import type { Settings } from '../../lib/types';
 
   let currencyText = $state('');
+  let timezone = $state('');
+  let timezoneLocked = $state(false);
   let message = $state('');
   let error = $state('');
 
   const isAdmin = $derived($user?.is_admin === true);
+  /** Every zone the browser knows, when it can say; a plain text field otherwise. */
+  const zones: string[] = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? [];
 
-  onMount(() => {
+  onMount(async () => {
     currencyText = $currency;
+    if (!isAdmin) return;
+    try {
+      const s = await api<Settings>('GET', '/settings');
+      timezone = s.timezone;
+      timezoneLocked = s.timezone_locked;
+    } catch { /* the field stays empty and saving leaves the timezone alone */ }
   });
 
-  async function saveCurrency() {
+  async function saveInstance() {
+    error = ''; message = '';
     try {
-      const s = await api<{ currency: string }>('PUT', '/settings', { currency: currencyText.trim().toUpperCase() });
+      const body: Record<string, string> = { currency: currencyText.trim().toUpperCase() };
+      if (!timezoneLocked && timezone.trim()) body.timezone = timezone.trim();
+      const s = await api<Settings>('PUT', '/settings', body);
       currency.set(s.currency);
+      timezone = s.timezone;
       message = $t('object.saved');
     } catch (e) { error = (e as Error).message; }
   }
@@ -50,13 +65,21 @@
 
   {#if isAdmin}
     <h2>{$t('settings.currency')}</h2>
-    <div class="row">
-      <div class="field"><input bind:value={currencyText} maxlength="3" aria-label={$t('settings.currency')} /><span class="hint">{$t('settings.currency-hint')}</span></div>
-      <button onclick={saveCurrency}>{$t('nav.save')}</button>
+    <div class="field"><input bind:value={currencyText} maxlength="3" aria-label={$t('settings.currency')} /><span class="hint">{$t('settings.currency-hint')}</span></div>
+
+    <h2>{$t('settings.timezone')}</h2>
+    <div class="field">
+      {#if zones.length > 0}
+        <select bind:value={timezone} aria-label={$t('settings.timezone')} disabled={timezoneLocked}>
+          <!-- The current value stays selectable even when this browser's list lacks it. -->
+          {#if timezone && !zones.includes(timezone)}<option value={timezone}>{timezone}</option>{/if}
+          {#each zones as z}<option value={z}>{z}</option>{/each}
+        </select>
+      {:else}
+        <input bind:value={timezone} aria-label={$t('settings.timezone')} disabled={timezoneLocked} />
+      {/if}
+      <span class="hint">{timezoneLocked ? $t('settings.timezone-locked') : $t('settings.timezone-hint')}</span>
     </div>
+    <button onclick={saveInstance}>{$t('nav.save')}</button>
   {/if}
 </main>
-
-<style>
-  .row > button { flex: none; }
-</style>

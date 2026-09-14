@@ -4,6 +4,7 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
+use crate::sync::apply::{canonical_edited_at, wins};
 use crate::sync::{record, Entity};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -61,6 +62,11 @@ pub struct ActivityInput {
     /// Client-generated id for this creation attempt. Present only from the offline outbox.
     #[serde(default)]
     pub client_op_id: Option<String>,
+    /// When an edit was made, for an edit that reaches the server later than that -- one queued
+    /// offline. Each field it changes is then written only if nothing newer has changed that
+    /// field in the meantime (see `update`). Absent for an ordinary edit, which is made now.
+    #[serde(default)]
+    pub edited_at: Option<String>,
 }
 
 impl ActivityInput {
@@ -309,10 +315,49 @@ async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> 
     Ok(Json(one_out(&state, row).await?))
 }
 
+/// Whether `field` of this activity was changed after `at` by anything else -- a later edit from
+/// this or another browser, or a synced device. The same last-write-wins rule a sync `set` op is
+/// held to (`sync::apply::wins`), against the same `field_clock`.
+async fn changed_since(tx: &mut sqlx::AnyConnection, uuid: &str, field: &str, at: &str) -> Result<bool, AppError> {
+    let stored: Option<(String, String)> = sqlx::query_as(
+        "SELECT edited_at, device_id FROM field_clock WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
+        .bind(Entity::Activity.as_str()).bind(uuid).bind(field)
+        .fetch_optional(&mut *tx).await?;
+    Ok(stored.is_some_and(|(stored_at, stored_device)| !wins(at, record::DEVICE_ID, &stored_at, &stored_device)))
+}
+
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Json<ActivityOut>, AppError> {
     let existing = load_owned_activity(&state, user.id, id).await?;
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
     body.validate(&object)?;
+
+    // An edit made offline and sent now carries the moment it was made. Capped at now, so a
+    // device whose clock runs ahead cannot make its edit beat every later one for hours.
+    let edited_at = match body.edited_at.as_deref() {
+        Some(raw) => {
+            let at = canonical_edited_at(raw)
+                .ok_or_else(|| AppError::BadRequest("edited_at must be an RFC 3339 timestamp".into()))?;
+            Some(at.min(record::edited_at_now()))
+        }
+        None => None,
+    };
+
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    if let Some(at) = &edited_at {
+        // Field by field, not all or nothing: a title fixed on the phone at the garage and a cost
+        // typed in on the desktop that evening are both kept, whichever arrives last.
+        let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
+        if body.date != existing.date && changed_since(&mut tx, &uuid, "date", at).await? { body.date = existing.date.clone(); }
+        if body.category != existing.category && changed_since(&mut tx, &uuid, "category", at).await? { body.category = existing.category.clone(); }
+        if body.title != existing.title && changed_since(&mut tx, &uuid, "title", at).await? { body.title = existing.title.clone(); }
+        if body.notes != existing.notes && changed_since(&mut tx, &uuid, "notes", at).await? { body.notes = existing.notes.clone(); }
+        if body.counter_value != existing.counter_value && changed_since(&mut tx, &uuid, "counter_value", at).await? { body.counter_value = existing.counter_value; }
+        if body.cost_cents != existing.cost_cents && changed_since(&mut tx, &uuid, "cost_cents", at).await? { body.cost_cents = existing.cost_cents; }
+        if body.quantity_milli != existing.quantity_milli && changed_since(&mut tx, &uuid, "quantity_milli", at).await? { body.quantity_milli = existing.quantity_milli; }
+        // Keeping some fields and not others can combine into something no single edit said --
+        // a reading without its value -- so the merge is held to the same rules as either edit.
+        body.validate(&object)?;
+    }
 
     // Only fields whose value actually differs are logged -- a PATCH that rewrites a field
     // with its existing value produces no `changes` row (see `record::record_update`).
@@ -325,7 +370,6 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if body.cost_cents != existing.cost_cents { changed.push(("cost_cents", json!(body.cost_cents))); }
     if body.quantity_milli != existing.quantity_milli { changed.push(("quantity_milli", json!(body.quantity_milli))); }
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query(
         "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8 WHERE id = $9 AND deleted_at IS NULL",
     )
@@ -334,7 +378,10 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
-        record::record_update(&mut tx, user.id, Entity::Activity, &uuid, &changed, &record::edited_at_now()).await?;
+        // The clock records when the edit was made, so a still-older queued edit arriving after
+        // this one loses to it too.
+        let clock = edited_at.clone().unwrap_or_else(record::edited_at_now);
+        record::record_update(&mut tx, user.id, Entity::Activity, &uuid, &changed, &clock).await?;
     }
     tx.commit().await?;
 

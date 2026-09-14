@@ -30,6 +30,12 @@
     const max = Math.max(...all.map((b) => b.cost_cents), 1);
     return Math.round((value / max) * 100);
   }
+
+  /** `2026-09` as the reader's short month and year, e.g. "Sep 26". */
+  function monthLabel(month: string): string {
+    const [y, m] = month.split('-').map(Number);
+    return new Intl.DateTimeFormat($locale, { month: 'short', year: '2-digit' }).format(new Date(Date.UTC(y, m - 1, 15)));
+  }
 </script>
 
 {#if error}<p class="error">{error}</p>{/if}
@@ -38,6 +44,18 @@
        to a whole unit, since the rate is an average and more digits would claim precision it
        does not have. -->
   <p class="muted">{$t('insights.usage')}: <b>{$t('insights.per-month', { amount: counter(Math.round(data.counter_per_day_milli * 30.44 / 1000), unit, $locale) })}</b></p>
+{/if}
+{#if data && data.usage_by_month.length > 0 && unit}
+  {@const measured = data.usage_by_month.map((m) => ({ cost_cents: m.amount ?? 0 }))}
+  <h3>{$t('insights.usage-by-month')}</h3>
+  {#each data.usage_by_month as m, i (m.month)}
+    <div class="bar-row">
+      <span class="label">{monthLabel(m.month)}</span>
+      <span class="track"><span class="fill" style={`width:${pct(measured[i].cost_cents, measured)}%`}></span></span>
+      <!-- A month the readings cannot measure says so, rather than drawing a zero it does not know. -->
+      <span class="value tnum">{m.amount === null ? '—' : counter(m.amount, unit, $locale)}</span>
+    </div>
+  {/each}
 {/if}
 {#if data}
   {#if data.by_year.length === 0}

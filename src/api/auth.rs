@@ -107,6 +107,10 @@ async fn revoke_token(
 pub struct Credentials {
     pub username: String,
     pub password: String,
+    /// The browser's IANA timezone, sent by first-run setup. Ignored by login, and by setup
+    /// when `LOGB_TIMEZONE` is set or the value is not a timezone.
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 async fn user_count(state: &App) -> Result<i64, AppError> {
@@ -153,6 +157,15 @@ async fn setup(
     .ok_or_else(|| AppError::Conflict("setup already completed".into()))?;
     let token = auth::create_session_in(&mut tx, user.id).await?;
     tx.commit().await?;
+    // The person setting the instance up is almost always sitting in the timezone it is for,
+    // and UTC -- the only other guess available -- makes reminders come due at the wrong
+    // midnight for most of the world. A value that does not parse is dropped rather than
+    // refused: a first run must not fail over a timezone the browser spelled oddly.
+    if state.config.timezone.is_none() {
+        if let Some(tz) = body.timezone.as_deref().and_then(|s| super::settings::parse_timezone(s).ok()) {
+            super::settings::store_timezone(&state, tz).await?;
+        }
+    }
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
     Ok((StatusCode::CREATED, jar, Json(user)))
 }

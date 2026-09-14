@@ -351,7 +351,7 @@ mod tests {
         notify_hour: 8,
         notify_format: "json".into(),
         public_url: None,
-        timezone: chrono_tz::Tz::UTC,
+        timezone: None,
         backup: None,
         backup_dir: None,
         backup_hour: 3,

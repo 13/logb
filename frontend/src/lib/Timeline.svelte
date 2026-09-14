@@ -5,6 +5,7 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
+  import { foldReadings, readingSpan } from './timeline-fold';
   import { categoriesFor } from './object-types';
   import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
@@ -26,7 +27,26 @@
     [...categoriesFor(type), ...CATEGORIES.filter((c) => present.has(c))]
       .filter((c, i, all) => all.indexOf(c) === i),
   );
+  /** Which folded runs of readings are open. */
+  let open = $state<string[]>([]);
+  function toggle(key: string) {
+    open = open.includes(key) ? open.filter((k) => k !== key) : [...open, key];
+  }
 </script>
+
+{#snippet readingRow(a: Activity)}
+  <!-- A reading is one number, so it is one line, not a card. Still a button, so a typo can be
+       opened and fixed like any other entry. -->
+  <button
+    class="entry reading"
+    class:pending={a.pending}
+    disabled={a.pending}
+    onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
+  >
+    <span class="muted">{fmtDate(a.date, $locale)} · {$t('cat.reading')}{#if a.pending} · {$t('timeline.pending')}{/if}</span>
+    <span class="tnum">{counter(a.counter_value, unit, $locale)}</span>
+  </button>
+{/snippet}
 
 <div class="chips">
   <button class:active={category === ''} class="chip" onclick={() => (category = '')}>{$t('timeline.filter-all')}</button>
@@ -51,46 +71,54 @@
   {#each groups as [year, items] (year)}
     <p class="year">{year}</p>
     <div class="list">
-      {#each items as a (a.id)}
-        {#if a.category === 'reading'}
-          <!-- Folded: a reading is one number, and a monthly habit would otherwise bury the
-               repairs and services under a full card each. Still a button, so a typo can be
-               opened and fixed like any other entry. -->
+      {#each foldReadings(items) as row (row.kind === 'entry' ? row.activity.id : row.key)}
+        {#if row.kind === 'readings'}
+          {@const span = readingSpan(row.readings)}
+          {@const expanded = open.includes(row.key)}
+          <!-- A run of readings between two real entries says one thing -- the counter went from
+               here to there -- so it is one line until someone asks for the detail. -->
+          <button class="entry reading fold" aria-expanded={expanded} onclick={() => toggle(row.key)}>
+            <span class="muted">
+              <span class="caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+              {fmtDate(row.readings[row.readings.length - 1].date, $locale)} – {fmtDate(row.readings[0].date, $locale)}
+              · {$t('timeline.readings', { n: row.readings.length })}
+            </span>
+            {#if span}<span class="tnum">{counter(span.from, unit, $locale)} – {counter(span.to, unit, $locale)}</span>{/if}
+          </button>
+          {#if expanded}
+            <div class="list folded">
+              {#each row.readings as a (a.id)}{@render readingRow(a)}{/each}
+            </div>
+          {/if}
+        {:else if row.activity.category === 'reading'}
+          {@render readingRow(row.activity)}
+        {:else}
+          {@const a = row.activity}
           <button
-            class="entry reading"
+            class="card entry"
             class:pending={a.pending}
             disabled={a.pending}
             onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
           >
-            <span class="muted">{fmtDate(a.date, $locale)} · {$t('cat.reading')}{#if a.pending} · {$t('timeline.pending')}{/if}</span>
-            <span class="tnum">{counter(a.counter_value, unit, $locale)}</span>
-          </button>
-        {:else}
-        <button
-          class="card entry"
-          class:pending={a.pending}
-          disabled={a.pending}
-          onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
-        >
-          <div class="row head">
-            <b>{a.title}</b>
-            <span class="chip">{$t(`cat.${a.category}`)}</span>
-            {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
-          </div>
-          <div class="muted tnum">
-            {fmtDate(a.date, $locale)}
-            {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
-            {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
-          </div>
-          {#if a.notes}<p class="notes">{a.notes}</p>{/if}
-          {#if a.attachments.length > 0}
-            <div class="thumb-strip">
-              {#each a.attachments.slice(0, 6) as att (att.id)}
-                {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
-              {/each}
+            <div class="row head">
+              <b>{a.title}</b>
+              <span class="chip">{$t(`cat.${a.category}`)}</span>
+              {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>
-          {/if}
-        </button>
+            <div class="muted tnum">
+              {fmtDate(a.date, $locale)}
+              {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
+              {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
+            </div>
+            {#if a.notes}<p class="notes">{a.notes}</p>{/if}
+            {#if a.attachments.length > 0}
+              <div class="thumb-strip">
+                {#each a.attachments.slice(0, 6) as att (att.id)}
+                  {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
+                {/each}
+              </div>
+            {/if}
+          </button>
         {/if}
       {/each}
     </div>
@@ -106,11 +134,13 @@
   .entry { display: flex; flex-direction: column; gap: var(--space-1); text-align: left; width: 100%; }
   .entry.pending { opacity: .55; cursor: default; }
   .entry.reading {
-    flex-direction: row; justify-content: space-between; align-items: baseline;
+    flex-direction: row; justify-content: space-between; align-items: baseline; gap: var(--space-2);
     min-height: auto; padding: var(--space-2) var(--space-3);
     background: transparent; border: 1px dashed var(--border); border-radius: var(--radius-sm);
     font-size: var(--text-sm); color: var(--text);
   }
+  .caret { display: inline-block; width: 1em; }
+  .folded { padding-left: var(--space-4); }
   .pending-chip { flex: none; }
   .head { justify-content: space-between; }
   .head b { flex: 1; }

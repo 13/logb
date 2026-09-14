@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import SignedIn from './SignedIn.svelte';
   import { go } from './router';
   import { t } from '../i18n';
@@ -6,17 +7,37 @@
 
   let open = $state(false);
   let root = $state<HTMLDivElement | null>(null);
+  let avatar = $state<HTMLButtonElement | null>(null);
+  let panel = $state<HTMLDivElement | null>(null);
 
-  // Closes on a tap anywhere else and on Escape, the two ways people dismiss a panel like this.
+  /** Opening moves focus into the panel, so a keyboard or screen-reader user lands on what just
+   *  appeared instead of somewhere behind it. */
+  async function show() {
+    open = true;
+    await tick();
+    panel?.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+
+  /** `restore` returns focus to the avatar -- after Escape, where the person is still here. A tap
+   *  elsewhere already put focus where they wanted it. */
+  function hide(restore: boolean) {
+    open = false;
+    if (restore) avatar?.focus();
+  }
+
   $effect(() => {
     if (!open) return;
-    const outside = (e: PointerEvent) => { if (root && !root.contains(e.target as Node)) open = false; };
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') open = false; };
+    const outside = (e: PointerEvent) => { if (root && !root.contains(e.target as Node)) hide(false); };
+    const keys = (e: KeyboardEvent) => { if (e.key === 'Escape') hide(true); };
+    // Tabbing out of the panel closes it, rather than leaving it open over whatever has focus.
+    const focus = (e: FocusEvent) => { if (root && !root.contains(e.target as Node)) hide(false); };
     document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape);
+    document.addEventListener('keydown', keys);
+    document.addEventListener('focusin', focus);
     return () => {
       document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', escape);
+      document.removeEventListener('keydown', keys);
+      document.removeEventListener('focusin', focus);
     };
   });
 </script>
@@ -28,15 +49,16 @@
   <div class="account-menu" bind:this={root}>
     <button
       class="avatar"
+      bind:this={avatar}
       aria-label={$t('account.menu', { name: $user.username })}
       aria-expanded={open}
       aria-haspopup="true"
-      onclick={() => (open = !open)}
+      onclick={() => (open ? hide(false) : show())}
     >{$user.username.slice(0, 1).toUpperCase()}</button>
     {#if open}
-      <div class="panel" role="group" aria-label={$t('account.menu', { name: $user.username })}>
+      <div class="panel" role="group" aria-label={$t('account.menu', { name: $user.username })} bind:this={panel}>
         <SignedIn />
-        <button class="ghost settings" onclick={() => { open = false; go('/settings/account'); }}>{$t('account.settings')}</button>
+        <button class="ghost settings" onclick={() => { hide(false); go('/settings/account'); }}>{$t('account.settings')}</button>
       </div>
     {/if}
   </div>

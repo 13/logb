@@ -7,9 +7,20 @@ export type ObjectType = (typeof OBJECT_TYPES)[number];
 export type Kind = 'photo' | 'document';
 
 export interface User { id: number; username: string; is_admin: boolean; lang: string; created_at?: string }
-export interface Settings { currency: string }
+/** `timezone` is the instance's IANA zone; `timezone_locked` is true when `LOGB_TIMEZONE` sets it. */
+export interface Settings { currency: string; timezone: string; timezone_locked: boolean }
+/** `GET /me/notifications`: where this person's digest goes. */
+export interface NotificationSettings {
+  url: string | null; format: 'text' | 'json'; push_devices: number; vapid_public_key: string;
+  instance_webhook: boolean; hour: number;
+}
+export interface NotificationTest { webhook: string | null; push_sent: number; push_failed: number }
 
-export interface ObjectStats { total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number }
+export interface ObjectStats {
+  total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number;
+  /** The date of the newest entry with a counter value. */
+  last_reading_date: string | null;
+}
 export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {
   id: number; user_id: number; name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
@@ -97,6 +108,8 @@ export interface Insights {
   fuel: { unit: string; quantity_milli: number; per_100_milli: number | null; cost_per_counter_milli: number | null } | null;
   /** Counter units per day over recent readings, ×1000; null until there is enough history. */
   counter_per_day_milli: number | null;
+  /** The last twelve months, oldest first; `amount` is null for a month the readings cannot measure. */
+  usage_by_month: { month: string; amount: number | null }[];
 }
 
 /** An API token as it is listed: never the token itself, which the server returns exactly once

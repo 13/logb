@@ -3,13 +3,14 @@
   import TopBar from '../lib/TopBar.svelte';
   import { api } from '../lib/api';
   import { go, back } from '../lib/router';
-  import { t } from '../i18n';
-  import { centsToInput, parseMoney } from '../lib/format';
+  import { locale, t } from '../i18n';
+  import { centsToInput, counter, parseMoney } from '../lib/format';
   import { emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
-  import { readingReminder, reminderBody } from '../lib/reminder-form';
-  import { addMonthsIso } from '../lib/reading';
+  import { reminderBody } from '../lib/reminder-form';
+  import { readingActivity } from '../lib/reading';
+  import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
   import { OBJECT_TYPES, type MemObject, type ObjectInput } from '../lib/types';
 
@@ -20,8 +21,24 @@
     untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
   );
   let priceText = $state('');
-  /** Opt-in, never automatic: a reminder nobody asked for is the kind that gets muted. */
-  let remindReading = $state(false);
+  /** Ticked template ids. Opt-in, never automatic: a reminder nobody asked for is the kind that
+   *  gets muted. */
+  let chosen = $state<string[]>([]);
+  let readingText = $state('');
+  const offeredTemplates = $derived(editing ? [] : templatesFor(input.type, input.counter_unit));
+  const ticked = $derived(offeredTemplates.filter((tp) => chosen.includes(tp.id)));
+  /** A distance-based reminder is only right from where the counter is now. */
+  const needsReading = $derived(ticked.some((tp) => counterStep(tp, input.counter_unit) !== null));
+
+  /** "every 15,000 km or 12 months", in the reader's language and number format. */
+  function schedule(tp: ReminderTemplate): string {
+    if (tp.reading) return $t('reminder.every-month');
+    const parts: string[] = [];
+    const step = counterStep(tp, input.counter_unit);
+    if (step !== null) parts.push(counter(step, input.counter_unit, $locale));
+    if (tp.months !== undefined) parts.push($t('template.months', { n: tp.months }));
+    return $t('template.every', { what: parts.join(` ${$t('template.or')} `) });
+  }
   let error = $state('');
   let busy = $state(false);
   /** The objects offered as this one's parent: everything the user owns, minus this object and
@@ -86,13 +103,21 @@
       const saved = editing
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
         : await api<MemObject>('POST', '/objects', input);
-      if (!editing && remindReading && saved.counter_unit) {
-        // Starting a month out: the reading just typed into a new object's first entry is as
-        // good as today's, so asking again tomorrow would be noise. A failure here must not
-        // lose the object that was just saved -- the reminder can be added from its tab.
-        const start = addMonthsIso(todayIso(), 1);
-        try { await api('POST', `/objects/${saved.id}/reminders`, reminderBody(readingReminder($t('reading.reminder-title'), start))); }
-        catch { /* the object is saved; the reminders tab offers the same action */ }
+      if (!editing && ticked.length > 0) {
+        const today = todayIso();
+        const current = String(readingText).trim() === '' ? null : Number(readingText);
+        const reading = current !== null && Number.isInteger(current) && current >= 0 ? current : null;
+        // A failure here must not lose the object that was just saved: every one of these can
+        // be added from the object's own tabs afterwards.
+        try {
+          if (reading !== null && saved.counter_unit) {
+            await api('POST', `/objects/${saved.id}/activities`, readingActivity(reading, today, $t('reading.entry-title')));
+          }
+          for (const tp of ticked) {
+            const body = templateInput(tp, { title: $t(tp.title), unit: saved.counter_unit, currentReading: reading, today });
+            if (body) await api('POST', `/objects/${saved.id}/reminders`, reminderBody(body));
+          }
+        } catch { /* the object is saved; its reminders tab offers the same */ }
       }
       go(`/objects/${saved.id}`, true);
     } catch (err) { error = (err as Error).message; } finally { busy = false; }
@@ -124,8 +149,24 @@
         <option value="h">{$t('object.counter-h')}</option>
       </select>
     </div>
-    {#if !editing && input.counter_unit}
-      <label class="row toggle"><input type="checkbox" bind:checked={remindReading} /> {$t('object.reading-reminder')}</label>
+    {#if offeredTemplates.length > 0}
+      <fieldset class="templates">
+        <legend>{$t('object.templates')}</legend>
+        <p class="hint">{$t('object.templates-hint')}</p>
+        {#each offeredTemplates as tp (tp.id)}
+          <label class="row toggle">
+            <input type="checkbox" value={tp.id} bind:group={chosen} />
+            <span>{$t(tp.title)} <span class="muted">· {schedule(tp)}</span></span>
+          </label>
+        {/each}
+        {#if needsReading}
+          <div class="field">
+            <label for="cr">{$t('object.current-reading', { unit: input.counter_unit ?? '' })}</label>
+            <input id="cr" type="number" inputmode="numeric" min="0" step="1" bind:value={readingText} />
+            <span class="hint">{$t('object.current-reading-hint')}</span>
+          </div>
+        {/if}
+      </fieldset>
     {/if}
     <div class="field">
       <label for="fu">{$t('object.fuel-unit')}</label>
@@ -168,4 +209,7 @@
 <style>
   .toggle input { flex: none; width: 20px; height: 20px; }
   .actions { margin-top: var(--space-2); }
+  .templates { border: none; padding: 0; margin: 0 0 var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+  .templates legend { font-size: var(--text-sm); color: var(--muted); padding: 0; margin-bottom: var(--space-1); }
+  .templates .hint { margin: 0; }
 </style>

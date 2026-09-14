@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
 test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '12-object-hierarchy');
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Hierarchy House');
@@ -27,7 +27,7 @@ test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }
 });
 
 test('an archived object deep inside the tree is still reachable from the archived view', async ({ page }) => {
-  await signIn(page);
+  await signInFresh(page, '12-object-hierarchy');
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Attic Nest House');

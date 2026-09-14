@@ -1,4 +1,4 @@
-use chrono::{Days, NaiveDate};
+use chrono::{Datelike, Days, Months, NaiveDate};
 
 /// How far back the usage rate looks: recent enough to follow a change of habit (a new commute,
 /// a winter the bike stays in), long enough to smooth out one long trip.
@@ -55,6 +55,44 @@ pub fn estimated_date(last: Reading, rate_milli: i64, target: i64) -> Option<Nai
         return None;
     }
     last.date.checked_add_days(Days::new(days as u64))
+}
+
+/// How far the counter moved in one calendar month.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct MonthUsage {
+    /// `YYYY-MM`.
+    pub month: String,
+    /// Null when the readings cannot say: no reading in that month, or none before it to
+    /// measure from.
+    pub amount: Option<i64>,
+}
+
+/// Usage per calendar month for the `months` months ending with today's, oldest first.
+///
+/// A month's amount is the highest reading up to its end minus the highest reading before it
+/// began -- but only for a month that has a reading of its own. A month without one says
+/// nothing: spreading the next month's jump back over it would draw a smooth curve the data
+/// does not have, and charging it all to the next month would draw a spike that never happened.
+/// A counter that went down (a replaced odometer) is unknown too, not negative.
+pub fn monthly_usage(readings: &[Reading], today: NaiveDate, months: u32) -> Vec<MonthUsage> {
+    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else { return Vec::new() };
+    let highest_before = |date: NaiveDate| readings.iter().filter(|r| r.date < date).map(|r| r.counter).max();
+    (0..months)
+        .rev()
+        .filter_map(|back| {
+            let first = this_month.checked_sub_months(Months::new(back))?;
+            let next = first.checked_add_months(Months::new(1))?;
+            // Measured to the month's own highest reading, not to the highest up to its end: the
+            // latter can never be below the start, so a replaced odometer would read as a quiet
+            // month of zero rather than the unknown it is.
+            let highest_in_month = readings.iter().filter(|r| r.date >= first && r.date < next).map(|r| r.counter).max();
+            let amount = match (highest_in_month, highest_before(first)) {
+                (Some(end), Some(start)) if end >= start => Some(end - start),
+                _ => None,
+            };
+            Some(MonthUsage { month: first.format("%Y-%m").to_string(), amount })
+        })
+        .collect()
 }
 
 /// One fuel entry that carries an odometer reading, an amount, and what it cost.
@@ -123,6 +161,31 @@ mod tests {
 
     fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
     fn r(date: &str, counter: i64) -> Reading { Reading { date: day(date), counter } }
+
+    #[test]
+    fn monthly_usage_measures_each_month_that_has_a_reading() {
+        let readings = [r("2026-06-15", 10_000), r("2026-07-10", 10_800), r("2026-07-30", 11_000), r("2026-09-05", 12_500)];
+        let usage = monthly_usage(&readings, day("2026-09-13"), 4);
+        let months: Vec<&str> = usage.iter().map(|u| u.month.as_str()).collect();
+        assert_eq!(months, ["2026-06", "2026-07", "2026-08", "2026-09"]);
+        let amounts: Vec<Option<i64>> = usage.iter().map(|u| u.amount).collect();
+        // June: the first reading ever, nothing to measure from. July: 11_000 - 10_000.
+        // August: no reading, so no claim. September: 12_500 - 11_000.
+        assert_eq!(amounts, [None, Some(1_000), None, Some(1_500)]);
+    }
+
+    #[test]
+    fn monthly_usage_does_not_invent_negative_months() {
+        let readings = [r("2026-07-10", 90_000), r("2026-08-10", 100)];
+        let usage = monthly_usage(&readings, day("2026-08-20"), 1);
+        assert_eq!(usage, [MonthUsage { month: "2026-08".into(), amount: None }], "a replaced odometer");
+    }
+
+    #[test]
+    fn monthly_usage_crosses_a_year() {
+        let readings = [r("2025-12-31", 5_000), r("2026-01-02", 5_040)];
+        assert_eq!(monthly_usage(&readings, day("2026-01-05"), 1)[0], MonthUsage { month: "2026-01".into(), amount: Some(40) });
+    }
 
     #[test]
     fn the_rate_runs_from_the_earliest_reading_in_the_window_to_the_latest() {

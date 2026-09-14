@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { signInFresh } from './helpers';
 
-/// Adding files saves the entry first, and an entry needs a title. The form used to answer the
-/// click with a bare "Title" in red and nothing else -- a label, not a message.
-test('adding files before a title says why, and puts the cursor in the title', async ({ page }) => {
-  await signIn(page);
+/// Snapping the receipt comes before naming the entry. Adding files saves the draft, which needs
+/// a title -- so the category stands in as one, visibly, instead of the click being refused.
+test('adding files before a title starts the draft under the category name', async ({ page }) => {
+  await signInFresh(page, 'form-errors');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Form errors car');
   await page.getByRole('button', { name: 'Save' }).click();
@@ -12,17 +12,25 @@ test('adding files before a title says why, and puts the cursor in the title', a
 
   await page.getByRole('button', { name: /Log activity/ }).first().click();
   await expect(page).toHaveURL(/\/activities\/new$/);
+  await page.getByLabel('Category').selectOption('repair');
   await page.getByRole('button', { name: /Add photos or files/ }).click();
 
-  const alert = page.getByRole('alert');
-  await expect(alert).toHaveText('Give the entry a title first — photos and files are saved with it.');
-  await expect(page.getByLabel('Title')).toBeFocused();
-  // Nothing was saved: the picker only replaces the button once a draft exists.
-  await expect(page.getByRole('button', { name: /Take photo/ })).toHaveCount(0);
-
-  // With a title, the same button goes on to the picker.
-  await page.getByLabel('Title').fill('Brake pads');
-  await page.getByRole('button', { name: /Add photos or files/ }).click();
+  await expect(page.getByLabel('Title')).toHaveValue('Repair');
   await expect(page.getByRole('button', { name: /Take photo/ })).toBeVisible();
-  await expect(alert).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+/// A validation message used to be the field's label on its own -- "Cost" in red.
+test('a field that does not validate is named in a sentence', async ({ page }) => {
+  await signInFresh(page, 'form-errors');
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Form errors bike');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Form errors bike' })).toBeVisible();
+
+  await page.getByRole('button', { name: /Log activity/ }).first().click();
+  await page.getByLabel('Title').fill('Brake pads');
+  await page.getByLabel('Cost').fill('twelve');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Check “Cost”: it is missing or not valid.');
 });

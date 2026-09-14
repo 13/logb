@@ -490,7 +490,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             let mut act_input = ActivityInput {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
-                quantity_milli: a.quantity_milli, client_op_id: None,
+                quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None,
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;

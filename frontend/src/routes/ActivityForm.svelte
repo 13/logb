@@ -3,7 +3,7 @@
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
   import Icon from '../lib/Icon.svelte';
-  import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueuedActivity } from '../lib/api';
+  import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueued, updateQueuedActivity } from '../lib/api';
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
@@ -134,13 +134,15 @@
   const ensureSaved = serialize(async (): Promise<Activity> => {
     if (saved) return saved;
     if (!ready) throw new Error('not loaded yet');
-    const body = buildInput();
-    const bad = validateActivity(body);
+    let body = buildInput();
+    let bad = validateActivity(body);
     if (bad === 'activity.title') {
-      // The one field a person skips on the way to "add photos" -- the title sits above it and
-      // is not yet filled in. Say why it is needed now, and put the cursor there.
-      document.getElementById('ti')?.focus();
-      throw new Error($t('activity.title-first'));
+      // Snapping the receipt comes before naming the entry, and the draft needs a title to be
+      // saved at all. The category is a fair one to start with -- "Repair" beside a photo of
+      // the repair bill -- and it sits in the title field in plain sight, to be replaced.
+      input.title = $t(`cat.${input.category}`);
+      body = buildInput();
+      bad = validateActivity(body);
     }
     if (bad) throw new Error(fieldError(bad, $t));
     const tempId = mintTempId();
@@ -209,7 +211,9 @@
         const folded = await updateQueuedActivity(saved.id, body as unknown as Record<string, unknown>);
         if (!folded) throw new Error('activity.save-lost');
       } else if (saved) {
-        await api('PATCH', `/activities/${saved.id}`, body);
+        // Queued with the moment of the edit when the connection is gone; the server keeps each
+        // field only if nothing newer changed it meanwhile (see `updateQueued` in ../lib/api.ts).
+        await updateQueued(`/activities/${saved.id}`, body as unknown as Record<string, unknown>);
       } else {
         // null means "queued, not sent": the row exists locally and will be replayed.
         await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>);

@@ -6,7 +6,7 @@ const obj = {
   id: 1, user_id: 1, name: 'Golf', type: 'car', counter_unit: 'km', fuel_unit: 'l', description: 'grey',
   purchase_date: '2020-03-01', purchase_price_cents: 1500000, archived_at: null,
   cover_attachment_id: null, cover_file_id: null, parent_id: null, created_at: '', updated_at: '',
-  stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0 },
+  stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0, last_reading_date: null },
 } as MemObject;
 
 describe('object form', () => {

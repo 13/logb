@@ -4,7 +4,7 @@ use sqlx::any::AnyPoolOptions;
 use sqlx::AnyPool;
 use sqlx::Executor;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -272,20 +272,47 @@ impl<'r> sqlx::Decode<'r, sqlx::Any> for Bool {
     }
 }
 
-/// The instance's wall-clock timezone, set once from `LOGB_TIMEZONE` at startup.
+/// The instance's wall-clock timezone.
 ///
 /// A process-wide value rather than a parameter because `today()` is called from places with
 /// no access to the config -- notably the `ReminderRow -> ReminderOut` conversion that decides
 /// whether a reminder is due. Unset (in tests, and before `build`) it reads as UTC.
-static TIMEZONE: OnceLock<Tz> = OnceLock::new();
+///
+/// A lock rather than a `OnceLock`, because it is no longer only a startup setting: with no
+/// `LOGB_TIMEZONE`, first-run setup stores the browser's timezone and an administrator can change
+/// it in Settings, and either takes effect without a restart.
+static TIMEZONE: RwLock<Option<Tz>> = RwLock::new(None);
 
-/// Fixes the timezone for the life of the process. Later calls are ignored.
+/// Key in the `settings` table holding the timezone setup or an administrator chose.
+pub const TIMEZONE_KEY: &str = "timezone";
+
 pub fn set_timezone(tz: Tz) {
-    let _ = TIMEZONE.set(tz);
+    // A poisoned lock only means a writer panicked mid-assignment of a `Copy` value, which
+    // cannot leave it half-written; the value inside is still a whole `Option<Tz>`.
+    *TIMEZONE.write().unwrap_or_else(|e| e.into_inner()) = Some(tz);
 }
 
 pub fn timezone() -> Tz {
-    TIMEZONE.get().copied().unwrap_or(Tz::UTC)
+    TIMEZONE.read().unwrap_or_else(|e| e.into_inner()).unwrap_or(Tz::UTC)
+}
+
+/// Decides the timezone at startup: `LOGB_TIMEZONE` when it is set, otherwise the one stored in
+/// `settings`, otherwise UTC. An environment variable is a deliberate operator choice and wins
+/// over anything clicked in the app; Settings says so rather than offering a field that would do
+/// nothing.
+pub async fn load_timezone(configured: Option<Tz>, pool: &AnyPool) -> Result<(), BoxError> {
+    if let Some(tz) = configured {
+        set_timezone(tz);
+        return Ok(());
+    }
+    let stored: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = $1")
+        .bind(TIMEZONE_KEY).fetch_optional(pool).await?;
+    match stored.as_deref().map(str::parse::<Tz>) {
+        Some(Ok(tz)) => set_timezone(tz),
+        Some(Err(_)) => tracing::warn!(value = ?stored, "the stored timezone is not an IANA name; using UTC"),
+        None => {}
+    }
+    Ok(())
 }
 
 /// RFC 3339 UTC timestamp with second precision, e.g. `2026-09-04T10:00:00Z`.
