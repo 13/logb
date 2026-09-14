@@ -207,6 +207,13 @@ export default {
 
   'timeline.readings': '{n} Zählerstände',
   'insights.usage-by-month': 'Pro Monat',
+  'insights.contents': 'Inhalt einrechnen',
+  'insights.ownership': 'Gesamtkosten',
+  'insights.per-year-since': '≈ {amount} pro Jahr seit {since}',
+  'insights.since': 'seit {since}',
+  'insights.spend-by-month': 'Ausgaben pro Monat',
+  'insights.by-fill': 'Verbrauch pro Tankfüllung',
+  'insights.by-fill-hint': 'Setzt voraus, dass jedes Mal vollgetankt wurde.',
 
   'settings.notifications': 'Benachrichtigungen',
   'settings.timezone': 'Zeitzone',

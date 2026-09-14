@@ -207,6 +207,13 @@ export default {
 
   'timeline.readings': '{n} readings',
   'insights.usage-by-month': 'Per month',
+  'insights.contents': 'Include contents',
+  'insights.ownership': 'Total cost of ownership',
+  'insights.per-year-since': '≈ {amount} a year since {since}',
+  'insights.since': 'since {since}',
+  'insights.spend-by-month': 'Spend per month',
+  'insights.by-fill': 'Consumption per fill',
+  'insights.by-fill-hint': 'Assumes every fill tops the tank up.',
 
   'settings.notifications': 'Notifications',
   'settings.timezone': 'Timezone',
