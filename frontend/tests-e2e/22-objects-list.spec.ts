@@ -50,7 +50,7 @@ test('tabs, search at any depth, sorting that survives a reload, and a card that
   const boiler = page.getByRole('button', { name: /List Boiler/ });
   await expect(boiler).toBeVisible();
   await expect(boiler).toContainText('in List House');
-  await expect(page.getByRole('button', { name: /List House/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^List House/ })).toHaveCount(0);
   await page.getByLabel('Search objects').fill('zzz-nothing');
   await expect(page.getByText('No objects match “zzz-nothing”.')).toBeVisible();
   await page.getByLabel('Search objects').fill('');

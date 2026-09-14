@@ -71,6 +71,9 @@
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
   .row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
   .row > b { flex: none; }
-  .type-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
-  .type-row :global(svg) { flex: none; }
+  /* Flex would put the icon and each piece of text (split into separate runs by Svelte's block
+     anchors) into their own wrappable items, so the icon can land alone on its own line. Block
+     flow keeps the icon inline with the text that follows it, wrapping naturally as one run. */
+  .type-row { display: block; }
+  .type-row :global(svg) { vertical-align: middle; margin-right: var(--space-2); }
 </style>

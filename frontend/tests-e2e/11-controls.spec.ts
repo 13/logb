@@ -148,9 +148,9 @@ test('every control in a form is the same height', async ({ page }) => {
   expect(distinct[0]).toBeGreaterThanOrEqual(44);
 });
 
-// The chips row sat flush against the first card: 8px of air above it and 4px below, and the
-// 4px was the focus ring's bleed rather than a gap anyone chose. A row that filters a list
-// belongs between the two, not stuck to one of them.
+// The controls row (search box + sort) sat flush against the first card: 8px of air above it and
+// 4px below, and the 4px was the focus ring's bleed rather than a gap anyone chose. A row that
+// filters a list belongs between the tabs above it and the list below, not stuck to one of them.
 test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
@@ -169,30 +169,28 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await expect(page.locator('.card-row', { hasText: 'Chip gap probe' })).toBeVisible({ timeout: 20000 });
 
   // The dashboard re-runs its load whenever it (re)mounts, and while that is in flight
-  // `.chips`'s next element sibling is the "Loading..." paragraph, not `.list` -- reading
-  // `nextElementSibling` blind can measure that paragraph instead of the list. `.chips + .list`
-  // matches only once the list is actually the element right after the chips row, so a null
+  // `.controls`'s next element sibling is the "Loading..." paragraph, not `.list` -- reading
+  // `nextElementSibling` blind can measure that paragraph instead of the list. `.controls + .list`
+  // matches only once the list is actually the element right after the controls row, so a null
   // result here means the load has not settled yet and the measurement is retried rather than
   // taken against the wrong element.
   let gaps!: { above: number; below: number };
   await expect(async () => {
     const result = await page.evaluate(() => {
       const box = (el: Element) => el.getBoundingClientRect();
-      const chips = document.querySelector('.chips')!;
-      const chip = chips.querySelector('button')!;
-      const list = document.querySelector('.chips + .list');
+      const tabs = document.querySelector('.tabs')!;
+      const controls = document.querySelector('.controls')!;
+      const search = controls.querySelector('input[type="search"]')!;
+      const list = document.querySelector('.controls + .list');
       if (!list) return null;
-      // What is actually above the chip is the topbar's last control, not the topbar's box. The
-      // dashboard's topbar carries no buttons of its own any more -- both used to live there, and
-      // now live in the app nav instead -- so its last control is the title.
-      const above = box(chip).top - box(document.querySelector('.topbar h1')!).bottom;
-      const below = box(list).top - box(chip).bottom;
+      const above = box(search).top - box(tabs).bottom;
+      const below = box(list).top - box(controls).bottom;
       return { above, below };
     });
     expect(result).not.toBeNull();
     gaps = result!;
   }).toPass();
-  expect(gaps.below, `the chips row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
+  expect(gaps.below, `the controls row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
 });
 
 // An empty list is what these tabs are initialised with, not an answer from the server. Drawing
