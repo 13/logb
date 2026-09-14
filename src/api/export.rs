@@ -150,7 +150,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-             purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
+             purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid \
              FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
@@ -162,7 +162,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid \
              FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
@@ -473,6 +473,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             archived: None,
             cover_attachment_id: None,
             parent_id: None,
+            client_uuid: None,
         };
         obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
 
@@ -484,13 +485,14 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None, parent_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
+            client_uuid: None,
         };
 
         for (ai, a) in o.activities.iter().enumerate() {
             let mut act_input = ActivityInput {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
-                quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None,
+                quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None, client_uuid: None,
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;
@@ -507,6 +509,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                 title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(),
                 due_counter: r.due_counter, repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
                 kind: r.kind.clone(), every_n: r.every_n, every_unit: r.every_unit.clone(),
+                client_uuid: None,
             };
             // `validate` fills in a missing start for a reading reminder, but the insert below
             // writes the archive's own value -- so the archive has to carry one.

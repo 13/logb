@@ -50,6 +50,8 @@ pub struct ReminderRow {
     /// A reading reminder's interval; both null on a service reminder.
     pub every_n: Option<i64>,
     pub every_unit: Option<String>,
+    /// The row's sync identity, so a client can name it in an op without a bootstrap first.
+    pub client_uuid: Option<String>,
     // joined
     pub object_name: String,
     pub counter_unit: Option<String>,
@@ -163,7 +165,7 @@ pub(crate) fn select_reminders(where_and_order: &str) -> String {
     format!(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, \
-         r.kind, r.every_n, r.every_unit, o.name AS object_name, o.counter_unit, \
+         r.kind, r.every_n, r.every_unit, r.client_uuid, o.name AS object_name, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter, \
          (SELECT MAX(a.date) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL \
             AND a.counter_value IS NOT NULL AND a.date <= $1) AS last_reading_date \
@@ -206,6 +208,10 @@ pub struct ReminderInput {
     pub every_n: Option<i64>,
     #[serde(default)]
     pub every_unit: Option<String>,
+    /// Identity minted by the client before the server saw the row. A replay carrying the
+    /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
+    #[serde(default)]
+    pub client_uuid: Option<String>,
 }
 
 pub(crate) fn service_kind() -> String {
@@ -261,16 +267,25 @@ async fn insert(
     tx: &mut sqlx::AnyConnection,
     object_id: i64,
     b: &ReminderInput,
+    uuid: String,
 ) -> Result<(i64, String), AppError> {
-    let uuid = uuid::Uuid::new_v4().to_string();
-    let (id,): (i64,) = sqlx::query_as(
+    let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid, kind, every_n, every_unit) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
     )
     .bind(object_id).bind(&b.title).bind(&b.notes).bind(&b.due_date).bind(b.due_counter)
     .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(&uuid)
     .bind(&b.kind).bind(b.every_n).bind(&b.every_unit)
-    .fetch_one(&mut *tx).await?;
+    .fetch_one(&mut *tx).await;
+    let (id,) = match inserted {
+        Ok(row) => row,
+        // A replay of one client_uuid racing past `create`'s pre-check trips the unique index
+        // on `client_uuid`; the id is spoken for, so that is the same conflict.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into()));
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok((id, uuid))
 }
 
@@ -333,9 +348,27 @@ async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQ
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<(StatusCode, Json<ReminderOut>), AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
     body.validate(object.counter_unit.as_deref())?;
+    let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
+    if let Some(uuid) = client_uuid.as_deref() {
+        // Idempotent on the caller's own live row under this object; a conflict on anyone
+        // else's, on another object's, or on a tombstone -- see `objects::create`.
+        let existing: Option<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+            "SELECT r.id, r.object_id, o.user_id, r.deleted_at FROM reminders r \
+             JOIN objects o ON o.id = r.object_id WHERE r.client_uuid = $1")
+            .bind(uuid).fetch_optional(&state.db).await?;
+        match existing {
+            Some((id, oid, owner, None)) if owner == user.id && oid == object_id => {
+                let row = load_owned(&state, user.id, id).await?;
+                return Ok((StatusCode::OK, Json(out(&state, user.id, row).await?)));
+            }
+            Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
+            None => {}
+        }
+    }
+    let uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
-    let (id, uuid) = insert(&mut tx, object_id, &body).await?;
+    let (id, uuid) = insert(&mut tx, object_id, &body, uuid).await?;
     record::record_create(&mut tx, user.id, Entity::Reminder, &uuid, &edited_at).await?;
     tx.commit().await?;
     let row = load_owned(&state, user.id, id).await?;
@@ -477,8 +510,9 @@ async fn done(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, bod
                 due_date: date.map(|d| d.to_string()), due_counter: counter,
                 repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
                 kind: KIND_SERVICE.to_string(), every_n: None, every_unit: None,
+                client_uuid: None,
             };
-            let (nid, nuuid) = insert(&mut tx, r.object_id, &input).await?;
+            let (nid, nuuid) = insert(&mut tx, r.object_id, &input, uuid::Uuid::new_v4().to_string()).await?;
             record::record_create(&mut tx, user.id, Entity::Reminder, &nuuid, &edited_at).await?;
             Some(nid)
         }
@@ -590,7 +624,7 @@ mod tests {
             id: 1, object_id: 1, title: "Oil change".into(), notes: "".into(),
             due_date: None, due_counter: None, repeat_months: None, repeat_counter: None,
             done_at: None, done_activity_id: None, created_at: "2024-01-01T00:00:00Z".into(),
-            snoozed_until: None, kind: KIND_SERVICE.into(), every_n: None, every_unit: None,
+            snoozed_until: None, kind: KIND_SERVICE.into(), every_n: None, every_unit: None, client_uuid: None,
             object_name: "Golf".into(), counter_unit: None, current_counter: None, last_reading_date: None,
         }
     }

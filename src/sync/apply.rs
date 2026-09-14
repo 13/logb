@@ -300,12 +300,12 @@ pub async fn apply_op(
 
             let cascaded = match op.entity {
                 Entity::Object => record::cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
-                Entity::Activity => record::cascade_activity(&mut *tx, &op.entity_uuid, &now).await?,
+                Entity::Activity => record::cascade_activity(&mut *tx, user_id, &op.entity_uuid, &now, &op.edited_at).await?,
                 // An attachment has no children to tombstone, but it is not a leaf reference-wise:
                 // it can be an object's cover, and `cover_attachment_id` is a plain INTEGER with
                 // no FK to enforce that by itself -- see `record::clear_cover_of`.
                 Entity::Attachment => {
-                    record::clear_cover_of(&mut *tx, &op.entity_uuid).await?;
+                    record::clear_cover_of(&mut *tx, user_id, &op.entity_uuid, &op.edited_at).await?;
                     Vec::new()
                 }
                 // A reminder has no children of its own, and nothing else keeps a stray

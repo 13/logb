@@ -424,3 +424,18 @@ async fn snoozing_a_future_reminder_takes_it_out_of_the_lookahead_too() {
         .send().await.unwrap().json().await.unwrap();
     assert!(listed.iter().any(|x| x["id"] == rid), "a lapsed snooze suppresses nothing");
 }
+
+#[tokio::test]
+async fn a_reminder_create_honours_and_replays_on_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let url = app.url(&format!("/objects/{}/reminders", car["id"]));
+    let body = json!({ "title": "Oil", "due_date": "2027-01-01", "client_uuid": "phone-0003-oil" });
+    let first: serde_json::Value = app.client.post(&url).json(&body).send().await.unwrap().json().await.unwrap();
+    assert_eq!(first["client_uuid"], "phone-0003-oil");
+    let res = app.client.post(&url).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let second: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(first["id"], second["id"]);
+}

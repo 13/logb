@@ -99,6 +99,26 @@ pub(crate) fn normalize_op_id(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// The wording every create answers when a `client_uuid` names a row the caller may not adopt:
+/// another account's, or a tombstone. One sentence for both, so the response does not say
+/// which -- the same reasoning as the 404-not-403 rule on ownership checks.
+pub(crate) const CLIENT_UUID_TAKEN: &str = "client_uuid names a row you cannot reuse";
+
+/// A client-minted identity for a row a device made before the server saw it. Only the shape
+/// is checked -- length and no whitespace -- never a UUID grammar: backfilled rows carry
+/// 32-character hex and new ones 36-character v4, and a client is free to mint either.
+pub(crate) fn normalize_client_uuid(raw: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(s) = raw else { return Ok(None) };
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if s.len() < 8 || s.len() > 64 || s.chars().any(char::is_whitespace) {
+        return Err(AppError::BadRequest("client_uuid must be 8-64 characters with no whitespace".into()));
+    }
+    Ok(Some(s))
+}
+
 /// The op id a client_op_id lookup resolved to is spoken for by a row this request cannot be
 /// handed: one belonging to another object, or one that has since been deleted -- the id stays
 /// taken (the unique index spans tombstones too), it just no longer names a row the caller can

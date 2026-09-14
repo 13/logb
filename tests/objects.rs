@@ -761,3 +761,81 @@ async fn a_patch_that_omits_parent_id_cannot_write_back_a_stale_parent() {
          parent it read before the lock and closed a House <-> Garage cycle",
     );
 }
+
+#[tokio::test]
+async fn a_create_may_carry_its_own_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car", "client_uuid": "phone-0001-golf" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let created: serde_json::Value = res.json().await.unwrap();
+    // The sync bootstrap is the read path that exposes uuids today.
+    let boot: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
+    let mine = boot["objects"].as_array().unwrap().iter()
+        .find(|o| o["id"] == created["id"]).expect("the object is in the snapshot");
+    assert_eq!(mine["client_uuid"], "phone-0001-golf");
+}
+
+#[tokio::test]
+async fn replaying_a_create_with_the_same_client_uuid_returns_the_same_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let body = json!({ "name": "Golf", "type": "car", "client_uuid": "phone-0001-golf" });
+    let first: serde_json::Value = app.client.post(app.url("/objects")).json(&body).send().await.unwrap().json().await.unwrap();
+    let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 200, "a replay is not a second create");
+    let second: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(first["id"], second["id"]);
+    let list: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1);
+}
+
+#[tokio::test]
+async fn a_client_uuid_belonging_to_someone_else_or_to_a_tombstone_is_a_conflict() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let body = json!({ "name": "Golf", "type": "car", "client_uuid": "phone-0001-golf" });
+    let created: serde_json::Value = app.client.post(app.url("/objects")).json(&body).send().await.unwrap().json().await.unwrap();
+
+    // Another account, same uuid.
+    let other = app.create_user_client("anna", "another horse").await;
+    let res = other.post(app.url("/objects")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 409);
+
+    // The owner deletes it; the uuid now names a tombstone and cannot be revived by a replay.
+    app.client.delete(app.url(&format!("/objects/{}", created["id"]))).send().await.unwrap();
+    let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 409);
+}
+
+#[tokio::test]
+async fn a_malformed_client_uuid_is_a_bad_request() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    for bad in ["short", "has space in it", &"x".repeat(65)] {
+        let res = app.client.post(app.url("/objects"))
+            .json(&json!({ "name": "Golf", "type": "car", "client_uuid": bad }))
+            .send().await.unwrap();
+        assert_eq!(res.status(), 400, "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn every_object_response_carries_its_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let created: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Golf", "type": "car", "client_uuid": "phone-0001-golf" }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(created["client_uuid"], "phone-0001-golf");
+    let read: serde_json::Value = app.client.get(app.url(&format!("/objects/{}", created["id"]))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(read["client_uuid"], "phone-0001-golf");
+    let list: Vec<serde_json::Value> = app.client.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list[0]["client_uuid"], "phone-0001-golf");
+    // A row the server minted has one too -- some 36-character v4.
+    let other: serde_json::Value = app.client.post(app.url("/objects"))
+        .json(&json!({ "name": "Bike", "type": "bike" })).send().await.unwrap().json().await.unwrap();
+    assert_eq!(other["client_uuid"].as_str().unwrap().len(), 36);
+}

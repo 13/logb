@@ -451,3 +451,35 @@ async fn deleting_the_activity_that_completed_a_reminder_clears_its_done_activit
     assert!(r["done_activity_id"].is_null(), "the stale pointer must be cleared: {r}");
     assert!(r["done_at"].is_string(), "clearing the pointer must not undo done-ness");
 }
+
+#[tokio::test]
+async fn an_activity_create_honours_and_replays_on_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let url = app.url(&format!("/objects/{}/activities", car["id"]));
+    let body = json!({ "date": "2026-09-01", "category": "repair", "title": "Wipers", "client_uuid": "phone-0002-wipers" });
+    let res = app.client.post(&url).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let first: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(first["client_uuid"], "phone-0002-wipers");
+    let res = app.client.post(&url).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let second: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(first["id"], second["id"]);
+    let boot: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
+    let a = boot["activities"].as_array().unwrap().iter().find(|a| a["id"] == first["id"]).unwrap();
+    assert_eq!(a["client_uuid"], "phone-0002-wipers");
+}
+
+#[tokio::test]
+async fn an_activity_client_uuid_cannot_adopt_a_row_on_another_object() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let golf = app.create_object(&app.client, "Golf", Some("km")).await;
+    let bike = app.create_object(&app.client, "Bike", None).await;
+    let body = json!({ "date": "2026-09-01", "category": "repair", "title": "Wipers", "client_uuid": "phone-0002-wipers" });
+    app.client.post(app.url(&format!("/objects/{}/activities", golf["id"]))).json(&body).send().await.unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{}/activities", bike["id"]))).json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 409, "the uuid names a row under a different object");
+}

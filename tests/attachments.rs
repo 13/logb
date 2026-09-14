@@ -480,3 +480,41 @@ async fn concurrent_uploads_sharing_one_op_id_resolve_to_one_attachment_and_leav
     // The winner's file row is the only one that may survive: every loser's is unreferenced.
     assert_eq!(file_row_count(&app).await, 1, "a losing upload left its file row behind");
 }
+
+#[tokio::test]
+async fn an_upload_honours_and_replays_on_client_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+    let make = || form(png(64, 64), "a.png", "image/png").text("client_uuid", "phone-0004-photo");
+    let res = app.client.post(&base).multipart(make()).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let first: serde_json::Value = res.json().await.unwrap();
+    let res = app.client.post(&base).multipart(make()).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let second: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(first["id"], second["id"]);
+    let list: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1);
+}
+
+#[tokio::test]
+async fn an_attachment_response_names_its_own_uuid_and_its_files_uuid() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+    let a: serde_json::Value = app.client.post(&base)
+        .multipart(form(png(64, 64), "a.png", "image/png").text("client_uuid", "phone-0004-photo"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(a["client_uuid"], "phone-0004-photo");
+    let file_uuid = a["file_uuid"].as_str().unwrap().to_string();
+    // The same bytes again, as a second attachment: dedup means the same file uuid.
+    let b: serde_json::Value = app.client.post(&base)
+        .multipart(form(png(64, 64), "b.png", "image/png").text("client_uuid", "phone-0005-photo"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(b["file_uuid"], file_uuid);
+    let boot: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
+    assert!(boot["files"].as_array().unwrap().iter().any(|f| f["client_uuid"] == file_uuid));
+}

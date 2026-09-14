@@ -44,6 +44,8 @@ pub struct ActivityRow {
     pub client_op_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The row's sync identity, so a client can name it in an op without a bootstrap first.
+    pub client_uuid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +69,10 @@ pub struct ActivityInput {
     /// field in the meantime (see `update`). Absent for an ordinary edit, which is made now.
     #[serde(default)]
     pub edited_at: Option<String>,
+    /// Identity minted by the client before the server saw the row. A replay carrying the
+    /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
+    #[serde(default)]
+    pub client_uuid: Option<String>,
 }
 
 impl ActivityInput {
@@ -123,7 +129,7 @@ async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError>
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
-         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at FROM activities a JOIN objects o ON o.id = a.object_id \
+         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
@@ -166,7 +172,7 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     Ok(sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at \
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
          ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
@@ -247,7 +253,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     if let Some(op) = body.client_op_id.as_deref() {
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-             quantity_milli, client_op_id, created_at, updated_at \
+             quantity_milli, client_op_id, created_at, updated_at, client_uuid \
              FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
         )
         .bind(op)
@@ -257,14 +263,31 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             return op_id_row_response(&state, existing, object_id).await;
         }
     }
+    let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
+    if let Some(uuid) = client_uuid.as_deref() {
+        // Idempotent on the caller's own live row under this object; a conflict on anyone
+        // else's, on another object's, or on a tombstone -- see `objects::create`.
+        let existing: Option<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+            "SELECT a.id, a.object_id, o.user_id, a.deleted_at FROM activities a \
+             JOIN objects o ON o.id = a.object_id WHERE a.client_uuid = $1")
+            .bind(uuid).fetch_optional(&state.db).await?;
+        match existing {
+            Some((id, oid, owner, None)) if owner == user.id && oid == object_id => {
+                let row = load_owned_activity(&state, user.id, id).await?;
+                return Ok((StatusCode::OK, Json(one_out(&state, row).await?)).into_response());
+            }
+            Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
+            None => {}
+        }
+    }
     let now = db::now();
-    let activity_uuid = uuid::Uuid::new_v4().to_string();
+    let activity_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at",
+         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
@@ -279,10 +302,14 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         // would have, by adopting the winner's row rather than failing the request.
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
             tx.rollback().await?;
-            let op = body.client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
+            // Without an op id the only unique index this insert can trip is `client_uuid`:
+            // a replay raced past the pre-check above, and the id is spoken for either way.
+            let Some(op) = body.client_op_id.as_deref() else {
+                return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into()));
+            };
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-                 quantity_milli, client_op_id, created_at, updated_at \
+                 quantity_milli, client_op_id, created_at, updated_at, client_uuid \
                  FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
             )
             .bind(op)
@@ -411,7 +438,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     // reminder's `done_activity_id`, and the activity's attachments), shared with
     // `sync::apply::apply_op`'s `delete` handling -- see the module docs on `sync::record`.
     let activity_uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
-    let cascaded = record::cascade_activity(&mut tx, &activity_uuid, &now).await?;
+    let cascaded = record::cascade_activity(&mut tx, user.id, &activity_uuid, &now, &edited_at).await?;
     record::record_delete(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
     record::log_cascade(&mut tx, user.id, &edited_at, record::DEVICE_ID, &cascaded).await?;
     tx.commit().await?;

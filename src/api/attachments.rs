@@ -40,6 +40,11 @@ pub struct AttachmentOut {
     pub height: Option<i64>,
     pub taken_at: Option<String>,
     pub client_op_id: Option<String>,
+    /// The row's sync identity, so a client can name it in an op without a bootstrap first.
+    pub client_uuid: Option<String>,
+    /// The sync identity of the `files` row behind this attachment. Identical bytes dedup onto
+    /// one file, so an upload may answer with a file uuid the client has never seen.
+    pub file_uuid: Option<String>,
 }
 
 /// INVARIANT: filters `a.deleted_at` but, unlike `load_owned`, not `o.deleted_at` -- every
@@ -49,7 +54,8 @@ pub struct AttachmentOut {
 pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut>, AppError> {
     Ok(sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id, \
+         a.client_uuid, f.client_uuid AS file_uuid \
          FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.object_id = $1 AND a.deleted_at IS NULL \
          ORDER BY a.created_at DESC, a.id DESC",
     )
@@ -59,7 +65,8 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut, AppError> {
     sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id, \
+         a.client_uuid, f.client_uuid AS file_uuid \
          FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
          WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
@@ -140,6 +147,7 @@ async fn upload(
     let mut kind: Option<String> = None;
     let mut caption = String::new();
     let mut client_op_id: Option<String> = None;
+    let mut client_uuid: Option<String> = None;
 
     loop {
         let field = match mp.next_field().await {
@@ -164,6 +172,10 @@ async fn upload(
             }
             "kind" => kind = Some(field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?),
             "caption" => caption = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?,
+            "client_uuid" => {
+                let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
+                client_uuid = super::normalize_client_uuid(Some(t))?;
+            }
             "client_op_id" => {
                 let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
                 // As in the JSON create path: a blank op id means no idempotency was
@@ -184,6 +196,24 @@ async fn upload(
     if let Some(aid) = activity_id {
         let a = load_owned_activity(&state, user.id, aid).await?;
         if a.object_id != object_id { return Err(AppError::NotFound); }
+    }
+
+    // The client's own identity for the attachment, checked the way `objects::create` checks
+    // it: a replay of the caller's own live row answers with that row, anything else is a
+    // conflict. Like the op-id replay below, this runs after the body has been drained and
+    // before the bytes are hashed or written.
+    if let Some(uuid) = client_uuid.as_deref() {
+        let existing: Option<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+            "SELECT t.id, t.object_id, o.user_id, t.deleted_at FROM attachments t \
+             JOIN objects o ON o.id = t.object_id WHERE t.client_uuid = $1")
+            .bind(uuid).fetch_optional(&state.db).await?;
+        match existing {
+            Some((id, oid, owner, None)) if owner == user.id && oid == object_id => {
+                return Ok((StatusCode::OK, Json(load_owned(&state, user.id, id).await?)));
+            }
+            Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
+            None => {}
+        }
     }
 
     // A retried upload must resolve to the attachment the first attempt made, rather than
@@ -258,7 +288,7 @@ async fn upload(
         }
     };
 
-    let attachment_uuid = uuid::Uuid::new_v4().to_string();
+    let attachment_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
@@ -283,7 +313,13 @@ async fn upload(
         // pre-check above does, rather than handing back another object's attachment.
         Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
             tx.rollback().await?;
-            let op = client_op_id.as_deref().expect("only a client_op_id insert can trip this index");
+            // Without an op id the only unique index this insert can trip is `client_uuid`:
+            // a replay raced past the pre-check above. This request's bytes are then
+            // referenced by nothing, as in the op-id case below.
+            let Some(op) = client_op_id.as_deref() else {
+                purge_orphan_files(&state, &[file_id]).await?;
+                return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into()));
+            };
             let winner: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE client_op_id = $1 AND deleted_at IS NULL")
                 .bind(op)
                 .fetch_optional(&state.db).await?;
@@ -362,7 +398,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     // `record::clear_cover_of` is the single copy of this statement, shared with
     // `sync::apply::apply_op`'s `delete` handling.
     let attachment_uuid = record::uuid_of(&mut tx, Entity::Attachment, id).await?;
-    record::clear_cover_of(&mut tx, &attachment_uuid).await?;
+    record::clear_cover_of(&mut tx, user.id, &attachment_uuid, &edited_at).await?;
     record::record_delete(&mut tx, user.id, Entity::Attachment, &attachment_uuid, &edited_at).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)

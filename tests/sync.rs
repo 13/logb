@@ -2736,3 +2736,87 @@ async fn a_sync_push_cannot_create_a_cycle() {
         .bind(&house_uuid).fetch_one(&app.state.db).await.unwrap();
     assert!(parent.is_none(), "the cycle must not have landed");
 }
+
+#[tokio::test]
+async fn every_pulled_change_names_the_servers_id_for_its_row() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let activity: serde_json::Value = app.client
+        .post(app.url(&format!("/objects/{}/activities", car["id"])))
+        .json(&json!({ "date": "2026-09-01", "category": "repair", "title": "Wipers" }))
+        .send().await.unwrap().json().await.unwrap();
+    // A create logs only a `create` row; an edit is what produces a `set` row to check.
+    let res = app.client.patch(app.url(&format!("/activities/{}", activity["id"])))
+        .json(&json!({ "date": "2026-09-01", "category": "repair", "title": "Wiper blades" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+
+    let pulled: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let changes = pulled["changes"].as_array().unwrap();
+    let object_create = changes.iter().find(|c| c["entity"] == "object" && c["op"] == "create").unwrap();
+    assert_eq!(object_create["entity_id"], car["id"]);
+    let activity_create = changes.iter().find(|c| c["entity"] == "activity" && c["op"] == "create").unwrap();
+    assert_eq!(activity_create["entity_id"], activity["id"]);
+    // A set row names the same id as the create for the same uuid.
+    let activity_set = changes.iter().find(|c| c["entity"] == "activity" && c["op"] == "set").unwrap();
+    assert_eq!(activity_set["entity_id"], activity["id"]);
+}
+
+#[tokio::test]
+async fn deleting_a_cover_attachment_logs_the_cover_being_cleared() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let a: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(Form::new().part("file", Part::bytes(png()).file_name("a.png").mime_str("image/png").unwrap()))
+        .send().await.unwrap().json().await.unwrap();
+    // Make it the cover, then delete it.
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "Golf", "type": "car", "counter_unit": "km", "cover_attachment_id": a["id"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let before: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let since = before["next_seq"].as_i64().unwrap();
+    let epoch = before["epoch"].as_str().unwrap().to_string();
+    let res = app.client.delete(app.url(&format!("/attachments/{}", a["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let after: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&epoch={epoch}"))).send().await.unwrap().json().await.unwrap();
+    let cleared = after["changes"].as_array().unwrap().iter().find(|c|
+        c["entity"] == "object" && c["op"] == "set" && c["field"] == "cover_attachment_id");
+    let cleared = cleared.expect("the cover clear is in the feed");
+    assert_eq!(cleared["entity_id"], id);
+    // A REST-side write stores the double-encoded JSON `null` (the string "null"), while a
+    // pushed op with an explicit null stores SQL NULL; a client must read both as "clear".
+    assert!(cleared["value"].is_null() || cleared["value"] == "null", "value clears the field: {:?}", cleared["value"]);
+}
+
+#[tokio::test]
+async fn deleting_a_done_activity_logs_the_reminder_being_unlinked() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let oid = car["id"].as_i64().unwrap();
+    let activity: serde_json::Value = app.client.post(app.url(&format!("/objects/{oid}/activities")))
+        .json(&json!({ "date": "2026-09-01", "category": "maintenance", "title": "Oil" }))
+        .send().await.unwrap().json().await.unwrap();
+    let reminder: serde_json::Value = app.client.post(app.url(&format!("/objects/{oid}/reminders")))
+        .json(&json!({ "title": "Oil", "due_date": "2026-09-01" }))
+        .send().await.unwrap().json().await.unwrap();
+    let res = app.client.post(app.url(&format!("/reminders/{}/done", reminder["id"])))
+        .json(&json!({ "activity_id": activity["id"] })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let before: serde_json::Value = app.client.get(app.url("/sync/pull?since=0")).send().await.unwrap().json().await.unwrap();
+    let since = before["next_seq"].as_i64().unwrap();
+    let epoch = before["epoch"].as_str().unwrap().to_string();
+    let res = app.client.delete(app.url(&format!("/activities/{}", activity["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let after: serde_json::Value = app.client.get(app.url(&format!("/sync/pull?since={since}&epoch={epoch}"))).send().await.unwrap().json().await.unwrap();
+    let unlinked = after["changes"].as_array().unwrap().iter().find(|c|
+        c["entity"] == "reminder" && c["op"] == "set" && c["field"] == "done_activity_id");
+    assert!(unlinked.is_some(), "the unlink is in the feed");
+    assert_eq!(unlinked.unwrap()["entity_id"], reminder["id"]);
+}

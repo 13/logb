@@ -13,6 +13,10 @@ pub struct ChangeRow {
     pub value: Option<String>,
     pub edited_at: String,
     pub device_id: String,
+    /// The server's integer id for `entity_uuid`, so a device that first hears of a row here
+    /// can relate it to the ids REST responses and file URLs use. Null once the row has been
+    /// hard-purged by retention, by which point there is nothing to apply the change to.
+    pub entity_id: Option<i64>,
 }
 
 pub async fn pull(
@@ -22,8 +26,15 @@ pub async fn pull(
     limit: i64,
 ) -> Result<Vec<ChangeRow>, AppError> {
     Ok(sqlx::query_as::<_, ChangeRow>(
-        "SELECT seq, entity, entity_uuid, op, field, value, edited_at, device_id \
-         FROM changes WHERE user_id = $1 AND seq > $2 ORDER BY seq LIMIT $3")
+        "SELECT c.seq, c.entity, c.entity_uuid, c.op, c.field, c.value, c.edited_at, c.device_id, \
+         CASE c.entity \
+           WHEN 'object'     THEN (SELECT id FROM objects     WHERE client_uuid = c.entity_uuid) \
+           WHEN 'activity'   THEN (SELECT id FROM activities  WHERE client_uuid = c.entity_uuid) \
+           WHEN 'reminder'   THEN (SELECT id FROM reminders   WHERE client_uuid = c.entity_uuid) \
+           WHEN 'attachment' THEN (SELECT id FROM attachments WHERE client_uuid = c.entity_uuid) \
+           WHEN 'file'       THEN (SELECT id FROM files       WHERE client_uuid = c.entity_uuid) \
+         END AS entity_id \
+         FROM changes c WHERE c.user_id = $1 AND c.seq > $2 ORDER BY c.seq LIMIT $3")
         .bind(user_id)
         .bind(since)
         .bind(limit)

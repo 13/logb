@@ -399,12 +399,25 @@ pub(crate) async fn cascade_object(
 /// snapshot, indefinitely.
 pub(crate) async fn clear_cover_of(
     tx: &mut sqlx::AnyConnection,
+    user_id: i64,
     attachment_uuid: &str,
+    edited_at: &str,
 ) -> Result<(), AppError> {
+    // Which objects are about to change, before they do: the log needs their uuids. Without
+    // the log entry a device that pulls later keeps a cover pointing at a row it has been
+    // told is gone.
+    let cleared: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT client_uuid FROM objects WHERE deleted_at IS NULL \
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
+        .bind(attachment_uuid).fetch_all(&mut *tx).await?;
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
          AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
         .bind(attachment_uuid).execute(&mut *tx).await?;
+    for uuid in nameable(cleared) {
+        record_update(tx, user_id, Entity::Object, &uuid,
+            &[("cover_attachment_id", serde_json::Value::Null)], edited_at).await?;
+    }
     Ok(())
 }
 
@@ -419,22 +432,46 @@ pub(crate) async fn clear_cover_of(
 /// be the same op.
 pub(crate) async fn cascade_activity(
     tx: &mut sqlx::AnyConnection,
+    user_id: i64,
     activity_uuid: &str,
     now: &str,
+    edited_at: &str,
 ) -> Result<Vec<(Entity, String)>, AppError> {
     // The cover subquery deliberately does not skip tombstoned attachments: an object pointing
-    // at one has a stale cover, and clearing it is the point.
+    // at one has a stale cover, and clearing it is the point. Both reference cleanups read the
+    // rows they are about to change first and log a `set … null` for each, so a device that
+    // pulls later learns of them -- they are ordinary field changes, not tombstones, and the
+    // delete row alone says nothing about them.
+    let cover_cleared: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT client_uuid FROM objects \
+         WHERE deleted_at IS NULL AND cover_attachment_id IN (\
+           SELECT id FROM attachments \
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
+        .bind(activity_uuid).fetch_all(&mut *tx).await?;
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL \
          WHERE deleted_at IS NULL AND cover_attachment_id IN (\
            SELECT id FROM attachments \
            WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
         .bind(activity_uuid).execute(&mut *tx).await?;
+    for uuid in nameable(cover_cleared) {
+        record_update(tx, user_id, Entity::Object, &uuid,
+            &[("cover_attachment_id", serde_json::Value::Null)], edited_at).await?;
+    }
+    let unlinked: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT client_uuid FROM reminders \
+         WHERE deleted_at IS NULL \
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
+        .bind(activity_uuid).fetch_all(&mut *tx).await?;
     sqlx::query(
         "UPDATE reminders SET done_activity_id = NULL \
          WHERE deleted_at IS NULL \
          AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
         .bind(activity_uuid).execute(&mut *tx).await?;
+    for uuid in nameable(unlinked) {
+        record_update(tx, user_id, Entity::Reminder, &uuid,
+            &[("done_activity_id", serde_json::Value::Null)], edited_at).await?;
+    }
 
     let uuids: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \

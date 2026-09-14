@@ -37,6 +37,8 @@ pub struct ObjectRow {
     pub parent_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+    /// The row's sync identity, so a client can name it in an op without a bootstrap first.
+    pub client_uuid: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -96,6 +98,10 @@ pub struct ObjectInput {
     /// parent, `null` makes the object a root again, an id moves it.
     #[serde(default, deserialize_with = "double_option")]
     pub parent_id: Option<Option<i64>>,
+    /// Identity minted by the client before the server saw the row. A replay carrying the
+    /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
+    #[serde(default)]
+    pub client_uuid: Option<String>,
 }
 
 /// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
@@ -151,7 +157,7 @@ impl ObjectInput {
 /// the tests happened not to cover.
 const OWNED_OBJECT: &str =
     "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
+     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid \
      FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
 
 /// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
@@ -383,7 +389,7 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
            AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
@@ -398,9 +404,29 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
 
 async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<ObjectInput>) -> Result<(StatusCode, Json<ObjectOut>), AppError> {
     body.validate()?;
+    let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
+    if let Some(uuid) = client_uuid.as_deref() {
+        // Idempotent on the caller's own live row; a conflict on anyone else's or on a
+        // tombstone. Checked outside the write transaction on purpose: a hit answers without
+        // ever taking the write lock, and a miss that races another replay trips the unique
+        // index on `client_uuid` below, which is answered the same way.
+        let existing: Option<(i64, i64, Option<String>)> =
+            sqlx::query_as("SELECT id, user_id, deleted_at FROM objects WHERE client_uuid = $1")
+                .bind(uuid)
+                .fetch_optional(&state.db)
+                .await?;
+        match existing {
+            Some((id, owner, None)) if owner == user.id => {
+                let row = load_owned_object(&state, user.id, id).await?;
+                return Ok((StatusCode::OK, Json(with_stats(&state, row).await?)));
+            }
+            Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
+            None => {}
+        }
+    }
     let now = db::now();
     let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
-    let object_uuid = uuid::Uuid::new_v4().to_string();
+    let object_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     // Checked inside the transaction, on its connection -- never from the pool -- for the two
@@ -420,12 +446,22 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at",
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid",
     )
     .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
     .bind(&object_uuid)
-    .fetch_one(&mut *tx).await?;
+    .fetch_one(&mut *tx).await;
+    let row = match row {
+        Ok(row) => row,
+        // Two replays of one client_uuid racing past the pre-check above: the loser trips the
+        // unique index on `client_uuid`. The id is spoken for, so that is the same conflict.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            tx.rollback().await?;
+            return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into()));
+        }
+        Err(e) => return Err(e.into()),
+    };
     record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
