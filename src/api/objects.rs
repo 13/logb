@@ -49,6 +49,12 @@ pub struct ObjectStats {
     pub due_reminder_count: i64,
     /// The date of the newest entry with a counter value, up to `reminders::reading_horizon`.
     pub last_reading_date: Option<String>,
+    /// The newest non-deleted activity dated today or earlier. A future-dated entry -- a planned
+    /// expense -- is not recent activity.
+    pub last_activity_date: Option<String>,
+    /// Counter units per day over recent readings, scaled by 1000 -- the Info tab's figure, from
+    /// `insights::usage_by_object`. Null until there is enough history.
+    pub counter_per_day_milli: Option<i64>,
 }
 
 /// One link in an object's ancestor chain, as the client needs it to draw a breadcrumb:
@@ -197,6 +203,10 @@ struct DerivedRow {
     current_counter: Option<i64>,
     due_reminder_count: i64,
     last_reading_date: Option<String>,
+    last_activity_date: Option<String>,
+    /// Filled in after the query, from `usage_by_object`, not read from a column.
+    #[sqlx(default)]
+    counter_per_day_milli: Option<i64>,
     cover_file_id: Option<i64>,
 }
 
@@ -233,6 +243,8 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
            )) AS due_reminder_count, \
            (SELECT MAX(date) FROM activities WHERE object_id = o.id AND deleted_at IS NULL \
               AND counter_value IS NOT NULL AND date <= $4) AS last_reading_date, \
+           (SELECT MAX(date) FROM activities WHERE object_id = o.id AND deleted_at IS NULL \
+              AND date <= $2) AS last_activity_date, \
            (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
          FROM objects o WHERE o.deleted_at IS NULL AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
     )
@@ -242,6 +254,12 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
     for (object_id, due) in due_readings(state, user_id, only).await? {
         if let Some(row) = rows.get_mut(&object_id) {
             row.due_reminder_count += due;
+        }
+    }
+    // One query for every object in scope, the same rate reminders and the Info tab use.
+    for (object_id, usage) in super::insights::usage_by_object(state, user_id, only).await? {
+        if let Some(row) = rows.get_mut(&object_id) {
+            row.counter_per_day_milli = Some(usage.rate_milli);
         }
     }
     Ok(rows)
@@ -283,6 +301,8 @@ impl DerivedRow {
             current_counter: self.current_counter,
             due_reminder_count: self.due_reminder_count,
             last_reading_date: self.last_reading_date.clone(),
+            last_activity_date: self.last_activity_date.clone(),
+            counter_per_day_milli: self.counter_per_day_milli,
         }
     }
 

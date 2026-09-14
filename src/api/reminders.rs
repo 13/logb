@@ -185,7 +185,7 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<ReminderRow, A
 
 /// A single reminder as the API answers it, with its object's usage for the estimate.
 async fn out(state: &App, user_id: i64, row: ReminderRow) -> Result<ReminderOut, AppError> {
-    let usage = usage_by_object(state, user_id, Some(row.object_id)).await?.remove(&row.object_id);
+    let usage = usage_by_object(state, Some(user_id), Some(row.object_id)).await?.remove(&row.object_id);
     Ok(ReminderOut::build(row, today(), usage))
 }
 
@@ -296,7 +296,7 @@ async fn list(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
          ORDER BY r.done_at IS NOT NULL, r.due_date IS NULL, r.due_date, r.due_counter, r.id",
     )))
     .bind(reading_horizon()).bind(object_id).fetch_all(&state.db).await?;
-    let usage = usage_by_object(&state, user.id, Some(object_id)).await?.remove(&object_id);
+    let usage = usage_by_object(&state, Some(user.id), Some(object_id)).await?.remove(&object_id);
     let today = today();
     Ok(Json(rows.into_iter().map(|r| ReminderOut::build(r, today, usage)).collect()))
 }
@@ -312,7 +312,7 @@ pub async fn due_for_user(state: &App, user_id: i64, within_days: i64) -> Result
     .bind(reading_horizon()).bind(user_id).fetch_all(&state.db).await?;
     let today = today();
     let usage: HashMap<i64, Usage> = if within_days > 0 {
-        usage_by_object(state, user_id, None).await?
+        usage_by_object(state, Some(user_id), None).await?
     } else {
         // The estimate only ever feeds the lookahead, and a zero-day window has none.
         HashMap::new()

@@ -33,7 +33,7 @@ pub struct UsageOut {
 async fn usage(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<UsageOut>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
     let counter_per_day_milli =
-        usage_by_object(&state, user.id, Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
+        usage_by_object(&state, Some(user.id), Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
     Ok(Json(UsageOut { counter_per_day_milli }))
 }
 
@@ -90,21 +90,22 @@ pub struct Usage {
     pub rate_milli: i64,
 }
 
-/// Usage for every object of `user_id` that has enough readings for a rate, or just `only`.
+/// Usage for every object of `user_id` (or of anyone, for a caller that has already checked
+/// ownership of `only`) that has enough readings for a rate, or just `only`.
 ///
 /// One query over the readings of the last window and a bit -- the fallback in
 /// `daily_rate_milli` reaches past the window, so this reads twice its length -- rather than one
 /// per object, because the dashboard's lookahead asks for every object at once. Readings dated
 /// past `reminders::reading_horizon` are left out: a typo'd year must not become the "latest"
 /// reading.
-pub async fn usage_by_object(state: &App, user_id: i64, only: Option<i64>) -> Result<HashMap<i64, Usage>, AppError> {
+pub async fn usage_by_object(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result<HashMap<i64, Usage>, AppError> {
     let today = db::today();
     let from = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
         .map(|t| (t - chrono::Duration::days(RATE_WINDOW_DAYS * 2)).to_string())
         .unwrap_or_else(|_| today.clone());
     let rows: Vec<(i64, String, i64)> = sqlx::query_as(
         "SELECT a.object_id, a.date, a.counter_value FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = $1 AND ($2 IS NULL OR o.id = $2) AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
+         WHERE ($1 IS NULL OR o.user_id = $1) AND ($2 IS NULL OR o.id = $2) AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
            AND a.counter_value IS NOT NULL AND a.date <= $3 AND a.date >= $4",
     )
     .bind(user_id).bind(only).bind(super::reminders::reading_horizon()).bind(&from)
@@ -279,7 +280,7 @@ async fn read(
     };
 
     let counter_per_day_milli =
-        usage_by_object(&state, user.id, Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
+        usage_by_object(&state, Some(user.id), Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
 
     let usage_by_month = if object.counter_unit.is_some() {
         // Every reading, not a window: the first month of the chart is measured from whatever

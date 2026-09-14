@@ -2294,7 +2294,8 @@
               "string",
               "null"
             ],
-            "format": "date"
+            "format": "date",
+            "description": "The newest entry dated today or earlier"
           },
           "last_reading_date": {
             "type": [
@@ -2303,6 +2304,14 @@
             ],
             "format": "date",
             "description": "The newest entry with a counter value"
+          },
+          "counter_per_day_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Counter units per day, x1000, from recent readings; null without enough history"
           }
         }
       },
