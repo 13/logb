@@ -273,3 +273,10 @@ What that changes on the wire:
 Compatibility rule for clients: **ignore unknown snapshot keys and unknown entities, and show an
 unknown type key as "other".** No epoch rotation was needed. No client consumes the feed yet (the
 PWA has no sync client), so nothing could fail on the new entity.
+
+### 2026-09-14: a `set` on a deleted row is rejected
+
+- A pushed `set` naming a row whose `deleted_at` is already non-null is rejected with reason
+  "this item was deleted", checked once the op's own shape and every value it references are
+  valid but before `field_clock` is read -- last-write-wins is never consulted for it, so a
+  stale edit cannot win its way into resurrecting a field on a row the user already removed.

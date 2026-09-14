@@ -293,6 +293,8 @@ pub struct ImportCounts {
     pub activities: usize,
     pub attachments: usize,
     pub reminders: usize,
+    pub types_created: usize,
+    pub types_merged: usize,
 }
 
 /// Appends `extra` to `description` on its own line, exactly the way the migration's second
@@ -412,7 +414,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
     validate_import(&data)?;
     let archive_types = archive_types(&data)?;
 
-    let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0 };
+    let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0, types_created: 0, types_merged: 0 };
     // One instant for the whole import: every row it creates is "set" at the moment the
     // import ran, not at whatever `created_at` the archive says (that field is preserved on
     // the row itself, per rule 1 in `sync::record` -- this is about `changes`/`field_clock`
@@ -433,6 +435,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let wanted = tags::fold(&input.name);
         if let Some((uuid, _)) = live.iter().find(|(_, name)| tags::fold(name) == wanted) {
             type_uuids.insert(archive_uuid, uuid.clone());
+            counts.types_merged += 1;
             continue;
         }
         // The uuid is unique across every account and survives deletion, so one already taken
@@ -450,6 +453,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             .execute(&mut *tx).await?;
         record::record_create(&mut tx, user.id, Entity::ObjectType, &uuid, &edited_at).await?;
         type_uuids.insert(archive_uuid, uuid);
+        counts.types_created += 1;
     }
 
     for o in data.objects {

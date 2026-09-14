@@ -3114,10 +3114,122 @@ async fn rest_type_writes_appear_in_the_change_feed() {
         ("delete".to_string(), None, Some(id)),
     ], "unchanged icon and categories log nothing: {feed}");
 
-    // The REST create stamped the clock, so a stale offline rename loses.
+    // The type was deleted above, so a stale offline rename is refused outright -- it does not
+    // even reach last-write-wins to lose there, since a `set` on a tombstoned row is rejected
+    // before `field_clock` is ever read. `an_older_edit_is_superseded_but_still_recorded` pins
+    // the ordinary LWW loss on a still-live row; this is the other rejection this same op shape
+    // can hit once the row it names is gone.
     let body: serde_json::Value = app.push_raw(&push_body(json!([{
         "client_op_id": "stale", "entity": "object_type", "entity_uuid": uuid, "op": "set",
         "field": "icon", "value": "tool", "edited_at": before_now(3600), "device_id": "phone"
     }]))).await.json().await.unwrap();
-    assert_eq!(body["results"][0]["outcome"], "superseded", "{body}");
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "this item was deleted", "{body}");
+}
+
+/// The stored value of one field, read straight from the row rather than through a REST read
+/// path that might apply its own transformation -- the question here is what the column holds.
+async fn stored_field(db: &sqlx::AnyPool, table: &str, uuid: &str, field: &str) -> Option<String> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT {field} FROM {table} WHERE client_uuid = $1")))
+        .bind(uuid)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// The `field_clock` row for one entity/field, if any.
+async fn field_clock_of(db: &sqlx::AnyPool, entity: &str, uuid: &str, field: &str) -> Option<(String, String)> {
+    sqlx::query_as(
+        "SELECT edited_at, device_id FROM field_clock WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
+        .bind(entity)
+        .bind(uuid)
+        .bind(field)
+        .fetch_optional(db)
+        .await
+        .unwrap()
+}
+
+/// Pushes a `set` on `field` at a row that is already tombstoned, and pins the whole rejection
+/// contract: the outcome and reason, the stored value untouched, and no trace left in either
+/// `field_clock` or `changes` -- a rejected op has to look as if it never arrived, the same
+/// promise `an_operation_naming_the_removed_field_is_rejected_not_fatal` and
+/// `a_field_outside_the_whitelist_is_rejected` pin for the other rejection reasons.
+///
+/// `edited_at` is far in the future and `device_id` differs from whatever created the row, so a
+/// last-write-wins comparison alone (if the deleted check were skipped or misplaced after the
+/// `field_clock` read) would let this op win and overwrite the stored value -- the rejection has
+/// to come from the row being deleted, not from losing on the clock.
+async fn assert_set_on_deleted_row_is_rejected(
+    app: &common::TestApp,
+    entity: &str,
+    table: &str,
+    uuid: &str,
+    field: &str,
+) {
+    let before_value = stored_field(&app.state.db, table, uuid, field).await;
+    let before_clock = field_clock_of(&app.state.db, entity, uuid, field).await;
+    let op_id = format!("op-deleted-{entity}");
+
+    let body: serde_json::Value = app.push_raw(&push_body(json!([{
+        "client_op_id": op_id, "entity": entity, "entity_uuid": uuid,
+        "op": "set", "field": field, "value": "should never land",
+        "edited_at": after_now(31_536_000), "device_id": "intruder"
+    }]))).await.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{entity}: {body}");
+    assert_eq!(body["results"][0]["reason"], "this item was deleted", "{entity}: {body}");
+
+    assert_eq!(
+        stored_field(&app.state.db, table, uuid, field).await, before_value,
+        "{entity}: the stored value must not change"
+    );
+    assert_eq!(
+        field_clock_of(&app.state.db, entity, uuid, field).await, before_clock,
+        "{entity}: a rejected op must not advance field_clock"
+    );
+    assert_eq!(app.count_changes_of(&op_id).await, 0, "{entity}: a rejected op must leave no changes row");
+}
+
+/// A `set` pushed at a row that was deleted -- over REST or over sync, whichever created it --
+/// is rejected with a reason naming the deletion, for every entity a `set` op can name. Without
+/// the check this task adds, the write would fall straight through to `field_clock`/`wins` and
+/// silently resurrect content on a row the user removed, without ever un-deleting the row
+/// itself: the object (say) would stay invisible everywhere while one of its columns quietly
+/// changed underneath it.
+#[tokio::test]
+async fn a_set_on_a_deleted_row_is_rejected_for_every_entity() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_uuid = client_uuid(&app.state.db, "objects", car["id"].as_i64().unwrap()).await;
+    app.delete_object(&car).await;
+    assert_set_on_deleted_row_is_rejected(&app, "object", "objects", &object_uuid, "name").await;
+
+    // A live parent object for the three child entities below -- deleting each child on its
+    // own, never the parent, so the parent's own aliveness cannot be what is under test.
+    let (_, activity_id, reminder_id, attachment_id) = object_with_children(&app, &app.client, "Yaris").await;
+
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity_id).await;
+    let res = app.client.delete(app.url(&format!("/activities/{activity_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete activity: {}", res.text().await.unwrap());
+    assert_set_on_deleted_row_is_rejected(&app, "activity", "activities", &activity_uuid, "title").await;
+
+    let reminder_uuid = client_uuid(&app.state.db, "reminders", reminder_id).await;
+    let res = app.client.delete(app.url(&format!("/reminders/{reminder_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete reminder: {}", res.text().await.unwrap());
+    assert_set_on_deleted_row_is_rejected(&app, "reminder", "reminders", &reminder_uuid, "title").await;
+
+    let attachment_uuid = client_uuid(&app.state.db, "attachments", attachment_id).await;
+    let res = app.client.delete(app.url(&format!("/attachments/{attachment_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete attachment: {}", res.text().await.unwrap());
+    assert_set_on_deleted_row_is_rejected(&app, "attachment", "attachments", &attachment_uuid, "caption").await;
+
+    let scooter = app.post_json("/types", &json!({
+        "name": "E-scooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km"
+    })).await;
+    let type_id = scooter["id"].as_i64().unwrap();
+    let type_uuid = scooter["client_uuid"].as_str().unwrap().to_string();
+    let res = app.client.delete(app.url(&format!("/types/{type_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "delete type: {}", res.text().await.unwrap());
+    assert_set_on_deleted_row_is_rejected(&app, "object_type", "object_types", &type_uuid, "name").await;
 }

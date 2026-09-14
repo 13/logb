@@ -3684,6 +3684,14 @@
           },
           "reminders": {
             "type": "integer"
+          },
+          "types_created": {
+            "type": "integer",
+            "description": "Archive types with no same-name match in the account: inserted as new types"
+          },
+          "types_merged": {
+            "type": "integer",
+            "description": "Archive types folded onto an existing type of the same name (folded case-insensitively) instead of being created"
           }
         }
       },

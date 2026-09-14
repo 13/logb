@@ -630,9 +630,10 @@ fn data_of(zip: &[u8]) -> serde_json::Value {
     serde_json::from_str(&data_json).unwrap()
 }
 
-async fn import_as(app: &common::TestApp, client: &reqwest::Client, zip: Vec<u8>) {
+async fn import_as(app: &common::TestApp, client: &reqwest::Client, zip: Vec<u8>) -> serde_json::Value {
     let res = client.post(app.url("/import")).header("content-type", "application/zip").body(zip).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    res.json().await.unwrap()
 }
 
 #[tokio::test]
@@ -687,9 +688,39 @@ async fn an_archive_without_types_imports() {
     app.setup("ben", "correct horse").await;
     let zip = archive_with_object_json(json!({ "type": "bike", "category": null }));
     assert!(data_of(&zip).get("types").is_none());
-    import_as(&app, &app.client, zip).await;
+    let counts = import_as(&app, &app.client, zip).await;
     assert_eq!(app.get_json("/objects").await[0]["type"], "bike");
     assert_eq!(app.get_json("/types").await, json!([]));
+    // Nothing in `types` to create or fold onto an existing one: both counts stay at zero
+    // rather than, say, miscounting the objects' own implicit type.
+    assert_eq!(counts["types_created"], 0, "{counts}");
+    assert_eq!(counts["types_merged"], 0, "{counts}");
+}
+
+/// One archive type folds onto a name the account already has (same name, different case, so
+/// the merge is exercised on `tags::fold` and not a literal string match); the other is new to
+/// the account. The response has to tell the two apart, or a client restoring a big backup has
+/// no way to show "12 new types, 3 already had a match" -- it only knows "15 types" happened.
+#[tokio::test]
+async fn import_reports_how_many_types_were_created_and_how_many_were_merged() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    app.post_json("/types", &json!({ "name": "scooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" })).await;
+
+    let mut data = export_shell(base_object());
+    data["objects"] = json!([]);
+    data["types"] = json!([
+        // Same name as the account's existing type, differently cased: must merge, not create.
+        { "client_uuid": uuid::Uuid::new_v4().to_string(), "name": "Scooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" },
+        // A name the account has never seen: must create.
+        { "client_uuid": uuid::Uuid::new_v4().to_string(), "name": "Trailer", "icon": "car", "categories": ["repair"], "counter_unit": "km" },
+    ]);
+    let counts = import_as(&app, &app.client, zip_data_json(&data)).await;
+    assert_eq!(counts["types_created"], 1, "{counts}");
+    assert_eq!(counts["types_merged"], 1, "{counts}");
+
+    let types = app.get_json("/types").await;
+    assert_eq!(types.as_array().unwrap().len(), 2, "the merged type is not duplicated: {types}");
 }
 
 #[tokio::test]

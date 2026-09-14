@@ -641,6 +641,26 @@ pub async fn apply_op(
                 }
             }
 
+            // A row already tombstoned (by a delete this same device raced with, or one that
+            // reached the server first from another device) refuses every `set` outright,
+            // whatever `wins` would have said about the timestamps: last-write-wins between two
+            // edits is not a rule for reviving content a delete already removed. Checked here,
+            // after the op's own shape and every value it references are valid -- rejecting an
+            // op for a deleted row is not a race to win, so it does not need `field_clock`'s
+            // serialisation and belongs after everything that does not -- and before
+            // `field_clock` and the `UPDATE`, since a rejected op must not advance the clock or
+            // add a `changes` row.
+            let deleted_at: Option<(Option<String>,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT deleted_at FROM {} WHERE client_uuid = $1",
+                op.entity.table()
+            )))
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if deleted_at.and_then(|(d,)| d).is_some() {
+                return Ok(Outcome::Rejected { reason: "this item was deleted".into() });
+            }
+
             // Read, decide with `wins`, then write: three statements that have to behave as
             // one, because whatever else could write this row between the read and the write
             // could make its own stale write disappear behind the very check meant to stop it.

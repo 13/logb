@@ -102,7 +102,14 @@ export interface ReminderInput {
   kind: ReminderKind; every_n: number | null; every_unit: EveryUnit | null;
 }
 export interface DoneOut { done: Reminder; next: Reminder | null }
-export interface ImportCounts { objects: number; activities: number; attachments: number; reminders: number }
+export interface ImportCounts {
+	objects: number;
+	activities: number;
+	attachments: number;
+	reminders: number;
+	types_created: number;
+	types_merged: number;
+}
 
 export interface ActivityHit {
   id: number; object_id: number; object_name: string; date: string; category: Category; title: string;

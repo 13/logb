@@ -297,7 +297,7 @@ export default {
   'settings.export': 'Alles exportieren (zip)',
   'settings.export-not-backup': 'Das Export-Archiv ist keine Datenbanksicherung. Es ist portabel, in sich geschlossen und lässt sich in jedes LogB importieren — aber es entsteht nur, wenn du es anstößt.',
   'settings.import': 'Zip importieren',
-  'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen importiert',
+  'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen, {types_created} Typen ({types_merged} mit vorhandenen zusammengeführt) importiert',
   'settings.version': 'Version',
   'settings.about': 'Über LogB',
   'settings.built': 'Erstellt',
