@@ -62,11 +62,20 @@ routerPath.subscribe(() => clearServingSaved());
  *
  * Calibrated from responses that can NEVER be a cache hit: `/auth/...` and `/settings` are
  * `NetworkOnly` (see vite.config.ts), so their `Date` header always reflects a live request made
- * moments ago -- any gap between it and `sentAt` is clock skew, not cache age. Both are requested
- * on every session check, so this recalibrates itself continuously rather than trusting one
- * reading for the life of the tab.
+ * moments ago -- any gap between it and roughly when the server saw the request is clock skew,
+ * not cache age. Both are requested on every session check, so this recalibrates itself
+ * continuously rather than trusting one reading for the life of the tab. See `handle` below for
+ * how it is measured -- the midpoint of the round trip, and only for a round trip short enough
+ * that the midpoint is a trustworthy stand-in for "when the server wrote that header".
  */
 let clockSkewMs = 0;
+
+/** How long a calibrating response's round trip may take and still be trusted. Past this, the
+ *  midpoint below stops being a reasonable proxy for "roughly when the server wrote its `Date`
+ *  header" -- a response that took 70s to come back could have spent nearly all of that queued
+ *  or retried, nowhere near the midpoint of the interval, and calibrating from it anyway once
+ *  corrupted `clockSkewMs` badly enough to make every later FRESH response look cached. */
+const MAX_CALIBRATION_ROUND_TRIP_MS = 5_000;
 
 /** Test seam only: resets the calibrated skew between tests that exercise it through
  *  `api()`/`handle()`, so one test's calibration cannot leak into the next. Production never
@@ -148,7 +157,17 @@ async function handle<T>(res: Response, path: string, sentAt?: number, gen?: num
     // is a property of the server, not of any one screen, so a late answer still calibrates it.
     if ((path.startsWith('/auth/') || path.startsWith('/settings')) && dateHeader !== null) {
       const t = Date.parse(dateHeader);
-      if (!Number.isNaN(t)) clockSkewMs = sentAt - t;
+      const now = Date.now();
+      const roundTripMs = now - sentAt;
+      // The midpoint of the round trip, not `sentAt` itself: `sentAt` is when this device sent
+      // the request, but the server wrote its `Date` header partway through the trip back, and
+      // the midpoint is the best guess at "when" without a timestamp from the server itself. A
+      // round trip so slow that this guess cannot be trusted (network congestion, a server that
+      // took its time) is skipped entirely rather than risked -- reading its own latency as clock
+      // skew once corrupted the estimate enough that every later FRESH response looked cached.
+      if (!Number.isNaN(t) && roundTripMs <= MAX_CALIBRATION_ROUND_TRIP_MS) {
+        clockSkewMs = (sentAt + now) / 2 - t;
+      }
     }
     // Skip touching `staleKeys` for a response whose captured generation is stale (see
     // `routeGeneration`) -- a route change (or session end) has already happened since this

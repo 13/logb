@@ -200,6 +200,9 @@ async function adoptUser(me: User): Promise<void> {
     // mounted screen keeps holding their data in its own state once the caches are gone.
     user.set(undefined);
     await tick();
+    // A note (or staleness recorded per path) earned by the previous person's requests must not
+    // linger over the incoming user's screens -- the same reasoning `endSession` already applies.
+    clearServingSaved();
   }
   if ((await clearCachesUnlessOwnedBy(me.id)) && shown?.id === me.id) {
     // Same person still on screen, so App's per-user type load will not rerun on its own.
@@ -317,7 +320,13 @@ async function doLoadSession(): Promise<boolean> {
     // A second write, over the one `adoptUser` already made: `/settings` is a separate request
     // that was not answered yet when that one ran, and the currency is what lets an offline
     // start (see `openOffline`) show amounts correctly without a network call.
-    rememberProfile({ ...me, currency: s.currency });
+    //
+    // Guarded: this runs after an `await`, during which a 401 elsewhere (or this very function,
+    // reached again) can have called `endSession()` -- which forgets the profile precisely so
+    // a lapsed or signed-out session does not linger -- or signed in as someone else entirely.
+    // Writing unconditionally would resurrect a profile `endSession` just forgot, or attribute
+    // this settings answer to a user who is no longer the one on screen.
+    if (sessionKnown && get(user)?.id === me.id) rememberProfile({ ...me, currency: s.currency });
   } catch (e) {
     // `/auth/me` has just confirmed the session, so a 4xx here is not the session ending: it is
     // only the settings that could not be read. Signing the user out without forgetting them
@@ -336,7 +345,8 @@ export async function login(username: string, password: string): Promise<void> {
   await adoptUser(me); // sets sessionKnown = true itself, before it returns
   const s = await api<Settings>('GET', '/settings');
   currency.set(s.currency);
-  rememberProfile({ ...me, currency: s.currency }); // see the matching comment in doLoadSession
+  // Guarded exactly as in doLoadSession: see the comment there.
+  if (sessionKnown && get(user)?.id === me.id) rememberProfile({ ...me, currency: s.currency });
   // Anything queued while the session was expired has been waiting for exactly this. The
   // outbox's own triggers -- load, `online`, `visibilitychange` -- none of them fire on a
   // login, which is an SPA navigation, so without this the writes sit until the user happens

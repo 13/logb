@@ -199,6 +199,39 @@ describe('ending a session', () => {
 
     expect(went).toEqual(['/login']);
   });
+
+  /**
+   * `doLoadSession` writes the remembered profile a second time once `/settings` answers (see the
+   * comment there), a moment after `adoptUser` already wrote it once. If a sign-out (or a 401
+   * elsewhere) ends the session in that gap, `endSession` forgets the profile precisely so a
+   * lapsed or signed-out session leaves nothing behind -- a `/settings` answer landing AFTER that
+   * must not undo it.
+   */
+  it('does not resurrect a profile endSession already forgot, from a /settings answer pending when it ran', async () => {
+    const storage = installStorage();
+    installCaches([]);
+    const settingsGate: { resolve: (() => void) | null } = { resolve: null };
+    serve({
+      '/auth/status': () => jsonResponse(200, { setup_required: false }),
+      '/auth/me': () => jsonResponse(200, ME),
+      '/settings': () => new Promise((resolve) => { settingsGate.resolve = () => resolve(jsonResponse(200, { currency: 'EUR' })); }),
+      '/auth/logout': () => jsonResponse(204, null),
+    });
+    const session = await freshSession();
+
+    const pending = session.loadSession();
+    // Lets adoptUser's own microtasks (which already wrote the profile once) settle, while
+    // /settings stays deliberately pending.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storage.getItem('logb.session.profile')).not.toBeNull();
+
+    await session.logout(); // endSession() forgets the profile synchronously
+
+    settingsGate.resolve?.(); // /settings finally answers, after the session has already ended
+    await pending;
+
+    expect(storage.getItem('logb.session.profile')).toBeNull();
+  });
 });
 
 /** An in-memory `localStorage`: vitest runs in node, which has none. */

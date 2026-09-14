@@ -50,7 +50,9 @@ export type SplitResult = { tags: string[]; text: string; error: 'too-long' | 't
  * refuses (too long, or the tag limit already reached) stays in the text too, ahead of what
  * follows -- not silently dropped -- so it can be edited rather than retyped; an empty segment
  * (two commas in a row, or trailing spaces) is skipped without error. When two segments fail,
- * the later one's error wins, since it is the one still visible in the returned text.
+ * `error` simply ends up holding the LATER one's -- each failure overwrites it in turn, nothing
+ * more deliberate than that. Every failed segment stays in the text regardless (see above), so
+ * an earlier one is not hidden or lost; only its message is not the one shown until it is fixed.
  */
 export function splitTyped(tags: string[], value: string): SplitResult {
   if (!value.includes(',')) return { tags, text: value, error: null };

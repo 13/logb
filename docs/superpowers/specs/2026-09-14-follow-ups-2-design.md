@@ -18,13 +18,18 @@ tags, own types and offline cache projects.
    `servingSaved` store is true whenever the set is non-empty; the top bar shows the existing
    "Offline — showing saved data" note when offline mode *or* `servingSaved` is true. A response
    without a `Date` header, or one that fails to parse, counts as fresh. (The server's HTTP stack
-   sends `Date`; the plan checks.)
+   sends `Date`; the plan checks.) A route change also bumps a generation counter that each request
+   captures alongside its send time; a response whose captured generation is stale (the user has
+   since navigated away) is ignored entirely, so it cannot re-add a key the route change already
+   cleared once its answer finally arrives.
 
    Clock skew: a self-hosted instance can have a server clock far off from the client's (no RTC, a
    Raspberry Pi that boots believing it's 1970), which would otherwise show the note permanently
    (server ahead) or hide a real cache hit forever (server behind). `api.ts` calibrates a skew
    estimate from responses that can never be a cache hit — `/api/auth/...` and `/api/settings` are
-   `NetworkOnly` — and subtracts it before judging any path's staleness.
+   `NetworkOnly` — measured from the midpoint of the round trip rather than its start, and skipped
+   entirely past a 5 s round trip, so a merely slow response is never itself misread as clock skew
+   — and subtracts the estimate before judging any path's staleness.
 2. **Sign-out without a connection.** `logout` and `logoutEverywhere` fail on a network error
    before any session state changes. The callers (`SignedIn.svelte`, `settings/Account.svelte`)
    show `nav.signout-offline` ("Signing out needs a connection." / "Zum Abmelden ist eine

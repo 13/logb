@@ -117,6 +117,15 @@ whenever the set is non-empty; the top bar shows the existing offline note whene
 as fresh -- there is nothing there to prove otherwise. (Confirmed empirically: LogB's own HTTP
 stack always sends `Date`, so this only ever fires on an actual cache hit.)
 
+A route change (or a session end) also bumps a `routeGeneration` counter; each request captures
+the current generation alongside `sentAt` when it is sent, and a response whose captured
+generation no longer matches is ignored entirely -- a request made for a screen the user has since
+left cannot re-add a key the route change already cleared once its (possibly very late) answer
+finally arrives. Known limit: changing a filter or search on the SAME screen re-fetches under a
+new query string without a route change, so a stale key left by the OLD query is not cleared until
+the next navigation or a fresh response to that exact query -- harmless in practice, since the
+screen itself no longer shows anything from that superseded request.
+
 Clock skew: a self-hosted instance's server clock can be far off from the client's -- no RTC on a
 Raspberry Pi that boots believing it's 1970, or simply the wrong timezone -- by much more than the
 60s threshold above, in either direction. Uncorrected, that would show the note permanently
@@ -124,8 +133,13 @@ Raspberry Pi that boots believing it's 1970, or simply the wrong timezone -- by 
 response still reads as "recent enough"). `api.ts` maintains a calibrated skew estimate, updated
 from every response to a path that can NEVER be a cache hit: `/api/auth/...` and `/api/settings`
 are `NetworkOnly` (see "Matchers" above), so their `Date` header always reflects a live request
-made moments ago -- any gap between it and the moment the request was sent is clock skew, not
-cache age. Both are requested on every session check, so the estimate keeps recalibrating rather
+made moments ago -- any gap from it is clock skew, not cache age. Measured from the MIDPOINT of
+the round trip (`(sentAt + Date.now()) / 2`), not from `sentAt` itself -- the server wrote its
+`Date` header partway through the trip back, and the midpoint is the best guess at "when" without
+a timestamp from the server -- and skipped entirely when the round trip took more than 5s: a slow
+response's own latency would otherwise be misread as clock skew, once badly enough (a 70s round
+trip read as ~70s of skew) to make every later FRESH response look like it came from the cache.
+Both endpoints are requested on every session check, so the estimate keeps recalibrating rather
 than trusting one reading for the life of the tab. `servedFromCache(dateHeader, sentAt, skewMs)`
 takes the current estimate as its third argument and subtracts it before comparing.
 

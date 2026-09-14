@@ -230,6 +230,32 @@ describe('servingSaved', () => {
     expect(get(servingSaved)).toBe(true);
   });
 
+  // A round trip this slow could have spent nearly all of it queued or retried, nowhere near
+  // the midpoint of the interval -- calibrating from it anyway once misread its own latency as
+  // ~70s of server clock skew, which then made every later FRESH response look cached (see
+  // `MAX_CALIBRATION_ROUND_TRIP_MS` in ../src/lib/api.ts).
+  it('does not calibrate skew from a slow round trip, so a later fresh response still reads as fresh', async () => {
+    vi.useFakeTimers();
+    try {
+      const sentAt = Date.now();
+      // The server's clock has no real skew at all -- its `Date` header, written when the
+      // response was finally sent, reads as "now" once the full round trip has elapsed.
+      const resolve = deferredMockFetch(200, { id: 1 }, new Date(sentAt + 70_000).toUTCString());
+      const pending = api('GET', '/auth/me');
+      await vi.advanceTimersByTimeAsync(70_000); // the round trip itself takes 70s
+      resolve();
+      await pending;
+
+      // A genuinely fresh /objects response right after must still read as fresh: the slow
+      // calibration above must have left `clockSkewMs` untouched, not corrupted to ~-70s.
+      mockFetch(200, { items: [] }, new Date(Date.now()).toUTCString());
+      await api('GET', '/objects');
+      expect(get(servingSaved)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // The route-generation counter this guards: a request sent for the screen just left, whose
   // stale answer only arrives after the user has already navigated elsewhere, must not resurrect
   // a note for a screen nobody is looking at any more.
