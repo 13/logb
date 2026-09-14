@@ -478,6 +478,16 @@ response was lost resolves to the row already created rather than duplicating
 it. The bundled web client uses this for its offline queue, and any client that
 queues writes should do the same.
 
+A client that keeps a local mirror — the Android app — goes one step further:
+every create (`POST` of an object, activity, reminder or attachment) accepts a
+`client_uuid`, the sync identity the client minted for the row before the
+server saw it. A replay carrying the same value answers `200` with the row the
+first attempt made; a value naming another account's row, another object's row
+or a tombstone answers `409`. Every object, activity, reminder and attachment
+response carries its `client_uuid` (an attachment also its `file_uuid`), and
+every row from `GET /api/sync/pull` carries `entity_id`, the server's integer
+id for that uuid. The full shapes are in `docs/openapi.json`.
+
 `LOGB_CORS_ORIGINS` (comma-separated) lets a web client on another origin call
 the API; unset, no CORS headers are sent at all. Credentials are never allowed
 cross-origin whatever is listed, so such a client must authenticate with a

@@ -1,6 +1,13 @@
 # Offline-first Android client with server sync
 
-Status: phase 1 (the server) is implemented and merged. Phases 2-6 are not started.
+Status: phase 1 (the server) is implemented and merged. The client half is superseded: the
+phone is a native Android app, designed in
+`logb_mobile/docs/superpowers/specs/2026-09-14-logb-android-design.md`, not the Capacitor shell
+below. The "prerequisite for phase 4" was resolved by having creates arrive through REST with
+the row's final offline values and its own `client_uuid`, so no queued `set` predates the
+create; the server additions that make this possible (`client_uuid` on creates, `client_uuid`
+in responses, `entity_id` on pull rows, logged reference cleanups) shipped in the
+`android-prereqs` branch.
 See "What phase 1 actually built" at the end for how the implementation amended this design.
 
 ## Problem
