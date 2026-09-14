@@ -377,6 +377,10 @@ started offline opens as the last user who signed in. On a shared device,
 another person should sign in only after the previous user has signed out:
 signing out removes that data from the device.
 
+Signing in and out also sends `Clear-Site-Data: "cache"`, telling the browser
+to drop its HTTP cache for the site, so files a shared browser cached under an
+older version don't outlive the session that fetched them.
+
 ## Time
 
 Set `LOGB_TIMEZONE` to the household's own zone. Reminder due dates are

@@ -3,7 +3,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -103,6 +103,27 @@ async fn revoke_token(
     if done.rows_affected() == 0 { Err(AppError::NotFound) } else { Ok(StatusCode::NO_CONTENT) }
 }
 
+/// `Clear-Site-Data` header name. The `http` crate only special-cases the ~70 headers RFC-listed
+/// as "standard"; this one isn't among them, so there is no `header::CLEAR_SITE_DATA` constant
+/// to reuse.
+const CLEAR_SITE_DATA: HeaderName = HeaderName::from_static("clear-site-data");
+
+/// Sent on every response that starts or ends a session (setup, login, logout, logout-all).
+/// Before 3555016, `/api/files/{id}` and its thumbnails were served `private, max-age=31536000,
+/// immutable`, so a browser that already cached those bytes will keep reusing them for up to a
+/// year without ever asking the server again -- on a shared browser, the next person to sign in
+/// could still open the previous user's files straight from that cache. `"cache"` drops exactly
+/// that HTTP cache. It is deliberately not `"storage"`, which would also wipe the offline
+/// outbox in IndexedDB and the app's own `localStorage`, and not `"cookies"`, which would sign
+/// the browser back out right after signing it in.
+const CLEAR_SITE_DATA_CACHE: &str = "\"cache\"";
+
+/// The one-element header array added to every successful setup/login/logout/logout-all
+/// response.
+fn clear_site_data() -> [(HeaderName, HeaderValue); 1] {
+    [(CLEAR_SITE_DATA, HeaderValue::from_static(CLEAR_SITE_DATA_CACHE))]
+}
+
 #[derive(Deserialize)]
 pub struct Credentials {
     pub username: String,
@@ -127,7 +148,7 @@ async fn setup(
     headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<Credentials>,
-) -> Result<(StatusCode, CookieJar, Json<AuthUser>), AppError> {
+) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], CookieJar, Json<AuthUser>), AppError> {
     // Cheap pre-check: rejects the common "setup already done" call before spending an
     // Argon2 hash on it. The authoritative guard is the transaction below.
     if user_count(&state).await? > 0 {
@@ -167,7 +188,7 @@ async fn setup(
         }
     }
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
-    Ok((StatusCode::CREATED, jar, Json(user)))
+    Ok((StatusCode::CREATED, clear_site_data(), jar, Json(user)))
 }
 
 async fn login(
@@ -176,7 +197,7 @@ async fn login(
     headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<Credentials>,
-) -> Result<(CookieJar, Json<AuthUser>), AppError> {
+) -> Result<([(HeaderName, HeaderValue); 1], CookieJar, Json<AuthUser>), AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
     // Case-insensitive by `lower(...)` on both sides rather than by the column's collation:
     // SQLite declares `UNIQUE COLLATE NOCASE`, PostgreSQL carries a unique index on
@@ -197,19 +218,19 @@ async fn login(
         .bind(id).fetch_one(&state.db).await?;
     let token = auth::create_session(&state, user.id).await?;
     let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
-    Ok((jar, Json(user)))
+    Ok((clear_site_data(), jar, Json(user)))
 }
 
 async fn logout(
     State(state): State<App>,
     headers: HeaderMap,
     jar: CookieJar,
-) -> Result<(StatusCode, CookieJar), AppError> {
+) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], CookieJar), AppError> {
     if let Some(c) = jar.get(auth::COOKIE) {
         auth::delete_session(&state, c.value()).await?;
     }
     let secure = auth::wants_secure(&state, &headers);
-    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
+    Ok((StatusCode::NO_CONTENT, clear_site_data(), jar.remove(auth::removal_cookie(secure))))
 }
 
 /// Ends every session of the caller, this browser's included -- the "signed in somewhere I
@@ -219,10 +240,10 @@ async fn logout_all(
     State(state): State<App>,
     headers: HeaderMap,
     jar: CookieJar,
-) -> Result<(StatusCode, CookieJar), AppError> {
+) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], CookieJar), AppError> {
     auth::delete_sessions_for_user(&state, user.id).await?;
     let secure = auth::wants_secure(&state, &headers);
-    Ok((StatusCode::NO_CONTENT, jar.remove(auth::removal_cookie(secure))))
+    Ok((StatusCode::NO_CONTENT, clear_site_data(), jar.remove(auth::removal_cookie(secure))))
 }
 
 async fn me(user: AuthUser) -> Json<AuthUser> {

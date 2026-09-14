@@ -64,7 +64,10 @@ Uploaded files (`/api/files/{id}` and `/api/files/{id}/thumb`) are served `Cache
 no-cache` with a strong `ETag` from the stored file's sha256 (with a `-thumb` suffix for the
 thumbnail). The browser HTTP cache therefore revalidates every reuse, and a `304` is answered only
 after the ownership check, so another user on the same browser gets a 404, never the previous
-user's bytes. The service worker's `logb-files` cache is cleared per user as above.
+user's bytes. The service worker's `logb-files` cache is cleared per user as above. For entries the
+browser cached under the old `immutable` header, before this scheme existed, every successful
+setup/login/logout/logout-all response also carries `Clear-Site-Data: "cache"`, so those bytes
+don't outlive the session that fetched them.
 
 ## Starting offline
 

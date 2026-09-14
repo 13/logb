@@ -163,6 +163,41 @@ async fn logout_all_ends_every_session() {
     assert_eq!(app.login(&second, "ben", "correct horse").await.status(), 200);
 }
 
+/// Signing in or out tells the browser to drop its HTTP cache, so files a shared browser
+/// cached under the old `immutable` header (pre-3555016) can't outlive the session that
+/// fetched them. Never `"storage"` (that would also wipe the offline outbox and
+/// `localStorage`) and never absent on a failed login, which changes nothing worth clearing.
+#[tokio::test]
+async fn sign_in_and_out_clear_the_browsers_http_cache() {
+    let app = common::spawn().await;
+
+    // setup (first admin, signed in on the spot).
+    let res = common::new_client()
+        .post(app.url("/auth/setup"))
+        .json(&json!({ "username": "ben", "password": "correct horse" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    assert_eq!(res.headers().get("clear-site-data").unwrap().to_str().unwrap(), "\"cache\"");
+
+    let c = common::new_client();
+    let res = app.login(&c, "ben", "wrong").await;
+    assert_eq!(res.status(), 401);
+    assert!(res.headers().get("clear-site-data").is_none(), "a failed login must not clear anything");
+
+    let res = app.login(&c, "ben", "correct horse").await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers().get("clear-site-data").unwrap().to_str().unwrap(), "\"cache\"");
+
+    let res = c.post(app.url("/auth/logout")).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+    assert_eq!(res.headers().get("clear-site-data").unwrap().to_str().unwrap(), "\"cache\"");
+
+    assert_eq!(app.login(&c, "ben", "correct horse").await.status(), 200);
+    let res = c.post(app.url("/auth/logout-all")).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+    assert_eq!(res.headers().get("clear-site-data").unwrap().to_str().unwrap(), "\"cache\"");
+}
+
 /// Expired sessions are swept on a timer, not only when someone happens to sign in.
 #[tokio::test]
 async fn expired_sessions_are_pruned() {
