@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { addTag, contrastRatio, foldTag, removeTag, suggestTags, tagColorIndex, TAG_PALETTE_SIZE } from '../src/lib/tags.ts';
+import { addTag, contrastRatio, foldTag, removeTag, splitTyped, suggestTags, tagColorIndex, TAG_PALETTE_SIZE } from '../src/lib/tags.ts';
 
 describe('tagColorIndex', () => {
   it('is stable and ignores case and accents', () => {
@@ -29,6 +29,29 @@ describe('addTag / removeTag', () => {
   });
   it('removes by exact tag', () => {
     expect(removeTag(['a', 'b'], 'a')).toEqual(['b']);
+  });
+});
+
+describe('splitTyped', () => {
+  it('commits a completed segment and keeps the rest as text', () => {
+    expect(splitTyped(['A'], 'b,')).toEqual({ tags: ['A', 'b'], text: '', error: null });
+  });
+  it('commits every completed segment, trimming stray spaces', () => {
+    expect(splitTyped([], 'a, b ,c')).toEqual({ tags: ['a', 'b'], text: 'c', error: null });
+  });
+  it('dedupes a segment against an existing tag without raising an error', () => {
+    expect(splitTyped(['Winter'], 'winter,x')).toEqual({ tags: ['Winter'], text: 'x', error: null });
+  });
+  it('leaves a too-long segment in the text and reports the error, still committing the rest', () => {
+    const value = `${'x'.repeat(33)},ok,`;
+    expect(splitTyped([], value)).toEqual({ tags: ['ok'], text: 'x'.repeat(33), error: 'too-long' });
+  });
+  it('leaves a segment that would overflow the tag limit in the text and reports the error', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `t${i}`);
+    expect(splitTyped(ten, 'eleven,')).toEqual({ tags: ten, error: 'too-many', text: 'eleven' });
+  });
+  it('passes text through unchanged when there is no comma', () => {
+    expect(splitTyped(['A'], 'partial')).toEqual({ tags: ['A'], text: 'partial', error: null });
   });
 });
 

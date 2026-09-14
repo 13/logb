@@ -42,6 +42,38 @@ export function removeTag(tags: string[], tag: string): string[] {
   return tags.filter((t) => t !== tag);
 }
 
+export type SplitResult = { tags: string[]; text: string; error: 'too-long' | 'too-many' | null };
+
+/**
+ * Applies every comma-terminated segment of a freshly typed value as a tag, via `addTag`, and
+ * keeps whatever follows the last comma as the text still being typed. A segment that `addTag`
+ * refuses (too long, or the tag limit already reached) stays in the text too, ahead of what
+ * follows -- not silently dropped -- so it can be edited rather than retyped; an empty segment
+ * (two commas in a row, or trailing spaces) is skipped without error. When two segments fail,
+ * the later one's error wins, since it is the one still visible in the returned text.
+ */
+export function splitTyped(tags: string[], value: string): SplitResult {
+  if (!value.includes(',')) return { tags, text: value, error: null };
+  const parts = value.split(',');
+  const rest = parts.pop() ?? '';
+  let current = tags;
+  let error: 'too-long' | 'too-many' | null = null;
+  const failed: string[] = [];
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    const r = addTag(current, part);
+    if ('error' in r) {
+      if (r.error === 'empty') continue;
+      failed.push(part);
+      error = r.error;
+    } else {
+      current = r.tags;
+    }
+  }
+  const text = (rest !== '' ? [...failed, rest] : failed).join(',');
+  return { tags: current, text, error };
+}
+
 export function suggestTags(all: TagCount[], current: string[], text: string, limit = 8): string[] {
   const have = new Set(current.map(foldTag));
   const q = foldTag(normalizeTag(text));

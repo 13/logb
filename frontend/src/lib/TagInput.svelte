@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n';
-  import { addTag, removeTag, suggestTags, tagColorIndex } from './tags';
+  import { addTag, removeTag, splitTyped, suggestTags, tagColorIndex } from './tags';
   import type { TagCount } from './types';
 
   let { tags = $bindable([]), suggestions, label, id }: { tags: string[]; suggestions: TagCount[]; label: string; id: string } = $props();
@@ -22,17 +22,13 @@
     else if (e.key === 'Backspace' && text === '' && tags.length > 0) { tags = tags.slice(0, -1); }
   }
   // Android keyboards often report `e.key` as "Unidentified", so a typed comma only shows up here.
-  // Every segment before the last comma becomes a tag; what follows it stays as the text. A
-  // segment that fails stays in the text too, with the error shown.
+  // `splitTyped` turns every segment before the last comma into a tag via `addTag`; what follows
+  // stays as the text, a failed segment included, with its error translated for display.
   function oninput(e: Event) {
     // The element's own value: this must not depend on whether `bind:value` has run yet.
     const value = (e.currentTarget as HTMLInputElement).value;
-    if (!value.includes(',')) return;
-    const parts = value.split(',');
-    const rest = parts.pop() ?? '';
-    const failed: string[] = [];
-    for (const part of parts) if (part.trim() && !add(part)) failed.push(part);
-    text = [...failed, rest].join(',');
+    const r = splitTyped(tags, value);
+    tags = r.tags; text = r.text; error = r.error ? $t(`tags.${r.error}`) : '';
   }
 </script>
 
@@ -56,10 +52,12 @@
   .tag-input { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
   .tag-input input { flex: 1 1 8rem; min-width: 8rem; }
   .remove { position: relative; background: none; border: 0; padding: 0 0 0 2px; min-height: 0; color: inherit; font: inherit; cursor: pointer; }
-  /* A 44px-tall hit area around the bare glyph. It reaches left over the chip's own (inert) text
-     and right only to half the gap past the chip's padding, so it never covers the next chip. */
+  /* A 32px-tall hit area around the bare glyph -- short of WCAG 2.2 AA's 24x24 minimum target
+     size horizontally, since it must stay inside the chip's own row, but well past it vertically.
+     It reaches left over the chip's own (inert) text and right only to half the gap past the
+     chip's padding, so it never covers the next chip. */
   .remove::before {
-    content: ''; position: absolute; top: calc(50% - 22px); bottom: calc(50% - 22px);
+    content: ''; position: absolute; top: calc(50% - 16px); bottom: calc(50% - 16px);
     left: -14px; right: calc(-1 * var(--space-2) - var(--space-1) / 2);
   }
 </style>

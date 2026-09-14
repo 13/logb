@@ -50,3 +50,29 @@ test('tag an object and an entry, see coloured chips, and filter by tapping one'
   await page.getByRole('button', { name: 'Clear tag filter' }).click();
   await expect(page.getByText('Tag Seed')).toBeVisible();
 });
+
+test('Enter on an empty tags field still submits the form', async ({ page }) => {
+  await signInFresh(page, '23-tags-empty');
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Empty Tags');
+  await page.getByLabel('Type').selectOption('other');
+  await page.getByLabel('Tags', { exact: true }).press('Enter');
+  await page.waitForURL(/\/objects\/\d+$/);
+});
+
+test('a tag typed past the character limit shows a described, announced error', async ({ page }) => {
+  await signInFresh(page, '23-tags-toolong');
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Long Tag');
+  await page.getByLabel('Type').selectOption('other');
+  const tagInput = page.getByLabel('Tags', { exact: true });
+  await tagInput.fill('x'.repeat(33));
+  await tagInput.press('Enter');
+  const errorText = page.getByText('A tag can be at most 32 characters.');
+  await expect(errorText).toBeVisible();
+  const describedBy = await tagInput.getAttribute('aria-describedby');
+  expect(describedBy).toBeTruthy();
+  const errorEl = page.locator(`#${describedBy}`);
+  await expect(errorEl).toHaveAttribute('aria-live', 'polite');
+  await expect(errorEl).toHaveText('A tag can be at most 32 characters.');
+});
