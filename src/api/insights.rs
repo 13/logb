@@ -16,7 +16,25 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub fn router() -> Router<App> {
-    Router::new().route("/objects/{id}/insights", get(read))
+    Router::new()
+        .route("/objects/{id}/insights", get(read))
+        .route("/objects/{id}/usage", get(usage))
+}
+
+#[derive(Serialize)]
+pub struct UsageOut {
+    /// Counter units per day over recent readings, scaled by 1000 -- the same figure as
+    /// `InsightsOut::counter_per_day_milli`. Null until there is enough history.
+    pub counter_per_day_milli: Option<i64>,
+}
+
+/// Just the rate. The reading form needs it to question an implausible reading, and asking
+/// `/insights` for it meant running every cost rollup on each open of a one-field form.
+async fn usage(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<UsageOut>, AppError> {
+    load_owned_object(&state, user.id, object_id).await?;
+    let counter_per_day_milli =
+        usage_by_object(&state, user.id, Some(object_id)).await?.get(&object_id).map(|u| u.rate_milli);
+    Ok(Json(UsageOut { counter_per_day_milli }))
 }
 
 #[derive(Serialize, sqlx::FromRow)]

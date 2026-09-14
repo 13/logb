@@ -472,6 +472,45 @@
         }
       }
     },
+    "/objects/{id}/usage": {
+      "get": {
+        "summary": "How fast one object's counter rises -- the rate alone, without the cost rollups of /insights.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["counter_per_day_milli"],
+                  "properties": {
+                    "counter_per_day_milli": {
+                      "type": ["integer", "null"],
+                      "format": "int64",
+                      "description": "Counter units per day, x1000, as in Insights.counter_per_day_milli; null without enough history"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's object"
+          }
+        }
+      }
+    },
     "/objects/{id}/recent-titles": {
       "get": {
         "summary": "Up to 20 recent, distinct activity titles for this object, for repeat suggestions.",

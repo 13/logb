@@ -7,7 +7,7 @@
   import { counter, fmtDate, todayIso } from '../lib/format';
   import { readingActivity, readingWarning, type ReadingWarning } from '../lib/reading';
   import { locale, t } from '../i18n';
-  import type { Insights, MemObject } from '../lib/types';
+  import type { MemObject } from '../lib/types';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
@@ -35,7 +35,7 @@
     if (object.stats.current_counter !== null) valueText = String(object.stats.current_counter);
     lastDate = object.stats.last_reading_date;
     // The rate only sharpens the plausibility check; the form is complete without it.
-    try { rate = (await api<Insights>('GET', `/objects/${oid}/insights`)).counter_per_day_milli; }
+    try { rate = (await api<{ counter_per_day_milli: number | null }>('GET', `/objects/${oid}/usage`)).counter_per_day_milli; }
     catch { /* offline or refused: no rate check */ }
   });
 
