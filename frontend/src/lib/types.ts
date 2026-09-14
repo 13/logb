@@ -112,6 +112,17 @@ export interface Insights {
   usage_by_month: { month: string; amount: number | null }[];
 }
 
+/** `GET /stats`. `bucket` is `YYYY`, `YYYY-MM`, an object type, a category, or `purchase_price`. */
+export interface Amount { bucket: string; cost_cents: number }
+/** `cost_cents` includes every descendant's spend. */
+export interface StatsObject { id: number; name: string; type: ObjectType; archived: boolean; cost_cents: number; children: StatsObject[] }
+export interface Stats {
+  total_cents: number;
+  /** Every year with spend, newest first, whichever year is selected. */
+  years: string[];
+  over_time: Amount[]; by_object: StatsObject[]; by_type: Amount[]; by_category: Amount[];
+}
+
 /** An API token as it is listed: never the token itself, which the server returns exactly once
  *  at creation and stores only as a hash. */
 export interface ApiToken {

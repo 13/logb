@@ -1,14 +1,15 @@
 import type { IconName } from './Icon.svelte';
 
-export type Destination = 'objects' | 'search' | 'settings';
+export type Destination = 'objects' | 'search' | 'stats' | 'settings';
 
 export type NavDestination = { id: Destination; path: string; icon: IconName; label: string };
 
-/** The whole of LogB's top-level navigation. Three is few enough that all of them are always
+/** The whole of LogB's top-level navigation. Four is few enough that all of them are always
  *  visible: no drawer, no overflow menu, no hamburger hiding two items behind a tap. */
 export const DESTINATIONS: NavDestination[] = [
   { id: 'objects', path: '/', icon: 'object', label: 'nav.objects' },
   { id: 'search', path: '/search', icon: 'search', label: 'search.title' },
+  { id: 'stats', path: '/stats', icon: 'chart', label: 'nav.stats' },
   { id: 'settings', path: '/settings', icon: 'settings', label: 'nav.settings' },
 ];
 
@@ -26,6 +27,7 @@ function within(p: string, prefix: string): boolean {
 export function activeDestination(p: string): Destination | null {
   if (p === '/' || within(p, '/objects')) return 'objects';
   if (within(p, '/search')) return 'search';
+  if (within(p, '/stats')) return 'stats';
   if (within(p, '/settings')) return 'settings';
   return null;
 }

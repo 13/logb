@@ -16,6 +16,10 @@ describe('activeDestination', () => {
     expect(activeDestination('/search')).toBe('search');
   });
 
+  it('marks Statistics', () => {
+    expect(activeDestination('/stats')).toBe('stats');
+  });
+
   it('marks Settings, including its sub-pages', () => {
     expect(activeDestination('/settings')).toBe('settings');
     expect(activeDestination('/settings/appearance')).toBe('settings');
@@ -32,10 +36,11 @@ describe('activeDestination', () => {
     expect(activeDestination('/objectsfoo')).toBeNull();
     expect(activeDestination('/searching')).toBeNull();
     expect(activeDestination('/settingsx')).toBeNull();
+    expect(activeDestination('/statsx')).toBeNull();
   });
 
-  it('lists exactly the three top-level destinations, in order', () => {
-    expect(DESTINATIONS.map((d) => d.id)).toEqual(['objects', 'search', 'settings']);
-    expect(DESTINATIONS.map((d) => d.path)).toEqual(['/', '/search', '/settings']);
+  it('lists exactly the four top-level destinations, in order', () => {
+    expect(DESTINATIONS.map((d) => d.id)).toEqual(['objects', 'search', 'stats', 'settings']);
+    expect(DESTINATIONS.map((d) => d.path)).toEqual(['/', '/search', '/stats', '/settings']);
   });
 });
