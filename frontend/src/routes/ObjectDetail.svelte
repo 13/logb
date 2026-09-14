@@ -29,6 +29,9 @@
   let loadingMore = $state(false);
   let category = $state<Category | ''>('');
   let children = $state<MemObject[]>([]);
+  /** Archived children are not listed under Contents, but their costs still count with "Include
+   *  contents", so having any is enough to offer the switch. */
+  let archivedChildCount = $state(0);
   let error = $state('');
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
@@ -50,6 +53,8 @@
   async function loadChildren() {
     try { children = await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=false`); }
     catch (e) { error = (e as Error).message; }
+    try { archivedChildCount = (await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=true`)).length; }
+    catch { archivedChildCount = 0; }
   }
 
   /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
@@ -239,7 +244,7 @@
       {/if}
       <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
       <h3>{$t('insights.title')}</h3>
-      <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0} />
+      <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0 || archivedChildCount > 0} />
       <div class="list info-actions">
         <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
         <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>

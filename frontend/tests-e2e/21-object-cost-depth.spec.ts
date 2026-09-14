@@ -49,3 +49,24 @@ test('a house includes its boiler on request, and remembers the choice', async (
   await expect(page.getByLabel('Include contents')).toBeChecked();
   await expect(page.getByTestId('insights-ownership')).toContainText('4,250.00');
 });
+
+test('a house whose only child is archived still offers to include it', async ({ page }) => {
+  await signInFresh(page, '21-cost-archived');
+  const house = await object(page, { name: 'Quiet House', type: 'home' });
+  const shed = await object(page, { name: 'Old Shed', type: 'other', parent_id: house });
+  await entry(page, house, { date: '2025-03-10', category: 'repair', cost_cents: 50_000 });
+  await entry(page, shed, { date: '2025-04-10', category: 'repair', cost_cents: 10_000 });
+  // PATCH replaces the object, so the whole body is sent with archived set.
+  const res = await page.request.patch(`/api/objects/${shed}`, {
+    data: { name: 'Old Shed', type: 'other', description: '', parent_id: house, archived: true },
+  });
+  expect(res.ok()).toBe(true);
+
+  await openInfo(page, house);
+  const ownership = page.getByTestId('insights-ownership');
+  await expect(ownership).toContainText('500.00');
+  const toggle = page.getByLabel('Include contents');
+  await expect(toggle).toBeVisible();
+  await toggle.check();
+  await expect(ownership).toContainText('600.00');
+});

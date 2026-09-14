@@ -1,6 +1,6 @@
 # Follow-ups after statistics
 
-Status: approved, not implemented. Clears the leftovers recorded while building
+Status: implemented. Clears the leftovers recorded while building
 `2026-09-14-statistics-design.md` and `2026-09-14-object-cost-depth-design.md`.
 
 1. **Flaky settings spec.** `14-settings.spec.ts` "a row carries its current value" counts the
