@@ -325,7 +325,9 @@ describe('offline start and cache ownership', () => {
     expect(log.slice(0, 3)).toEqual(['deleted:logb-api', 'deleted:logb-files', 'user:8']);
     expect(log.indexOf('fetch:/settings')).toBeGreaterThan(log.indexOf('user:8'));
     expect(storage.getItem('logb.cache.user')).toBe('8');
-    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(OTHER);
+    // Plus `currency`: `/settings` loads right after and is remembered on top (see the second
+    // `rememberProfile` call in ../src/stores/session.ts).
+    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual({ ...OTHER, currency: 'EUR' });
     expect(get(session.offline)).toBe(false);
   });
 
@@ -370,7 +372,8 @@ describe('offline start and cache ownership', () => {
 
     expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
     expect(storage.getItem('logb.cache.user')).toBe('7');
-    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(PROFILE);
+    // Plus `currency`: `login()` loads `/settings` right after and remembers it too.
+    expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual({ ...PROFILE, currency: 'EUR' });
   });
 
   /**
@@ -433,6 +436,153 @@ describe('offline start and cache ownership', () => {
       expect(storage.getItem('logb.session.profile')).toBeNull();
       expect(storage.getItem('logb.cache.user')).toBeNull();
     }
+  });
+
+  /** `currency` rides along on the remembered profile (see ../src/lib/cache-owner.ts) so an
+   *  offline start can show amounts correctly without a network call. */
+  it('sets currency from the remembered profile when opening offline', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify({ ...PROFILE, currency: 'USD' }));
+    storage.setItem('logb.cache.user', '7');
+    serve({});
+    const session = await freshSession();
+
+    expect(await session.loadSession()).toBe(false);
+    expect(get(session.offline)).toBe(true);
+    expect(get(session.currency)).toBe('USD');
+  });
+
+  it('leaves the default currency when the remembered profile has none', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    serve({});
+    const session = await freshSession();
+
+    expect(await session.loadSession()).toBe(false);
+    expect(get(session.currency)).toBe('EUR');
+  });
+
+  it('remembers the currency once /settings loads, for a later offline start', async () => {
+    const storage = installStorage();
+    serve(signedIn); // signedIn's /settings answers { currency: 'EUR' }
+    const session = await freshSession();
+
+    await session.loadSession();
+
+    const stored = JSON.parse(storage.getItem('logb.session.profile')!);
+    expect(stored.currency).toBe('EUR');
+  });
+});
+
+/** `signOutErrorMessage` is what `SignedIn.svelte` and `settings/Account.svelte` show when
+ *  `logout`/`logoutEverywhere` reject: an `ApiError`'s own message for a server refusal, and the
+ *  `nav.signout-offline` i18n KEY -- not a translated string -- for anything that means the
+ *  request never reached the server at all. Built via `freshSession()`, and `ApiError` from the
+ *  SAME module instance it returns (see the comment on `freshSession` above `api.ts` is
+ *  reimported fresh per test), so `instanceof` inside it lines up with the error under test. */
+describe('signOutErrorMessage', () => {
+  it('returns the server message for an ApiError', async () => {
+    const session = await freshSession();
+    const api = await import('../src/lib/api');
+
+    expect(session.signOutErrorMessage(new api.ApiError(403, 'forbidden', 'not allowed'))).toBe('not allowed');
+  });
+
+  it('returns the nav.signout-offline key for a connectivity failure', async () => {
+    const session = await freshSession();
+
+    expect(session.signOutErrorMessage(new TypeError('Failed to fetch'))).toBe('nav.signout-offline');
+    expect(session.signOutErrorMessage(new DOMException('aborted', 'AbortError'))).toBe('nav.signout-offline');
+    expect(session.signOutErrorMessage(new Error('anything else'))).toBe('nav.signout-offline');
+  });
+});
+
+/**
+ * Besides `online`/`visibilitychange`, offline mode retries the session check every 30s on its
+ * own -- a device can regain a connection quietly in the background, with no reconnect event and
+ * no tab-focus change to trigger the existing listeners. The timer must not run forever: it
+ * stops the moment the session becomes known, and repeated offline attempts before that must
+ * never stack a second one.
+ */
+describe('the offline retry timer', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    // @ts-expect-error -- test-only cleanup of globals this suite installs
+    delete globalThis.caches;
+    // @ts-expect-error -- as above
+    delete globalThis.localStorage;
+  });
+
+  it('retries every 30s while offline, stops once known, and never doubles up', async () => {
+    vi.useFakeTimers();
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    installCaches([]);
+    let statusCalls = 0;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      const path = url.replace('/api', '').split('?')[0];
+      if (path === '/auth/status') {
+        statusCalls++;
+        // The first two attempts (the initial boot and a manual retry, standing in for
+        // `online`/`visibilitychange` firing) still cannot reach the server; the third, made by
+        // the 30s timer itself, finally can.
+        if (statusCalls < 3) throw new TypeError('Failed to fetch');
+        return jsonResponse(200, { setup_required: false });
+      }
+      if (path === '/auth/me') return jsonResponse(200, ME);
+      if (path === '/settings') return jsonResponse(200, { currency: 'EUR' });
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+
+    const session = await freshSession();
+    expect(await session.loadSession()).toBe(false); // still unreachable -- opens offline
+    expect(get(session.offline)).toBe(true);
+    expect(statusCalls).toBe(1);
+
+    // A second failed boot attempt (e.g. `online` firing moments later) must not start a
+    // second, overlapping 30s interval.
+    await session.loadSession();
+    expect(statusCalls).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(statusCalls).toBe(3);
+    expect(get(session.user)).toMatchObject(ME);
+    expect(get(session.offline)).toBe(false); // the session is known now
+
+    const knownAt = statusCalls;
+    await vi.advanceTimersByTimeAsync(90_000); // three more ticks' worth, if it were still running
+    expect(statusCalls).toBe(knownAt); // the timer stopped -- nothing polled again
+  });
+
+  it('stops the retry timer when a sign-out succeeds despite the retry still running', async () => {
+    vi.useFakeTimers();
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    installCaches([]);
+    let statusCalls = 0;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      const path = url.replace('/api', '').split('?')[0];
+      // `/auth/status` never recovers -- only this one request, the user's own "Sign out"
+      // click, happens to get through (a brief connectivity blip is enough).
+      if (path === '/auth/status') { statusCalls++; throw new TypeError('Failed to fetch'); }
+      if (path === '/auth/logout') return jsonResponse(204, null);
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+
+    const session = await freshSession();
+    expect(await session.loadSession()).toBe(false);
+    expect(get(session.offline)).toBe(true);
+
+    await session.logout();
+    expect(get(session.user)).toBeNull();
+
+    const before = statusCalls;
+    await vi.advanceTimersByTimeAsync(90_000);
+    // The timer stopped: nothing polled /auth/status again on a page that has moved to /login.
+    expect(statusCalls).toBe(before);
   });
 });
 

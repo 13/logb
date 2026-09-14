@@ -128,3 +128,36 @@ test('the cache owner alone keeps the previous user\'s saved objects from the ne
   await expect(page.getByText('Owner Check A')).toHaveCount(0);
   await context.setOffline(false);
 });
+
+/**
+ * `logout` fails on the network error before touching any session state (see `signOutErrorMessage`
+ * in ../src/stores/session.ts): the request to `/api/auth/logout` never reaches the server, so
+ * nothing about the signed-in session changes, and the caller shows a message that says so rather
+ * than whatever the browser's fetch error happens to be.
+ */
+test('signing out with no connection says so, and leaves the user signed in', async ({ page, context }) => {
+  await signInFresh(page, '25-offline-signout');
+  await page.goto('/');
+  await underServiceWorker(page);
+
+  await context.setOffline(true);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: /Account/ }).click();
+  // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
+  // sidebar carries its own "Sign out" too.
+  await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
+
+  await expect(page.getByText('Signing out needs a connection.')).toBeVisible();
+  // Still on a signed-in page: no navigation to /login, and the account page still names the
+  // user and offers to sign out again (nothing about the session actually changed).
+  await expect(page).not.toHaveURL(/\/login$/);
+  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  await expect(page.locator('main').getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+
+  await context.setOffline(false);
+});
+
+// A1 ("saved data shown while online", `servedFromCache`/`servingSaved` in ../src/lib/api.ts) has
+// no e2e test here: see the report's "A1 e2e decision" for why an attempt was made and dropped as
+// unreliable rather than kept as a flaky test. It is covered by the `servedFromCache`/`servingSaved`
+// unit tests in tests/api.test.ts.

@@ -18,7 +18,13 @@
 const OWNER_KEY = 'logb.cache.user';
 const PROFILE_KEY = 'logb.session.profile';
 
-export interface Profile { id: number; username: string; is_admin: boolean; lang: string }
+/**
+ * `currency` is optional: it comes from `/settings`, a separate request from the one that
+ * establishes the other fields, so it is filled in a moment later (see `rememberProfile`'s
+ * second call in ../stores/session.ts) and a profile stored before this field existed has none.
+ * Used only so an offline start can show amounts in the right currency without a network call.
+ */
+export interface Profile { id: number; username: string; is_admin: boolean; lang: string; currency?: string }
 
 /** Resolved inside each caller's `try`: merely reading `globalThis.localStorage` can throw. */
 function storageOf(storage?: Storage): Storage | undefined {
@@ -28,23 +34,31 @@ function storageOf(storage?: Storage): Storage | undefined {
 export function rememberProfile(p: Profile, storage?: Storage): void {
   try {
     // Only these fields: this is kept on disk after the tab closes, so nothing beyond what the
-    // shell needs to render goes into it.
-    const { id, username, is_admin, lang } = p;
-    storageOf(storage)?.setItem(PROFILE_KEY, JSON.stringify({ id, username, is_admin, lang }));
+    // shell needs to render goes into it. `currency` is omitted rather than stored as
+    // `undefined` -- `JSON.stringify` drops an `undefined` property anyway, but doing it
+    // explicitly keeps the "no currency yet" and "currency is EUR" cases from ever looking
+    // alike in the raw JSON.
+    const { id, username, is_admin, lang, currency } = p;
+    const data: Record<string, unknown> = { id, username, is_admin, lang };
+    if (currency !== undefined) data.currency = currency;
+    storageOf(storage)?.setItem(PROFILE_KEY, JSON.stringify(data));
   } catch { /* full or blocked: the app just cannot open offline next time */ }
 }
 
 /** The stored profile, or null when there is none or it is not a whole profile (an older or
- *  hand-edited value must not be handed to the shell as a user). */
+ *  hand-edited value must not be handed to the shell as a user). `currency` reads back as
+ *  `undefined` for a profile stored before this field existed, or one this device has never
+ *  loaded `/settings` for yet -- not a reason to reject the rest of the profile. */
 export function rememberedProfile(storage?: Storage): Profile | null {
   try {
     const raw = storageOf(storage)?.getItem(PROFILE_KEY);
     if (!raw) return null;
     const p: unknown = JSON.parse(raw);
     if (typeof p !== 'object' || p === null) return null;
-    const { id, username, is_admin, lang } = p as Record<string, unknown>;
+    const { id, username, is_admin, lang, currency } = p as Record<string, unknown>;
     if (!Number.isInteger(id) || typeof username !== 'string' || typeof is_admin !== 'boolean' || typeof lang !== 'string') return null;
-    return { id: id as number, username, is_admin, lang };
+    if (currency !== undefined && typeof currency !== 'string') return null;
+    return { id: id as number, username, is_admin, lang, ...(currency !== undefined ? { currency: currency as string } : {}) };
   } catch {
     return null;
   }

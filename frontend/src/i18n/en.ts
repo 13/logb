@@ -12,6 +12,7 @@ export default {
   'nav.close': 'Close',
   'nav.loading': 'Loading…',
   'nav.offline-mode': 'Offline — showing saved data',
+  'nav.signout-offline': 'Signing out needs a connection.',
   'nav.confirm-delete': 'Really delete? This cannot be undone.',
   'error.generic': 'Something went wrong',
   'error.offline': 'No connection',

@@ -1,6 +1,6 @@
 import { get, readonly, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
-import { api, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
+import { api, ApiError, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberedProfile, rememberProfile, userSwitchNeedsReload } from '../lib/cache-owner';
 import { clearObjectCache, clearObjectMemory } from '../lib/object-cache';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
@@ -16,6 +16,23 @@ import { go } from '../lib/router';
 let navigate: (path: string, replace?: boolean) => void = go;
 export function setNavigateForTesting(fn: (path: string, replace?: boolean) => void): void {
   navigate = fn;
+}
+
+/**
+ * What `logout`/`logoutEverywhere`'s callers (`SignedIn.svelte`, `settings/Account.svelte`) show
+ * when the call rejects. An `ApiError` is the server answering and refusing -- its message is
+ * already legible, straight from the response body (see `handle()` in ../lib/api.ts). Anything
+ * else -- a `TypeError` from a dropped connection, an aborted request, a malformed response --
+ * never reached the server at all, and the honest thing to say is that signing out needs a
+ * connection, not whatever the browser happened to throw.
+ *
+ * Returns the `nav.signout-offline` i18n KEY for that case, and the plain message for an
+ * `ApiError` -- not translated here. `$t()` on a key it does not recognise renders the key
+ * itself unchanged (see ../i18n/index.ts), so both callers use this the same way regardless of
+ * which case fired: `error = $t(signOutErrorMessage(e))`.
+ */
+export function signOutErrorMessage(e: unknown): string {
+  return e instanceof ApiError ? e.message : 'nav.signout-offline';
 }
 
 /** undefined = not loaded yet, null = anonymous */
@@ -49,6 +66,7 @@ function endSession(): void {
   user.set(null);
   sessionKnown = true;
   offlineState.set(false);
+  stopOfflineRetry();
   // Not awaited: nobody is signed in afterwards, so nothing loads that the old caches could
   // answer, and the next session start claims (and, being ownerless, clears) them again anyway.
   void clearObjectCache();
@@ -91,6 +109,29 @@ globalThis.addEventListener?.('online', retrySession);
 globalThis.addEventListener?.('visibilitychange', () => {
   if (globalThis.document?.visibilityState === 'visible') retrySession();
 });
+
+/**
+ * The 30s poke while stuck in offline mode. `online` and `visibilitychange` above only fire on
+ * an actual reconnect event or a tab regaining focus -- neither has to happen on a device that
+ * quietly regains signal in the background (a phone in a pocket, a laptop lid left open), which
+ * otherwise left the app showing stale data until the user happened to switch away and back.
+ *
+ * `startOfflineRetry` is idempotent -- `openOffline` may run again on every failed retry attempt
+ * while nothing about the situation has changed, and must not stack a second interval each time.
+ * `stopOfflineRetry` is called from every place `sessionKnown` becomes true (`endSession`,
+ * `adoptUser`, and the setup-required branch of `doLoadSession`), so the timer never outlives the
+ * question it exists to keep asking.
+ */
+let offlineRetryTimer: ReturnType<typeof setInterval> | null = null;
+function startOfflineRetry(): void {
+  if (offlineRetryTimer !== null) return;
+  offlineRetryTimer = setInterval(() => { if (!sessionKnown) void loadSession(); }, 30_000);
+}
+function stopOfflineRetry(): void {
+  if (offlineRetryTimer === null) return;
+  clearInterval(offlineRetryTimer);
+  offlineRetryTimer = null;
+}
 
 /**
  * Another tab of this app changed who is signed in -- signed in as someone else, signed out, or
@@ -157,6 +198,7 @@ async function adoptUser(me: User): Promise<void> {
   }
   rememberProfile(me);
   offlineState.set(false);
+  stopOfflineRetry();
   user.set(me);
   setOutboxUser(me.id);
 }
@@ -178,9 +220,14 @@ async function openOffline(): Promise<void> {
   // Re-checked: `inFlight` serialises `loadSession`, but `login` does not go through it, and a
   // sign-in that completed while the deletes ran must not be overwritten by the old profile.
   if (sessionKnown) return;
-  if (get(user)?.id !== profile.id) user.set({ ...profile });
+  // `currency` rides along on the stored profile (see ../lib/cache-owner.ts) but is not part of
+  // `User` -- split it off rather than handing the user store a field nothing there expects.
+  const { currency: profileCurrency, ...profileUser } = profile;
+  if (get(user)?.id !== profile.id) user.set({ ...profileUser });
+  if (profileCurrency !== undefined) currency.set(profileCurrency);
   setOutboxUser(profile.id);
   offlineState.set(true);
+  startOfflineRetry();
 }
 
 async function doLoadSession(): Promise<boolean> {
@@ -200,6 +247,7 @@ async function doLoadSession(): Promise<boolean> {
     user.set(null);
     sessionKnown = true;
     offlineState.set(false);
+    stopOfflineRetry();
     setOutboxUser(null);
     // A reset database hands out user ids from 1 again: the previous instance's profile must not
     // open offline, and its caches must not count as the new user 7's because an old user 7 left
@@ -232,6 +280,10 @@ async function doLoadSession(): Promise<boolean> {
   try {
     const s = await api<Settings>('GET', '/settings');
     currency.set(s.currency);
+    // A second write, over the one `adoptUser` already made: `/settings` is a separate request
+    // that was not answered yet when that one ran, and the currency is what lets an offline
+    // start (see `openOffline`) show amounts correctly without a network call.
+    rememberProfile({ ...me, currency: s.currency });
   } catch (e) {
     // `/auth/me` has just confirmed the session, so a 4xx here is not the session ending: it is
     // only the settings that could not be read. Signing the user out without forgetting them
@@ -251,6 +303,7 @@ export async function login(username: string, password: string): Promise<void> {
   sessionKnown = true;
   const s = await api<Settings>('GET', '/settings');
   currency.set(s.currency);
+  rememberProfile({ ...me, currency: s.currency }); // see the matching comment in doLoadSession
   // Anything queued while the session was expired has been waiting for exactly this. The
   // outbox's own triggers -- load, `online`, `visibilitychange` -- none of them fire on a
   // login, which is an SPA navigation, so without this the writes sit until the user happens

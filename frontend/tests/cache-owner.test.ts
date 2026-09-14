@@ -53,6 +53,32 @@ describe('remembered profile', () => {
     s.setItem('logb.session.profile', JSON.stringify(null));
     expect(rememberedProfile(s)).toBeNull();
   });
+
+  /** `currency` comes from `/settings`, a separate request from the one that fills in the rest
+   *  of the profile (see the second `rememberProfile` call in ../src/stores/session.ts), so a
+   *  profile can legitimately exist without it -- that must not fail the whole profile. */
+  it('round-trips currency', () => {
+    const s = memoryStorage();
+    rememberProfile({ ...BEN, currency: 'USD' }, s);
+    expect(rememberedProfile(s)).toEqual({ ...BEN, currency: 'USD' });
+  });
+
+  it('reads a stored profile with no currency as currency undefined', () => {
+    const s = memoryStorage();
+    rememberProfile(BEN, s); // BEN carries no currency
+    const p = rememberedProfile(s);
+    expect(p).not.toBeNull();
+    expect(p?.currency).toBeUndefined();
+    // Also the shape a profile stored before this field existed takes: the key is absent, not
+    // present-and-null or present-and-undefined.
+    expect(Object.prototype.hasOwnProperty.call(JSON.parse(s.getItem('logb.session.profile')!), 'currency')).toBe(false);
+  });
+
+  it('rejects a profile whose currency is not a string', () => {
+    const s = memoryStorage();
+    s.setItem('logb.session.profile', JSON.stringify({ ...BEN, currency: 42 }));
+    expect(rememberedProfile(s)).toBeNull();
+  });
 });
 
 describe('cache owner', () => {

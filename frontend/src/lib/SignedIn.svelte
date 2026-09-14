@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { t } from '../i18n';
-  import { logout, user } from '../stores/session';
+  import { logout, signOutErrorMessage, user } from '../stores/session';
 
   /** `compact` is the sidebar's version: the name and an icon-only sign-out button, since the
    *  sidebar is 240px wide and already says what the app is. */
@@ -15,7 +15,7 @@
   async function signOut() {
     busy = true; error = '';
     try { await logout(); }
-    catch (e) { error = (e as Error).message; }
+    catch (e) { error = $t(signOutErrorMessage(e)); }
     finally { busy = false; }
   }
 </script>

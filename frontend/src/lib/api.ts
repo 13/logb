@@ -1,8 +1,41 @@
+import { readonly, writable, type Readable } from 'svelte/store';
 import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
 
 export { ApiError, isRejection, isUnauthenticated } from './api-error';
+
+/**
+ * Whether the most recent response was answered from the service worker's cache rather than
+ * the network. `NetworkFirst` (see vite.config.ts / sw-routes.ts) falls back to `logb-api` only
+ * once the network has taken more than 4s, so a stale `Date` header is the one signal the page
+ * itself can see -- there is no other way to tell a slow-but-live answer from a cached one.
+ * Flips back to false the moment a fresh response arrives. TopBar shows the offline note while
+ * this is true, in addition to `offline` mode itself (see ../stores/session.ts) -- the two are
+ * independent: a signed-in, online user can still be looking at last week's list because the
+ * network happened to be slow just now.
+ */
+const servingSavedState = writable(false);
+export const servingSaved: Readable<boolean> = readonly(servingSavedState);
+
+/**
+ * Pure so it can be unit-tested without a fetch: true only when `dateHeader` is far enough
+ * before `sentAt` (the moment the request went out) that ordinary latency or clock drift cannot
+ * explain it -- which, given the 4s `NetworkFirst` timeout above, only a cache hit can. A
+ * missing or unparsable header counts as fresh: there is nothing there to prove otherwise, and
+ * treating "we don't know" as "cached" would show the note on every response an unrelated
+ * proxy happened to strip the header from.
+ *
+ * `now` is accepted for symmetry with callers that already have the current time to hand, but
+ * the comparison anchors on `sentAt` -- what a fetch wrapper actually knows when it needs an
+ * answer -- not on whatever moment this function happens to run.
+ */
+export function servedFromCache(dateHeader: string | null, sentAt: number, now: number = Date.now()): boolean {
+  if (dateHeader === null) return false;
+  const headerTime = Date.parse(dateHeader);
+  if (Number.isNaN(headerTime)) return false;
+  return sentAt - headerTime > 60_000;
+}
 
 let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void {
@@ -44,7 +77,14 @@ function isOurs(op: QueuedOp): boolean {
   return op.userId === undefined || currentUserId === null || op.userId === currentUserId;
 }
 
-async function handle<T>(res: Response, path: string): Promise<T> {
+/**
+ * `sentAt` is optional only so this stays callable without it (there is no response to have
+ * come from a cache before one exists); every real call site below passes it. Recorded here,
+ * the one place every fetch wrapper's response passes through, rather than in each of them, so
+ * `servingSaved` reflects the single most recent answer regardless of which wrapper fetched it.
+ */
+async function handle<T>(res: Response, path: string, sentAt?: number): Promise<T> {
+  if (sentAt !== undefined && res.ok) servingSavedState.set(servedFromCache(res.headers.get('date'), sentAt));
   if (res.status === 204) return undefined as T;
   const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
   const body = isJson ? await res.json() : null;
@@ -71,8 +111,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     init.headers = { 'content-type': 'application/json' };
     init.body = JSON.stringify(body);
   }
+  const sentAt = Date.now();
   const res = await fetch(`/api${path}`, init);
-  return handle<T>(res, path);
+  return handle<T>(res, path, sentAt);
 }
 
 /**
@@ -81,21 +122,24 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
  * there is more to fetch.
  */
 export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; total: number }> {
+  const sentAt = Date.now();
   const res = await fetch(`/api${path}`, { method: 'GET', credentials: 'same-origin' });
-  const items = await handle<T[]>(res, path);
+  const items = await handle<T[]>(res, path, sentAt);
   const header = res.headers.get('x-total-count');
   const total = header === null ? items.length : Number(header);
   return { items, total: Number.isFinite(total) ? total : items.length };
 }
 
 export async function upload<T = unknown>(path: string, form: FormData): Promise<T> {
+  const sentAt = Date.now();
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', body: form });
-  return handle<T>(res, path);
+  return handle<T>(res, path, sentAt);
 }
 
 export async function uploadRaw<T = unknown>(path: string, blob: Blob, contentType: string): Promise<T> {
+  const sentAt = Date.now();
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': contentType }, body: blob });
-  return handle<T>(res, path);
+  return handle<T>(res, path, sentAt);
 }
 
 export function fileUrl(fileId: number, thumb = false): string {

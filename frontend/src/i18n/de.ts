@@ -12,6 +12,7 @@ export default {
   'nav.close': 'Schließen',
   'nav.loading': 'Lädt…',
   'nav.offline-mode': 'Offline – gespeicherte Daten',
+  'nav.signout-offline': 'Zum Abmelden ist eine Verbindung nötig.',
   'nav.confirm-delete': 'Wirklich löschen? Das kann nicht rückgängig gemacht werden.',
   'error.generic': 'Etwas ist schiefgelaufen',
   'error.offline': 'Keine Verbindung',

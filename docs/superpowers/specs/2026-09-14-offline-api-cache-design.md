@@ -94,6 +94,47 @@ Signing out, signing out everywhere and a 401 remove the stored profile together
 On a shared device where someone never signed out, their saved data opens offline -- the same
 exposure as leaving the app signed in, which it effectively is.
 
+### A1. Saved data shown while online
+
+`NetworkFirst` (see "Matchers" above) answers from `logb-api` once the network has taken longer
+than its 4s timeout -- an ordinary slow connection, not a lost one, so `offline` mode itself
+never sees it. `frontend/src/lib/api.ts` compares a successful response's `Date` header with the
+moment the request was sent (`servedFromCache`, unit-tested directly): a response dated more
+than 60s before that came from the cache, not the network just now. A `servingSaved` store is
+set true by such a response and false by the next fresh one; the top bar shows the existing
+offline note whenever `offline` mode *or* `servingSaved` is true. A response with no `Date`
+header, or one that fails to parse, counts as fresh -- there is nothing there to prove otherwise.
+(Confirmed empirically: LogB's own HTTP stack always sends `Date`, so this only ever fires on an
+actual cache hit.)
+
+### A2. Sign-out without a connection
+
+`logout` and `logoutEverywhere` already fail before changing any session state when the request
+never reaches the server (they simply propagate the fetch error). Their callers -- `SignedIn.svelte`
+and `settings/Account.svelte`, both the "Sign out" and "Sign out everywhere" buttons -- show
+`nav.signout-offline` ("Signing out needs a connection." / "Zum Abmelden ist eine Verbindung
+nötig.") for that case, and the server's own message for an `ApiError`. `signOutErrorMessage(e)`
+(`../stores/session.ts`) tells the two apart by `instanceof ApiError`, returning the i18n *key*
+for a connectivity failure and the plain message otherwise -- `$t()` on a key it does not
+recognise renders it unchanged, so both callers use `$t(signOutErrorMessage(e))` uniformly.
+
+### A3. Stuck in offline mode
+
+Besides `online` and `visibilitychange`, `session.ts` also polls every 30s while offline mode
+holds and the session is still not known -- a device can quietly regain a connection with
+neither event firing (nothing reconnected in the network-interface sense, no tab switch). The
+timer starts the first time the app opens offline and stops the moment the session becomes known
+(a real sign-in, sign-out, or 401), whichever attempt gets there first; repeated failed attempts
+in the meantime never start a second, overlapping one.
+
+### A4. Currency offline
+
+The remembered profile gains an optional `currency`, filled in by a second write once `/settings`
+loads (a separate request from the one that establishes the rest of the profile) and used to set
+`currency` when the app opens offline. A profile stored before this field existed, or one from a
+device that has not loaded `/settings` yet this session, simply has no `currency` -- the store
+keeps its default (`EUR`) in that case, exactly as it does online before `/settings` answers.
+
 ## Comments and specs
 
 `object-cache.ts` and `type-registry.ts` comments, and the own-types spec's "Offline" bullet, are

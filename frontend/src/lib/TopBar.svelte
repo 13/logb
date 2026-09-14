@@ -1,6 +1,6 @@
 <script lang="ts">
   import { back, go } from './router';
-  import { onOutboxFlushed, outboxDeadCount, outboxPending } from './api';
+  import { onOutboxFlushed, outboxDeadCount, outboxPending, servingSaved } from './api';
   import { t } from '../i18n';
   import Icon, { type IconName } from './Icon.svelte';
   import AccountMenu from './AccountMenu.svelte';
@@ -39,8 +39,10 @@
   {/if}
   <h1>{#if icon}<Icon name={icon} />{/if}{title}</h1>
   <!-- In offline mode the user on screen is only the last one remembered here, and what shows is
-       what was cached -- worth saying, so stale data is not taken for current. -->
-  {#if $offline}<span class="offline-note muted" role="status">{$t('nav.offline-mode')}</span>{/if}
+       what was cached -- worth saying, so stale data is not taken for current. `servingSaved`
+       covers the other way this happens: online and signed in, but the network took long enough
+       that the service worker answered from `logb-api` instead (see `servedFromCache` in ./api.ts). -->
+  {#if $offline || $servingSaved}<span class="offline-note muted" role="status">{$t('nav.offline-mode')}</span>{/if}
   {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
   {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}

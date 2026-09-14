@@ -2,15 +2,19 @@
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
   import { t } from '../../i18n';
-  import { user, logout, logoutEverywhere } from '../../stores/session';
+  import { user, logout, logoutEverywhere, signOutErrorMessage } from '../../stores/session';
 
   let ownPass = $state('');
   let message = $state('');
   let error = $state('');
 
+  async function signOut() {
+    try { await logout(); } catch (e) { error = $t(signOutErrorMessage(e)); }
+  }
+
   async function signOutEverywhere() {
     if (!confirm($t('settings.logout-all-confirm'))) return;
-    try { await logoutEverywhere(); } catch (e) { error = (e as Error).message; }
+    try { await logoutEverywhere(); } catch (e) { error = $t(signOutErrorMessage(e)); }
   }
 
   async function changeOwnPassword() {
@@ -32,7 +36,7 @@
     <div class="field"><label for="op">{$t('settings.change-password')}</label><input id="op" type="password" bind:value={ownPass} autocomplete="new-password" /></div>
     <button onclick={changeOwnPassword} disabled={ownPass.length < 8}>{$t('nav.save')}</button>
   </div>
-  <button class="ghost" onclick={logout}>{$t('login.logout')}</button>
+  <button class="ghost" onclick={signOut}>{$t('login.logout')}</button>
   <button class="ghost" onclick={signOutEverywhere}>{$t('settings.logout-all')}</button>
   <p class="muted hint">{$t('settings.logout-all-hint')}</p>
 </main>

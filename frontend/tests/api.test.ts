@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api, ApiError, isRejection, setUnauthorizedHandler, fileUrl } from '../src/lib/api';
+import { get } from 'svelte/store';
+import { api, ApiError, isRejection, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl } from '../src/lib/api';
 
-function mockFetch(status: number, body: unknown) {
+/** `dateHeader` defaults to absent, matching every existing call site of this helper: none of
+ *  them cared about `servingSaved` before this response header existed. */
+function mockFetch(status: number, body: unknown, dateHeader: string | null = null) {
   const res = {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: (k: string) => (k.toLowerCase() === 'content-type' && body !== undefined ? 'application/json' : null) },
+    headers: {
+      get: (k: string) => {
+        const key = k.toLowerCase();
+        if (key === 'content-type') return body !== undefined ? 'application/json' : null;
+        if (key === 'date') return dateHeader;
+        return null;
+      },
+    },
     json: async () => body,
     text: async () => JSON.stringify(body),
   };
@@ -83,5 +93,51 @@ describe('isRejection', () => {
     expect(isRejection('a string')).toBe(false);
     expect(isRejection(undefined)).toBe(false);
     expect(isRejection(null)).toBe(false);
+  });
+});
+
+// `NetworkFirst` (see vite.config.ts / sw-routes.ts) only falls back to the service worker's
+// cache after a 4s network timeout, so a `Date` header set well over a minute before the
+// request went out is the one signal available to the page that this happened.
+describe('servedFromCache', () => {
+  it('is false when there is no Date header at all', () => {
+    expect(servedFromCache(null, Date.now())).toBe(false);
+  });
+
+  it('is false for a response dated moments before the request was sent -- ordinary latency', () => {
+    const sentAt = Date.now();
+    expect(servedFromCache(new Date(sentAt - 5_000).toUTCString(), sentAt)).toBe(false);
+  });
+
+  it('is true for a response dated well over a minute before the request was sent', () => {
+    const sentAt = Date.now();
+    expect(servedFromCache(new Date(sentAt - 61_000).toUTCString(), sentAt)).toBe(true);
+  });
+
+  it('is false for an unparsable Date header', () => {
+    expect(servedFromCache('not a date', Date.now())).toBe(false);
+  });
+});
+
+describe('servingSaved', () => {
+  it('flips true on a response served from the cache, and back on the next fresh one', async () => {
+    const sentAt = Date.now();
+    mockFetch(200, { items: [] }, new Date(sentAt - 61_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(true);
+
+    mockFetch(200, { items: [] }, new Date().toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(false);
+  });
+
+  it('does not flip on a response with no Date header at all', async () => {
+    mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(true);
+
+    mockFetch(200, { items: [] }, null);
+    await api('GET', '/objects');
+    expect(get(servingSaved)).toBe(false);
   });
 });
