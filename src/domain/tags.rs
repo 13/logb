@@ -97,9 +97,14 @@ mod tests {
     #[test]
     fn a_huge_input_is_refused_without_reading_all_of_it() {
         let many: Vec<String> = (0..10_000).map(|i| format!("t{i}")).collect();
-        let started = std::time::Instant::now();
         assert!(normalize(&many).unwrap_err().contains("10"));
-        assert!(started.elapsed() < std::time::Duration::from_millis(200), "took {:?}", started.elapsed());
+        // Proof of the early stop without a wall clock, which would flake on a loaded machine: a
+        // too-long tag placed after the eleventh distinct one is never reached, so the error is
+        // the count, not the length.
+        let mut past_the_limit: Vec<String> = (0..11).map(|i| format!("t{i}")).collect();
+        past_the_limit.push("x".repeat(MAX_TAG_CHARS + 1));
+        let err = normalize(&past_the_limit).unwrap_err();
+        assert!(err.contains("10") && !err.contains("32"), "{err}");
     }
 
     #[test]
