@@ -153,7 +153,7 @@
     // scheme invented here.
     const result = await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>, tempId);
     saved = result ?? {
-      id: tempId, object_id: oid, ...body,
+      id: tempId, object_id: oid, ...body, tags: body.tags ?? [],
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       attachments: [], pending: true,
     };

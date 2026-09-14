@@ -47,6 +47,17 @@
   --transition: 150ms ease;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
+
+  /* Tag chips: eight hues picked by a hash of the tag's name. Every pair is checked for at least
+     4.5:1 contrast by tests/tags.test.ts, so the colour never costs legibility. */
+  --tag-0-bg: #e3f1ec; --tag-0-fg: #14532d;
+  --tag-1-bg: #e4ecfb; --tag-1-fg: #1e3a8a;
+  --tag-2-bg: #fbe9e3; --tag-2-fg: #7c2d12;
+  --tag-3-bg: #f3e8fb; --tag-3-fg: #581c87;
+  --tag-4-bg: #fdf3d8; --tag-4-fg: #713f12;
+  --tag-5-bg: #fce7ef; --tag-5-fg: #831843;
+  --tag-6-bg: #e0f4f7; --tag-6-fg: #164e63;
+  --tag-7-bg: #eceef1; --tag-7-fg: #1f2937;
 }
 :root[data-theme="dark"] {
   --bg: #121412;
@@ -62,6 +73,15 @@
   --shadow: none;
   --focus: #ecebe6;
   color-scheme: dark;
+
+  --tag-0-bg: #16392d; --tag-0-fg: #b7f0d2;
+  --tag-1-bg: #1c2d55; --tag-1-fg: #c7d7fe;
+  --tag-2-bg: #4a2417; --tag-2-fg: #fed7c7;
+  --tag-3-bg: #3a1d52; --tag-3-fg: #e9d5ff;
+  --tag-4-bg: #45330c; --tag-4-fg: #fde68a;
+  --tag-5-bg: #4d1a33; --tag-5-fg: #fbcfe8;
+  --tag-6-bg: #123c47; --tag-6-fg: #bae6fd;
+  --tag-7-bg: #2b313a; --tag-7-fg: #e5e7eb;
 }
 * { box-sizing: border-box; margin: 0; }
 html, body { min-height: 100%; }
@@ -166,6 +186,18 @@ input[type='checkbox'], input[type='radio'] {
 .chip.due { background: var(--danger); color: #fff; }
 .chip.pending { background: var(--warn); color: #fff; flex: none; white-space: nowrap; }
 .chip.dead { background: var(--danger); color: #fff; flex: none; white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-full); padding: 2px var(--space-2); font-size: var(--text-xs); font-weight: 600; line-height: 1.4; border: 0; min-height: 0; }
+button.tag { cursor: pointer; }
+.tag.active { outline: 2px solid currentColor; outline-offset: 1px; }
+.tag-0 { background: var(--tag-0-bg); color: var(--tag-0-fg); }
+.tag-1 { background: var(--tag-1-bg); color: var(--tag-1-fg); }
+.tag-2 { background: var(--tag-2-bg); color: var(--tag-2-fg); }
+.tag-3 { background: var(--tag-3-bg); color: var(--tag-3-fg); }
+.tag-4 { background: var(--tag-4-bg); color: var(--tag-4-fg); }
+.tag-5 { background: var(--tag-5-bg); color: var(--tag-5-fg); }
+.tag-6 { background: var(--tag-6-bg); color: var(--tag-6-fg); }
+.tag-7 { background: var(--tag-7-bg); color: var(--tag-7-fg); }
+.tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 /* The row scrolls; without the mask it just looks cut off. The fade is the affordance -- a
    scrollbar is invisible on a touch device, and an arrow would need a tap target for something
    a swipe already does. Horizontal padding equal to the ring's bleed (2px outline + 2px offset

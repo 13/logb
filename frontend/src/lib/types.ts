@@ -33,11 +33,12 @@ export interface MemObject {
   /** The chain from the root down to this object's parent, nearest last. A single-object read
    *  fills this in; a list response leaves it out, so it is optional rather than empty. */
   ancestors?: { id: number; name: string }[];
+  tags: string[];
 }
 export interface ObjectInput {
   name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
-  parent_id?: number | null;
+  parent_id?: number | null; tags?: string[];
 }
 
 export interface Attachment {
@@ -58,8 +59,12 @@ export interface Activity {
   /** Set client-side only, for a synthetic entry built from a still-queued outbox op — the
    *  server never sends this field. See `pendingToActivity` in ObjectDetail.svelte. */
   pending?: boolean;
+  tags: string[];
 }
-export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null; quantity_milli: number | null }
+export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null; quantity_milli: number | null; tags?: string[] }
+
+/** `GET /tags`: every distinct tag in use, with how many objects and entries carry it. */
+export interface TagCount { tag: string; count: number }
 
 export interface TitleSuggestion {
   title: string; category: Category; last_date: string;

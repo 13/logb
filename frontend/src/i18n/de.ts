@@ -388,4 +388,12 @@ export default {
   'stats.none': 'Für diesen Zeitraum sind keine Kosten erfasst.',
   'stats.expand': 'Inhalt von {name} zeigen',
   'stats.collapse': 'Inhalt von {name} ausblenden',
+
+  'tags.label': 'Tags',
+  'tags.placeholder': 'Tag hinzufügen',
+  'tags.remove': '{tag} entfernen',
+  'tags.too-long': 'Ein Tag darf höchstens 32 Zeichen lang sein.',
+  'tags.too-many': 'Höchstens 10 Tags.',
+  'tags.filter': 'Tag: {tag}',
+  'tags.clear': 'Tag-Filter aufheben',
 } as Record<string, string>;

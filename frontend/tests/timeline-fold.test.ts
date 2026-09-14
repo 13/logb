@@ -5,7 +5,7 @@ import type { Activity, Category } from '../src/lib/types';
 function a(id: number, category: Category, counter: number | null = null, pending = false): Activity {
   return {
     id, object_id: 1, date: '2026-09-01', category, title: `t${id}`, notes: '', counter_value: counter,
-    cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [], pending,
+    cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [], pending, tags: [],
   };
 }
 

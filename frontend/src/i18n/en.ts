@@ -388,4 +388,12 @@ export default {
   'stats.none': 'No costs recorded for this period.',
   'stats.expand': 'Show what is inside {name}',
   'stats.collapse': 'Hide what is inside {name}',
+
+  'tags.label': 'Tags',
+  'tags.placeholder': 'Add a tag',
+  'tags.remove': 'Remove {tag}',
+  'tags.too-long': 'A tag can be at most 32 characters.',
+  'tags.too-many': 'Up to 10 tags.',
+  'tags.filter': 'Tag: {tag}',
+  'tags.clear': 'Clear tag filter',
 } as Record<string, string>;

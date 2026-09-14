@@ -81,7 +81,7 @@
       cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
       quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
-      pending: true,
+      pending: true, tags: Array.isArray(b.tags) ? b.tags : [],
     };
   }
 
