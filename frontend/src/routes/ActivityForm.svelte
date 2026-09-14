@@ -3,6 +3,7 @@
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
   import Icon from '../lib/Icon.svelte';
+  import TagInput from '../lib/TagInput.svelte';
   import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueued, updateQueuedActivity } from '../lib/api';
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
@@ -12,7 +13,7 @@
   import { fieldError } from '../lib/form-error';
   import { categoriesFor } from '../lib/object-types';
   import { locale, t } from '../i18n';
-  import { type Activity, type Attachment, type MemObject, type ActivityInput, type TitleSuggestion } from '../lib/types';
+  import { type Activity, type Attachment, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -28,6 +29,8 @@
   let error = $state('');
   let busy = $state(false);
   let allSuggestions = $state<TitleSuggestion[]>([]);
+  /** Tags already in use, offered while typing one. */
+  let tagCounts = $state<TagCount[]>([]);
   const suggestions = $derived(suggestionsFor(allSuggestions, input.category));
   // The object's vocabulary, plus whatever this entry already says. An entry logged before its
   // object was re-typed must keep its own category in the list, or saving an untouched form
@@ -46,6 +49,9 @@
   const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
 
   onMount(async () => {
+    // Not awaited, and a failure is ignored: this form has to work offline, and suggestions are
+    // only a convenience. `tags` itself travels in `input`, so the outbox carries it like `notes`.
+    api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
     try {
       object = await api<MemObject>('GET', `/objects/${oid}`);
       setCachedObject(oid, object);
@@ -164,6 +170,9 @@
   function buildInput(): ActivityInput {
     return {
       ...input,
+      // A plain copy: `input.tags` is a $state proxy, and IndexedDB cannot clone a proxy, so
+      // queuing this body offline (the outbox) would fail with the spread's array left as it is.
+      tags: [...(input.tags ?? [])],
       cost_cents: parseMoney(costText),
       // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
       counter_value: String(counterText).trim() === '' ? null : Number(counterText),
@@ -319,6 +328,7 @@
       </div>
     {/if}
     <div class="field"><label for="no">{$t('activity.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
+    <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
 
     <h2>{$t('activity.photos')}</h2>
     {#if attachments.length > 0}

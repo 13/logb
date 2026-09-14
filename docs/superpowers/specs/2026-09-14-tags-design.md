@@ -1,6 +1,6 @@
 # Tags on objects and entries
 
-Status: approved, not implemented. Second of three projects (objects list → tags → own types).
+Status: implemented. Second of three projects (objects list → tags → own types).
 
 Objects and entries can only be told apart by name, type and category. A household wants its own
 words for them -- "lease", "Garage 2", "warranty", "tax 2026" -- and wants to find everything

@@ -2,11 +2,11 @@ import { todayIso } from './format';
 import type { Activity, ActivityInput, Category, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
-  return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null };
+  return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null, tags: [] };
 }
 
 export function toActivityInput(a: Activity): ActivityInput {
-  return { date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli };
+  return { date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags] };
 }
 
 /** Returns the i18n key of the offending field, or null when valid. */

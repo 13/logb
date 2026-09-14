@@ -1,4 +1,6 @@
-import type { TagCount } from './types';
+// `.js`: tests/tags.test.ts is type-checked under tsconfig.node.json (nodenext), which needs an
+// extension here; the browser config's bundler resolution maps it to types.ts all the same.
+import type { TagCount } from './types.js';
 
 export const TAG_PALETTE_SIZE = 8;
 export const MAX_TAGS = 10;

@@ -9,11 +9,13 @@
   import { categoriesFor } from './object-types';
   import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
+  import TagChips from './TagChips.svelte';
+  import { tagColorIndex } from './tags';
 
-  let { objectId, type, activities, total, loadingMore = false, onmore, onlog, unit, category = $bindable('') }:
+  let { objectId, type, activities, total, loadingMore = false, onmore, onlog, unit, category = $bindable(''), tagFilter = $bindable(null) }:
     {
       objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
-      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | '';
+      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | ''; tagFilter?: string | null;
     } = $props();
   const groups = $derived(groupByYear(activities));
   const hasMore = $derived(activities.length < total);
@@ -55,11 +57,18 @@
   {/each}
 </div>
 
+{#if tagFilter !== null}
+  <div class="tag-filter">
+    <span class={`tag tag-${tagColorIndex(tagFilter)}`}>{$t('tags.filter', { tag: tagFilter })}</span>
+    <button class="ghost" onclick={() => (tagFilter = null)}>{$t('tags.clear')}</button>
+  </div>
+{/if}
+
 {#if activities.length === 0}
   <!-- An object with no history and an object whose filter matched nothing are not the same
        screen: the first is an invitation, the second is a fact about the chip above it. -->
   <div class="empty">
-    {#if category === ''}
+    {#if category === '' && tagFilter === null}
       <span class="empty-icon"><Icon name="edit" size={40} /></span>
       <p>{$t('timeline.empty')}</p>
       {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}
@@ -94,6 +103,9 @@
           {@render readingRow(row.activity)}
         {:else}
           {@const a = row.activity}
+          <!-- The chips can be buttons, and a button cannot sit inside the entry's button, so they
+               sit below it; `.entry-row` keeps the two together as one item of the list. -->
+          <div class="entry-row">
           <button
             class="card entry"
             class:pending={a.pending}
@@ -119,6 +131,10 @@
               </div>
             {/if}
           </button>
+          {#if (a.tags ?? []).length > 0}
+            <div class="entry-tags"><TagChips tags={a.tags} onselect={(tag) => (tagFilter = tag)} active={tagFilter} /></div>
+          {/if}
+          </div>
         {/if}
       {/each}
     </div>
@@ -146,6 +162,9 @@
   .head b { flex: 1; }
   .head .chip { flex: none; }
   .notes { font-size: var(--text-sm); white-space: pre-wrap; }
+  .entry-tags { margin-top: var(--space-1); padding-left: var(--space-3); }
+  .tag-filter { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+  .tag-filter button { font-size: var(--text-sm); }
   .more { width: 100%; margin-top: var(--space-3); }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
 </style>

@@ -1,4 +1,5 @@
 import type { MemObject, ObjectType } from './types';
+import { foldTag } from './tags';
 
 export const SORT_KEYS = ['name', 'last-activity', 'changed', 'cost', 'counter'] as const;
 export type SortKey = (typeof SORT_KEYS)[number];
@@ -20,7 +21,7 @@ function fold(s: string): string {
 export function matchesQuery(o: MemObject, query: string, typeLabel: (t: ObjectType) => string): boolean {
   const q = fold(query.trim());
   if (!q) return true;
-  return [o.name, typeLabel(o.type), o.description].some((field) => fold(field).includes(q));
+  return [o.name, typeLabel(o.type), o.description, ...o.tags].some((field) => fold(field).includes(q));
 }
 
 /** The value each non-name sort orders by, highest or newest first. Null means "not known", and
@@ -48,23 +49,27 @@ export function sortObjects(list: MemObject[], key: SortKey, locale: string): Me
 
 export interface ListRow { object: MemObject; parentName: string | null }
 
-/** What the list shows for a tab, a query and a sort.
+/** What the list shows for a tab, a query, a sort and a tag filter.
  *
  *  The active tab without a query shows top-level objects, as the dashboard always has -- a
  *  child is reached through its parent. An object whose parent is not active counts as
  *  top-level there, or a live child of an archived parent would appear nowhere. A query searches
  *  every depth, and the archived tab is flat; both name each object's parent so two "Filter"s in
- *  different rooms can be told apart. */
+ *  different rooms can be told apart. A tag filter is a search too: the boiler tagged "winter"
+ *  lives inside the house, and a filter that only looked at top-level objects would hide it. */
 export function visibleRows(
   active: MemObject[], archived: MemObject[], tab: ListTab, query: string, sort: SortKey,
-  typeLabel: (t: ObjectType) => string, locale: string,
+  typeLabel: (t: ObjectType) => string, locale: string, tag: string | null = null,
 ): ListRow[] {
   const names = new Map<number, string>([...active, ...archived].map((o) => [o.id, o.name]));
   const activeIds = new Set(active.map((o) => o.id));
-  const searching = query.trim() !== '';
+  const searching = query.trim() !== '' || tag !== null;
+  const wanted = tag === null ? null : foldTag(tag);
   const pool = tab === 'archived' ? archived : active;
   const shown = pool.filter((o) => {
-    if (searching) return matchesQuery(o, query, typeLabel);
+    if (searching) {
+      return matchesQuery(o, query, typeLabel) && (wanted === null || o.tags.some((x) => foldTag(x) === wanted));
+    }
     if (tab === 'archived') return true;
     return o.parent_id === null || !activeIds.has(o.parent_id);
   });

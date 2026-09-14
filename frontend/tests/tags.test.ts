@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { addTag, contrastRatio, foldTag, removeTag, suggestTags, tagColorIndex, TAG_PALETTE_SIZE } from '../src/lib/tags';
+import { addTag, contrastRatio, foldTag, removeTag, suggestTags, tagColorIndex, TAG_PALETTE_SIZE } from '../src/lib/tags.ts';
 
 describe('tagColorIndex', () => {
   it('is stable and ignores case and accents', () => {

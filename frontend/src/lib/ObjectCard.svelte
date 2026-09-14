@@ -7,7 +7,9 @@
   import type { MemObject } from './types';
   import { typeIcon } from './object-types';
   import Icon from './Icon.svelte';
-  let { object, parentName = null }: { object: MemObject; parentName?: string | null } = $props();
+  import TagChips from './TagChips.svelte';
+  /** `ontag` makes the chips buttons that filter by their tag; without it they are plain labels. */
+  let { object, parentName = null, ontag }: { object: MemObject; parentName?: string | null; ontag?: (tag: string) => void } = $props();
 </script>
 
 <!-- The quick-log action belongs to this object, so it sits inside the object's card rather than
@@ -16,8 +18,11 @@
      button, and the card is a button: the whole row navigates, and 26 e2e tests find objects by
      that button's accessible name. So the card stays the button and the quick-log action is a
      sibling positioned within its bounds. Both are in the tab order, in reading order, and the
-     card's padding-right keeps its text from running under the action. -->
+     card's padding-right keeps its text from running under the action. The tag chips can be
+     buttons too, so they sit below the card rather than in it; `.card-box` is what the action is
+     centred on, so the chips' height does not pull it down off the card. -->
 <div class="card-row">
+  <div class="card-box">
   <button class="card list-card" onclick={() => go(`/objects/${object.id}`)}>
     {#if object.cover_file_id}
       <img class="thumb cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" />
@@ -44,10 +49,16 @@
   </button>
   <button class="quicklog" aria-label={$t('dash.log')}
           onclick={() => go(`/objects/${object.id}/activities/new`)}><Icon name="plus" /></button>
+  </div>
+  {#if (object.tags ?? []).length > 0}
+    <div class="card-tags"><TagChips tags={object.tags} onselect={ontag} /></div>
+  {/if}
 </div>
 
 <style>
-  .card-row { position: relative; }
+  .card-box { position: relative; }
+  /* Inset by the card's own padding, so the chips start where the card's content does. */
+  .card-tags { margin-top: var(--space-1); padding-left: var(--space-3); }
   .list-card {
     display: flex; gap: var(--space-3); align-items: center; text-align: left; width: 100%;
     background: var(--surface); border: 1px solid var(--border);

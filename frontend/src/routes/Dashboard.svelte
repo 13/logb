@@ -9,6 +9,7 @@
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
   import type { MemObject, ObjectType, Reminder } from '../lib/types';
+  import { tagColorIndex } from '../lib/tags';
   import Icon from '../lib/Icon.svelte';
 
   let active = $state<MemObject[]>([]);
@@ -25,6 +26,8 @@
   let sort = $state<SortKey>(parseSort(params.get('sort')) ?? parseSort($rememberedSort) ?? 'name');
   /** Session-only: a search is a moment's question, not a way of looking at the list. */
   let query = $state('');
+  /** Session-only too, and not in the address: set by tapping a chip on a card. */
+  let tagFilter = $state<string | null>(null);
 
   async function load() {
     loading = true; error = '';
@@ -54,7 +57,7 @@
   });
 
   const typeLabel = (ty: ObjectType) => $t(`type.${ty}`);
-  const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale));
+  const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale, tagFilter));
   const activeCount = $derived(visibleRows(active, archived, 'active', '', 'name', typeLabel, $locale).length);
   const nothingYet = $derived(active.length === 0 && archived.length === 0);
 
@@ -135,11 +138,17 @@
         </select>
       </label>
     </div>
+    {#if tagFilter !== null}
+      <div class="tag-filter">
+        <span class={`tag tag-${tagColorIndex(tagFilter)}`}>{$t('tags.filter', { tag: tagFilter })}</span>
+        <button class="ghost" onclick={() => (tagFilter = null)}>{$t('tags.clear')}</button>
+      </div>
+    {/if}
     {#if rows.length === 0}
-      <p class="muted">{$t('dash.no-match', { q: query.trim() })}</p>
+      <p class="muted">{$t('dash.no-match', { q: query.trim() || (tagFilter ?? '') })}</p>
     {:else}
       <div class="list">
-        {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} />{/each}
+        {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} />{/each}
       </div>
     {/if}
   {/if}
@@ -159,5 +168,7 @@
   .controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-3); }
   .controls input[type='search'] { flex: 1 1 12rem; }
   .sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+  .tag-filter { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+  .tag-filter button { font-size: var(--text-sm); }
   .tabs .count { margin-left: var(--space-1); font-weight: normal; }
 </style>

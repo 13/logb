@@ -11,7 +11,7 @@ function obj(over: Omit<Partial<MemObject>, 'stats'> & { stats?: Partial<MemObje
   return {
     id, user_id: 1, name: `Object ${id}`, type: 'other', counter_unit: null, fuel_unit: null, description: '',
     purchase_date: null, purchase_price_cents: null, archived_at: null, cover_attachment_id: null, cover_file_id: null,
-    parent_id: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    parent_id: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', tags: [],
     ...over,
     stats: {
       total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0,
@@ -99,5 +99,18 @@ describe('visibleRows', () => {
   it('lists archived objects flat, with their parent', () => {
     const rows = visibleRows(active, archived, 'archived', '', 'name', label, 'en');
     expect(rows.map((r) => [r.object.name, r.parentName])).toEqual([['Shed', 'House']]);
+  });
+});
+
+describe('tags in the objects list', () => {
+  const house = obj({ id: 200, name: 'Tag House', tags: ['Lease'] });
+  const boiler = obj({ id: 201, name: 'Tag Boiler', parent_id: 200, tags: ['winter'] });
+  const car = obj({ id: 202, name: 'Tag Car', tags: ['Winter', 'Lease'] });
+  it('search matches tags', () => {
+    expect(visibleRows([house, boiler, car], [], 'active', 'lease', 'name', (t) => t, 'en').map((r) => r.object.name)).toEqual(['Tag Car', 'Tag House']);
+  });
+  it('a tag filter keeps carriers at every depth, ignoring case', () => {
+    const rows = visibleRows([house, boiler, car], [], 'active', '', 'name', (t) => t, 'en', 'WINTER');
+    expect(rows.map((r) => [r.object.name, r.parentName])).toEqual([['Tag Boiler', 'Tag House'], ['Tag Car', null]]);
   });
 });

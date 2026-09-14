@@ -7,6 +7,8 @@
   import Insights from '../lib/Insights.svelte';
   import Icon from '../lib/Icon.svelte';
   import ObjectCard from '../lib/ObjectCard.svelte';
+  import TagChips from '../lib/TagChips.svelte';
+  import { foldTag } from '../lib/tags';
   import { typeIcon } from '../lib/object-types';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
@@ -28,6 +30,8 @@
   let activityTotal = $state(0);
   let loadingMore = $state(false);
   let category = $state<Category | ''>('');
+  /** Session-only, like `category`: a tag tapped on an entry narrows the timeline to it. */
+  let tagFilter = $state<string | null>(null);
   let children = $state<MemObject[]>([]);
   /** Archived children are not listed under Contents, but their costs still count with "Include
    *  contents", so having any is enough to offer the switch. */
@@ -87,7 +91,13 @@
 
   async function pendingActivities(): Promise<Activity[]> {
     const ops = await pendingOpsFor(`/objects/${oid}/activities`);
-    return ops.filter((o) => !category || o.body.category === category).map(pendingToActivity);
+    // The server filters the loaded page by tag; a queued entry has not reached it, so it is
+    // filtered here the same way (ignoring case and accents), or it would show under any tag.
+    const wanted = tagFilter === null ? null : foldTag(tagFilter);
+    return ops
+      .filter((o) => !category || o.body.category === category)
+      .filter((o) => wanted === null || (Array.isArray(o.body.tags) && (o.body.tags as string[]).some((x) => foldTag(x) === wanted)))
+      .map(pendingToActivity);
   }
 
   /// Guards against two loads landing out of order: only the newest may commit its result.
@@ -115,6 +125,7 @@
       const page = await fetchWindow<Activity>(want, base, (limit, offset) => {
         const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (category) params.set('category', category);
+        if (tagFilter) params.set('tag', tagFilter);
         return apiPage<Activity>(`/objects/${oid}/activities?${params}`);
       });
       items = page.items;
@@ -145,7 +156,7 @@
   }
 
   $effect(() => { oid; loadObject(); });
-  $effect(() => { oid; category; loadActivities('reset'); });
+  $effect(() => { oid; category; tagFilter; loadActivities('reset'); });
   $effect(() => { oid; if (tab === 'info') loadChildren(); });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
@@ -218,11 +229,11 @@
       <Timeline
         objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
-        unit={object.counter_unit} bind:category
+        unit={object.counter_unit} bind:category bind:tagFilter
       />
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
            already is; two of them would be two calls to the same action. -->
-      {#if activities.length > 0 || category !== ''}
+      {#if activities.length > 0 || category !== '' || tagFilter !== null}
         <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
       {/if}
     {:else if tab === 'documents'}
@@ -232,6 +243,7 @@
     {:else}
       <h2>{object.name}</h2>
       <p class="muted">{$t(`type.${object.type}`)}</p>
+      <TagChips tags={object.tags ?? []} />
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
       <h3>{$t('object.contents')}</h3>

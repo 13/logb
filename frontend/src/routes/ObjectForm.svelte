@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
+  import TagInput from '../lib/TagInput.svelte';
   import { api } from '../lib/api';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
@@ -12,7 +13,7 @@
   import { readingActivity } from '../lib/reading';
   import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
-  import { OBJECT_TYPES, type MemObject, type ObjectInput } from '../lib/types';
+  import { OBJECT_TYPES, type MemObject, type ObjectInput, type TagCount } from '../lib/types';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
@@ -41,6 +42,8 @@
   }
   let error = $state('');
   let busy = $state(false);
+  /** Tags already in use, offered while typing one. */
+  let tagCounts = $state<TagCount[]>([]);
   /** The objects offered as this one's parent: everything the user owns, minus this object and
    *  its descendants (which the server would refuse as a cycle), minus anything archived. */
   let parentChoices = $state<MemObject[]>([]);
@@ -58,6 +61,9 @@
   }
 
   onMount(async () => {
+    // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
+    // wait for them or lose its object load over them.
+    api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
     if (id) {
       const o = await api<MemObject>('GET', `/objects/${id}`);
       input = toInput(o);
@@ -185,6 +191,7 @@
       </select>
     </div>
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>
+    <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
     <div class="row">
       <div class="field"><label for="pd">{$t('object.purchase-date')}</label><input id="pd" type="date" bind:value={input.purchase_date} /></div>
       <div class="field"><label for="pp">{$t('object.purchase-price')}</label><input id="pp" type="text" inputmode="decimal" bind:value={priceText} /></div>

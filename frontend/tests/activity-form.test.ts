@@ -10,11 +10,12 @@ describe('activity form', () => {
   it('defaults the date to today', () => {
     expect(emptyActivity().date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(emptyActivity().category).toBe('maintenance');
+    expect(emptyActivity().tags).toEqual([]);
   });
 
   it('maps an activity to input', () => {
-    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300 };
-    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300 });
+    const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300, tags: ['Winter'] };
+    expect(toActivityInput(src)).toEqual({ date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300, tags: ['Winter'] });
   });
 
   it('validates required fields', () => {

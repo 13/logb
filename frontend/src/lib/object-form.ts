@@ -1,14 +1,14 @@
 import type { MemObject, ObjectInput } from './types';
 
 export function emptyInput(): ObjectInput {
-  return { name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false, parent_id: null };
+  return { name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false, parent_id: null, tags: [] };
 }
 
 export function toInput(o: MemObject): ObjectInput {
   return {
     name: o.name, type: o.type, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
     purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents, archived: o.archived_at !== null,
-    parent_id: o.parent_id,
+    parent_id: o.parent_id, tags: [...o.tags],
   };
 }
 
