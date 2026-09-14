@@ -193,32 +193,40 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   expect(gaps.below, `the controls row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
 });
 
-// An empty list is what these tabs are initialised with, not an answer from the server. Drawing
-// the empty state from it put a full icon-sentence-button block on screen while the first
-// request was still out, and took it away again when the answer arrived -- a bigger flash than
-// the one-line "nothing yet" it replaced.
-test('an empty state waits for the answer before claiming there is nothing', async ({ page }) => {
-  await signInFresh(page, '11-controls');
-  await page.getByRole('button', { name: /New object/ }).click();
-  await page.getByLabel('Name').fill('Empty flash probe');
-  await page.getByLabel('Type').selectOption('bike');
-  await page.getByRole('button', { name: 'Save' }).click();
+test.describe('empty state timing', () => {
+  // `/api/objects/*/attachments` and `/api/reminders` are matched by the service worker's
+  // `householdData` route (NetworkFirst), and a request it handles never reaches `page.route` --
+  // this test is about the dashboard's loading/empty state, not about the service worker, so it
+  // runs with the worker blocked to get its delayed response back under `page.route`'s control.
+  test.use({ serviceWorkers: 'block' });
 
-  // Hold both answers back long enough that a premature empty state would be on screen.
-  for (const path of ['**/api/objects/*/attachments', '**/api/objects/*/reminders']) {
-    await page.route(path, async (route) => {
-      await new Promise((r) => setTimeout(r, 1500));
-      await route.continue();
-    });
-  }
+  // An empty list is what these tabs are initialised with, not an answer from the server. Drawing
+  // the empty state from it put a full icon-sentence-button block on screen while the first
+  // request was still out, and took it away again when the answer arrived -- a bigger flash than
+  // the one-line "nothing yet" it replaced.
+  test('an empty state waits for the answer before claiming there is nothing', async ({ page }) => {
+    await signInFresh(page, '11-controls');
+    await page.getByRole('button', { name: /New object/ }).click();
+    await page.getByLabel('Name').fill('Empty flash probe');
+    await page.getByLabel('Type').selectOption('bike');
+    await page.getByRole('button', { name: 'Save' }).click();
 
-  const docsEmpty = page.getByText(/Receipts, manuals|Belege, Handb/);
-  await page.getByRole('button', { name: 'Documents' }).click();
-  await expect(docsEmpty, 'the documents empty state was drawn before the request answered').toHaveCount(0);
-  await expect(docsEmpty).toBeVisible({ timeout: 5000 });
+    // Hold both answers back long enough that a premature empty state would be on screen.
+    for (const path of ['**/api/objects/*/attachments', '**/api/objects/*/reminders']) {
+      await page.route(path, async (route) => {
+        await new Promise((r) => setTimeout(r, 1500));
+        await route.continue();
+      });
+    }
 
-  const remEmpty = page.getByText(/A reminder watches|Eine Erinnerung/);
-  await page.getByRole('button', { name: 'Reminders' }).click();
-  await expect(remEmpty, 'the reminders empty state was drawn before the request answered').toHaveCount(0);
-  await expect(remEmpty).toBeVisible({ timeout: 5000 });
+    const docsEmpty = page.getByText(/Receipts, manuals|Belege, Handb/);
+    await page.getByRole('button', { name: 'Documents' }).click();
+    await expect(docsEmpty, 'the documents empty state was drawn before the request answered').toHaveCount(0);
+    await expect(docsEmpty).toBeVisible({ timeout: 5000 });
+
+    const remEmpty = page.getByText(/A reminder watches|Eine Erinnerung/);
+    await page.getByRole('button', { name: 'Reminders' }).click();
+    await expect(remEmpty, 'the reminders empty state was drawn before the request answered').toHaveCount(0);
+    await expect(remEmpty).toBeVisible({ timeout: 5000 });
+  });
 });

@@ -1,6 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { signInFresh } from './helpers';
 
+// `/api/types` is matched by the service worker's `householdData` route (NetworkFirst), and a
+// request it handles never reaches `page.route` -- this test delays that request to check the
+// entry form's own re-render, not the service worker, so it runs with the worker blocked to get
+// the delayed response back under `page.route`'s control.
+test.use({ serviceWorkers: 'block' });
+
 test('an own type is offered, drawn and counted everywhere a built-in one is', async ({ page }) => {
   await signInFresh(page, '24-own-types');
 
