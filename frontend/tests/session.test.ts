@@ -203,6 +203,20 @@ function installCaches(log: string[]) {
   globalThis.caches = { delete: vi.fn(async (name: string) => { log.push(`delete:${name}`); return true; }) } as unknown as CacheStorage;
 }
 
+/**
+ * Like `installCaches`, but each delete only finishes a macrotask later, logging `deleted:` when
+ * it does. A real `caches.delete` is asynchronous, and until it resolves a fetch can still be
+ * answered from the old cache -- so "called before the user is set" proves nothing; "finished
+ * before the user is set" is the ordering that matters.
+ */
+function installSlowCaches(log: string[]) {
+  globalThis.caches = {
+    delete: vi.fn((name: string) => new Promise<boolean>((resolve) => {
+      setTimeout(() => { log.push(`deleted:${name}`); resolve(true); }, 0);
+    })),
+  } as unknown as CacheStorage;
+}
+
 const PROFILE = { id: 7, username: 'ben', is_admin: true, lang: 'de' };
 
 /**
@@ -275,7 +289,7 @@ describe('offline start and cache ownership', () => {
     storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
     storage.setItem('logb.cache.user', '7');
     const log: string[] = [];
-    installCaches(log);
+    installSlowCaches(log);
     serve({});
     const session = await freshSession();
     expect(await session.loadSession()).toBe(false);
@@ -289,11 +303,42 @@ describe('offline start and cache ownership', () => {
     session.user.subscribe((u) => { if (u && u.id === 8) log.push('user:8'); });
     expect(await session.loadSession()).toBe(true);
 
-    expect(log.slice(0, 3)).toEqual(['delete:logb-api', 'delete:logb-files', 'user:8']);
+    // The deletes have FINISHED (not merely started) before the new user is set.
+    expect(log.slice(0, 3)).toEqual(['deleted:logb-api', 'deleted:logb-files', 'user:8']);
     expect(log.indexOf('fetch:/settings')).toBeGreaterThan(log.indexOf('user:8'));
     expect(storage.getItem('logb.cache.user')).toBe('8');
     expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual(OTHER);
     expect(get(session.offline)).toBe(false);
+  });
+
+  it('an offline start with caches owned by someone else finishes clearing them before showing the profile', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '9'); // half-written or edited: not provably PROFILE's
+    const log: string[] = [];
+    installSlowCaches(log);
+    serve({});
+    const session = await freshSession();
+    session.user.subscribe((u) => { if (u && u.id === 7) log.push('user:7'); });
+
+    expect(await session.loadSession()).toBe(false);
+
+    expect(log).toEqual(['deleted:logb-api', 'deleted:logb-files', 'user:7']);
+    expect(get(session.offline)).toBe(true);
+  });
+
+  /** A reset database starts user ids over, so a new user 7 must not inherit the old one's caches. */
+  it('forgets the profile and the cache owner when the instance needs setup', async () => {
+    const storage = installStorage();
+    storage.setItem('logb.session.profile', JSON.stringify(PROFILE));
+    storage.setItem('logb.cache.user', '7');
+    serve({ '/auth/status': () => jsonResponse(200, { setup_required: true }) });
+    const session = await freshSession();
+
+    expect(await session.loadSession()).toBe(true);
+
+    expect(storage.getItem('logb.session.profile')).toBeNull();
+    expect(storage.getItem('logb.cache.user')).toBeNull();
   });
 
   it('clears on a first sign-in with no owner recorded, and remembers who signed in', async () => {

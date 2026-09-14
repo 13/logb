@@ -115,7 +115,9 @@ not an installed app: no offline, no home-screen icon.
 
 If several people sign in on one phone, note that a write queued offline
 belongs to whoever made it: it stays put until that person signs back in, and
-nobody else can see, send or discard it.
+nobody else can see, send or discard it. Started without a connection, the app
+opens as the last person signed in, on what it saved for them; signing out
+removes that, and nobody else ever sees another person's saved data.
 
 ## Backup
 

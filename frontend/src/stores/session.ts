@@ -1,4 +1,4 @@
-import { get, writable } from 'svelte/store';
+import { get, readonly, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
 import { api, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { claimCaches, forgetCacheOwner, forgetProfile, rememberedProfile, rememberProfile } from '../lib/cache-owner';
@@ -27,8 +27,12 @@ export const currency = writable<string>('EUR');
  * could not reach the server. `user` is then that remembered profile, not a confirmed session:
  * `sessionKnown` stays false, so the retry listeners keep asking and the outbox keeps holding
  * its writes until a real answer arrives.
+ *
+ * Read-only outside this module: only the session check may decide it, and a component setting
+ * it would show the note (or hide it) without anything about the session having changed.
  */
-export const offline = writable<boolean>(false);
+const offlineState = writable<boolean>(false);
+export const offline: Readable<boolean> = readonly(offlineState);
 
 /**
  * Everything a session leaves behind on this device, dropped. Login and logout are SPA
@@ -44,8 +48,10 @@ export const offline = writable<boolean>(false);
 function endSession(): void {
   user.set(null);
   sessionKnown = true;
-  offline.set(false);
-  clearObjectCache();
+  offlineState.set(false);
+  // Not awaited: nobody is signed in afterwards, so nothing loads that the old caches could
+  // answer, and the next session start claims (and, being ownerless, clears) them again anyway.
+  void clearObjectCache();
   clearCustomTypes();
   setOutboxUser(null);
   forgetProfile();
@@ -94,10 +100,12 @@ export function loadSession(): Promise<boolean> {
   return inFlight;
 }
 
-/** Drops the on-disk and in-memory caches when they are not `userId`'s (see ./cache-owner). */
-function clearCachesUnlessOwnedBy(userId: number): boolean {
+/** Drops the on-disk and in-memory caches when they are not `userId`'s (see ./cache-owner).
+ *  Resolves only once the service-worker caches are really gone, so a caller that then sets the
+ *  user cannot have the first load for them answered from the previous person's cache. */
+async function clearCachesUnlessOwnedBy(userId: number): Promise<boolean> {
   if (!claimCaches(userId)) return false;
-  clearObjectCache();
+  await clearObjectCache();
   clearCustomTypes();
   // `clearCustomTypes` forgets only the list of the owner it knows in this tab; after a reload
   // that is nobody, so the previous person's stored list would otherwise stay on disk.
@@ -118,12 +126,12 @@ async function adoptUser(me: User): Promise<void> {
     user.set(undefined);
     await tick();
   }
-  if (clearCachesUnlessOwnedBy(me.id) && shown?.id === me.id) {
+  if ((await clearCachesUnlessOwnedBy(me.id)) && shown?.id === me.id) {
     // Same person still on screen, so App's per-user type load will not rerun on its own.
     void loadCustomTypes(me.id);
   }
   rememberProfile(me);
-  offline.set(false);
+  offlineState.set(false);
   user.set(me);
   setOutboxUser(me.id);
 }
@@ -134,16 +142,20 @@ async function adoptUser(me: User): Promise<void> {
  * is asserted about the session: it stays unknown, the retry keeps trying, and the outbox may
  * queue under this id but not send (see `setOutboxSendGate`).
  */
-function openOffline(): void {
+async function openOffline(): Promise<void> {
   if (sessionKnown) return; // a known session is not undone by one failed request
   const profile = rememberedProfile();
   if (!profile) return;
   // The profile and owner are written together, so they agree -- unless storage was half
-  // written or edited. Then the caches are not provably this person's, and must go.
-  clearCachesUnlessOwnedBy(profile.id);
+  // written or edited. Then the caches are not provably this person's, and must be gone before
+  // anything renders for them.
+  await clearCachesUnlessOwnedBy(profile.id);
+  // Re-checked: `inFlight` serialises `loadSession`, but `login` does not go through it, and a
+  // sign-in that completed while the deletes ran must not be overwritten by the old profile.
+  if (sessionKnown) return;
   if (get(user)?.id !== profile.id) user.set({ ...profile });
   setOutboxUser(profile.id);
-  offline.set(true);
+  offlineState.set(true);
 }
 
 async function doLoadSession(): Promise<boolean> {
@@ -155,15 +167,20 @@ async function doLoadSession(): Promise<boolean> {
     // that the user is signed out, which would be a lie the outbox then acts on. The `online`
     // and `visibilitychange` listeners above try again. Without a server answer (as
     // `isRejection` tells them apart) the last user may still open offline.
-    if (!isRejection(e)) openOffline();
+    if (!isRejection(e)) await openOffline();
     return false;
   }
   setupRequired.set(status.setup_required);
   if (status.setup_required) {
     user.set(null);
     sessionKnown = true;
-    offline.set(false);
+    offlineState.set(false);
     setOutboxUser(null);
+    // A reset database hands out user ids from 1 again: the previous instance's profile must not
+    // open offline, and its caches must not count as the new user 7's because an old user 7 left
+    // them. Without an owner recorded, the first sign-in clears them.
+    forgetProfile();
+    forgetCacheOwner();
     return true;
   }
   let me: User;
@@ -175,7 +192,7 @@ async function doLoadSession(): Promise<boolean> {
     // (offline, a 5xx) says only that we still do not know, so it must not be recorded as an
     // answer.
     if (isRejection(e)) { endSession(); return true; }
-    openOffline();
+    await openOffline();
     return false;
   }
   await adoptUser(me);

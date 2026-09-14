@@ -1,6 +1,6 @@
 # Offline API cache that actually caches
 
-Status: approved, not implemented.
+Status: implemented.
 
 ## Problem
 

@@ -30,6 +30,25 @@ describe('clearObjectCache', () => {
     expect(del).toHaveBeenCalledTimes(2);
   });
 
+  it('clears the Maps at once, and resolves only after both deletes have finished', async () => {
+    const pending: Array<() => void> = [];
+    globalThis.caches = {
+      delete: vi.fn(() => new Promise<boolean>((r) => pending.push(() => r(true)))),
+    } as unknown as CacheStorage;
+    setCachedObject(1, obj);
+
+    let done = false;
+    const cleared = clearObjectCache().then(() => { done = true; });
+    // Synchronous: a load racing the deletes must already miss the in-memory copy.
+    expect(getCachedObject(1)).toBeUndefined();
+
+    await Promise.resolve();
+    expect(done).toBe(false);
+    pending.forEach((resolve) => resolve());
+    await cleared;
+    expect(done).toBe(true);
+  });
+
   it('does not throw when the Cache API does not exist (vitest, older browsers)', () => {
     // @ts-expect-error -- deliberately absent, as in the node test environment by default
     delete globalThis.caches;

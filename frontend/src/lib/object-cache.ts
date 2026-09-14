@@ -54,10 +54,15 @@ export function setCachedActivities(id: number, page: { items: Activity[]; total
  *  re-poisoned from it on the very next load. `globalThis.caches` is guarded because it does
  *  not exist under vitest (node) or in a browser with no service worker support. Call on
  *  logout and on any handled unauthorized response — this cache must never survive past the
- *  session that populated it. */
-export function clearObjectCache(): void {
+ *  session that populated it.
+ *
+ *  The Maps are cleared synchronously; the returned promise resolves once both Workbox caches
+ *  are actually gone. A caller about to load data for a DIFFERENT user must await it: until a
+ *  `caches.delete` settles, the service worker can still answer from the old cache. */
+export function clearObjectCache(): Promise<void> {
   objects.clear();
   activityPages.clear();
-  void globalThis.caches?.delete('logb-api');
-  void globalThis.caches?.delete('logb-files');
+  const store = globalThis.caches;
+  if (!store) return Promise.resolve();
+  return Promise.all([store.delete('logb-api'), store.delete('logb-files')]).then(() => {});
 }
