@@ -1214,6 +1214,49 @@
         }
       }
     },
+    "/stats": {
+      "get": {
+        "summary": "Spend across all of the caller's objects: over time, by object (children rolled up), by type and by category.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1900,
+              "maximum": 9999
+            },
+            "description": "Restrict to one year; over_time then has twelve YYYY-MM buckets. Omitted: all years, one YYYY bucket each."
+          },
+          {
+            "name": "purchases",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Count objects' purchase prices, as by_category bucket purchase_price. Skipped for an object with a costed purchase entry."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "year is not a number or out of range"
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "summary": "Instance settings.",
@@ -2722,6 +2765,38 @@
               }
             }
           }
+        }
+      },
+      "StatsAmount": {
+        "type": "object",
+        "required": ["bucket", "cost_cents"],
+        "properties": {
+          "bucket": { "type": "string" },
+          "cost_cents": { "type": "integer", "format": "int64" }
+        }
+      },
+      "StatsObject": {
+        "type": "object",
+        "required": ["id", "name", "type", "archived", "cost_cents", "children"],
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "archived": { "type": "boolean" },
+          "cost_cents": { "type": "integer", "format": "int64", "description": "Own spend plus every descendant's." },
+          "children": { "type": "array", "items": { "$ref": "#/components/schemas/StatsObject" } }
+        }
+      },
+      "Stats": {
+        "type": "object",
+        "required": ["total_cents", "years", "over_time", "by_object", "by_type", "by_category"],
+        "properties": {
+          "total_cents": { "type": "integer", "format": "int64" },
+          "years": { "type": "array", "items": { "type": "string" }, "description": "Every year with spend, newest first; ignores the year filter." },
+          "over_time": { "type": "array", "items": { "$ref": "#/components/schemas/StatsAmount" } },
+          "by_object": { "type": "array", "items": { "$ref": "#/components/schemas/StatsObject" } },
+          "by_type": { "type": "array", "items": { "$ref": "#/components/schemas/StatsAmount" } },
+          "by_category": { "type": "array", "items": { "$ref": "#/components/schemas/StatsAmount" } }
         }
       },
       "Bucket": {
