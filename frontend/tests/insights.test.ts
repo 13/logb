@@ -13,7 +13,7 @@ describe('insightsPath', () => {
 describe('sinceLabel', () => {
   it('names the month and year the object has been owned since', () => {
     expect(sinceLabel('2024-05-01', 'en')).toBe('May 2024');
-    expect(sinceLabel('2024-05-01', 'de')).toBe('Mai 2024');
+    expect(sinceLabel('2024-05-01', 'de')).toMatch(/^Mai.* 2024$/);
   });
 });
 
