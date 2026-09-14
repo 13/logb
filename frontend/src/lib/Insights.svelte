@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from './api';
   import BarList from './BarList.svelte';
-  import { counter, money, perCounter, quantity } from './format';
+  import { counter, money, moneyWhole, perCounter, quantity } from './format';
   import { fillLabel, insightsPath, monthLabel, sinceLabel } from './insights';
   import { persisted } from '../stores/persisted';
   import { currency } from '../stores/session';
@@ -13,13 +13,17 @@
   /** Per device and not synced, like the Statistics screen's purchase switch: a way of looking, not data. */
   const includeContents = persisted('logb.insights.contents', false);
 
+  // An object without children always asks for its own figures, whatever the switch last said
+  // on a house. Derived (not read directly in the effect below) so a `hasContents` flip that
+  // doesn't change the resulting path -- e.g. `children` finishing its own load after Insights
+  // has already mounted -- doesn't re-trigger the fetch.
+  const path = $derived(insightsPath(objectId, hasContents && $includeContents));
+
   let data = $state<Insights | null>(null);
   let error = $state('');
 
   $effect(() => {
-    // An object without children always asks for its own figures, whatever the switch last said
-    // on a house.
-    const path = insightsPath(objectId, hasContents && $includeContents);
+    const p = path;
     // Reset before the fetch, not just on success: without this, switching to another object
     // shows the previous one's cost breakdown under the new object's name for however long the
     // request takes -- and indefinitely if it fails, since neither `data` nor `error` was ever
@@ -27,13 +31,14 @@
     data = null;
     error = '';
     let current = true;
-    api<Insights>('GET', path)
+    api<Insights>('GET', p)
       .then((d) => { if (current) data = d; })
       .catch((e) => { if (current) error = (e as Error).message; });
     return () => { current = false; };
   });
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
+  const spent = $derived(data ? data.by_year.some((b) => b.cost_cents > 0) : false);
 </script>
 
 {#if hasContents}
@@ -49,11 +54,11 @@
     <p data-testid="insights-ownership">
       {$t('insights.ownership')}: <b class="tnum">{fmt(o.total_cents)}</b>
       <span class="muted">· {o.per_year_cents !== null
-        ? $t('insights.per-year-since', { amount: fmt(o.per_year_cents), since: sinceLabel(o.since, $locale) })
+        ? $t('insights.per-year-since', { amount: moneyWhole(o.per_year_cents, $currency, $locale), since: sinceLabel(o.since, $locale) })
         : $t('insights.since', { since: sinceLabel(o.since, $locale) })}</span>
     </p>
   {/if}
-  {#if data.by_year.length === 0}
+  {#if !spent}
     <p class="muted">{$t('insights.none')}</p>
   {:else}
     <h3>{$t('insights.spend-by-month')}</h3>

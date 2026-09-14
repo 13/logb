@@ -19,13 +19,17 @@ Top to bottom:
    - The purchase price follows phase 1's rule: counted unless the object has a non-deleted
      `purchase` activity with `cost_cents > 0`, in which case that entry already is the purchase.
    - "Since" is the purchase date, or the object's creation date when there is none.
-   - Per year = total ÷ years owned. Years owned run from "since" to the archive date if the object
-     is archived, otherwise today. The per-year figure is omitted when fewer than 90 days are owned:
-     a few weeks' spend multiplied out to a year is not a figure anyone can use.
+   - Per year = total ÷ years owned, shown in whole currency units (e.g. "€1,300", never
+     "€1,300.00"): it is an average, and cents would claim a precision it does not have. Years
+     owned run from "since" to the archive date if the object is archived, otherwise today. The
+     per-year figure is omitted when fewer than 90 days are owned: a few weeks' spend multiplied
+     out to a year is not a figure anyone can use.
    - With the switch on, every descendant's running costs and purchase price (same rule, per
      descendant) are added to the total. "Since" and years owned stay the object's own.
 3. **Per month.** The last twelve calendar months ending with the current one, oldest first, every
-   month present with 0 when nothing was spent. Running costs only.
+   month present with 0 when nothing was spent. Running costs only. When the object (with
+   descendants, if the switch is on) has no spend at all, the per-month, per-year and per-category
+   bars are replaced by "Not enough data yet." rather than twelve empty €0.00 bars.
 4. **Per year** and **Per category**, as today. Running costs only.
 5. **Cost per km, fuel totals, consumption, usage, usage per month**: unchanged and always the
    object's own. Counters belong to one object; adding a boiler's hours to a house makes no sense.
@@ -99,7 +103,9 @@ already refuses cycles.
   - `sinceLabel(date, locale)` -- "May 2024" from `YYYY-MM-DD`.
   - `fillLabel(date, locale)` -- a short day and month ("10 Jan") for a fill bar.
   Month bars use `monthLabel` (short month and two-digit year): a twelve-month window crosses a
-  year, and two bars both labelled "Sep" would be ambiguous.
+  year, and two bars both labelled "Sep" would be ambiguous. The usage-per-month bars now use the
+  same shared `monthLabel`, not a separate local formatter, and their heading is "Usage per month"
+  (distinct from the spend block's "Spend per month").
 - `ObjectDetail.svelte` passes whether the object has children (it already loads them for the Info
   tab) so the switch can hide without a request.
 - en/de strings for every new label.

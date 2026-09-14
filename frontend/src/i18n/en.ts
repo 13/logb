@@ -206,7 +206,7 @@ export default {
   'reading.warn-implausible': 'Far more than usual since {date}. Check for a typo, then save again.',
 
   'timeline.readings': '{n} readings',
-  'insights.usage-by-month': 'Per month',
+  'insights.usage-by-month': 'Usage per month',
   'insights.contents': 'Include contents',
   'insights.ownership': 'Total cost of ownership',
   'insights.per-year-since': '≈ {amount} a year since {since}',

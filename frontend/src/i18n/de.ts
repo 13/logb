@@ -206,7 +206,7 @@ export default {
   'reading.warn-implausible': 'Weit mehr als üblich seit {date}. Auf Tippfehler prüfen, dann erneut speichern.',
 
   'timeline.readings': '{n} Zählerstände',
-  'insights.usage-by-month': 'Pro Monat',
+  'insights.usage-by-month': 'Nutzung pro Monat',
   'insights.contents': 'Inhalt einrechnen',
   'insights.ownership': 'Gesamtkosten',
   'insights.per-year-since': '≈ {amount} pro Jahr seit {since}',
