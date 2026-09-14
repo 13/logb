@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { money, moneyWhole, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity } from '../src/lib/format';
+import { money, moneyWhole, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity, lastActivityLabel } from '../src/lib/format';
 
 describe('format', () => {
   it('formats cents as currency', () => {
@@ -76,5 +76,25 @@ describe('parseQuantity', () => {
     expect(parseQuantity('1.005')).toBe(1005);
     expect(parseQuantity('3.14159')).toBe(3142);
     expect(parseQuantity('41.3')).toBe(41_300);
+  });
+});
+
+describe('lastActivityLabel', () => {
+  const today = '2026-09-14';
+  it('says today, yesterday and days ago within a month', () => {
+    expect(lastActivityLabel('2026-09-14', today, 'en')).toBe('today');
+    expect(lastActivityLabel('2026-09-13', today, 'en')).toBe('yesterday');
+    expect(lastActivityLabel('2026-09-11', today, 'en')).toBe('3 days ago');
+    expect(lastActivityLabel('2026-08-15', today, 'en')).toBe('30 days ago');
+  });
+  it('gives month and year beyond a month', () => {
+    expect(lastActivityLabel('2025-03-02', today, 'en')).toBe('Mar 2025');
+    expect(lastActivityLabel('2025-03-02', today, 'de')).toMatch(/2025$/);
+  });
+  it('speaks the reader\'s language', () => {
+    expect(lastActivityLabel('2026-09-11', today, 'de')).toMatch(/3/);
+  });
+  it('is empty without a date', () => {
+    expect(lastActivityLabel(null, today, 'en')).toBe('');
   });
 });

@@ -20,6 +20,10 @@ export interface ObjectStats {
   total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number;
   /** The date of the newest entry with a counter value. */
   last_reading_date: string | null;
+  /** The newest entry dated today or earlier. */
+  last_activity_date: string | null;
+  /** Counter units per day over recent readings, ×1000; null until there is enough history. */
+  counter_per_day_milli: number | null;
 }
 export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {

@@ -68,3 +68,15 @@ export function quantity(milli: number | null | undefined, unit: string, locale:
   const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
   return `${n} ${unit}`;
 }
+
+/** When something last happened, as a person says it: "today", "yesterday", "3 days ago" within
+ *  a month, then the month and year. Dates are whole days (`YYYY-MM-DD`), so the difference is
+ *  counted in UTC days and no timezone can shift it by one. */
+export function lastActivityLabel(date: string | null, today: string, locale: string): string {
+  if (!date) return '';
+  const day = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+  const days = Math.round((day(today) - day(date)) / 86_400_000);
+  if (days >= 0 && days <= 30) return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-days, 'day');
+  const [y, m] = date.split('-').map(Number);
+  return new Intl.DateTimeFormat(locale, { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 15, 12)));
+}
