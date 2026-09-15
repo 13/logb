@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
+  import DateInput from '../lib/DateInput.svelte';
   import { api, createQueued, isRejection } from '../lib/api';
   import { getCachedObject } from '../lib/object-cache';
   import { back, go } from '../lib/router';
   import { counter, fmtDate, todayIso } from '../lib/format';
+  import { dateFormat } from '../stores/date-format';
   import { readingActivity, readingWarning, type ReadingWarning } from '../lib/reading';
   import { locale, t } from '../i18n';
   import type { MemObject } from '../lib/types';
@@ -78,15 +80,15 @@
         <!-- svelte-ignore a11y_autofocus -->
         <input id="rv" class="tnum big" type="number" inputmode="numeric" min="0" step="1" bind:value={valueText} autofocus required />
         {#if object.stats.current_counter !== null && lastDate}
-          <span class="hint tnum">{$t('reading.last', { counter: counter(object.stats.current_counter, object.counter_unit, $locale), date: fmtDate(lastDate, $locale) })}</span>
+          <span class="hint tnum">{$t('reading.last', { counter: counter(object.stats.current_counter, object.counter_unit, $locale), date: fmtDate(lastDate, $dateFormat) })}</span>
         {/if}
       </div>
-      <div class="field"><label for="rd">{$t('activity.date')}</label><input id="rd" type="date" bind:value={date} max={todayIso()} required /></div>
+      <div class="field"><label for="rd">{$t('activity.date')}</label><DateInput id="rd" bind:value={date} max={todayIso()} required /></div>
       {#if acknowledged && warning === acknowledged.warning}
         <p class="warn" role="alert">
           {warning === 'lower'
             ? $t('reading.warn-lower', { last: counter(object.stats.current_counter, object.counter_unit, $locale) })
-            : $t('reading.warn-implausible', { date: fmtDate(lastDate, $locale) })}
+            : $t('reading.warn-implausible', { date: fmtDate(lastDate, $dateFormat) })}
         </p>
       {/if}
       {#if error}<p class="error">{error}</p>{/if}

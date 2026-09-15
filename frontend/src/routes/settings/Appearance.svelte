@@ -2,11 +2,21 @@
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
-  import { t } from '../../i18n';
-  import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
+  import { locale, t } from '../../i18n';
+  import { LANG_NAMES, SUPPORTED, navigatorTags } from '../../i18n/detect';
   import { settings } from '../../stores/settings';
   import { currency, rememberCurrentCurrency, user } from '../../stores/session';
+  import { DATE_FORMATS, fmtDate, resolveDateFormat, type DateFormat } from '../../lib/format';
   import type { Settings } from '../../lib/types';
+
+  const EXAMPLE = '2026-09-15';
+  /** What `auto` itself would resolve to right now -- shown in its own label so picking
+   *  "Automatic" is not a leap of faith about what it means on this device. */
+  const resolvedAuto = $derived(resolveDateFormat('auto', $locale, navigatorTags(globalThis.navigator)));
+  const dateFormatLabel = (id: (typeof DATE_FORMATS)[number]): string =>
+    id === 'auto'
+      ? $t('settings.date-format-auto', { example: fmtDate(EXAMPLE, resolvedAuto) })
+      : fmtDate(EXAMPLE, id as DateFormat);
 
   let currencyText = $state('');
   let timezone = $state('');
@@ -54,6 +64,13 @@
     <select bind:value={$settings.locale} aria-label={$t('settings.language')}>
       <option value="auto">{$t('settings.language-auto')}</option>
       {#each SUPPORTED as l}<option value={l}>{LANG_NAMES[l]}</option>{/each}
+    </select>
+  </div>
+
+  <h2>{$t('settings.date-format')}</h2>
+  <div class="field">
+    <select bind:value={$settings.dateFormat} aria-label={$t('settings.date-format')}>
+      {#each DATE_FORMATS as id (id)}<option value={id}>{dateFormatLabel(id)}</option>{/each}
     </select>
   </div>
 

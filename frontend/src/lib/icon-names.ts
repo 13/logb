@@ -4,4 +4,5 @@
 export type IconName = 'back' | 'settings' | 'search' | 'document' | 'camera' | 'edit' | 'repeat'
   | 'plus'
   | 'car' | 'e-bike' | 'bike' | 'motorcycle' | 'home' | 'appliance' | 'tool' | 'body' | 'object'
-  | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron' | 'logout' | 'bell' | 'chart';
+  | 'palette' | 'person' | 'key' | 'box' | 'people' | 'database' | 'chevron' | 'logout' | 'bell' | 'chart'
+  | 'calendar';

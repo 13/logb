@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import TagInput from '../lib/TagInput.svelte';
+  import DateInput from '../lib/DateInput.svelte';
   import { api } from '../lib/api';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
@@ -210,7 +211,7 @@
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>
     <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
     <div class="row">
-      <div class="field"><label for="pd">{$t('object.purchase-date')}</label><input id="pd" type="date" bind:value={input.purchase_date} /></div>
+      <div class="field"><label for="pd">{$t('object.purchase-date')}</label><DateInput id="pd" bind:value={() => input.purchase_date ?? '', (v) => (input.purchase_date = v || null)} /></div>
       <div class="field"><label for="pp">{$t('object.purchase-price')}</label><input id="pp" type="text" inputmode="decimal" bind:value={priceText} /></div>
     </div>
     {#if editing}

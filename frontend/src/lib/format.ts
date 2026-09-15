@@ -10,11 +10,66 @@ export function moneyWhole(cents: number | null | undefined, currency: string, l
   return new Intl.NumberFormat(locale, { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
 }
 
-export function fmtDate(iso: string | null | undefined, locale: string): string {
+export type DateFormat = 'dmy-dot' | 'dmy-slash' | 'mdy-slash' | 'iso';
+export type DateFormatPref = 'auto' | DateFormat;
+export const DATE_FORMATS: DateFormatPref[] = ['auto', 'dmy-dot', 'dmy-slash', 'mdy-slash', 'iso'];
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** Pure string work on the calendar date: no Intl and no timezone, so a stored day can never
+ *  shift by one and every device shows the same digits for the same choice. */
+export function fmtDate(iso: string | null | undefined, format: DateFormat): string {
   if (!iso) return '';
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
-  return new Intl.DateTimeFormat(locale, { year: 'numeric', month: locale === 'de' ? '2-digit' : 'short', day: locale === 'de' ? '2-digit' : 'numeric' })
-    .format(new Date(Date.UTC(y, m - 1, d, 12)));
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  switch (format) {
+    case 'dmy-dot': return `${d}.${m}.${y}`;
+    case 'dmy-slash': return `${d}/${m}/${y}`;
+    case 'mdy-slash': return `${m}/${d}/${y}`;
+    case 'iso': return `${y}-${m}-${d}`;
+  }
+}
+
+/** Reads the chosen pattern back, leniently: `.`/`/`/`-` separators, 1-digit day/month, and a
+ *  2-digit year as 20YY. Rejects malformed and calendar-impossible dates (31.02.) rather than
+ *  silently clamping them. */
+export function parseDate(text: string, format: DateFormat): string | null {
+  const parts = text.trim().split(/[./-]/);
+  if (parts.length !== 3 || parts.some((p) => !/^\d+$/.test(p))) return null;
+  const [a, b, c] = parts.map(Number);
+  let y: number, m: number, d: number;
+  if (format === 'iso') [y, m, d] = [a, b, c];
+  else if (format === 'mdy-slash') [m, d, y] = [a, b, c];
+  else [d, m, y] = [a, b, c];
+  const yearDigits = (format === 'iso' ? parts[0] : parts[2]).length;
+  if (yearDigits === 2) y += 2000;
+  else if (yearDigits !== 4) return null;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
+/**
+ * `auto` resolves without Intl: German always means `dmy-dot`; English follows the browser's
+ * region -- `en-US` (or no `en-*` tag at all) means `mdy-slash`, any other `en-XX` region means
+ * `dmy-slash`. An explicit (non-`auto`) preference is returned unchanged.
+ */
+export function resolveDateFormat(pref: DateFormatPref, locale: 'en' | 'de', languages: readonly string[]): DateFormat {
+  if (pref !== 'auto') return pref;
+  if (locale === 'de') return 'dmy-dot';
+  const tag = languages.map((l) => l.split('-')).find(([lang, region]) => lang.toLowerCase() === 'en' && region);
+  return !tag || tag[1].toUpperCase() === 'US' ? 'mdy-slash' : 'dmy-slash';
+}
+
+/** The pattern spelled out in the app's own language, for a field's placeholder and its error
+ *  hint -- "DD.MM.YYYY", "TT.MM.JJJJ", and so on. */
+export function datePlaceholder(format: DateFormat, locale: 'en' | 'de'): string {
+  const [D, M, Y] = locale === 'de' ? ['TT', 'MM', 'JJJJ'] : ['DD', 'MM', 'YYYY'];
+  switch (format) {
+    case 'dmy-dot': return `${D}.${M}.${Y}`;
+    case 'dmy-slash': return `${D}/${M}/${Y}`;
+    case 'mdy-slash': return `${M}/${D}/${Y}`;
+    case 'iso': return `${Y}-${M}-${D}`;
+  }
 }
 
 export function counter(value: number | null | undefined, unit: string | null, locale: string): string {

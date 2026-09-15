@@ -2,6 +2,7 @@
   import { api } from './api';
   import { go } from './router';
   import { counter, fmtDate } from './format';
+  import { dateFormat } from '../stores/date-format';
   import { locale, t } from '../i18n';
   import { intervalDays, splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
@@ -68,7 +69,7 @@
 
   function when(r: Reminder): string {
     const parts: string[] = [];
-    if (r.due_date) parts.push($t('reminder.on', { date: fmtDate(r.due_date, $locale) }));
+    if (r.due_date) parts.push($t('reminder.on', { date: fmtDate(r.due_date, $dateFormat) }));
     if (r.due_counter !== null) parts.push($t('reminder.at', { counter: counter(r.due_counter, unit, $locale) }));
     return parts.join(' · ');
   }
@@ -81,9 +82,9 @@
 
   function reading(r: Reminder): string {
     const last = r.last_reading_date && r.current_counter !== null
-      ? $t('reminder.last-reading', { counter: counter(r.current_counter, unit, $locale), date: fmtDate(r.last_reading_date, $locale) })
+      ? $t('reminder.last-reading', { counter: counter(r.current_counter, unit, $locale), date: fmtDate(r.last_reading_date, $dateFormat) })
       : $t('reminder.no-reading');
-    const next = r.next_due_date && !r.due ? ` · ${$t('reminder.next-reading', { date: fmtDate(r.next_due_date, $locale) })}` : '';
+    const next = r.next_due_date && !r.due ? ` · ${$t('reminder.next-reading', { date: fmtDate(r.next_due_date, $dateFormat) })}` : '';
     return `${last}${next}`;
   }
 </script>
@@ -120,7 +121,7 @@
       {:else}
         <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
         {#if r.estimated_due_date}
-          <div class="muted">{$t('reminder.estimated', { date: fmtDate(r.estimated_due_date, $locale) })}</div>
+          <div class="muted">{$t('reminder.estimated', { date: fmtDate(r.estimated_due_date, $dateFormat) })}</div>
         {/if}
       {/if}
       {#if !r.due && r.snoozed_until}
@@ -128,7 +129,7 @@
              `when(r)` above can still read as overdue while the reminder is suppressed -- this
              line is what actually says so. -->
         <div class="row snoozed-until">
-          <span class="muted">{$t('reminder.snoozed-until', { date: fmtDate(r.snoozed_until, $locale) })}</span>
+          <span class="muted">{$t('reminder.snoozed-until', { date: fmtDate(r.snoozed_until, $dateFormat) })}</span>
           <button class="ghost" onclick={() => unsnooze(r)}>{$t('reminder.unsnooze')}</button>
         </div>
       {/if}
@@ -154,7 +155,7 @@
       {#each groups.done as r (r.id)}
         <div class="card done">
           <b>{r.title}</b>
-          <div class="muted">{$t('reminder.done')} · {fmtDate(r.done_at, $locale)}</div>
+          <div class="muted">{$t('reminder.done')} · {fmtDate(r.done_at, $dateFormat)}</div>
         </div>
       {/each}
     </div>
@@ -173,7 +174,7 @@
     <select id="link" bind:value={linkId}>
       <option value="">{$t('reminder.done-none')}</option>
       {#each linkable as a (a.id)}
-        <option value={String(a.id)}>{fmtDate(a.date, $locale)} — {a.title}</option>
+        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {a.title}</option>
       {/each}
     </select>
   </div>

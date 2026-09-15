@@ -16,6 +16,8 @@ export default {
   'nav.confirm-delete': 'Wirklich löschen? Das kann nicht rückgängig gemacht werden.',
   'error.generic': 'Etwas ist schiefgelaufen',
   'error.offline': 'Keine Verbindung',
+  'date.pick': 'Datum wählen',
+  'date.invalid': 'Datum wie {example} eingeben',
 
   'setup.title': 'Willkommen bei LogB',
   'setup.intro': 'Lege den ersten Benutzer an. Er wird Administrator.',
@@ -276,6 +278,8 @@ export default {
   'settings.instance': 'Diese Instanz',
   'settings.language': 'Sprache',
   'settings.language-auto': 'Automatisch',
+  'settings.date-format': 'Datumsformat',
+  'settings.date-format-auto': 'Automatisch ({example})',
   'settings.theme': 'Design',
   'settings.theme-auto': 'System',
   'settings.theme-light': 'Hell',

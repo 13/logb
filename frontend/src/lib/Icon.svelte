@@ -112,6 +112,9 @@
     <path d="M8 17v-5" />
     <path d="M13 17V8" />
     <path d="M18 17v-9" />
+  {:else if name === 'calendar'}
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <path d="M16 2v4M8 2v4M3 10h18" />
   {:else}
     {(name satisfies never)}
   {/if}

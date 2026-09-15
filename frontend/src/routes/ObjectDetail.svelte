@@ -14,6 +14,7 @@
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
+  import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { Activity, ActivityInput, Category, MemObject } from '../lib/types';
@@ -236,7 +237,7 @@
         <span class="stat"><b>{counter(object.stats.current_counter, object.counter_unit, $locale) || '—'}</b><span>{$t('object.current')}</span></span>
       {/if}
       {#if object.purchase_date}
-        <span class="stat"><b>{fmtDate(object.purchase_date, $locale)}</b><span>{$t('object.since')}</span></span>
+        <span class="stat"><b>{fmtDate(object.purchase_date, $dateFormat)}</b><span>{$t('object.since')}</span></span>
       {/if}
     </div>
 

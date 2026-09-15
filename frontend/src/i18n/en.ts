@@ -16,6 +16,8 @@ export default {
   'nav.confirm-delete': 'Really delete? This cannot be undone.',
   'error.generic': 'Something went wrong',
   'error.offline': 'No connection',
+  'date.pick': 'Choose date',
+  'date.invalid': 'Enter a date like {example}',
 
   'setup.title': 'Welcome to LogB',
   'setup.intro': 'Create the first user. It becomes the administrator.',
@@ -276,6 +278,8 @@ export default {
   'settings.instance': 'This instance',
   'settings.language': 'Language',
   'settings.language-auto': 'Automatic',
+  'settings.date-format': 'Date format',
+  'settings.date-format-auto': 'Automatic ({example})',
   'settings.theme': 'Theme',
   'settings.theme-auto': 'System',
   'settings.theme-light': 'Light',

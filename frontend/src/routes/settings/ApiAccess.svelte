@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
-  import { locale, t } from '../../i18n';
+  import { t } from '../../i18n';
   import { fmtDate } from '../../lib/format';
+  import { dateFormat } from '../../stores/date-format';
   import type { ApiToken } from '../../lib/types';
 
   let tokens = $state<ApiToken[]>([]);
@@ -71,7 +72,7 @@
           {tok.name}
           <span class="muted small">
             {tok.prefix}… ·
-            {tok.last_used_at ? $t('tokens.last-used', { date: fmtDate(tok.last_used_at.slice(0, 10), $locale) }) : $t('tokens.never-used')}
+            {tok.last_used_at ? $t('tokens.last-used', { date: fmtDate(tok.last_used_at.slice(0, 10), $dateFormat) }) : $t('tokens.never-used')}
           </span>
         </span>
         <button class="ghost danger-text" onclick={() => revokeToken(tok)}>{$t('tokens.revoke')}</button>

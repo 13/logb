@@ -18,7 +18,10 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
   await page.getByRole('button', { name: 'Remind me to log the reading' }).click();
   await expect(page.getByLabel('Every')).toHaveValue('1');
   // Started long ago, so with no reading on record it is due straight away.
-  await page.getByLabel('Starting').fill('2020-01-01');
+  // English Chromium's default locale (en-US) resolves the "auto" date format to mdy-slash --
+  // see playwright.config.ts, which sets no explicit `locale`, and DateInput.svelte.
+  await page.getByLabel('Starting').fill('01/01/2020');
+  await page.getByLabel('Starting').blur();
   await page.getByRole('button', { name: 'Save' }).click();
 
   const card = page.locator('.card').filter({ hasText: 'Log the counter reading' });

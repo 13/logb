@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api, ApiError } from '../../lib/api';
-  import { locale, t } from '../../i18n';
+  import { t } from '../../i18n';
   import { fmtDate } from '../../lib/format';
+  import { dateFormat } from '../../stores/date-format';
   import type { BackupStatus, DbDescription, DbLocation, DbProbe, DbSwitched } from '../../lib/types';
 
   let db = $state<DbDescription | null>(null);
@@ -182,7 +183,7 @@
         <span class="break">{$t('backup.scheduled', { directory: backup.directory ?? '', hour: hourText(backup.hour) })}</span>
         <span class="muted">
           {backup.last_at
-            ? $t('backup.last', { date: fmtDate(backup.last_at, $locale) })
+            ? $t('backup.last', { date: fmtDate(backup.last_at, $dateFormat) })
             : $t('backup.last-none', { hour: hourText(backup.hour) })}
         </span>
       {:else if backup.state === 'off'}

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { money, moneyWhole, fmtDate, counter, todayIso, perCounter, quantity, parseQuantity, lastActivityLabel } from '../src/lib/format';
+import {
+  money, moneyWhole, fmtDate, parseDate, resolveDateFormat, datePlaceholder,
+  counter, todayIso, perCounter, quantity, parseQuantity, lastActivityLabel,
+} from '../src/lib/format';
 
 describe('format', () => {
   it('formats cents as currency', () => {
@@ -12,11 +15,6 @@ describe('format', () => {
     expect(moneyWhole(150, 'EUR', 'en')).toBe('\u{20ac}2');
     expect(moneyWhole(null, 'EUR', 'en')).toBe('');
   });
-  it('formats dates per locale', () => {
-    expect(fmtDate('2024-03-05', 'en')).toBe('Mar 5, 2024');
-    expect(fmtDate('2024-03-05', 'de')).toBe('05.03.2024');
-    expect(fmtDate(null, 'de')).toBe('');
-  });
   it('formats counters with unit', () => {
     expect(counter(104500, 'km', 'de')).toBe('104.500 km');
     expect(counter(12, 'h', 'en')).toBe('12 h');
@@ -25,6 +23,60 @@ describe('format', () => {
   });
   it('todayIso is YYYY-MM-DD', () => {
     expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('fmtDate', () => {
+  it('renders each format with zero-padded day and month', () => {
+    expect(fmtDate('2026-09-05', 'dmy-dot')).toBe('05.09.2026');
+    expect(fmtDate('2026-09-05', 'dmy-slash')).toBe('05/09/2026');
+    expect(fmtDate('2026-09-05', 'mdy-slash')).toBe('09/05/2026');
+    expect(fmtDate('2026-09-05', 'iso')).toBe('2026-09-05');
+  });
+  it('takes the date part of a timestamp and ignores empty input', () => {
+    expect(fmtDate('2026-09-05T23:30:00Z', 'dmy-dot')).toBe('05.09.2026');
+    expect(fmtDate(null, 'dmy-dot')).toBe('');
+    expect(fmtDate('', 'iso')).toBe('');
+  });
+});
+
+describe('parseDate', () => {
+  it('reads the chosen pattern and lenient variants', () => {
+    expect(parseDate('15.09.2026', 'dmy-dot')).toBe('2026-09-15');
+    expect(parseDate('1.5.26', 'dmy-dot')).toBe('2026-05-01');
+    expect(parseDate('1/5/2026', 'dmy-slash')).toBe('2026-05-01');
+    expect(parseDate('5-1-2026', 'mdy-slash')).toBe('2026-05-01');
+    expect(parseDate('2026-05-01', 'iso')).toBe('2026-05-01');
+    expect(parseDate(' 15.09.2026 ', 'dmy-dot')).toBe('2026-09-15');
+  });
+  it('rejects impossible or malformed dates', () => {
+    expect(parseDate('31.02.2026', 'dmy-dot')).toBeNull();
+    expect(parseDate('13/13/2026', 'mdy-slash')).toBeNull();
+    expect(parseDate('15.09', 'dmy-dot')).toBeNull();
+    expect(parseDate('abc', 'iso')).toBeNull();
+    expect(parseDate('', 'dmy-dot')).toBeNull();
+  });
+});
+
+describe('resolveDateFormat', () => {
+  it('keeps an explicit choice', () => {
+    expect(resolveDateFormat('iso', 'de', ['de-DE'])).toBe('iso');
+  });
+  it('auto: German means dd.mm.yyyy, English follows the region', () => {
+    expect(resolveDateFormat('auto', 'de', ['en-US'])).toBe('dmy-dot');
+    expect(resolveDateFormat('auto', 'en', ['en-US'])).toBe('mdy-slash');
+    expect(resolveDateFormat('auto', 'en', ['en'])).toBe('mdy-slash');
+    expect(resolveDateFormat('auto', 'en', ['en-GB', 'en-US'])).toBe('dmy-slash');
+    expect(resolveDateFormat('auto', 'en', ['de-DE', 'en-AU'])).toBe('dmy-slash');
+  });
+});
+
+describe('datePlaceholder', () => {
+  it('spells the pattern in the app language', () => {
+    expect(datePlaceholder('dmy-dot', 'de')).toBe('TT.MM.JJJJ');
+    expect(datePlaceholder('dmy-dot', 'en')).toBe('DD.MM.YYYY');
+    expect(datePlaceholder('mdy-slash', 'en')).toBe('MM/DD/YYYY');
+    expect(datePlaceholder('iso', 'de')).toBe('JJJJ-MM-TT');
   });
 });
 

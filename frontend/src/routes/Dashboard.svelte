@@ -6,6 +6,7 @@
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
   import { fmtDate } from '../lib/format';
+  import { dateFormat } from '../stores/date-format';
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
   import type { MemObject, ObjectType, Reminder } from '../lib/types';
@@ -100,7 +101,7 @@
             <span class="muted">
               {#if r.days_until !== null}{r.days_until === 1 ? $t('dash.in-day') : $t('dash.in-days', { n: r.days_until })}{/if}
               {#if r.counter_until !== null && r.counter_unit} · {$t('dash.in-counter', { n: r.counter_until, unit: r.counter_unit })}{/if}
-              {#if r.estimated_due_date} · {$t('dash.estimated', { date: fmtDate(r.estimated_due_date, $locale) })}{/if}
+              {#if r.estimated_due_date} · {$t('dash.estimated', { date: fmtDate(r.estimated_due_date, $dateFormat) })}{/if}
             </span>
           </li>
         {/each}

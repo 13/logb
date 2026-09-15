@@ -2,6 +2,7 @@
   import { fileUrl } from './api';
   import { go } from './router';
   import { counter, fmtDate, money } from './format';
+  import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
@@ -45,7 +46,7 @@
     disabled={a.pending}
     onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
   >
-    <span class="muted">{fmtDate(a.date, $locale)} · {$t('cat.reading')}{#if a.pending} · {$t('timeline.pending')}{/if}</span>
+    <span class="muted">{fmtDate(a.date, $dateFormat)} · {$t('cat.reading')}{#if a.pending} · {$t('timeline.pending')}{/if}</span>
     <span class="tnum">{counter(a.counter_value, unit, $locale)}</span>
   </button>
 {/snippet}
@@ -89,7 +90,7 @@
           <button class="entry reading fold" aria-expanded={expanded} onclick={() => toggle(row.key)}>
             <span class="muted">
               <span class="caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-              {fmtDate(row.readings[row.readings.length - 1].date, $locale)} – {fmtDate(row.readings[0].date, $locale)}
+              {fmtDate(row.readings[row.readings.length - 1].date, $dateFormat)} – {fmtDate(row.readings[0].date, $dateFormat)}
               · {$t('timeline.readings', { n: row.readings.length })}
             </span>
             {#if span}<span class="tnum">{counter(span.from, unit, $locale)} – {counter(span.to, unit, $locale)}</span>{/if}
@@ -125,7 +126,7 @@
               {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>
             <div class="muted tnum">
-              {fmtDate(a.date, $locale)}
+              {fmtDate(a.date, $dateFormat)}
               {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
               {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
             </div>

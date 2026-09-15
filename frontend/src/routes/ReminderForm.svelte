@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
+  import DateInput from '../lib/DateInput.svelte';
   import { api } from '../lib/api';
   import { go, back } from '../lib/router';
   import { t } from '../i18n';
@@ -94,11 +95,11 @@
           </select>
         </div>
       </div>
-      <div class="field"><label for="st">{$t('reminder.starts')}</label><input id="st" type="date" bind:value={input.due_date} /></div>
+      <div class="field"><label for="st">{$t('reminder.starts')}</label><DateInput id="st" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
       <p class="hint">{$t('reminder.reading-hint')}</p>
     {:else}
       <div class="row">
-        <div class="field"><label for="dd">{$t('reminder.due-date')}</label><input id="dd" type="date" bind:value={input.due_date} /></div>
+        <div class="field"><label for="dd">{$t('reminder.due-date')}</label><DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
         {#if object?.counter_unit}
           <div class="field"><label for="dc">{$t('reminder.due-counter')} ({object.counter_unit})</label><input id="dc" type="number" min="0" bind:value={input.due_counter} /></div>
         {/if}

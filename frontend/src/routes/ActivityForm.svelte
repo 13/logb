@@ -4,11 +4,13 @@
   import FilePicker from '../lib/FilePicker.svelte';
   import Icon from '../lib/Icon.svelte';
   import TagInput from '../lib/TagInput.svelte';
+  import DateInput from '../lib/DateInput.svelte';
   import { api, cancelQueuedActivity, createQueued, fileUrl, isRejection, onOutboxFlushed, updateQueued, updateQueuedActivity } from '../lib/api';
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
+  import { dateFormat } from '../stores/date-format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
   import { categoriesFor, customTypes } from '../lib/type-registry';
@@ -301,7 +303,7 @@
   <TopBar title={editing ? $t('activity.edit') : $t('activity.new')} backTo={`/objects/${oid}`} />
   <form onsubmit={submit}>
     <div class="row">
-      <div class="field"><label for="d">{$t('activity.date')}</label><input id="d" type="date" bind:value={input.date} required /></div>
+      <div class="field"><label for="d">{$t('activity.date')}</label><DateInput id="d" bind:value={input.date} required /></div>
       <div class="field">
         <label for="c">{$t('activity.category')}</label>
         <select id="c" bind:value={input.category} onchange={() => (categoryTouched = true)}>
@@ -310,7 +312,7 @@
       </div>
     </div>
     {#if photoDate && photoDate !== input.date}
-      <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $locale) })}</button>
+      <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $dateFormat) })}</button>
     {/if}
     {#if !editing && suggestions.length > 0}
       <div class="chips">
