@@ -49,7 +49,8 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
 
   // A new entry offers exactly the type's categories.
   await page.goto(`/objects/${objectId}/activities/new`);
-  await expect(page.getByLabel('Category').locator('option')).toHaveText(['Repair', 'Fuel / charge', 'Other']);
+  // Trip comes on top of the type's own list, because this type counts km (see `categoriesFor`).
+  await expect(page.getByLabel('Category').locator('option')).toHaveText(['Repair', 'Fuel / charge', 'Other', 'Trip']);
   await page.getByLabel('Category').selectOption({ label: 'Repair' });
   await page.getByLabel('Title').fill('New brake pads');
   await page.getByLabel('Cost').fill('120');
@@ -68,7 +69,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await page.goto(`/objects/${objectId}/activities/new`);
   await page.reload();
   const category = page.getByLabel('Category');
-  await expect(category.locator('option')).toHaveText(['Repair', 'Fuel / charge', 'Other']);
+  await expect(category.locator('option')).toHaveText(['Repair', 'Fuel / charge', 'Other', 'Trip']);
   expect(['repair', 'fuel', 'other']).toContain(await category.inputValue());
   await page.context().unroute('**/api/types');
 
