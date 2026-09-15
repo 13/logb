@@ -112,6 +112,11 @@ export default {
   'timeline.filter-all': 'Alle',
   'timeline.pending': 'Wird noch gesendet',
 
+  'lastdone.title': 'Zuletzt erledigt',
+  'lastdone.since': 'vor {amount}',
+  'lastdone.filter': 'Titel: {title}',
+  'lastdone.clear': 'Titel-Filter aufheben',
+
   'activity.new': 'Aktivität eintragen',
   'activity.edit': 'Aktivität bearbeiten',
   'activity.date': 'Datum',

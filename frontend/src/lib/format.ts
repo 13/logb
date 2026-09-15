@@ -106,6 +106,14 @@ export function counter(value: number | null | undefined, unit: string | null, l
   return unit ? `${n} ${unit}` : n;
 }
 
+/** Counter distance since the last time; null when either side is unknown or the counter went
+ *  backwards (a replaced odometer, a typo) -- a negative "since" would only mislead. */
+export function sinceCounter(current: number | null | undefined, last: number | null): number | null {
+  if (current === null || current === undefined || last === null) return null;
+  const d = current - last;
+  return d >= 0 ? d : null;
+}
+
 export function todayIso(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');

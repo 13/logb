@@ -14,6 +14,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 
 // Kept in sync with the CHECK on activities.category (migrations 0009 and 0011 on SQLite, 0001
 // and 0002 on PostgreSQL) and with frontend/src/lib/types.ts's CATEGORIES: four health
@@ -28,6 +29,7 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/objects/{id}/activities", get(list).post(create))
         .route("/objects/{id}/recent-titles", get(recent_titles))
+        .route("/objects/{id}/last-done", get(last_done))
         .route("/activities/{id}", get(read).patch(update).delete(delete))
 }
 
@@ -166,6 +168,9 @@ pub struct ListQuery {
     /// Only entries carrying this tag, compared ignoring case and accents.
     #[serde(default)]
     pub tag: Option<String>,
+    /// Only entries whose title matches this one exactly, ignoring case and surrounding space.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// The `tag` filter as the key `domain::tags::fold` compares by, or `None` when there is no
@@ -175,19 +180,43 @@ fn wanted_tag(q: &ListQuery) -> Option<String> {
     (!tag.is_empty()).then(|| tags::fold(&tag))
 }
 
+/// The key two titles are compared under: trimmed, then case-folded in Rust rather than SQL.
+/// SQLite's `LOWER()` folds ASCII only (this build has no ICU extension), so `LOWER(TRIM(title))`
+/// would leave "BREMSBELÄGE" and "Bremsbeläge" as different groups there while PostgreSQL's
+/// (Unicode-aware) `LOWER()` would merge them -- the same query would then answer differently
+/// depending only on which database happens to be configured. `str::to_lowercase` performs full
+/// Unicode case folding in the application instead, so it runs identically on both backends.
+/// Both `last_done`'s grouping and the `title` filter below call this one helper, so a title
+/// tapped in one always matches what the other shows for it.
+fn fold_title(title: &str) -> String {
+    title.trim().to_lowercase()
+}
+
+/// The `title` filter as the key `fold_title` compares by, or `None` when there is no filter. A
+/// blank (or all-whitespace) value is no filter, not a filter nothing matches.
+fn wanted_title(q: &ListQuery) -> Option<String> {
+    let title = q.title.as_deref()?.trim();
+    (!title.is_empty()).then(|| fold_title(title))
+}
+
 /// How many activities match the filters, ignoring the page window -- the client needs it to
 /// know whether a "load more" button belongs on screen.
 pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
-    if let Some(wanted) = wanted_tag(q) {
-        // Counted in Rust with the same `carries` the page uses, so the header and the page can
+    let wanted_tag = wanted_tag(q);
+    let wanted_title = wanted_title(q);
+    if wanted_tag.is_some() || wanted_title.is_some() {
+        // Counted in Rust with the same match the page uses, so the header and the page can
         // never disagree -- see `list_for_object` for why SQL cannot do this match.
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT tags FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT tags, title FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
              AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
         )
         .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
         .fetch_all(&state.db).await?;
-        return Ok(rows.iter().filter(|(t,)| tags::carries(t, &wanted)).count() as i64);
+        return Ok(rows.iter()
+            .filter(|(t, _)| wanted_tag.as_ref().is_none_or(|w| tags::carries(t, w)))
+            .filter(|(_, title)| wanted_title.as_ref().is_none_or(|w| &fold_title(title) == w))
+            .count() as i64);
     }
     let (n,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
@@ -203,12 +232,15 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     if let Some(d) = &q.to { validate_date(d)?; }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    // A tag matches ignoring case and accents, which neither backend's LIKE does reliably
-    // (SQLite folds ASCII only, and neither strips accents). So with a tag filter SQL returns
-    // every row the other filters allow and the match and the page window are applied here. One
-    // object's timeline is hundreds of rows at most, so that costs nothing noticeable.
-    let wanted = wanted_tag(q);
-    let (sql_limit, sql_offset) = if wanted.is_some() { (i64::MAX, 0) } else { (limit, offset) };
+    // A tag matches ignoring case and accents, and a title matches ignoring case and surrounding
+    // space -- neither of which either backend's LIKE/LOWER does reliably (SQLite's LOWER folds
+    // ASCII only, and neither strips accents; see `fold_title`). So with either filter SQL
+    // returns every row the other filters allow and the match and the page window are applied
+    // here. One object's timeline is hundreds of rows at most, so that costs nothing noticeable.
+    let wanted_tag = wanted_tag(q);
+    let wanted_title = wanted_title(q);
+    let filtered = wanted_tag.is_some() || wanted_title.is_some();
+    let (sql_limit, sql_offset) = if filtered { (i64::MAX, 0) } else { (limit, offset) };
     let rows = sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
@@ -217,12 +249,14 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     )
     .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(sql_limit).bind(sql_offset)
     .fetch_all(&state.db).await?;
-    Ok(match wanted {
-        None => rows,
-        Some(wanted) => rows.into_iter()
-            .filter(|r| tags::carries(&r.tags, &wanted))
+    Ok(if !filtered {
+        rows
+    } else {
+        rows.into_iter()
+            .filter(|r| wanted_tag.as_ref().is_none_or(|w| tags::carries(&r.tags, w)))
+            .filter(|r| wanted_title.as_ref().is_none_or(|w| &fold_title(&r.title) == w))
             .skip(offset as usize).take(limit as usize)
-            .collect(),
+            .collect()
     })
 }
 
@@ -283,6 +317,81 @@ async fn recent_titles(
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows))
+}
+
+/// One row per title an object has seen more than once (or once, if it also has an open
+/// reminder of the same title), newest occurrence first -- see `last_done` and section C of
+/// `docs/superpowers/specs/2026-09-15-dates-tags-last-done-design.md`.
+#[derive(Serialize, Clone, Debug)]
+pub struct LastDone {
+    /// The spelling of the newest occurrence, trimmed.
+    pub title: String,
+    pub occurrences: i64,
+    pub last_date: String,
+    pub last_counter: Option<i64>,
+    pub last_activity_id: i64,
+}
+
+const LAST_DONE_LIMIT: usize = 50;
+
+async fn last_done(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(object_id): Path<i64>,
+) -> Result<Json<Vec<LastDone>>, AppError> {
+    load_owned_object(&state, user.id, object_id).await?;
+    // Grouped in Rust by `fold_title`, not by a SQL GROUP BY on a folded expression -- see the
+    // comment on `fold_title` for why SQL's own folding would disagree between backends. Rows
+    // arrive newest first, so the first one seen for a given key is already that title's newest
+    // occurrence, and any later one for the same key only adds to the count.
+    let entry_rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT id, title, date, counter_value FROM activities \
+         WHERE object_id = $1 AND deleted_at IS NULL AND category <> 'reading' \
+         ORDER BY date DESC, id DESC",
+    )
+    .bind(object_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut by_key: HashMap<String, LastDone> = HashMap::new();
+    for (id, title, date, counter_value) in entry_rows {
+        let key = fold_title(&title);
+        match by_key.get_mut(&key) {
+            Some(existing) => existing.occurrences += 1,
+            None => {
+                by_key.insert(key, LastDone {
+                    title: title.trim().to_string(),
+                    occurrences: 1,
+                    last_date: date,
+                    last_counter: counter_value,
+                    last_activity_id: id,
+                });
+            }
+        }
+    }
+
+    // An open reminder names something worth doing again even the first time it was ever
+    // logged, so a single occurrence still belongs on this list when one exists for its title. A
+    // title with no occurrence at all never entered `by_key` above and so cannot appear here
+    // either -- there is no "newest occurrence" a bare reminder could source `last_date` from.
+    let reminder_titles: Vec<(String,)> = sqlx::query_as(
+        "SELECT title FROM reminders WHERE object_id = $1 AND done_at IS NULL AND deleted_at IS NULL",
+    )
+    .bind(object_id)
+    .fetch_all(&state.db)
+    .await?;
+    let open: HashSet<String> = reminder_titles.into_iter().map(|(t,)| fold_title(&t)).collect();
+
+    let mut out: Vec<LastDone> = by_key.into_iter()
+        .filter(|(key, row)| row.occurrences >= 2 || open.contains(key))
+        .map(|(_, row)| row)
+        .collect();
+    // Newest `last_date` first, a tie broken by the higher `last_activity_id`. `HashMap`
+    // iteration order is unspecified, but `last_activity_id` is unique across rows, so this is a
+    // total order regardless of the order `out` started in.
+    out.sort_by(|a, b| b.last_date.cmp(&a.last_date).then(b.last_activity_id.cmp(&a.last_activity_id)));
+    out.truncate(LAST_DONE_LIMIT);
+    Ok(Json(out))
 }
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Response, AppError> {

@@ -483,3 +483,46 @@ async fn an_activity_client_uuid_cannot_adopt_a_row_on_another_object() {
     let res = app.client.post(app.url(&format!("/objects/{}/activities", bike["id"]))).json(&body).send().await.unwrap();
     assert_eq!(res.status(), 409, "the uuid names a row under a different object");
 }
+
+/// The `title` filter is a trimmed, case-insensitive exact match -- the same fold `last_done`
+/// groups by (`fold_title` in `src/api/activities.rs`), so a title tapped there and a filter
+/// applied here always agree.
+#[tokio::test]
+async fn title_filter_matches_trimmed_case_insensitively_and_combines_with_category() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let base = app.url(&format!("/objects/{id}/activities"));
+    for (date, category, title) in [
+        ("2026-01-10", "maintenance", "Bremsbeläge vorne"),
+        ("2026-05-12", "repair", "Bremsbeläge vorne"),
+        ("2026-02-01", "repair", "Kette"),
+    ] {
+        let res = app.client.post(&base).json(&json!({ "date": date, "category": category, "title": title, "notes": "" })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    // `Url::parse` (inside `reqwest::Client::get`) percent-encodes a raw space and non-ASCII
+    // bytes embedded in the query string on its own, so the literal accented, spaced text below
+    // reaches the server exactly as typed.
+    let res = app.client.get(format!("{base}?title=BREMSBELÄGE VORNE")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["x-total-count"], "2");
+    let rows: Vec<serde_json::Value> = res.json().await.unwrap();
+    let titles: Vec<&str> = rows.iter().map(|a| a["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, ["Bremsbeläge vorne", "Bremsbeläge vorne"], "both, and only, the brake pad entries");
+
+    // Combined with category, the filter narrows further.
+    let res = app.client.get(format!("{base}?title= bremsbeläge vorne &category=repair")).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "1");
+    let rows: Vec<serde_json::Value> = res.json().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["date"], "2026-05-12");
+
+    // A title matching nothing is an empty page, not every entry.
+    let res = app.client.get(format!("{base}?title=Nonexistent")).send().await.unwrap();
+    assert_eq!(res.headers()["x-total-count"], "0");
+    let rows: Vec<serde_json::Value> = res.json().await.unwrap();
+    assert!(rows.is_empty());
+}

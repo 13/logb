@@ -80,6 +80,12 @@ export interface TitleSuggestion {
   last_cost_cents: number | null; last_counter: number | null;
 }
 
+/** `GET /objects/{id}/last-done`: a title the object has logged more than once (or once,
+ *  alongside an open reminder of the same title), with the values of its newest occurrence. */
+export interface LastDone {
+  title: string; occurrences: number; last_date: string; last_counter: number | null; last_activity_id: number;
+}
+
 /** `service` watches a date or a counter target and is marked done; `reading` asks for a counter
  *  reading every `every_n` `every_unit`s and is satisfied by logging one. */
 export type ReminderKind = 'service' | 'reading';

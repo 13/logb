@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   money, moneyWhole, fmtDate, parseDate, resolveDateFormat, datePlaceholder,
-  counter, todayIso, perCounter, quantity, parseQuantity, lastActivityLabel,
+  counter, todayIso, perCounter, quantity, parseQuantity, lastActivityLabel, sinceCounter,
 } from '../src/lib/format';
 
 describe('format', () => {
@@ -180,5 +180,23 @@ describe('lastActivityLabel', () => {
   });
   it('is empty without a date', () => {
     expect(lastActivityLabel(null, today, 'en')).toBe('');
+  });
+});
+
+describe('sinceCounter', () => {
+  it('is the distance since the last time', () => {
+    expect(sinceCounter(4650, 3420)).toBe(1230);
+  });
+  it('is null without a current reading', () => {
+    expect(sinceCounter(null, 3420)).toBeNull();
+  });
+  it('is null without a last value', () => {
+    expect(sinceCounter(4650, null)).toBeNull();
+  });
+  it('is null when the counter went backwards', () => {
+    expect(sinceCounter(100, 3420)).toBeNull();
+  });
+  it('is zero when nothing has changed', () => {
+    expect(sinceCounter(3420, 3420)).toBe(0);
   });
 });

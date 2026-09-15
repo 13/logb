@@ -8,6 +8,7 @@
   import Icon from '../lib/Icon.svelte';
   import ObjectCard from '../lib/ObjectCard.svelte';
   import TagChips from '../lib/TagChips.svelte';
+  import LastDone from '../lib/LastDone.svelte';
   import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
@@ -17,7 +18,7 @@
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, ActivityInput, Category, MemObject } from '../lib/types';
+  import type { Activity, ActivityInput, Category, LastDone as LastDoneT, MemObject } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import type { QueuedOp } from '../lib/outbox';
 
@@ -38,10 +39,15 @@
   let category = $state<Category | ''>('');
   /** Session-only, like `category`: a tag tapped on an entry narrows the timeline to it. */
   let tagFilter = $state<string | null>(initialTag);
+  /** Session-only too: a "Last done" row tapped on the Info tab narrows the timeline to its
+   *  title (see `selectLastDone`). */
+  let titleFilter = $state<string | null>(null);
   let children = $state<MemObject[]>([]);
   /** Archived children are not listed under Contents, but their costs still count with "Include
    *  contents", so having any is enough to offer the switch. */
   let archivedChildCount = $state(0);
+  /** The Info tab's "Last done" list, loaded only while that tab is open -- see `loadChildren`. */
+  let lastDone = $state<LastDoneT[]>([]);
   let error = $state('');
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
@@ -65,6 +71,20 @@
     catch (e) { error = (e as Error).message; }
     try { archivedChildCount = (await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=true`)).length; }
     catch { archivedChildCount = 0; }
+  }
+
+  /** The "Last done" list, for the Info tab. Hidden by `LastDone.svelte` itself when empty, so
+   *  a failed request (like an offline load) just leaves it hidden rather than showing an error
+   *  of its own -- this list is a convenience shortcut into the timeline, not primary data. */
+  async function loadLastDone() {
+    try { lastDone = await api<LastDoneT[]>('GET', `/objects/${oid}/last-done`); }
+    catch { lastDone = []; }
+  }
+
+  /** A "Last done" row switches to the timeline, narrowed to its title. */
+  function selectLastDone(title: string) {
+    titleFilter = title;
+    tab = 'timeline';
   }
 
   /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
@@ -95,14 +115,22 @@
     };
   }
 
+  /** The same fold the server's `title` filter and `last_done` grouping use (`fold_title` in
+   *  `src/api/activities.rs`): trimmed and case-folded, so a queued entry matches a title filter
+   *  the same way a synced one does. */
+  const foldTitle = (title: string) => title.trim().toLowerCase();
+
   async function pendingActivities(): Promise<Activity[]> {
     const ops = await pendingOpsFor(`/objects/${oid}/activities`);
-    // The server filters the loaded page by tag; a queued entry has not reached it, so it is
-    // filtered here the same way (ignoring case and accents), or it would show under any tag.
-    const wanted = tagFilter === null ? null : foldTag(tagFilter);
+    // The server filters the loaded page by tag and title; a queued entry has not reached it,
+    // so it is filtered here the same way (tag ignoring case and accents, title ignoring case
+    // and surrounding space), or it would show under any tag or title filter.
+    const wantedTag = tagFilter === null ? null : foldTag(tagFilter);
+    const wantedTitle = titleFilter === null ? null : foldTitle(titleFilter);
     return ops
       .filter((o) => !category || o.body.category === category)
-      .filter((o) => wanted === null || (Array.isArray(o.body.tags) && (o.body.tags as string[]).some((x) => foldTag(x) === wanted)))
+      .filter((o) => wantedTag === null || (Array.isArray(o.body.tags) && (o.body.tags as string[]).some((x) => foldTag(x) === wantedTag)))
+      .filter((o) => wantedTitle === null || (typeof o.body.title === 'string' && foldTitle(o.body.title) === wantedTitle))
       .map(pendingToActivity);
   }
 
@@ -129,7 +157,7 @@
     // there would later show as the whole timeline offline, and reading it back under a filter
     // would show unfiltered entries as if they matched -- so a filtered load neither writes nor
     // reads it.
-    const filtered = category !== '' || tagFilter !== null;
+    const filtered = category !== '' || tagFilter !== null || titleFilter !== null;
     // `untrack`: this runs synchronously inside the `oid`/`category` $effect below, so reading
     // `activities` here made that effect depend on the very list it goes on to assign. The
     // effect then re-ran on its own result and started over from page one -- which is why
@@ -150,6 +178,7 @@
         const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (category) params.set('category', category);
         if (tagFilter) params.set('tag', tagFilter);
+        if (titleFilter) params.set('title', titleFilter);
         return apiPage<Activity>(`${activitiesPrefix}${params}`);
       });
       items = page.items;
@@ -184,8 +213,8 @@
   }
 
   $effect(() => { oid; loadObject(); });
-  $effect(() => { oid; category; tagFilter; loadActivities('reset'); });
-  $effect(() => { oid; if (tab === 'info') loadChildren(); });
+  $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
+  $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); } });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -260,11 +289,11 @@
       <Timeline
         objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
-        unit={object.counter_unit} bind:category bind:tagFilter
+        unit={object.counter_unit} bind:category bind:tagFilter bind:titleFilter
       />
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
            already is; two of them would be two calls to the same action. -->
-      {#if activities.length > 0 || category !== '' || tagFilter !== null}
+      {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
         <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
       {/if}
     {:else if tab === 'documents'}
@@ -277,6 +306,7 @@
       <TagChips tags={object.tags ?? []} />
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
+      <LastDone items={lastDone} {object} onselect={selectLastDone} />
       <h3>{$t('object.contents')}</h3>
       {#if children.length === 0}
         <p class="muted">{$t('object.contents-empty')}</p>

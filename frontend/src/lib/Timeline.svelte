@@ -13,10 +13,14 @@
   import TagChips from './TagChips.svelte';
   import { tagColorIndex } from './tags';
 
-  let { objectId, type, activities, total, loadingMore = false, onmore, onlog, unit, category = $bindable(''), tagFilter = $bindable(null) }:
+  let {
+    objectId, type, activities, total, loadingMore = false, onmore, onlog, unit,
+    category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
+  }:
     {
       objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
-      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | ''; tagFilter?: string | null;
+      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | '';
+      tagFilter?: string | null; titleFilter?: string | null;
     } = $props();
   const groups = $derived(groupByYear(activities));
   const hasMore = $derived(activities.length < total);
@@ -65,11 +69,21 @@
   </div>
 {/if}
 
+{#if titleFilter !== null}
+  <!-- Same chip-with-clear-button pattern as the tag filter above, combinable with it and with
+       category: this one narrows by exact title (a "Last done" row tapped on the Info tab),
+       not by tag. -->
+  <div class="tag-filter">
+    <span class="chip">{$t('lastdone.filter', { title: titleFilter })}</span>
+    <button class="ghost" onclick={() => (titleFilter = null)}>{$t('lastdone.clear')}</button>
+  </div>
+{/if}
+
 {#if activities.length === 0}
   <!-- An object with no history and an object whose filter matched nothing are not the same
-       screen: the first is an invitation, the second is a fact about the chip above it. -->
+       screen: the first is an invitation, the second is a fact about the chip(s) above it. -->
   <div class="empty">
-    {#if category === '' && tagFilter === null}
+    {#if category === '' && tagFilter === null && titleFilter === null}
       <span class="empty-icon"><Icon name="edit" size={40} /></span>
       <p>{$t('timeline.empty')}</p>
       {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}

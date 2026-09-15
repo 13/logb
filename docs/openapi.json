@@ -542,6 +542,40 @@
         }
       }
     },
+    "/objects/{id}/last-done": {
+      "get": {
+        "summary": "Titles this object has logged more than once (or once, alongside an open reminder of the same title), newest last-done first, at most 50.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LastDone"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's object"
+          }
+        }
+      }
+    },
     "/objects/{id}/activities": {
       "get": {
         "summary": "One page of the object's timeline, newest first. `X-Total-Count` carries the unpaged total. `limit` is clamped to 500 rather than refused.",
@@ -599,6 +633,14 @@
             "name": "tag",
             "in": "query",
             "description": "Only activities carrying this tag, compared ignoring case and accents. `X-Total-Count` counts the same matches.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "description": "Only activities whose title matches this one exactly, ignoring case and surrounding space. `X-Total-Count` counts the same matches.",
             "schema": {
               "type": "string"
             }
@@ -3213,6 +3255,34 @@
               "integer",
               "null"
             ],
+            "format": "int64"
+          }
+        }
+      },
+      "LastDone": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The spelling of the newest occurrence, trimmed."
+          },
+          "occurrences": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "last_counter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_activity_id": {
+            "type": "integer",
             "format": "int64"
           }
         }

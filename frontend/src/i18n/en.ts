@@ -112,6 +112,11 @@ export default {
   'timeline.filter-all': 'All',
   'timeline.pending': 'Waiting to send',
 
+  'lastdone.title': 'Last done',
+  'lastdone.since': '{amount} ago',
+  'lastdone.filter': 'Title: {title}',
+  'lastdone.clear': 'Clear title filter',
+
   'activity.new': 'Log activity',
   'activity.edit': 'Edit activity',
   'activity.date': 'Date',
