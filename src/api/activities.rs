@@ -16,13 +16,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-// Kept in sync with the CHECK on activities.category (migrations 0009 and 0011 on SQLite, 0001
-// and 0002 on PostgreSQL) and with frontend/src/lib/types.ts's CATEGORIES: four health
-// categories alongside the original seven, so a `body` object can log a symptom, treatment,
-// appointment or medication; and `reading`, an entry that is nothing but a counter value.
-pub const CATEGORIES: [&str; 12] = [
+// Kept in sync with the CHECK on activities.category (migrations 0009, 0011 and 0015 on
+// SQLite, 0001, 0002 and 0006 on PostgreSQL) and with frontend/src/lib/types.ts's CATEGORIES:
+// four health categories alongside the original seven; `reading`, an entry that is nothing but
+// a counter value; and `trip`, an entry whose end is `counter_value` and whose start is the
+// `start_counter` column (see the doc comment on `ActivityRow::start_counter`).
+pub const CATEGORIES: [&str; 13] = [
     "maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other",
-    "symptom", "treatment", "appointment", "medication", "reading",
+    "symptom", "treatment", "appointment", "medication", "reading", "trip",
 ];
 
 pub fn router() -> Router<App> {
@@ -52,6 +53,18 @@ pub struct ActivityRow {
     /// Stored JSON text, answered as the array it holds -- see `ObjectRow::tags`.
     #[serde(serialize_with = "tags::serialize_json_text")]
     pub tags: String,
+    /// A trip's start; its end is the existing `counter_value` above, so the object's current
+    /// counter, counter reminders and usage per month all keep reading it unchanged. `None` on
+    /// every other category -- see `ActivityInput::validate`. Distance (`counter_value -
+    /// start_counter`) is never stored, only computed where it is shown.
+    pub start_counter: Option<i64>,
+    /// A trip's start and end place, trimmed, blank stored as `None`. Used only by `trip`.
+    pub from_place: Option<String>,
+    pub to_place: Option<String>,
+    /// A trip's duration in minutes, 1..=10080 (one week). Used only by `trip`.
+    pub duration_minutes: Option<i64>,
+    /// A trip's battery used, as a percentage, 0..=100. Used only by `trip`.
+    pub battery_used_pct: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +96,35 @@ pub struct ActivityInput {
     /// replaces a present list with its normalised form.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Three-state on PATCH, exactly as `ObjectInput::cover_attachment_id`: absent keeps the
+    /// stored value (`update` merges it in before calling `validate`, below), `null` clears it,
+    /// a value sets it. Absent on create is simply "no value" -- `validate`'s `.flatten()`
+    /// reads an absent outer `None` the same way as an explicit `null`.
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub start_counter: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub from_place: Option<Option<String>>,
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub to_place: Option<Option<String>>,
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub duration_minutes: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub battery_used_pct: Option<Option<i64>>,
+}
+
+/// A trip's place, trimmed; blank becomes `None`. `Err` if what remains is over 80 characters,
+/// counted with `chars().count()` rather than bytes so "Bäckerei Müller" is judged by its own
+/// 15 letters, not by how many bytes UTF-8 spends on the umlaut.
+fn trim_place(place: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(p) = place else { return Ok(None) };
+    let trimmed = p.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > 80 {
+        return Err(AppError::BadRequest("from_place and to_place must be at most 80 characters".into()));
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 impl ActivityInput {
@@ -92,7 +134,11 @@ impl ActivityInput {
             return Err(AppError::BadRequest(format!("category must be one of {}", CATEGORIES.join(", "))));
         }
         self.title = self.title.trim().to_string();
-        if self.title.is_empty() { return Err(AppError::BadRequest("title is required".into())); }
+        // A trip's title defaults to "Trip" ($t('cat.trip')) in the UI when left blank; every
+        // other category still requires one, exactly as before.
+        if self.title.is_empty() && self.category != "trip" {
+            return Err(AppError::BadRequest("title is required".into()));
+        }
         if let Some(c) = self.counter_value {
             if object.counter_unit.is_none() {
                 return Err(AppError::BadRequest("this object has no counter".into()));
@@ -115,6 +161,57 @@ impl ActivityInput {
         if let Some(t) = &self.tags {
             self.tags = Some(tags::normalize(t).map_err(AppError::BadRequest)?);
         }
+
+        // The five trip fields, resolved to plain values: `.flatten()` reads an absent outer
+        // `None` (create, or a PATCH `update` already merged the stored value into) the same
+        // way as an explicit `null`. Read with `.take()` and written back below so every
+        // caller -- `create`, `update` and `export::validate_import` alike -- can read the
+        // trimmed, checked value back off `self` the same way afterwards, by `.flatten()`ing
+        // again.
+        let start_counter = self.start_counter.take().flatten();
+        let duration_minutes = self.duration_minutes.take().flatten();
+        let battery_used_pct = self.battery_used_pct.take().flatten();
+        let from_place = trim_place(self.from_place.take().flatten())?;
+        let to_place = trim_place(self.to_place.take().flatten())?;
+
+        let has_trip_fields = start_counter.is_some() || from_place.is_some() || to_place.is_some()
+            || duration_minutes.is_some() || battery_used_pct.is_some();
+        if self.category != "trip" {
+            if has_trip_fields {
+                return Err(AppError::BadRequest(
+                    "only a trip has start_counter, places, duration or battery".into(),
+                ));
+            }
+        } else {
+            // Allowed only on an object with a distance counter, regardless of the object's
+            // type's own category list -- see the module doc on `domain::custom_type` and the
+            // spec's "Type categories" note: a `trip` is offered by counter unit, not by type.
+            if !matches!(object.counter_unit.as_deref(), Some("km") | Some("mi")) {
+                return Err(AppError::BadRequest("a trip needs an object that counts km or mi".into()));
+            }
+            let (Some(end), Some(start)) = (self.counter_value, start_counter) else {
+                return Err(AppError::BadRequest("a trip needs start_counter and counter_value".into()));
+            };
+            if start < 0 || start > end {
+                return Err(AppError::BadRequest("start_counter must be between 0 and counter_value".into()));
+            }
+        }
+        if let Some(b) = battery_used_pct {
+            if !(0..=100).contains(&b) {
+                return Err(AppError::BadRequest("battery_used_pct must be between 0 and 100".into()));
+            }
+        }
+        if let Some(d) = duration_minutes {
+            if !(1..=10080).contains(&d) {
+                return Err(AppError::BadRequest("duration_minutes must be between 1 and 10080".into()));
+            }
+        }
+
+        self.start_counter = Some(start_counter);
+        self.duration_minutes = Some(duration_minutes);
+        self.battery_used_pct = Some(battery_used_pct);
+        self.from_place = Some(from_place);
+        self.to_place = Some(to_place);
         Ok(())
     }
 }
@@ -142,7 +239,9 @@ async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError>
 pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<ActivityRow, AppError> {
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
-         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid, a.tags FROM activities a JOIN objects o ON o.id = a.object_id \
+         a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid, a.tags, \
+         a.start_counter, a.from_place, a.to_place, a.duration_minutes, a.battery_used_pct \
+         FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
     .bind(id).bind(user_id)
@@ -245,7 +344,8 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let filtered = wanted_tag.is_some() || wanted_title.is_some();
     let (sql_limit, sql_offset) = if filtered { (i64::MAX, 0) } else { (limit, offset) };
     let rows = sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
          ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
@@ -410,7 +510,8 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     if let Some(op) = body.client_op_id.as_deref() {
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-             quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
+             quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct \
              FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
         )
         .bind(op)
@@ -442,13 +543,17 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
-        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
-         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags",
+        "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+         RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
     .bind(&activity_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
+    .bind(body.start_counter.flatten()).bind(body.from_place.clone().flatten()).bind(body.to_place.clone().flatten())
+    .bind(body.duration_minutes.flatten()).bind(body.battery_used_pct.flatten())
     .fetch_one(&mut *tx).await;
     let row = match inserted {
         Ok(row) => row,
@@ -466,7 +571,8 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             };
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
-                 quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
+                 quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+                 start_counter, from_place, to_place, duration_minutes, battery_used_pct \
                  FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
             )
             .bind(op)
@@ -513,6 +619,15 @@ async fn changed_since(tx: &mut sqlx::AnyConnection, uuid: &str, field: &str, at
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ActivityInput>) -> Result<Json<ActivityOut>, AppError> {
     let existing = load_owned_activity(&state, user.id, id).await?;
     let object = load_owned_object(&state, user.id, existing.object_id).await?;
+    // Trip fields are three-state on PATCH (see `ActivityInput`'s doc comment on
+    // `start_counter`): a key the client omitted must keep its stored value, unlike every other
+    // field of this handler, which a PATCH always resends in full. Merged in before `validate`
+    // so its `.flatten()` reads the stored value back exactly as if the client had sent it.
+    if body.start_counter.is_none() { body.start_counter = Some(existing.start_counter); }
+    if body.from_place.is_none() { body.from_place = Some(existing.from_place.clone()); }
+    if body.to_place.is_none() { body.to_place = Some(existing.to_place.clone()); }
+    if body.duration_minutes.is_none() { body.duration_minutes = Some(existing.duration_minutes); }
+    if body.battery_used_pct.is_none() { body.battery_used_pct = Some(existing.battery_used_pct); }
     body.validate(&object)?;
 
     // An edit made offline and sent now carries the moment it was made. Capped at now, so a
@@ -540,10 +655,25 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         if body.quantity_milli != existing.quantity_milli && changed_since(&mut tx, &uuid, "quantity_milli", at).await? { body.quantity_milli = existing.quantity_milli; }
         // `None` is "keep the stored tags", so losing to a newer edit is spelled by dropping them.
         if body.tags.as_deref().is_some_and(|t| tags::to_json(t) != existing.tags) && changed_since(&mut tx, &uuid, "tags", at).await? { body.tags = None; }
+        if body.start_counter.flatten() != existing.start_counter && changed_since(&mut tx, &uuid, "start_counter", at).await? { body.start_counter = Some(existing.start_counter); }
+        if body.from_place.clone().flatten() != existing.from_place && changed_since(&mut tx, &uuid, "from_place", at).await? { body.from_place = Some(existing.from_place.clone()); }
+        if body.to_place.clone().flatten() != existing.to_place && changed_since(&mut tx, &uuid, "to_place", at).await? { body.to_place = Some(existing.to_place.clone()); }
+        if body.duration_minutes.flatten() != existing.duration_minutes && changed_since(&mut tx, &uuid, "duration_minutes", at).await? { body.duration_minutes = Some(existing.duration_minutes); }
+        if body.battery_used_pct.flatten() != existing.battery_used_pct && changed_since(&mut tx, &uuid, "battery_used_pct", at).await? { body.battery_used_pct = Some(existing.battery_used_pct); }
         // Keeping some fields and not others can combine into something no single edit said --
-        // a reading without its value -- so the merge is held to the same rules as either edit.
+        // a reading without its value, or a trip missing its start -- so the merge is held to
+        // the same rules as either edit.
         body.validate(&object)?;
     }
+
+    // Resolved once, after every merge above has had its say, and reused for both the diff and
+    // the bind below -- see the doc comment on `ActivityInput::start_counter` for the three
+    // states `.flatten()` collapses.
+    let start_counter = body.start_counter.flatten();
+    let from_place = body.from_place.clone().flatten();
+    let to_place = body.to_place.clone().flatten();
+    let duration_minutes = body.duration_minutes.flatten();
+    let battery_used_pct = body.battery_used_pct.flatten();
 
     // Only fields whose value actually differs are logged -- a PATCH that rewrites a field
     // with its existing value produces no `changes` row (see `record::record_update`).
@@ -558,12 +688,20 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // Logged as the JSON text the column holds, as `objects::update` does.
     let tags = body.tags.as_deref().map(tags::to_json).unwrap_or_else(|| existing.tags.clone());
     if tags != existing.tags { changed.push(("tags", json!(tags))); }
+    if start_counter != existing.start_counter { changed.push(("start_counter", json!(start_counter))); }
+    if from_place != existing.from_place { changed.push(("from_place", json!(from_place))); }
+    if to_place != existing.to_place { changed.push(("to_place", json!(to_place))); }
+    if duration_minutes != existing.duration_minutes { changed.push(("duration_minutes", json!(duration_minutes))); }
+    if battery_used_pct != existing.battery_used_pct { changed.push(("battery_used_pct", json!(battery_used_pct))); }
 
     sqlx::query(
-        "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8, tags = $9 WHERE id = $10 AND deleted_at IS NULL",
+        "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8, tags = $9, \
+         start_counter = $10, from_place = $11, to_place = $12, duration_minutes = $13, battery_used_pct = $14 WHERE id = $15 AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
-    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(&tags).bind(id)
+    .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(&tags)
+    .bind(start_counter).bind(&from_place).bind(&to_place).bind(duration_minutes).bind(battery_used_pct)
+    .bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;

@@ -3318,3 +3318,153 @@ async fn a_set_on_a_deleted_row_is_rejected_before_any_other_set_validation() {
         "a name collision on another row must not preempt the deleted check: {body}"
     );
 }
+
+/// Creates a trip, exactly as `POST .../activities` would, and returns its JSON.
+async fn create_trip(app: &common::TestApp, object_id: i64, extra: serde_json::Value) -> serde_json::Value {
+    let mut body = json!({
+        "date": "2026-06-01", "category": "trip", "title": "", "notes": "",
+        "start_counter": 400, "counter_value": 600
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        body[k] = v.clone();
+    }
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    res.json().await.unwrap()
+}
+
+/// A `create` op for an activity only announces a row REST already made (`apply_op`'s doc
+/// comment on `OpKind::Create`), so this REST-creates the trip with a client-minted uuid first,
+/// then pushes the announcement -- and pulls it back through bootstrap to check every field.
+#[tokio::test]
+async fn a_pushed_trip_create_round_trips_every_field() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let object_id = bike["id"].as_i64().unwrap();
+
+    create_trip(&app, object_id, json!({
+        "from_place": "Home", "to_place": "Office", "duration_minutes": 75, "battery_used_pct": 32,
+        "client_uuid": "trip-uuid-0001"
+    })).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-trip-create", "entity": "activity", "entity_uuid": "trip-uuid-0001",
+        "op": "create", "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let boot: serde_json::Value = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap().json().await.unwrap();
+    let a = boot["activities"].as_array().unwrap().iter()
+        .find(|a| a["client_uuid"] == "trip-uuid-0001").unwrap();
+    assert_eq!(a["start_counter"], 400);
+    assert_eq!(a["counter_value"], 600);
+    assert_eq!(a["from_place"], "Home");
+    assert_eq!(a["to_place"], "Office");
+    assert_eq!(a["duration_minutes"], 75);
+    assert_eq!(a["battery_used_pct"], 32);
+}
+
+#[tokio::test]
+async fn pushing_start_counter_above_the_stored_counter_value_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let object_id = bike["id"].as_i64().unwrap();
+    let created = create_trip(&app, object_id, json!({})).await;
+    let uuid = client_uuid(&app.state.db, "activities", created["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-start-over", "entity": "activity", "entity_uuid": uuid,
+        "op": "set", "field": "start_counter", "value": 700,
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "start_counter must be between 0 and counter_value");
+
+    let stored: i64 = sqlx::query_scalar("SELECT start_counter FROM activities WHERE client_uuid = $1")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored, 400, "the rejected write must not land");
+}
+
+/// The same cross-field rule from the other side: `counter_value` is not trip-only, so it is
+/// checked against the row's stored `start_counter` only when the row is a trip.
+#[tokio::test]
+async fn pushing_counter_value_below_the_stored_start_counter_on_a_trip_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let object_id = bike["id"].as_i64().unwrap();
+    let created = create_trip(&app, object_id, json!({})).await;
+    let uuid = client_uuid(&app.state.db, "activities", created["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-end-under", "entity": "activity", "entity_uuid": uuid,
+        "op": "set", "field": "counter_value", "value": 300,
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "start_counter must be between 0 and counter_value");
+}
+
+#[tokio::test]
+async fn pushing_battery_used_pct_is_accepted_and_stamps_the_field_clock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let object_id = bike["id"].as_i64().unwrap();
+    let created = create_trip(&app, object_id, json!({})).await;
+    let uuid = client_uuid(&app.state.db, "activities", created["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-battery", "entity": "activity", "entity_uuid": uuid,
+        "op": "set", "field": "battery_used_pct", "value": 50,
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let stored: Option<i64> = sqlx::query_scalar("SELECT battery_used_pct FROM activities WHERE client_uuid = $1")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored, Some(50));
+
+    let clocked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM field_clock WHERE entity = 'activity' AND entity_uuid = $1 AND field = 'battery_used_pct'")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(clocked, 1, "the field clock must be stamped so a later, older write loses to this one");
+}
+
+#[tokio::test]
+async fn pushing_a_trip_field_on_a_non_trip_row_is_rejected() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_id = car["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities"))).json(&json!({
+        "date": "2026-06-01", "category": "maintenance", "title": "Brakes", "notes": ""
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let created: serde_json::Value = res.json().await.unwrap();
+    let uuid = client_uuid(&app.state.db, "activities", created["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-from-place-non-trip", "entity": "activity", "entity_uuid": uuid,
+        "op": "set", "field": "from_place", "value": "Home",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "only a trip has start_counter, places, duration or battery");
+
+    let stored: Option<String> = sqlx::query_scalar("SELECT from_place FROM activities WHERE client_uuid = $1")
+        .bind(&uuid).fetch_one(&app.state.db).await.unwrap();
+    assert!(stored.is_none(), "the rejected write must not land");
+}

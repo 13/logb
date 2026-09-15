@@ -2359,9 +2359,10 @@
           "treatment",
           "appointment",
           "medication",
-          "reading"
+          "reading",
+          "trip"
         ],
-        "description": "`reading` is an entry that records nothing but a counter value, and requires `counter_value`"
+        "description": "`reading` is an entry that records nothing but a counter value, and requires `counter_value`. `trip` requires `counter_value` and `start_counter`, and is allowed only on an object whose counter_unit is km or mi; its title may be blank."
       },
       "ObjectType": {
         "type": "string",
@@ -2849,6 +2850,46 @@
               "null"
             ],
             "description": "The row's sync identity: what a sync op names it by, and what `client_uuid` on a create set it to. Null only for a row that predates the sync tables and has not been backfilled, which no shipped migration leaves behind."
+          },
+          "start_counter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A trip's start; its end is `counter_value`. Null on every other category."
+          },
+          "from_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80,
+            "description": "A trip's start place, trimmed; blank stored as null. Null on every other category."
+          },
+          "to_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80,
+            "description": "A trip's end place, trimmed; blank stored as null. Null on every other category."
+          },
+          "duration_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A trip's duration in minutes, 1-10080 (one week). Null on every other category."
+          },
+          "battery_used_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A trip's battery used, 0-100. Null on every other category."
           }
         }
       },
@@ -2917,6 +2958,46 @@
             "minLength": 8,
             "maxLength": 64,
             "description": "Identity the client minted before the server saw the row. A second create carrying the same value answers 200 with the row the first one made; one naming another account's row, another object's row, or a tombstone answers 409. Only the shape is checked, never a UUID grammar."
+          },
+          "start_counter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Required, with counter_value, on a trip; 0 <= start_counter <= counter_value. Three-state on PATCH: absent keeps the stored value, null clears it, a number sets it. Refused (400) on any other category."
+          },
+          "from_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80,
+            "description": "Optional on a trip, trimmed, blank stored as null. Three-state on PATCH like start_counter. Refused (400) on any other category."
+          },
+          "to_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80,
+            "description": "Optional on a trip, trimmed, blank stored as null. Three-state on PATCH like start_counter. Refused (400) on any other category."
+          },
+          "duration_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional on a trip, 1-10080. Three-state on PATCH like start_counter. Refused (400) on any other category."
+          },
+          "battery_used_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional on a trip, 0-100. Three-state on PATCH like start_counter. Refused (400) on any other category."
           }
         }
       },

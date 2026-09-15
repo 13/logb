@@ -150,6 +150,7 @@ export default {
   'cat.appointment': 'Termin',
   'cat.medication': 'Medikament',
   'cat.reading': 'Zählerstand',
+  'cat.trip': 'Fahrt',
   'type.car': 'Auto',
   'type.e_bike': 'E-Bike',
   'type.bike': 'Fahrrad',

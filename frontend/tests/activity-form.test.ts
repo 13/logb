@@ -3,7 +3,10 @@ import { emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate
 import type { Activity, TitleSuggestion } from '../src/lib/types';
 
 function a(id: number, date: string): Activity {
-  return { id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [], tags: [] };
+  return {
+    id, object_id: 1, date, category: 'repair', title: `t${id}`, notes: '', counter_value: null, cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [], tags: [],
+    start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+  };
 }
 
 describe('activity form', () => {

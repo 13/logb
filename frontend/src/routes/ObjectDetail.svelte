@@ -132,6 +132,11 @@
       counter_value: typeof b.counter_value === 'number' ? b.counter_value : null,
       cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
       quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
+      start_counter: typeof b.start_counter === 'number' ? b.start_counter : null,
+      from_place: typeof b.from_place === 'string' ? b.from_place : null,
+      to_place: typeof b.to_place === 'string' ? b.to_place : null,
+      duration_minutes: typeof b.duration_minutes === 'number' ? b.duration_minutes : null,
+      battery_used_pct: typeof b.battery_used_pct === 'number' ? b.battery_used_pct : null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
       pending: true, tags: Array.isArray(b.tags) ? b.tags : [],
     };

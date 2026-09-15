@@ -450,6 +450,76 @@ async fn export_round_trips_fuel_quantity() {
     assert_eq!(acts[0]["quantity_milli"], 41_300, "the archive must not drop the quantity");
 }
 
+/// A trip's five extra fields must survive export and import like `fuel_quantity` above -- an
+/// archive that dropped them would silently turn every restored trip back into a bare reading.
+#[tokio::test]
+async fn export_round_trips_a_trip() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-06-01", "category": "trip", "title": "", "notes": "",
+        "start_counter": 400, "counter_value": 600, "from_place": "Home", "to_place": "Office",
+        "duration_minutes": 75, "battery_used_pct": 32
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    let zip = app.client.get(app.url("/export")).send().await.unwrap().bytes().await.unwrap();
+
+    let fresh = common::spawn().await;
+    fresh.setup("ben", "correct horse").await;
+    let res = fresh.client.post(fresh.url("/import"))
+        .header("content-type", "application/zip")
+        .body(zip.to_vec())
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objects: Vec<serde_json::Value> = fresh.client.get(fresh.url("/objects"))
+        .send().await.unwrap().json().await.unwrap();
+    let nid = objects[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = fresh.client.get(fresh.url(&format!("/objects/{nid}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(acts[0]["category"], "trip");
+    assert_eq!(acts[0]["start_counter"], 400);
+    assert_eq!(acts[0]["counter_value"], 600);
+    assert_eq!(acts[0]["from_place"], "Home");
+    assert_eq!(acts[0]["to_place"], "Office");
+    assert_eq!(acts[0]["duration_minutes"], 75);
+    assert_eq!(acts[0]["battery_used_pct"], 32);
+}
+
+/// The five trip fields were added after version-1 archives already existed in the wild --
+/// `#[serde(default)]` on `ActivityExport`'s five new fields is what lets an older archive
+/// (which never wrote any of them) still import, exactly as `import_succeeds_without_a_snoozed_until_field`
+/// does for `snoozed_until`.
+#[tokio::test]
+async fn import_succeeds_without_trip_fields() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["activities"] = json!([{
+        "date": "2024-01-01", "category": "maintenance", "title": "Service", "notes": "",
+        "counter_value": 1000, "cost_cents": null, "created_at": "2024-01-01T00:00:00Z",
+        "attachments": []
+        // no start_counter/from_place/to_place/duration_minutes/battery_used_pct at all --
+        // exactly what a pre-trip archive looked like.
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let id = objs[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/activities"))).send().await.unwrap().json().await.unwrap();
+    for field in ["start_counter", "from_place", "to_place", "duration_minutes", "battery_used_pct"] {
+        assert!(acts[0][field].is_null(), "{field} must default to null: {}", acts[0]);
+    }
+}
+
 /// The archive is built into a scratch file and streamed back; the scratch file must not
 /// survive the request, and the response must still be a complete, readable zip.
 #[tokio::test]

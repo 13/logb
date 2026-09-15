@@ -110,7 +110,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         let non_negative = matches!(
             (entity, field),
             (Entity::Object, "purchase_price_cents")
-                | (Entity::Activity, "cost_cents" | "counter_value" | "quantity_milli")
+                | (Entity::Activity, "cost_cents" | "counter_value" | "quantity_milli" | "start_counter")
                 | (Entity::Reminder, "due_counter")
         );
         if must_be_positive && *n <= 0 {
@@ -118,6 +118,14 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         }
         if non_negative && *n < 0 {
             return Err(format!("{field} must be >= 0"));
+        }
+        // The same bounds `ActivityInput::validate` enforces on the REST door -- see the
+        // Global Constraints in the trip log spec.
+        if entity == Entity::Activity && field == "battery_used_pct" && !(0..=100).contains(n) {
+            return Err("battery_used_pct must be between 0 and 100".into());
+        }
+        if entity == Entity::Activity && field == "duration_minutes" && !(1..=10080).contains(n) {
+            return Err("duration_minutes must be between 1 and 10080".into());
         }
         return Ok(());
     };
@@ -137,6 +145,13 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
             // two paths cannot drift into accepting different dates.
             crate::api::objects::validate_date(text).map_err(|e| e.to_string())?;
         }
+        // By the time this runs the text has already been through `canonical_place` (the push
+        // handler runs `canonical_value` before `apply_op` ever sees the op, and the `Set` arm
+        // below runs it again on `bound` directly, exactly as it does for tags) -- so this is
+        // the TRIMMED length, matching `ActivityInput::validate`'s `chars().count()` check.
+        (Entity::Activity, "from_place" | "to_place") if text.chars().count() > 80 => {
+            return Err("from_place and to_place must be at most 80 characters".into());
+        }
         _ => {}
     }
     Ok(())
@@ -146,6 +161,21 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
 /// only checked.
 fn is_tags(entity: Entity, field: &str) -> bool {
     matches!((entity, field), (Entity::Object | Entity::Activity, "tags"))
+}
+
+/// Whether `field` is a trip place, the other kind of field whose pushed text is rewritten --
+/// trimmed, blank becomes absent -- rather than only checked.
+fn is_place(entity: Entity, field: &str) -> bool {
+    matches!((entity, field), (Entity::Activity, "from_place" | "to_place"))
+}
+
+/// A trip place's stored spelling: trimmed, `None` when what remains is blank -- the same rule
+/// `ActivityInput`'s `trim_place` applies on the REST door, so a value pushed over sync and one
+/// written over REST end up identical. Unlike `canonical_tags`/`canonical_categories`, trimming
+/// cannot fail; the 80-character limit is `validate_value`'s to enforce, once, on this result.
+fn canonical_place(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// The stored spelling of a pushed `tags` value: JSON text holding an array of strings, run
@@ -170,6 +200,9 @@ pub fn canonical_value(
     match (field, value) {
         (Some(field), Some(serde_json::Value::String(text))) if is_tags(entity, field) => {
             Some(serde_json::Value::String(canonical_tags(&text).unwrap_or(text)))
+        }
+        (Some(field), Some(serde_json::Value::String(text))) if is_place(entity, field) => {
+            Some(canonical_place(&text).map_or(serde_json::Value::Null, serde_json::Value::String))
         }
         // An object type's name is stored trimmed and its categories normalised, so they are
         // logged that way too. Whatever fails here is rejected by `type_field`, and its log row
@@ -569,8 +602,64 @@ pub async fn apply_op(
                     Ok(normalised) => Binding::Text(normalised),
                     Err(reason) => return Ok(Outcome::Rejected { reason }),
                 },
+                // A trip place is trimmed, not merely checked, for the same reason tags are --
+                // done again here even though the push handler already rewrote the logged
+                // value (`canonical_value`), so `apply_op` never relies on its caller for what
+                // reaches the column.
+                Binding::Text(text) if is_place(op.entity, field) => {
+                    canonical_place(&text).map_or(Binding::Null, Binding::Text)
+                }
                 other => other,
             };
+
+            // The trip cross-field rules: something no single field's shape or range can say on
+            // its own, so they are checked against the row's OTHER current values, the way
+            // `ActivityInput::validate` checks them against the rest of a REST PATCH's body (a
+            // REST PATCH always resends every trip field together; a synced `set` touches one
+            // field at a time, so the row itself is where "the other fields" live).
+            if op.entity == Entity::Activity && matches!(
+                field,
+                "start_counter" | "from_place" | "to_place" | "duration_minutes"
+                    | "battery_used_pct" | "counter_value"
+            ) {
+                let (category, stored_counter_value, stored_start_counter): (String, Option<i64>, Option<i64>) =
+                    sqlx::query_as("SELECT category, counter_value, start_counter FROM activities WHERE client_uuid = $1")
+                        .bind(&op.entity_uuid)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                // `counter_value` is not trip-only -- every category may carry one -- so only
+                // the other four are refused outright on a non-trip row, and only when they are
+                // actually being set to something (clearing one with `null` stays legal
+                // regardless of category, exactly as on the REST door).
+                if field != "counter_value" && category != "trip" && !matches!(&bound, Binding::Null) {
+                    return Ok(Outcome::Rejected {
+                        reason: "only a trip has start_counter, places, duration or battery".into(),
+                    });
+                }
+                if category == "trip" {
+                    // The value this write leaves behind for whichever of the two this op
+                    // names -- not the stored one, which is what it is about to stop being
+                    // true; the OTHER of the pair keeps its stored value, since this op does
+                    // not touch it.
+                    let end = if field == "counter_value" {
+                        match &bound { Binding::Integer(n) => Some(*n), _ => None }
+                    } else {
+                        stored_counter_value
+                    };
+                    let start = if field == "start_counter" {
+                        match &bound { Binding::Integer(n) => Some(*n), _ => None }
+                    } else {
+                        stored_start_counter
+                    };
+                    if let (Some(s), Some(e)) = (start, end) {
+                        if s < 0 || s > e {
+                            return Ok(Outcome::Rejected {
+                                reason: "start_counter must be between 0 and counter_value".into(),
+                            });
+                        }
+                    }
+                }
+            }
 
             // A type key needs the database: a built-in key, or one of the caller's own live types
             // -- including one a create earlier in this same push inserted, on this transaction.

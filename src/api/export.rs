@@ -57,6 +57,18 @@ struct ActivityExport {
     // Added with tags; an older archive's entries are untagged.
     #[serde(default)]
     tags: Vec<String>,
+    // Added with trips; an older archive's entries carry none of the five, so every one of them
+    // is `None` on import -- exactly what a non-trip entry already stores.
+    #[serde(default)]
+    start_counter: Option<i64>,
+    #[serde(default)]
+    from_place: Option<String>,
+    #[serde(default)]
+    to_place: Option<String>,
+    #[serde(default)]
+    duration_minutes: Option<i64>,
+    #[serde(default)]
+    battery_used_pct: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -184,7 +196,8 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags \
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct \
              FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
@@ -206,6 +219,8 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
                 counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
                 tags: tags::from_json(&a.tags),
+                start_counter: a.start_counter, from_place: a.from_place.clone(), to_place: a.to_place.clone(),
+                duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
                 attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             })).collect::<Result<Vec<_>, AppError>>()?,
             attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
@@ -474,11 +489,13 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         for a in &o.activities {
             let activity_uuid = uuid::Uuid::new_v4().to_string();
             let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id")
+                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
+                 start_counter, from_place, to_place, duration_minutes, battery_used_pct) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
+                .bind(a.start_counter).bind(&a.from_place).bind(&a.to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
                 .fetch_one(&mut *tx).await?;
             record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
             activity_ids.push(aid);
@@ -582,6 +599,12 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                 notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
                 quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None, client_uuid: None,
                 tags: Some(a.tags.clone()),
+                // An archive's value is always explicit, never "absent" -- there is no stored
+                // row to keep it from, so every trip field is wrapped in `Some`, exactly as a
+                // freshly deserialized REST create's would be.
+                start_counter: Some(a.start_counter), from_place: Some(a.from_place.clone()),
+                to_place: Some(a.to_place.clone()), duration_minutes: Some(a.duration_minutes),
+                battery_used_pct: Some(a.battery_used_pct),
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;

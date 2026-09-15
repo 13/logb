@@ -127,6 +127,12 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
             ("counter_value", Integer), ("cost_cents", Integer), ("quantity_milli", Integer),
             ("tags", Text),
+            // A trip's fields. Settable on any activity the same way `quantity_milli` already
+            // is on a non-fuel one: the whitelist has no notion of "only on this category",
+            // that cross-field rule is `apply::apply_op`'s `Set` handling to enforce, exactly as
+            // `ActivityInput::validate` enforces it on the REST door.
+            ("start_counter", Integer), ("from_place", Text), ("to_place", Text),
+            ("duration_minutes", Integer), ("battery_used_pct", Integer),
         ],
         Entity::Reminder => &[
             ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
@@ -194,6 +200,9 @@ mod tests {
         (Entity::Activity, "counter_value"),
         (Entity::Activity, "cost_cents"),
         (Entity::Activity, "quantity_milli"),
+        (Entity::Activity, "start_counter"),
+        (Entity::Activity, "duration_minutes"),
+        (Entity::Activity, "battery_used_pct"),
         (Entity::Reminder, "due_counter"),
         (Entity::Reminder, "repeat_months"),
         (Entity::Reminder, "repeat_counter"),

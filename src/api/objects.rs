@@ -141,7 +141,12 @@ async fn check_type(conn: &mut sqlx::AnyConnection, user_id: i64, type_key: &str
 
 /// Deserializes a present field -- including an explicit `null` -- as `Some(..)`, leaving
 /// `None` to mean "the client did not send this field at all".
-fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+///
+/// `pub(crate)`: `ActivityInput`'s trip fields (`start_counter`, `from_place`, `to_place`,
+/// `duration_minutes`, `battery_used_pct` in `api::activities`) are three-state on PATCH for
+/// the same reason `cover_attachment_id` and `parent_id` are here, and reuse this rather than
+/// carry a second copy of the same deserializer.
+pub(crate) fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

@@ -145,3 +145,25 @@ async fn a_root_objects_search_hit_has_no_parent_name() {
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(res["objects"][0]["parent_name"], serde_json::Value::Null);
 }
+
+/// A trip's places are searched like its title and notes -- and the umlaut proves this runs
+/// through the backend's own case-folding (`state.backend.case_insensitive_like()`), not an
+/// ASCII-only shortcut.
+#[tokio::test]
+async fn a_trip_is_found_by_its_places() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-06-01", "category": "trip", "title": "", "notes": "",
+        "start_counter": 400, "counter_value": 600,
+        "from_place": "Bäckerei Müller", "to_place": "Home"
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    let r: serde_json::Value = app.client.get(app.url("/search?q=B%C3%A4ckerei")).send().await.unwrap().json().await.unwrap();
+    let acts = r["activities"].as_array().unwrap();
+    assert_eq!(acts.len(), 1, "{r}");
+    assert_eq!(acts[0]["category"], "trip");
+}

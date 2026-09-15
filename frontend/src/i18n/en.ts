@@ -150,6 +150,7 @@ export default {
   'cat.appointment': 'Appointment',
   'cat.medication': 'Medication',
   'cat.reading': 'Reading',
+  'cat.trip': 'Trip',
   'type.car': 'Car',
   'type.e_bike': 'E-bike',
   'type.bike': 'Bicycle',

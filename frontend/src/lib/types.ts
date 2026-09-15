@@ -2,7 +2,7 @@ import type { IconName } from './icon-names.js';
 
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
 export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
-  'symptom', 'treatment', 'appointment', 'medication', 'reading'] as const;
+  'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
 export type BuiltinType = (typeof OBJECT_TYPES)[number];
@@ -69,8 +69,20 @@ export interface Activity {
    *  server never sends this field. See `pendingToActivity` in ObjectDetail.svelte. */
   pending?: boolean;
   tags: string[];
+  /** A trip's fields, `null` on every other category. Its end is the existing `counter_value`
+   *  above; distance is `counter_value - start_counter`, never sent or stored. */
+  start_counter: number | null;
+  from_place: string | null;
+  to_place: string | null;
+  duration_minutes: number | null;
+  battery_used_pct: number | null;
 }
-export interface ActivityInput { date: string; category: Category; title: string; notes: string; counter_value: number | null; cost_cents: number | null; quantity_milli: number | null; tags?: string[] }
+export interface ActivityInput {
+  date: string; category: Category; title: string; notes: string; counter_value: number | null;
+  cost_cents: number | null; quantity_milli: number | null; tags?: string[];
+  start_counter?: number | null; from_place?: string | null; to_place?: string | null;
+  duration_minutes?: number | null; battery_used_pct?: number | null;
+}
 
 /** `GET /tags`: every distinct tag in use, with how many objects and entries carry it. */
 export interface TagCount { tag: string; count: number }
