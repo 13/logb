@@ -414,6 +414,7 @@ export default {
   'settings.types': 'Typen',
   'types.built-in': 'Eingebaute Typen',
   'types.yours': 'Eigene Typen',
+  'types.new-from-form': '+ Neuer Typ…',
   'types.add': 'Typ hinzufügen',
   'types.name': 'Name',
   'types.icon': 'Symbol',

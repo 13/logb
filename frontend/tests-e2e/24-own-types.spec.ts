@@ -91,3 +91,51 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await page.reload();
   await expect(page.locator('.type-row', { hasText: 'E-Scooter' })).toBeVisible();
 });
+
+test('"+ New type…" on the object form makes a type without losing what was typed', async ({ page }) => {
+  await signInFresh(page, '24-own-types-shortcut');
+
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Mein Pedelec');
+  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+
+  // Lands on Types with the add form already open, and the object form's own path carried as
+  // `return` -- not chosen, just opened for the roundtrip.
+  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew/);
+  await expect(page.getByRole('button', { name: 'Save type' })).toBeVisible();
+  await page.getByLabel('Name', { exact: true }).fill('Pedelec');
+  await page.getByLabel('Default counter unit').selectOption('km');
+  await page.getByRole('button', { name: 'Save type' }).click();
+
+  // Back on the object form: the name typed before the detour survived, and the new type --
+  // brought back as `?type=custom:<uuid>` -- is selected, unit and all.
+  await page.waitForURL(/\/objects\/new\?type=custom%3A/);
+  await expect(page.getByLabel('Name')).toHaveValue('Mein Pedelec');
+  await expect(page.getByLabel('Type', { exact: true })).toHaveValue(/^custom:/);
+  await expect(page.locator('#c option:checked')).toHaveText('Pedelec');
+  await expect(page.getByLabel('Counter', { exact: true })).toHaveValue('km');
+
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.waitForURL(/\/objects\/\d+$/);
+  await expect(page.getByRole('main')).toContainText('Pedelec');
+});
+
+test('Cancel on Types, reached from the shortcut, returns without changing the type', async ({ page }) => {
+  await signInFresh(page, '24-own-types-shortcut-cancel');
+
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Mein Auto');
+  // A type picked before the detour must still be there after Cancel -- otherwise nothing tells
+  // apart "the shortcut changed nothing" from "the shortcut happened to leave the default in
+  // place".
+  await page.getByLabel('Type', { exact: true }).selectOption({ label: 'Car' });
+  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+
+  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew/);
+  await expect(page.getByRole('button', { name: 'Save type' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await page.waitForURL(/\/objects\/new$/);
+  await expect(page.getByLabel('Name')).toHaveValue('Mein Auto');
+  await expect(page.getByLabel('Type', { exact: true })).toHaveValue('car');
+});

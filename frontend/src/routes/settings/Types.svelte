@@ -5,6 +5,8 @@
   import { api, ApiError } from '../../lib/api';
   import { newOpId } from '../../lib/outbox';
   import { t } from '../../i18n';
+  import { go } from '../../lib/router';
+  import { safeReturnPath } from '../../lib/object-draft';
   import { CUSTOM_TYPE_ICONS, customTypes, loadCustomTypes, typeIcon } from '../../lib/type-registry';
   import { CATEGORIES, OBJECT_TYPES, type Category, type CounterUnit, type CustomType } from '../../lib/types';
 
@@ -18,8 +20,17 @@
   let formError = $state('');
   /** A refused delete is about one row, so its message sits under that row. */
   let deleteError = $state<{ id: number; message: string } | null>(null);
+  /** Set from `?return=` on mount: the object form the "+ New type…" shortcut came from. A
+   *  successful create sends the new type's key back there; Cancel on the add form it opened
+   *  goes back without one. Absent (`null`) leaves both unchanged from Types opened normally. */
+  let returnPath = $state<string | null>(null);
 
-  onMount(() => { void loadCustomTypes(); });
+  onMount(() => {
+    void loadCustomTypes();
+    const params = new URLSearchParams(location.search);
+    returnPath = safeReturnPath(params.get('return'));
+    if (params.get('new') === '1') open('new');
+  });
 
   /** Built-in labels already exist for most icons; the rest have their own word. */
   const ICON_LABEL: Partial<Record<IconName, string>> = {
@@ -49,13 +60,29 @@
     // category that fits any entry and the server adds it anyway.
     const body = { name: name.trim(), icon, categories: CATEGORIES.filter((c) => c === 'other' || categories.includes(c)), counter_unit: unit };
     try {
-      if (editing === 'new') await api('POST', '/types', { ...body, client_uuid: newOpId() });
-      else await api('PATCH', `/types/${editing}`, body);
-      await loadCustomTypes();
-      editing = null;
+      if (editing === 'new') {
+        const created = await api<CustomType>('POST', '/types', { ...body, client_uuid: newOpId() });
+        await loadCustomTypes();
+        editing = null;
+        // Send the "+ New type…" shortcut back to its form with the type it just made --
+        // `created.key` (the registry's own `custom:<uuid>`), not anything derived here.
+        if (returnPath) { go(`${returnPath}?type=${encodeURIComponent(created.key)}`); return; }
+      } else {
+        await api('PATCH', `/types/${editing}`, body);
+        await loadCustomTypes();
+        editing = null;
+      }
     } catch (e) {
       formError = errorText(e);
     } finally { busy = false; }
+  }
+
+  /** Cancel on the add form the shortcut opened goes back to where it came from, type
+   *  unchanged; any other cancel (editing a type, or Types opened without `return`) just closes
+   *  the form in place, as before. */
+  function cancelForm() {
+    if (editing === 'new' && returnPath) { go(returnPath); return; }
+    editing = null;
   }
 
   async function remove(ty: CustomType) {
@@ -128,7 +155,7 @@
     {#if formError}<p class="error" role="alert">{formError}</p>{/if}
     <div class="row actions">
       <button type="submit" class="primary" disabled={busy || name.trim() === ''}>{$t('types.save')}</button>
-      <button type="button" class="ghost" onclick={() => (editing = null)}>{$t('nav.cancel')}</button>
+      <button type="button" class="ghost" onclick={cancelForm}>{$t('nav.cancel')}</button>
     </div>
   </form>
 {/snippet}

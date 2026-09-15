@@ -16,9 +16,13 @@
   import { todayIso } from '../lib/format';
   import { OBJECT_TYPES, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
   import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
+  import { saveObjectDraft, takeObjectDraft } from '../lib/object-draft';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
+  /** This route's own path, exactly as `App.svelte` registers it -- the key a draft is kept
+   *  under across the "+ New type…" round trip, and the `return` the shortcut sends Types. */
+  const currentPath = $derived(editing ? `/objects/${id}/edit` : '/objects/new');
   const presetParentId = new URLSearchParams(location.search).get('parent_id');
   let input = $state<ObjectInput>(
     untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
@@ -45,10 +49,21 @@
   let error = $state('');
   let busy = $state(false);
 
+  /** The type select's own last option: picking it does not choose a type at all, it detours to
+   *  Types to make one, keeping this form's input for when it comes back. Not a legal
+   *  `ObjectType` -- kept out of that type on purpose, so nothing downstream can mistake it for
+   *  a real selection. */
+  const NEW_TYPE = '__new_type';
+
   /** An own type knows the counter it usually has (an e-scooter counts km), so choosing it fills
    *  in the unit -- but only into an empty one: a unit the user already picked is theirs. */
-  function setType(ty: ObjectType) {
-    input.type = ty;
+  function setType(ty: string) {
+    if (ty === NEW_TYPE) {
+      saveObjectDraft(currentPath, $state.snapshot(input));
+      go(`/settings/types?new=1&return=${encodeURIComponent(currentPath)}`);
+      return;
+    }
+    input.type = ty as ObjectType;
     if (input.counter_unit === null) input.counter_unit = defaultUnit(ty, $customTypes);
   }
   /** An object whose own type is gone (deleted elsewhere, not synced here yet) still has to show
@@ -76,11 +91,22 @@
     // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
     // wait for them or lose its object load over them.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
-    if (id) {
+    // A kept draft beats a fresh fetch: it is this same form's own input, mid-edit, from just
+    // before the "+ New type…" detour -- fetching the object again here would throw that away.
+    const draft = takeObjectDraft(currentPath);
+    if (draft) {
+      input = draft;
+      priceText = centsToInput(draft.purchase_price_cents);
+    } else if (id) {
       const o = await api<MemObject>('GET', `/objects/${id}`);
       input = toInput(o);
       priceText = centsToInput(o.purchase_price_cents);
     }
+    // A `type` in the query names the type just created on Types, straight from the shortcut --
+    // selecting it here (through `setType`, so the counter-unit default still applies) is what
+    // lands the round trip on the new type instead of back on whatever the form had before.
+    const typeParam = new URLSearchParams(location.search).get('type');
+    if (typeParam && $customTypes.some((c) => c.key === typeParam)) setType(typeParam);
     // The descendant walk has to see the whole tree. `all=true` means "ignore nesting" only --
     // `archived` is an independent either/or filter that still applies -- so one fetch returns
     // the *unarchived* tree, and a child reachable only through an archived room is missing
@@ -162,6 +188,7 @@
           </optgroup>
         {/if}
         {#if missingType}<option value={input.type}>{$typesLoaded ? $t('types.unknown') : $t('types.loading')}</option>{/if}
+        <option value={NEW_TYPE}>{$t('types.new-from-form')}</option>
       </select>
     </div>
     <div class="field">
