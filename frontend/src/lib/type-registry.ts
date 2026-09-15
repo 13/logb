@@ -139,15 +139,28 @@ export function typeIcon(key: string, custom: CustomType[]): IconName {
 }
 
 /**
- * What the category select offers for this type -- plus `current`, always.
+ * What the category select offers for this type -- plus `current`, always, plus `trip` when
+ * `counterUnit` is a distance unit.
  *
  * Filtering is presentation only. An entry logged before its object was re-typed keeps its own
  * category in the list, so opening and saving an untouched form cannot re-file it. An unknown
  * type offers everything, for the same reason.
+ *
+ * `trip` is offered by `counterUnit`, not by type: the spec ("The `trip` category is accepted
+ * for every object type with a distance counter, independent of the type's category list")
+ * means no built-in type's own list in `TABLE` names it (see the carve-out in
+ * `builtin-types.test.ts`) -- it is added here instead, exactly when the object could actually
+ * hold one (`km`/`mi`), or when `current` already is one (re-typing away from km/mi must not
+ * hide an existing trip's own category, the same reason `current` is always kept below).
  */
-export function categoriesFor(key: string, custom: CustomType[], current?: Category): Category[] {
+export function categoriesFor(key: string, custom: CustomType[], current?: Category, counterUnit?: CounterUnit): Category[] {
   const list = isBuiltin(key) ? TABLE[key].categories : find(key, custom)?.categories ?? [...CATEGORIES];
-  return current && !list.includes(current) ? [...list, current] : list;
+  const offersTrip = counterUnit === 'km' || counterUnit === 'mi' || current === 'trip';
+  // Annotated explicitly: with no contextual type here, a bare `'trip'` in `[...list, 'trip']`
+  // widens to plain `string`, and the `Category[] | string[]` that leaves `withTrip` with then
+  // fails `.includes(current)` below (a `Category`) on the `string[]` branch.
+  const withTrip: Category[] = offersTrip && !list.includes('trip') ? [...list, 'trip'] : list;
+  return current && !withTrip.includes(current) ? [...withTrip, current] : withTrip;
 }
 
 /** The unit a new object of this type starts with. Built-in types leave it to the user. */

@@ -2,19 +2,39 @@ import { todayIso } from './format';
 import type { Activity, ActivityInput, Category, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
-  return { date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null, tags: [] };
+  return {
+    date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null, tags: [],
+    start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+  };
 }
 
 export function toActivityInput(a: Activity): ActivityInput {
-  return { date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags] };
+  return {
+    date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags],
+    start_counter: a.start_counter, from_place: a.from_place, to_place: a.to_place, duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
+  };
 }
 
 /** Returns the i18n key of the offending field, or null when valid. */
 export function validateActivity(input: ActivityInput): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return 'activity.date';
-  if (!input.title.trim()) return 'activity.title';
+  const isTrip = input.category === 'trip';
+  // A trip defaults its own title to `cat.trip` when left blank (see ActivityForm) -- every
+  // other category still needs one typed in.
+  if (!isTrip && !input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
-  if (input.counter_value !== null && Number.isNaN(input.counter_value)) return 'activity.counter';
+  if (isTrip) {
+    const start = input.start_counter;
+    const end = input.counter_value;
+    if (start === null || start === undefined || end === null) return 'trip.start';
+    if (Number.isNaN(start) || Number.isNaN(end)) return 'trip.start';
+    if (end < start) return 'trip.end';
+    if (input.duration_minutes !== null && input.duration_minutes !== undefined && Number.isNaN(input.duration_minutes)) return 'trip.duration';
+    const battery = input.battery_used_pct;
+    if (battery !== null && battery !== undefined && (Number.isNaN(battery) || battery < 0 || battery > 100)) return 'trip.battery';
+  } else if (input.counter_value !== null && Number.isNaN(input.counter_value)) {
+    return 'activity.counter';
+  }
   if (input.quantity_milli !== null && Number.isNaN(input.quantity_milli)) return 'activity.quantity';
   return null;
 }

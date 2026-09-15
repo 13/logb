@@ -7,6 +7,7 @@
   import { locale, t } from '../i18n';
   import { groupByYear } from './activity-form';
   import { foldReadings, readingSpan } from './timeline-fold';
+  import { placesLabel, spanLabel, tripDistance, formatDuration } from './trip';
   import { categoriesFor, customTypes } from './type-registry';
   import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
@@ -30,8 +31,12 @@
   // loaded so far, not necessarily every entry the object has -- acceptable here since this is
   // presentation, not the source of truth for what exists.
   const present = $derived(new Set(activities.map((a) => a.category)));
+  // `unit`: the same argument that makes `categoriesFor` offer `trip` on the entry form -- an
+  // object with a km/mi counter gets a "Trip" filter chip even before it has logged one, exactly
+  // like every other category chip here (offered by the type/unit, not only once something of
+  // that kind exists).
   const chipCategories = $derived(
-    [...categoriesFor(type, $customTypes), ...CATEGORIES.filter((c) => present.has(c))]
+    [...categoriesFor(type, $customTypes, undefined, unit), ...CATEGORIES.filter((c) => present.has(c))]
       .filter((c, i, all) => all.indexOf(c) === i),
   );
   /** Which folded runs of readings are open. */
@@ -135,15 +140,39 @@
             onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
           >
             <div class="row head">
-              <b>{a.title}</b>
+              <!-- A trip's title defaults to "Trip" when left empty (ActivityForm shows the same
+                   word as a placeholder rather than pre-filling it); every other category's
+                   title is required, so `a.title` is never actually empty for one of those. -->
+              <b>{a.title || $t('cat.trip')}</b>
               <span class="chip">{$t(`cat.${a.category}`)}</span>
               {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>
-            <div class="muted tnum">
-              {fmtDate(a.date, $dateFormat)}
-              {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
-              {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
-            </div>
+            {#if a.category === 'trip'}
+              {@const dist = tripDistance(a)}
+              <!-- Start/end/distance instead of the single reading a plain counter value would
+                   show below -- a trip moved the counter across a *span*, not to a bare number. -->
+              <div class="muted tnum">
+                {fmtDate(a.date, $dateFormat)} · {spanLabel(counter(a.start_counter, unit, $locale), counter(a.counter_value, unit, $locale))}
+                {#if dist !== null} · {counter(dist, unit, $locale)}{/if}
+              </div>
+              {#if placesLabel(a.from_place, a.to_place)}
+                <div class="muted">{placesLabel(a.from_place, a.to_place)}</div>
+              {/if}
+              {#if a.duration_minutes !== null || a.battery_used_pct !== null}
+                <div class="muted">
+                  {[
+                    a.duration_minutes !== null ? `${formatDuration(a.duration_minutes)} h` : null,
+                    a.battery_used_pct !== null ? `${a.battery_used_pct} %` : null,
+                  ].filter((s) => s !== null).join(' · ')}
+                </div>
+              {/if}
+            {:else}
+              <div class="muted tnum">
+                {fmtDate(a.date, $dateFormat)}
+                {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
+                {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
+              </div>
+            {/if}
             {#if a.notes}<p class="notes">{a.notes}</p>{/if}
             {#if a.attachments.length > 0}
               <div class="thumb-strip">

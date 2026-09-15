@@ -13,9 +13,10 @@
   import { dateFormat } from '../stores/date-format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
+  import { formatDuration, parseDuration, tripDistance } from '../lib/trip';
   import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
-  import { type Activity, type Attachment, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion } from '../lib/types';
+  import { CATEGORIES, type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -26,6 +27,20 @@
   let costText = $state('');
   let counterText = $state('');
   let quantityText = $state('');
+  // Trip-only text fields: `from_place`/`to_place` are nullable strings, so (unlike `input.title`
+  // or `.notes`) they cannot be bound to a text input directly without the field showing the
+  // literal word "null" the moment the category becomes trip -- same reason `counterText` above
+  // is its own state rather than a direct bind to the nullable `counter_value`. `durationText`
+  // holds whatever the user typed (`parseDuration` in `buildInput` turns it into minutes only at
+  // save time), so an in-progress "1:1" is never clobbered mid-edit.
+  let fromText = $state('');
+  let toText = $state('');
+  let durationText = $state('');
+  /** The trip Distance field. Not part of `ActivityInput` -- only start/end travel to the server
+   *  (see the type's own doc comment) -- so it lives here, linked to Start/End by the on*Change
+   *  handlers below exactly as the spec describes. */
+  let distance = $state<number | null>(null);
+  let tripPlaces = $state<TripPlaces>({ from: [], to: [] });
   let attachments = $state<Attachment[]>([]);
   let saved = $state<Activity | null>(null);
   let error = $state('');
@@ -37,7 +52,7 @@
   // The object's vocabulary, plus whatever this entry already says. An entry logged before its
   // object was re-typed must keep its own category in the list, or saving an untouched form
   // would quietly re-file it.
-  const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category));
+  const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category, object?.counter_unit));
   /** Set once the user picks a category (the select, or a repeat chip). Until then a new entry's
    *  category is only a default, and may be re-chosen when the object's own type loads late. */
   let categoryTouched = false;
@@ -52,6 +67,15 @@
     counterText !== '' && lastCounter !== null && Number(counterText) < lastCounter,
   );
   const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
+
+  /** The `?category=` query parameter of a `.../activities/new` link -- ObjectDetail's "+ Log
+   *  trip" button uses it (see Step 4 of the trip-log task). A garbage or unknown value is
+   *  simply ignored, same as `offered`'s own fallback below would ignore a category the object's
+   *  type does not actually offer. */
+  function categoryParam(): Category | null {
+    const c = new URLSearchParams(location.search).get('category');
+    return c && (CATEGORIES as readonly string[]).includes(c) ? (c as Category) : null;
+  }
 
   onMount(async () => {
     // Not awaited, and a failure is ignored: this form has to work offline, and suggestions are
@@ -74,9 +98,19 @@
     // A new entry's default category (`emptyActivity`'s 'maintenance') isn't offered by every
     // type -- a `body` object offers no `maintenance` at all -- so the select would silently
     // sit on an option that isn't in its own list. Editing overwrites `input` wholesale below,
-    // so this only ever matters for a genuinely new entry.
-    if (!aid && object && !categoriesFor(object.type, $customTypes).includes(input.category)) {
-      input.category = categoriesFor(object.type, $customTypes)[0];
+    // so this only ever matters for a genuinely new entry. A `?category=` link (ObjectDetail's
+    // "+ Log trip") wins over that default, but ONLY when the object actually offers it --
+    // `offered` below re-derives the very same list reactively for the select itself, so the
+    // two can never disagree about what a stale/forged query value is allowed to pick.
+    if (!aid && object) {
+      const list = categoriesFor(object.type, $customTypes, undefined, object.counter_unit);
+      const wanted = categoryParam();
+      if (wanted && list.includes(wanted)) {
+        input.category = wanted;
+        categoryTouched = true;
+      } else if (!list.includes(input.category)) {
+        input.category = list[0];
+      }
     }
     try {
       allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
@@ -94,6 +128,10 @@
         costText = centsToInput(a.cost_cents);
         counterText = a.counter_value === null ? '' : String(a.counter_value);
         quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
+        fromText = a.from_place ?? '';
+        toText = a.to_place ?? '';
+        durationText = a.duration_minutes === null ? '' : formatDuration(a.duration_minutes);
+        distance = tripDistance(a);
         attachments = a.attachments;
         ready = true;
       } catch (e) {
@@ -114,9 +152,56 @@
   $effect(() => {
     const list = $customTypes;
     if (aid || !object || categoryTouched || !object.type.startsWith('custom:')) return;
-    const own = categoriesFor(object.type, list);
+    const own = categoriesFor(object.type, list, undefined, object.counter_unit);
     if (!own.includes(untrack(() => input.category))) input.category = own[0];
   });
+
+  // A new trip's start defaults to the object's current counter -- "from where the odometer
+  // already is" -- the moment the category is (or becomes) trip, whether that happened via the
+  // `?category=trip` query above or a manual pick in the select further down. Guarded to run
+  // once: without `tripStartInit`, re-entering an empty Start field after clearing it would keep
+  // snapping back to the object's counter on every unrelated re-render.
+  let tripStartInit = false;
+  $effect(() => {
+    if (aid || tripStartInit || input.category !== 'trip') return;
+    if (!object || object.stats.current_counter === null) return;
+    tripStartInit = true;
+    if (input.start_counter === null) input.start_counter = object.stats.current_counter;
+  });
+
+  // From/To suggest this object's own earlier trip places (see `TripPlaces`). Loaded once, the
+  // moment the category is (or becomes) trip -- not in `onMount` unconditionally, since most
+  // entries are never a trip and the object may not even offer one yet when this form opens.
+  // Failure is ignored: the datalist is a convenience, not something this form depends on.
+  let tripPlacesLoaded = false;
+  $effect(() => {
+    if (tripPlacesLoaded || input.category !== 'trip') return;
+    tripPlacesLoaded = true;
+    api<TripPlaces>('GET', `/objects/${oid}/trip-places`).then((p) => (tripPlaces = p), () => {});
+  });
+
+  /** End (`input.counter_value`) typed directly: distance follows it, same as the spec says.
+   *  `start_counter` is declared optional on `ActivityInput` (`?:`, for the benefit of every
+   *  non-trip caller that never sets it at all) -- `?? null` reads that absent case the same as
+   *  an explicit null, since the two mean the same thing here: no start typed yet. */
+  function onTripEndChange() {
+    const start = input.start_counter ?? null;
+    if (start !== null && input.counter_value !== null) distance = input.counter_value - start;
+  }
+  /** Distance typed directly: end follows it (start + distance), unless start is not known yet. */
+  function onTripDistanceChange() {
+    const start = input.start_counter ?? null;
+    if (start !== null && distance !== null) input.counter_value = start + distance;
+  }
+  /** Start changed: an already-known distance is kept and the end moves with it; with no
+   *  distance yet (a freshly prefilled or freshly typed start, end not yet touched) there is
+   *  nothing to move, so this falls back to deriving distance from whatever end is already there. */
+  function onTripStartChange() {
+    const start = input.start_counter ?? null;
+    if (start === null) return;
+    if (distance !== null) input.counter_value = start + distance;
+    else if (input.counter_value !== null) distance = input.counter_value - start;
+  }
 
   // `saved.id` is the temp id ActivityForm minted for its own draft (see `mintTempId` below)
   // for as long as `saved.pending` holds. Nothing else refreshes it once a BACKGROUND flush --
@@ -187,19 +272,32 @@
   });
 
   function buildInput(): ActivityInput {
+    const isTrip = input.category === 'trip';
     return {
       ...input,
       // A plain copy: `input.tags` is a $state proxy, and IndexedDB cannot clone a proxy, so
       // queuing this body offline (the outbox) would fail with the spread's array left as it is.
       tags: [...(input.tags ?? [])],
       cost_cents: parseMoney(costText),
-      // `counterText` is bound to a number input, so Svelte hands back a number, not a string.
-      counter_value: String(counterText).trim() === '' ? null : Number(counterText),
+      // A trip's end IS the counter (`input.counter_value` is bound straight to the End field
+      // below, unlike the generic Counter field's own `counterText`); every other category keeps
+      // reading the generic field, exactly as before.
+      counter_value: isTrip ? input.counter_value : (String(counterText).trim() === '' ? null : Number(counterText)),
       // The quantity field only exists in the form for the fuel category (see the template
       // below) -- send it only then, so switching category away from fuel after typing an
       // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
       // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
       quantity_milli: input.category === 'fuel' ? parseQuantity(quantityText) : null,
+      // The five trip fields exist in the form only for the trip category (see the template
+      // below) -- sent as null otherwise, mirroring `quantity_milli` above, so switching away
+      // from trip after filling any of them in can't leave them stuck on a repair/maintenance/...
+      // row (the backend rejects them there outright, and PATCH keeps whatever it last stored
+      // when a field is merely absent from the body).
+      start_counter: isTrip ? input.start_counter : null,
+      from_place: isTrip ? (fromText.trim() || null) : null,
+      to_place: isTrip ? (toText.trim() || null) : null,
+      duration_minutes: isTrip ? parseDuration(durationText) : null,
+      battery_used_pct: isTrip ? input.battery_used_pct : null,
     };
   }
 
@@ -326,13 +424,64 @@
     {/if}
     <div class="field">
       <label for="ti">{$t('activity.title')}</label>
-      <input id="ti" list="titles" bind:value={input.title} required />
+      <!-- Optional only for a trip (spec: "defaults to $t('cat.trip') when empty") -- shown as
+           the placeholder rather than pre-filled, so it stays plainly a hint and not text the
+           user has to notice and delete. Timeline.svelte falls back to the same string when it
+           renders a trip whose title was in fact left empty. -->
+      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip'}
+             placeholder={input.category === 'trip' ? $t('cat.trip') : undefined} />
       <datalist id="titles">
         {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
       </datalist>
     </div>
+    {#if input.category === 'trip'}
+      <!-- `object?.counter_unit` (not a plain `object.counter_unit`): an existing trip must
+           still be editable offline even if the object itself failed to load (no cache either),
+           the same reason `object?.counter_unit` gates the generic Counter field's `label` --
+           these labels just show no unit in that rare case instead of throwing on `object.`. -->
+      <div class="row">
+        <div class="field">
+          <label for="tst">{$t('trip.start')} ({object?.counter_unit ?? ''})</label>
+          <input id="tst" type="number" inputmode="numeric" min="0" bind:value={input.start_counter} oninput={onTripStartChange} />
+        </div>
+        <div class="field">
+          <label for="ten">{$t('trip.end')} ({object?.counter_unit ?? ''})</label>
+          <input id="ten" type="number" inputmode="numeric" min="0" bind:value={input.counter_value} oninput={onTripEndChange} />
+        </div>
+      </div>
+      <div class="field">
+        <label for="tds">{$t('trip.distance')} ({object?.counter_unit ?? ''})</label>
+        <!-- No `min="0"` (unlike Start/End): distance is `end - start`, so an end typed below
+             start makes it negative -- exactly the mistake `trip.error-end` exists to explain.
+             A native `min` would instead block the browser's own submit outright before that
+             message ever runs, leaving Save looking like it silently does nothing. -->
+        <input id="tds" type="number" inputmode="numeric" bind:value={distance} oninput={onTripDistanceChange} />
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="tfr">{$t('trip.from')}</label>
+          <input id="tfr" list="trip-from" bind:value={fromText} />
+          <datalist id="trip-from">{#each tripPlaces.from as p (p)}<option value={p}></option>{/each}</datalist>
+        </div>
+        <div class="field">
+          <label for="tto">{$t('trip.to')}</label>
+          <input id="tto" list="trip-to" bind:value={toText} />
+          <datalist id="trip-to">{#each tripPlaces.to as p (p)}<option value={p}></option>{/each}</datalist>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="tdu">{$t('trip.duration')}</label>
+          <input id="tdu" type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} />
+        </div>
+        <div class="field">
+          <label for="tba">{$t('trip.battery')} (%)</label>
+          <input id="tba" type="number" inputmode="numeric" min="0" max="100" bind:value={input.battery_used_pct} />
+        </div>
+      </div>
+    {/if}
     <div class="row">
-      {#if object?.counter_unit}
+      {#if object?.counter_unit && input.category !== 'trip'}
         <div class="field">
           <label for="cv">{$t('activity.counter')} ({object.counter_unit})</label>
           <input id="cv" type="number" inputmode="numeric" min="0" bind:value={counterText} />

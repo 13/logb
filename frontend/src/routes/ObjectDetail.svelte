@@ -336,7 +336,15 @@
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
            already is; two of them would be two calls to the same action. -->
       {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
-        <button class="primary fab" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+        <div class="fab-row">
+          <!-- Only on an object that could actually hold one (a distance counter) -- the same
+               condition `categoriesFor`'s own `counterUnit` argument uses to offer the category
+               at all, so this button and the select it opens onto never disagree. -->
+          {#if object.counter_unit === 'km' || object.counter_unit === 'mi'}
+            <button class="ghost fab-btn" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
+          {/if}
+          <button class="primary fab-btn" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+        </div>
       {/if}
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
@@ -377,4 +385,20 @@
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
   .info-actions { margin-top: var(--space-4); }
   .tabs .chip { margin-left: var(--space-1); }
+  /* A second FAB ("+ Log trip") beside the usual one, only on a km/mi object. `.fab` itself
+     (app.css) is `position: fixed`, sized for exactly one button -- two of those stacked on top
+     of each other would overlap, not sit side by side. This wrapper takes over the fixed
+     positioning (mirroring `.fab`'s own rules, including its two responsive overrides below) and
+     lays its buttons out with `.fab-btn`, `.fab`'s own look with no position of its own. */
+  .fab-row {
+    position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+    z-index: 6; display: flex; gap: var(--space-2);
+  }
+  .fab-btn { border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+  @media (width < 900px) {
+    .fab-row { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
+  }
+  @media (width >= 900px) {
+    .fab-row { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
+  }
 </style>

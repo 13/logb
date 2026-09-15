@@ -29,6 +29,17 @@ describe('foldReadings', () => {
     expect(rows.map((r) => r.kind)).toEqual(['entry', 'readings']);
   });
 
+  // A trip has its own counter fields (start/end), and reads like a real entry, not a bare
+  // number -- folding it into a reading run would hide exactly the trip detail the timeline
+  // exists to show. The fold already keys purely on `category === 'reading'` (see
+  // `foldReadings` above), so a trip breaks a run the same way any other category does; this
+  // just pins that down for trips specifically, since a regression here would silently start
+  // swallowing trips into reading runs.
+  it('a trip between two readings breaks the run instead of joining it', () => {
+    const rows = foldReadings([a(3, 'reading', 30), a(2, 'trip', 20), a(1, 'reading', 10)]);
+    expect(rows.map((r) => r.kind)).toEqual(['entry', 'entry', 'entry']);
+  });
+
   it('spans the lowest to the highest value in the run', () => {
     expect(readingSpan([a(2, 'reading', 1300), a(1, 'reading', 1100)])).toEqual({ from: 1100, to: 1300 });
     expect(readingSpan([a(1, 'reading', null)])).toBeNull();
