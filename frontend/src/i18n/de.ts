@@ -151,6 +151,17 @@ export default {
   'trip.error-battery': 'Akkuverbrauch muss 0–100 % sein',
   'trip.error-duration': 'Dauer wie 1:15 eingeben',
 
+  'trips.title': 'Fahrten',
+  'trips.month': 'Diesen Monat',
+  'trips.year': 'Dieses Jahr',
+  'trips.all': 'Gesamt',
+  'trips.count': 'Fahrten',
+  'trips.distance': 'Strecke',
+  'trips.avg': 'Pro Fahrt',
+  'trips.speed': 'Ø Geschwindigkeit',
+  'trips.per-battery': 'Pro 10 % Akku',
+  'trips.by-month': 'Fahrstrecke pro Monat',
+
   'cat.maintenance': 'Wartung',
   'cat.repair': 'Reparatur',
   'cat.purchase': 'Kauf',

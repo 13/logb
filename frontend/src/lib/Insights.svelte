@@ -102,6 +102,14 @@
       display: m.amount === null ? '—' : counter(m.amount, unit, $locale),
     }))} />
   {/if}
+  {#if data.trip_distance_by_month.some((m) => m.distance > 0) && unit}
+    <section data-testid="insights-trip-distance">
+      <h3>{$t('trips.by-month')}</h3>
+      <BarList items={data.trip_distance_by_month.map((m) => ({
+        key: m.month, label: monthLabel(m.month, $locale), value: m.distance, display: counter(m.distance, unit, $locale),
+      }))} />
+    </section>
+  {/if}
   {#if data.fuel && data.fuel.fills.length > 0 && unit}
     {@const fuel = data.fuel}
     <section data-testid="insights-by-fill">

@@ -9,16 +9,17 @@
   import ObjectCard from '../lib/ObjectCard.svelte';
   import TagChips from '../lib/TagChips.svelte';
   import LastDone from '../lib/LastDone.svelte';
+  import TripTotals from '../lib/TripTotals.svelte';
   import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
-  import { counter, fmtDate, money } from '../lib/format';
+  import { counter, fmtDate, money, todayIso } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, ActivityInput, Category, LastDone as LastDoneT, MemObject } from '../lib/types';
+  import type { Activity, ActivityInput, Category, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import type { QueuedOp } from '../lib/outbox';
 
@@ -60,6 +61,9 @@
   let archivedChildCount = $state(0);
   /** The Info tab's "Last done" list, loaded only while that tab is open -- see `loadChildren`. */
   let lastDone = $state<LastDoneT[]>([]);
+  /** The Info tab's "Trips" totals, loaded the same way and for the same reason -- see
+   *  `loadTripSummary`. `null` until loaded, and again on a failed request. */
+  let tripSummary = $state<TripSummary | null>(null);
   let error = $state('');
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
@@ -101,6 +105,23 @@
       if (token === lastDoneSeq) lastDone = rows;
     } catch {
       if (token === lastDoneSeq) lastDone = [];
+    }
+  }
+
+  /// Guards `loadTripSummary` against a since-superseded request, the same way `lastDoneSeq`
+  /// guards "Last done" -- see the oid-reset effect below.
+  let tripSummarySeq = 0;
+
+  /** The Info tab's "Trips" totals. Hidden by `TripTotals.svelte` itself when there are none, so
+   *  a failed request (like an offline load) just leaves it hidden rather than showing an error
+   *  of its own -- like "Last done", this is a convenience summary, not primary data. */
+  async function loadTripSummary() {
+    const token = ++tripSummarySeq;
+    try {
+      const s = await api<TripSummary>('GET', `/objects/${oid}/trips/summary?today=${todayIso()}`);
+      if (token === tripSummarySeq) tripSummary = s;
+    } catch {
+      if (token === tripSummarySeq) tripSummary = null;
     }
   }
 
@@ -261,9 +282,11 @@
     titleFilter = null;
     lastDone = [];
     lastDoneSeq++;
+    tripSummary = null;
+    tripSummarySeq++;
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
-  $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); } });
+  $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); loadTripSummary(); } });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -366,6 +389,7 @@
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
       <LastDone items={lastDone} {object} onselect={selectLastDone} />
+      {#if offersTrip}<TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} />{/if}
       <h3>{$t('object.contents')}</h3>
       {#if children.length === 0}
         <p class="muted">{$t('object.contents-empty')}</p>

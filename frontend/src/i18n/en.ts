@@ -151,6 +151,17 @@ export default {
   'trip.error-battery': 'Battery used must be 0–100 %',
   'trip.error-duration': 'Enter a duration like 1:15',
 
+  'trips.title': 'Trips',
+  'trips.month': 'This month',
+  'trips.year': 'This year',
+  'trips.all': 'All time',
+  'trips.count': 'Trips',
+  'trips.distance': 'Distance',
+  'trips.avg': 'Per trip',
+  'trips.speed': 'Avg. speed',
+  'trips.per-battery': 'Per 10 % battery',
+  'trips.by-month': 'Trip distance per month',
+
   'cat.maintenance': 'Maintenance',
   'cat.repair': 'Repair',
   'cat.purchase': 'Purchase',

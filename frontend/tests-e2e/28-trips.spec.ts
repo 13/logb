@@ -91,4 +91,20 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Battery used must be 0–100 %')).toBeVisible();
   await expect(page).toHaveURL(/\/activities\/new/);
+
+  // The Info tab's "Trips" table totals the two trips saved above -- the first trip's edit
+  // above was cancelled, so it is still 400 -> 600 km (200 km), plus the second trip's 50 km:
+  // 2 trips and 250 km. Both are dated today under the pinned clock, so the same totals show
+  // for this month, this year and all time alike -- the assertions below only check the first
+  // (month) column, which is enough to show the summary reached the object at all.
+  await page.goto(`/objects/${bike}?tab=info`);
+  await expect(page.getByRole('heading', { name: 'Trips', exact: true })).toBeVisible();
+  const tripTotals = page.getByTestId('trip-totals');
+  await expect(tripTotals.locator('tr', { hasText: 'Trips' }).locator('td').first()).toHaveText('2');
+  await expect(tripTotals.locator('tr', { hasText: 'Distance' }).locator('td').first()).toHaveText('250 km');
+
+  // Statistics (the object's own Insights section, further down the same tab) shows the same
+  // distance under "Trip distance per month".
+  await expect(page.getByRole('heading', { name: 'Trip distance per month' })).toBeVisible();
+  await expect(page.getByTestId('insights-trip-distance').locator('.bar-row')).toHaveCount(12);
 });

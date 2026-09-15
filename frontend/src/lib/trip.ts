@@ -60,6 +60,23 @@ export function spanLabel(from: string, to: string): string {
   return `${from} → ${to}`;
 }
 
+/** An average speed (`TripSummary`'s `speed_x10`, tenths of the object's own distance unit per
+ *  hour) as "16.0 km/h" / "16,0 km/h" or "9.5 mph". Always one decimal: the value is already a
+ *  rounded average (see `totals` in src/domain/trips.rs), so a bare `Intl` default -- which would
+ *  drop a trailing ".0" -- would make a whole-number average look like an integer reading rather
+ *  than the average it is. */
+export function formatSpeed(speedX10: number, unit: 'km' | 'mi', locale: string): string {
+  const n = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(speedX10 / 10);
+  return `${n} ${unit === 'mi' ? 'mph' : 'km/h'}`;
+}
+
+/** `TripSummary`'s `distance_per_10pct` -- distance covered per 10 percentage points of battery
+ *  used -- as "59 km / 10 %" / "59 km / 10 %". `unit` is the object's own distance unit
+ *  (`counter_unit`, "km" or "mi"), the same as everywhere else a distance is shown. */
+export function formatPer10Pct(value: number, unit: string, locale: string): string {
+  return `${new Intl.NumberFormat(locale).format(value)} ${unit} / 10 %`;
+}
+
 /** The trip form's three linked counter fields, as ActivityForm holds them: `start`/`end` travel
  *  to the server (`start_counter`/`counter_value`); `distance` is local-only. */
 export interface TripLink { start: number | null; end: number | null; distance: number | null }

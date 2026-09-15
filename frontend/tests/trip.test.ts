@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, placesLabel, spanLabel, tripDistance,
-  type TripLink,
+  formatDuration, formatPer10Pct, formatSpeed, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, placesLabel,
+  spanLabel, tripDistance, type TripLink,
 } from '../src/lib/trip';
 
 describe('parseDuration', () => {
@@ -104,6 +104,26 @@ describe('linkTripDistance', () => {
 
   it('does nothing without a start to add onto', () => {
     expect(linkTripDistance(link(null, null, 200))).toEqual(link(null, null, 200));
+  });
+});
+
+describe('formatSpeed', () => {
+  it('renders one decimal in English', () => {
+    expect(formatSpeed(160, 'km', 'en')).toBe('16.0 km/h');
+  });
+
+  it('renders one decimal with a comma in German', () => {
+    expect(formatSpeed(160, 'km', 'de')).toBe('16,0 km/h');
+  });
+
+  it('labels a mile-based object mph', () => {
+    expect(formatSpeed(95, 'mi', 'en')).toBe('9.5 mph');
+  });
+});
+
+describe('formatPer10Pct', () => {
+  it('renders the distance with its unit and the fixed 10 % denominator', () => {
+    expect(formatPer10Pct(59, 'km', 'de')).toBe('59 km / 10 %');
   });
 });
 
