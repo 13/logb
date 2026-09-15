@@ -12,6 +12,7 @@ pub mod settings;
 pub mod stats;
 pub mod sync;
 pub mod tags;
+pub mod trips;
 pub mod types;
 pub mod users;
 
@@ -33,6 +34,7 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
         .merge(objects::router())
         .merge(insights::router())
         .merge(activities::router())
+        .merge(trips::router())
         .merge(reminders::router())
         .merge(search::router())
         .merge(tags::router())

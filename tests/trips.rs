@@ -251,3 +251,72 @@ async fn list_and_read_return_the_trip_fields() {
     assert_eq!(one["start_counter"], 400);
     assert_eq!(one["from_place"], "Home");
 }
+
+/// Creates a trip with the given date, counters and places -- everything else defaulted, like
+/// `trip()` above -- and answers its activity id.
+async fn create_trip(app: &common::TestApp, object_id: i64, date: &str, start: i64, end: i64, from: &str, to: &str) -> i64 {
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities"))).json(&json!({
+        "date": date, "category": "trip", "title": "", "notes": "",
+        "start_counter": start, "counter_value": end, "from_place": from, "to_place": to,
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    res.json::<Value>().await.unwrap()["id"].as_i64().unwrap()
+}
+
+#[tokio::test]
+async fn trip_places_are_distinct_most_recent_first_and_skip_deleted_trips_and_non_trip_entries() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    create_trip(&app, id, "2026-01-01", 0, 100, "Home", "Office").await;
+    create_trip(&app, id, "2026-02-01", 100, 200, "Office", "Home").await;
+    let gym_trip = create_trip(&app, id, "2026-03-01", 200, 210, "Home", "Gym").await;
+    let res = app.client.delete(app.url(&format!("/activities/{gym_trip}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    // A non-trip entry, newer than every trip above, to prove it never contributes a place.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-04-01", "category": "maintenance", "title": "Brakes", "notes": ""
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    let out: Value = app.client.get(app.url(&format!("/objects/{id}/trip-places"))).send().await.unwrap().json().await.unwrap();
+    // Most recent trip (2026-02-01) first; the deleted 2026-03-01 trip to "Gym" never appears.
+    assert_eq!(out["from"], json!(["Office", "Home"]));
+    assert_eq!(out["to"], json!(["Home", "Office"]));
+}
+
+#[tokio::test]
+async fn trips_summary_totals_month_year_and_all_time() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    create_trip(&app, id, "2026-09-02", 100, 150, "Home", "Office").await; // this month: 50 km
+    create_trip(&app, id, "2026-03-10", 150, 200, "Office", "Home").await; // this year, not this month: 50 km
+    create_trip(&app, id, "2025-12-31", 0, 100, "Home", "Office").await; // last year: 100 km
+
+    let out: Value = app.client
+        .get(app.url(&format!("/objects/{id}/trips/summary?today=2026-09-15")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!((out["month"]["trips"].as_i64(), out["month"]["distance"].as_i64()), (Some(1), Some(50)));
+    assert_eq!((out["year"]["trips"].as_i64(), out["year"]["distance"].as_i64()), (Some(2), Some(100)));
+    assert_eq!((out["all"]["trips"].as_i64(), out["all"]["distance"].as_i64()), (Some(3), Some(200)));
+}
+
+#[tokio::test]
+async fn trip_places_and_summary_of_another_users_object_are_404() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    let res = anna.get(app.url(&format!("/objects/{id}/trip-places"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    let res = anna.get(app.url(&format!("/objects/{id}/trips/summary"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}

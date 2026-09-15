@@ -163,7 +163,28 @@ export interface Insights {
   ownership: { total_cents: number; purchase_cents: number; since: string; per_year_cents: number | null };
   /** Twelve months ending with the current one, oldest first, zeros included. */
   by_month: Amount[];
+  /** The same twelve months as by_month/usage_by_month, oldest first; zero for a month with no trip. */
+  trip_distance_by_month: { month: string; distance: number }[];
 }
+
+/** `GET /objects/{id}/trip-places`: earlier from/to places of this object's trips, for the
+ *  entry form's suggestions -- distinct, most recent trip first, up to 20 each. */
+export interface TripPlaces { from: string[]; to: string[] }
+
+/** One period of `GET /objects/{id}/trips/summary` -- see `TripSummary`. */
+export interface TripTotals {
+  trips: number; distance: number;
+  /** distance / trips, rounded down; null with no trips. */
+  avg_distance: number | null;
+  /** Average speed (km/h or mi/h) x10, over the trips with a duration; null when none has one. */
+  speed_x10: number | null;
+  /** Distance per 10% battery used, over the trips with a battery figure; null when none has
+   *  one, or their combined percentage is 0. */
+  distance_per_10pct: number | null;
+}
+/** `GET /objects/{id}/trips/summary?today=YYYY-MM-DD`: trip counts and distance for this month,
+ *  this year and all time. */
+export interface TripSummary { month: TripTotals; year: TripTotals; all: TripTotals }
 
 /** `GET /stats`. `bucket` is `YYYY`, `YYYY-MM`, an object type, a category, or `purchase_price`. */
 export interface Amount { bucket: string; cost_cents: number }

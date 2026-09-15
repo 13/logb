@@ -78,6 +78,17 @@ pub struct InsightsOut {
     pub ownership: Ownership,
     /// The last twelve calendar months of spend, oldest first, zeros included.
     pub by_month: Vec<Amount>,
+    /// The same twelve calendar months as `by_month` (and `usage_by_month`), oldest first, of
+    /// trip distance -- see `domain::trips`. Zero for a month with no trip, never hidden.
+    pub trip_distance_by_month: Vec<MonthDistance>,
+}
+
+/// One month of `InsightsOut::trip_distance_by_month`.
+#[derive(Serialize)]
+pub struct MonthDistance {
+    /// `YYYY-MM`.
+    pub month: String,
+    pub distance: i64,
 }
 
 /// How many months the usage chart covers.
@@ -237,6 +248,24 @@ async fn read(
     let month_totals: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(months_sql)).bind(object_id).fetch_all(&state.db).await?;
     let by_month = months_ending(today, USAGE_MONTHS, &month_totals);
 
+    // Trip distance is the object's own, regardless of `contents`, exactly like `usage_by_month`
+    // and `counter_per_day_milli` above -- a child's trips are not this object's counter moving.
+    // `months_ending` is reused (rather than a bespoke grouping) so this series lines up with
+    // `by_month` and `usage_by_month` month for month; its `Amount.cost_cents` field is just
+    // renamed to `distance` below, this being a distance total and not a cost one.
+    let trip_month_totals: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT substr(date, 1, 7), CAST(SUM(counter_value - start_counter) AS BIGINT) FROM activities \
+         WHERE object_id = $1 AND deleted_at IS NULL AND category = 'trip' \
+         AND start_counter IS NOT NULL AND counter_value IS NOT NULL GROUP BY substr(date, 1, 7)",
+    )
+    .bind(object_id)
+    .fetch_all(&state.db)
+    .await?;
+    let trip_distance_by_month: Vec<MonthDistance> = months_ending(today, USAGE_MONTHS, &trip_month_totals)
+        .into_iter()
+        .map(|a| MonthDistance { month: a.bucket, distance: a.cost_cents })
+        .collect();
+
     let (children,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM objects WHERE parent_id = $1 AND deleted_at IS NULL")
         .bind(object_id)
         .fetch_one(&state.db)
@@ -314,5 +343,6 @@ async fn read(
         has_contents: children > 0,
         ownership,
         by_month,
+        trip_distance_by_month,
     }))
 }

@@ -576,6 +576,78 @@
         }
       }
     },
+    "/objects/{id}/trip-places": {
+      "get": {
+        "summary": "Earlier from/to places of this object's trips, for the entry form's suggestions -- distinct, most recent trip first, up to 20 each. Deleted trips and null places never appear.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripPlaces"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's object"
+          }
+        }
+      }
+    },
+    "/objects/{id}/trips/summary": {
+      "get": {
+        "summary": "Trip counts and distance for this month, this year and all time.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "today",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "YYYY-MM-DD; defaults to the server's own date in the configured timezone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's object"
+          }
+        }
+      }
+    },
     "/objects/{id}/activities": {
       "get": {
         "summary": "One page of the object's timeline, newest first. `X-Total-Count` carries the unpaged total. `limit` is clamped to 500 rather than refused.",
@@ -3369,6 +3441,58 @@
         },
         "required": ["title", "occurrences", "last_date", "last_counter", "last_activity_id"]
       },
+      "TripPlaces": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "to": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["from", "to"]
+      },
+      "TripTotals": {
+        "type": "object",
+        "properties": {
+          "trips": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "distance": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "avg_distance": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "distance / trips, rounded down; null with no trips"
+          },
+          "speed_x10": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Average speed (km/h or mi/h) x10, over the trips with a duration; null when none has one"
+          },
+          "distance_per_10pct": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Distance per 10% battery used, over the trips with a battery figure; null when none has one, or their combined percentage is 0"
+          }
+        },
+        "required": ["trips", "distance", "avg_distance", "speed_x10", "distance_per_10pct"]
+      },
+      "TripSummary": {
+        "type": "object",
+        "properties": {
+          "month": { "$ref": "#/components/schemas/TripTotals" },
+          "year": { "$ref": "#/components/schemas/TripTotals" },
+          "all": { "$ref": "#/components/schemas/TripTotals" }
+        },
+        "required": ["month", "year", "all"]
+      },
       "Insights": {
         "type": "object",
         "properties": {
@@ -3527,6 +3651,24 @@
             "description": "Twelve calendar months ending with the current one, oldest first, zeros included",
             "items": {
               "$ref": "#/components/schemas/StatsAmount"
+            }
+          },
+          "trip_distance_by_month": {
+            "type": "array",
+            "description": "The same twelve calendar months as by_month and usage_by_month, oldest first, of trip distance; zero for a month with no trip, never hidden",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string",
+                  "description": "YYYY-MM"
+                },
+                "distance": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "required": ["month", "distance"]
             }
           }
         }

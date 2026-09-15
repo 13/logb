@@ -1,5 +1,5 @@
 mod common;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde_json::json;
 
 #[tokio::test]
@@ -205,6 +205,40 @@ async fn fills_draw_a_trend_and_a_purchase_entry_is_the_purchase() {
         { "date": "2026-02-01", "per_100_milli": 6_000 },
         { "date": "2026-03-01", "per_100_milli": 5_000 },
     ]));
+}
+
+#[tokio::test]
+async fn trip_distance_by_month_covers_the_same_twelve_months_as_usage_by_month() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+    let today = logb::db::today();
+    let this_month = NaiveDate::parse_from_str(&today, "%Y-%m-%d").unwrap();
+
+    entry(&app, id, json!({
+        "date": today, "category": "trip", "title": "", "notes": "",
+        "start_counter": 100, "counter_value": 150,
+    })).await;
+    // The 1st of the month, not `today` minus two calendar months, so the arithmetic never
+    // lands on a day that month does not have (e.g. subtracting from the 31st).
+    let two_months_ago = this_month.with_day(1).unwrap().checked_sub_months(chrono::Months::new(2)).unwrap().to_string();
+    entry(&app, id, json!({
+        "date": two_months_ago, "category": "trip", "title": "", "notes": "",
+        "start_counter": 0, "counter_value": 40,
+    })).await;
+
+    let out = app.get_json(&format!("/objects/{id}/insights")).await;
+    let months = out["trip_distance_by_month"].as_array().unwrap();
+    assert_eq!(months.len(), 12, "the same twelve months as usage_by_month");
+    assert_eq!(months[11]["month"], today[..7], "oldest first, ending in the current month");
+    assert_eq!(months[11]["distance"], 50);
+    assert_eq!(months[9]["distance"], 40, "two months back");
+    for (i, m) in months.iter().enumerate() {
+        if i != 9 && i != 11 {
+            assert_eq!(m["distance"], 0, "month {i} has no trip, so zero rather than missing");
+        }
+    }
 }
 
 #[tokio::test]
