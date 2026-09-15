@@ -3,6 +3,7 @@ import { tick } from 'svelte';
 import { api, ApiError, clearServingSaved, flushOutbox, isRejection, persistStorage, setOutboxSendGate, setOutboxUser, setUnauthorizedHandler } from '../lib/api';
 import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberedProfile, rememberProfile, userSwitchNeedsReload } from '../lib/cache-owner';
 import { clearObjectCache, clearObjectMemory } from '../lib/object-cache';
+import { forgetObjectDraft } from '../lib/object-draft';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
@@ -74,6 +75,10 @@ function endSession(): void {
   // answer, and the next session start claims (and, being ownerless, clears) them again anyway.
   void clearObjectCache();
   clearCustomTypes();
+  // A kept "+ New type…" draft (see ../lib/object-draft.ts) is this session's own in-progress
+  // form, not something the next person on this device -- or this same person signing back in --
+  // should ever have restored into theirs.
+  forgetObjectDraft();
   setOutboxUser(null);
   forgetProfile();
   forgetCacheOwner();

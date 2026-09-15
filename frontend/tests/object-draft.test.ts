@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { safeReturnPath, saveObjectDraft, takeObjectDraft } from '../src/lib/object-draft';
+import { forgetObjectDraft, safeReturnPath, saveObjectDraft, takeObjectDraft } from '../src/lib/object-draft';
 import type { ObjectInput } from '../src/lib/types';
 
 describe('object-draft: safeReturnPath', () => {
@@ -30,6 +30,26 @@ describe('object-draft: safeReturnPath', () => {
   it('refuses a path with traversal segments', () => {
     expect(safeReturnPath('/objects/../settings')).toBeNull();
   });
+
+  it('refuses raw percent-encoding, undecoded, disguised as a path', () => {
+    expect(safeReturnPath('%2F%2Fevil')).toBeNull();
+  });
+
+  it('refuses a path with a trailing query string', () => {
+    expect(safeReturnPath('/objects/new?x')).toBeNull();
+  });
+
+  it('refuses a path with a trailing slash', () => {
+    expect(safeReturnPath('/objects/new/')).toBeNull();
+  });
+
+  it('refuses a backslash-led address (some browsers treat \\ as /)', () => {
+    expect(safeReturnPath('/\\evil')).toBeNull();
+  });
+
+  it('refuses a double-backslash address', () => {
+    expect(safeReturnPath('\\\\evil')).toBeNull();
+  });
 });
 
 describe('object-draft: save and take', () => {
@@ -49,24 +69,48 @@ describe('object-draft: save and take', () => {
     purchase_date: null, purchase_price_cents: null, archived: false, parent_id: null, tags: [],
   };
 
-  it('returns what was saved for the same path', () => {
-    saveObjectDraft('/objects/new', input);
-    expect(takeObjectDraft('/objects/new')).toEqual(input);
+  it('returns what was saved for the same path, under the token it was saved with', () => {
+    const token = saveObjectDraft('/objects/new', input);
+    expect(takeObjectDraft('/objects/new', token)).toEqual(input);
   });
 
-  it('is used at most once', () => {
-    saveObjectDraft('/objects/new', input);
-    takeObjectDraft('/objects/new');
-    expect(takeObjectDraft('/objects/new')).toBeNull();
+  it('is used at most once, even with the right token', () => {
+    const token = saveObjectDraft('/objects/new', input);
+    takeObjectDraft('/objects/new', token);
+    expect(takeObjectDraft('/objects/new', token)).toBeNull();
   });
 
   it('returns null for a different path than it was saved under', () => {
-    saveObjectDraft('/objects/new', input);
-    expect(takeObjectDraft('/objects/12/edit')).toBeNull();
+    const token = saveObjectDraft('/objects/new', input);
+    expect(takeObjectDraft('/objects/12/edit', token)).toBeNull();
   });
 
   it('returns null when the stored JSON is unreadable', () => {
     storage.set('logb.object-draft', '{not json');
-    expect(takeObjectDraft('/objects/new')).toBeNull();
+    expect(takeObjectDraft('/objects/new', 'anything')).toBeNull();
+  });
+
+  it('returns null, and discards the draft, when no token is given', () => {
+    const token = saveObjectDraft('/objects/new', input);
+    expect(takeObjectDraft('/objects/new', null)).toBeNull();
+    // The mismatched read above must not have left the draft sitting there for a later, correct
+    // read to still pick up -- a plain visit with no token at all discards it outright.
+    expect(takeObjectDraft('/objects/new', token)).toBeNull();
+  });
+
+  it('returns null, and discards the draft, when the token is wrong', () => {
+    saveObjectDraft('/objects/new', input);
+    expect(takeObjectDraft('/objects/new', 'not-the-token')).toBeNull();
+    expect(storage.has('logb.object-draft')).toBe(false);
+  });
+
+  it('forgetObjectDraft clears a stored draft outright', () => {
+    const token = saveObjectDraft('/objects/new', input);
+    forgetObjectDraft();
+    expect(takeObjectDraft('/objects/new', token)).toBeNull();
+  });
+
+  it('forgetObjectDraft is a no-op when nothing is stored', () => {
+    expect(() => forgetObjectDraft()).not.toThrow();
   });
 });

@@ -59,8 +59,8 @@
    *  in the unit -- but only into an empty one: a unit the user already picked is theirs. */
   function setType(ty: string) {
     if (ty === NEW_TYPE) {
-      saveObjectDraft(currentPath, $state.snapshot(input));
-      go(`/settings/types?new=1&return=${encodeURIComponent(currentPath)}`);
+      const token = saveObjectDraft(currentPath, $state.snapshot(input));
+      go(`/settings/types?new=1&return=${encodeURIComponent(currentPath)}&draft=${encodeURIComponent(token)}`);
       return;
     }
     input.type = ty as ObjectType;
@@ -91,9 +91,14 @@
     // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
     // wait for them or lose its object load over them.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
-    // A kept draft beats a fresh fetch: it is this same form's own input, mid-edit, from just
-    // before the "+ New type…" detour -- fetching the object again here would throw that away.
-    const draft = takeObjectDraft(currentPath);
+    const params = new URLSearchParams(location.search);
+    // The token in `draft=` is what makes this restore safe: only the one mount that just made
+    // the round trip -- Types sending back exactly the token this form minted -- may claim a
+    // kept draft. A plain later visit to this same route (no token, a stale one from history,
+    // the back button) carries none that matches, and the draft is discarded rather than shown
+    // to whoever mounts next -- see `takeObjectDraft`.
+    const draftToken = params.get('draft');
+    const draft = takeObjectDraft(currentPath, draftToken);
     if (draft) {
       input = draft;
       priceText = centsToInput(draft.purchase_price_cents);
@@ -105,8 +110,13 @@
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
     // lands the round trip on the new type instead of back on whatever the form had before.
-    const typeParam = new URLSearchParams(location.search).get('type');
+    const typeParam = params.get('type');
     if (typeParam && $customTypes.some((c) => c.key === typeParam)) setType(typeParam);
+    // Both are one-shot: a reload of this exact URL must not re-apply `type` over a draft that
+    // is already consumed, nor offer up a `draft` token a second time (see `takeObjectDraft`'s
+    // "used at most once"). Mirrors ObjectDetail's `?tag=` -- strip what was just consumed, keep
+    // whatever else genuinely belongs in the address.
+    if (typeParam !== null || draftToken !== null) history.replaceState(null, '', currentPath);
     // The descendant walk has to see the whole tree. `all=true` means "ignore nesting" only --
     // `archived` is an independent either/or filter that still applies -- so one fetch returns
     // the *unarchived* tree, and a child reachable only through an archived room is missing

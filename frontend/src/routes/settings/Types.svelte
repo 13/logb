@@ -24,13 +24,27 @@
    *  successful create sends the new type's key back there; Cancel on the add form it opened
    *  goes back without one. Absent (`null`) leaves both unchanged from Types opened normally. */
   let returnPath = $state<string | null>(null);
+  /** The one-time token that came with `return`, carried on unchanged back to the object form
+   *  (`draft=`) on both Save and Cancel -- see `object-draft.ts`. Not validated here: this page
+   *  only ferries it, the object form is what checks it matches before trusting anything back. */
+  let draftToken = $state<string | null>(null);
 
   onMount(() => {
     void loadCustomTypes();
     const params = new URLSearchParams(location.search);
     returnPath = safeReturnPath(params.get('return'));
+    draftToken = params.get('draft');
     if (params.get('new') === '1') open('new');
   });
+
+  /** `returnPath` with `extra` query params plus the carried `draft` token, if any -- the one
+   *  place both Save and Cancel build the address they send the shortcut back to. */
+  function returnUrl(extra: Record<string, string> = {}): string {
+    const qs = new URLSearchParams(extra);
+    if (draftToken !== null) qs.set('draft', draftToken);
+    const s = qs.toString();
+    return s ? `${returnPath}?${s}` : returnPath!;
+  }
 
   /** Built-in labels already exist for most icons; the rest have their own word. */
   const ICON_LABEL: Partial<Record<IconName, string>> = {
@@ -66,7 +80,7 @@
         editing = null;
         // Send the "+ New type…" shortcut back to its form with the type it just made --
         // `created.key` (the registry's own `custom:<uuid>`), not anything derived here.
-        if (returnPath) { go(`${returnPath}?type=${encodeURIComponent(created.key)}`); return; }
+        if (returnPath) { go(returnUrl({ type: created.key })); return; }
       } else {
         await api('PATCH', `/types/${editing}`, body);
         await loadCustomTypes();
@@ -81,7 +95,7 @@
    *  unchanged; any other cancel (editing a type, or Types opened without `return`) just closes
    *  the form in place, as before. */
   function cancelForm() {
-    if (editing === 'new' && returnPath) { go(returnPath); return; }
+    if (editing === 'new' && returnPath) { go(returnUrl()); return; }
     editing = null;
   }
 

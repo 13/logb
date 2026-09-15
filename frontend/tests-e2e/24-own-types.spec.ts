@@ -99,17 +99,19 @@ test('"+ New type…" on the object form makes a type without losing what was ty
   await page.getByLabel('Name').fill('Mein Pedelec');
   await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
 
-  // Lands on Types with the add form already open, and the object form's own path carried as
-  // `return` -- not chosen, just opened for the roundtrip.
-  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew/);
+  // Lands on Types with the add form already open, and the object form's own path plus a
+  // one-time draft token carried as `return`/`draft` -- not chosen, just opened for the
+  // roundtrip.
+  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew&draft=/);
   await expect(page.getByRole('button', { name: 'Save type' })).toBeVisible();
   await page.getByLabel('Name', { exact: true }).fill('Pedelec');
   await page.getByLabel('Default counter unit').selectOption('km');
   await page.getByRole('button', { name: 'Save type' }).click();
 
-  // Back on the object form: the name typed before the detour survived, and the new type --
-  // brought back as `?type=custom:<uuid>` -- is selected, unit and all.
-  await page.waitForURL(/\/objects\/new\?type=custom%3A/);
+  // Back on the object form, its address clean again (the `?type=`/`draft=` round trip is
+  // consumed on mount, not left sitting in the URL for a reload to re-apply): the name typed
+  // before the detour survived, and the new type is selected, unit and all.
+  await expect(page).toHaveURL(/\/objects\/new$/);
   await expect(page.getByLabel('Name')).toHaveValue('Mein Pedelec');
   await expect(page.getByLabel('Type', { exact: true })).toHaveValue(/^custom:/);
   await expect(page.locator('#c option:checked')).toHaveText('Pedelec');
@@ -117,7 +119,11 @@ test('"+ New type…" on the object form makes a type without losing what was ty
 
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);
-  await expect(page.getByRole('main')).toContainText('Pedelec');
+  // The object's own name also contains "Pedelec", so the type itself is checked on the Info
+  // tab's own type line rather than by a page-wide text search that a coincidence like that
+  // could pass on its own.
+  await page.getByRole('button', { name: 'Info' }).click();
+  await expect(page.locator('main .muted').first()).toHaveText('Pedelec');
 });
 
 test('Cancel on Types, reached from the shortcut, returns without changing the type', async ({ page }) => {
@@ -131,11 +137,63 @@ test('Cancel on Types, reached from the shortcut, returns without changing the t
   await page.getByLabel('Type', { exact: true }).selectOption({ label: 'Car' });
   await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
 
-  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew/);
+  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew&draft=/);
   await expect(page.getByRole('button', { name: 'Save type' })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
 
-  await page.waitForURL(/\/objects\/new$/);
+  await expect(page).toHaveURL(/\/objects\/new$/);
   await expect(page.getByLabel('Name')).toHaveValue('Mein Auto');
   await expect(page.getByLabel('Type', { exact: true })).toHaveValue('car');
+});
+
+test('the shortcut also works from the edit form, and clears type/draft from the URL', async ({ page }) => {
+  await signInFresh(page, '24-own-types-edit-shortcut');
+
+  // An existing object to edit.
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Old Name');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.waitForURL(/\/objects\/\d+$/);
+  const objectId = Number(new URL(page.url()).pathname.split('/').pop());
+
+  await page.goto(`/objects/${objectId}/edit`);
+  await page.getByLabel('Name').fill('New Name');
+  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await page.waitForURL(new RegExp(`/settings/types\\?new=1&return=%2Fobjects%2F${objectId}%2Fedit&draft=`));
+  await page.getByLabel('Name', { exact: true }).fill('Widget');
+  await page.getByLabel('Default counter unit').selectOption('mi');
+  await page.getByRole('button', { name: 'Save type' }).click();
+
+  // Back on the edit form at its own clean URL: the renamed name survived the detour, the new
+  // type is selected, and nothing from the roundtrip (`type=`, `draft=`) is left in the address.
+  await expect(page).toHaveURL(new RegExp(`/objects/${objectId}/edit$`));
+  expect(page.url()).not.toMatch(/[?&](type|draft)=/);
+  await expect(page.getByLabel('Name')).toHaveValue('New Name');
+  await expect(page.locator('#c option:checked')).toHaveText('Widget');
+  await expect(page.getByLabel('Counter', { exact: true })).toHaveValue('mi');
+
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.waitForURL(`**/objects/${objectId}`);
+  await expect(page.getByRole('main')).toContainText('New Name');
+  // The type line lives under the Info tab, not the default Timeline one.
+  await page.getByRole('button', { name: 'Info' }).click();
+  await expect(page.locator('main .muted').first()).toHaveText('Widget');
+});
+
+test('abandoning the shortcut leaves a later, plain visit to the object form empty', async ({ page }) => {
+  await signInFresh(page, '24-own-types-abandon');
+
+  await page.goto('/objects/new');
+  await page.getByLabel('Name').fill('Abandoned Draft');
+  // The detour is started (a draft is kept and a token minted) but never finished -- no create,
+  // no Cancel click, just leaving Types the way someone closing the tab or typing a new address
+  // would.
+  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew&draft=/);
+
+  // A plain, direct visit -- no `draft=` token in its address -- must not resurrect that
+  // abandoned input: the form comes up exactly as empty as a fresh one.
+  await page.goto('/objects/new');
+  await expect(page.getByLabel('Name')).toHaveValue('');
+  await expect(page.getByLabel('Type', { exact: true })).toHaveValue('other');
 });
