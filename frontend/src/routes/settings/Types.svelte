@@ -80,7 +80,8 @@
         editing = null;
         // Send the "+ New type…" shortcut back to its form with the type it just made --
         // `created.key` (the registry's own `custom:<uuid>`), not anything derived here.
-        if (returnPath) { go(returnUrl({ type: created.key })); return; }
+        // Replace, not push: Back from the saved object must not land on this add form again.
+        if (returnPath) { go(returnUrl({ type: created.key }), true); return; }
       } else {
         await api('PATCH', `/types/${editing}`, body);
         await loadCustomTypes();
@@ -95,7 +96,7 @@
    *  unchanged; any other cancel (editing a type, or Types opened without `return`) just closes
    *  the form in place, as before. */
   function cancelForm() {
-    if (editing === 'new' && returnPath) { go(returnUrl()); return; }
+    if (editing === 'new' && returnPath) { go(returnUrl(), true); return; }
     editing = null;
   }
 

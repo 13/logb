@@ -124,6 +124,11 @@ test('"+ New type…" on the object form makes a type without losing what was ty
   // could pass on its own.
   await page.getByRole('button', { name: 'Info' }).click();
   await expect(page.locator('main .muted').first()).toHaveText('Pedelec');
+
+  // Back from the saved object must not reopen the "Add type" form the round trip passed through.
+  await page.goBack();
+  await expect(page).not.toHaveURL(/\/settings\/types/);
+  await expect(page.getByRole('button', { name: 'Save type' })).toHaveCount(0);
 });
 
 test('Cancel on Types, reached from the shortcut, returns without changing the type', async ({ page }) => {

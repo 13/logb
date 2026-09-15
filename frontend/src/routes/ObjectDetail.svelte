@@ -103,6 +103,9 @@
   /** A "Last done" row switches to the timeline, narrowed to its title. */
   function selectLastDone(title: string) {
     titleFilter = title;
+    // A category or tag chosen earlier would hide the very entries the row stands for.
+    category = '';
+    tagFilter = null;
     tab = 'timeline';
   }
 

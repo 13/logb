@@ -54,6 +54,9 @@ test('the date format setting is used everywhere, and the typed date field valid
   await page.getByText('Repaint').first().click();
   await expect(page).toHaveURL(/\/activities\/\d+$/);
   const digitsField = page.getByLabel('Date', { exact: true });
+  // Wait for the entry to load first: its date arriving mid-fill replaced the field's text while
+  // Playwright was typing, and the two ran together.
+  await expect(digitsField).toHaveValue('03.04.2026');
   await digitsField.fill('01052026');
   await digitsField.blur();
   await expect(digitsField).toHaveValue('01.05.2026');

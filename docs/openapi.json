@@ -3285,7 +3285,8 @@
             "type": "integer",
             "format": "int64"
           }
-        }
+        },
+        "required": ["title", "occurrences", "last_date", "last_counter", "last_activity_id"]
       },
       "Insights": {
         "type": "object",

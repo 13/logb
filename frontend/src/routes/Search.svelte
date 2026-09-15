@@ -78,7 +78,9 @@
               </span>
             </button>
             {#if (o.tags ?? []).length > 0}
-              <div class="hit-tags"><TagChips navigates tags={o.tags} onselect={(tag) => go(`/objects/${o.id}?tag=${encodeURIComponent(tag)}`)} /></div>
+              <div class="hit-tags"><!-- Plain labels: an object's own tag is rarely on its entries, so a tap would open an empty
+                   timeline under a "Show entries tagged" label. -->
+              <TagChips tags={o.tags} /></div>
             {/if}
           </div>
         {/each}

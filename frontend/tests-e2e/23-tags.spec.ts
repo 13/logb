@@ -240,11 +240,12 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
   await expect(page.getByText('Suchkette geölt')).toBeVisible();
   await expect(page.getByText('Suchlicht getauscht')).toHaveCount(0);
 
-  // The object hit's chip goes to the same place, by the object's own id.
+  // An object hit's own tags are plain labels: they are rarely on its entries, so a link would
+  // open an empty timeline.
   await page.goto('/search?q=Such');
-  await page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).locator('.tag', { hasText: 'Pendeln' }).click();
-  await page.waitForURL(new RegExp(`/objects/${objectId}$`));
-  await expect(page.locator('.tag-filter', { hasText: 'Pendeln' })).toBeVisible();
+  const objectChip = page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).locator('.tag', { hasText: 'Pendeln' });
+  await expect(objectChip).toBeVisible();
+  await expect(page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).getByRole('button', { name: /Pendeln/ })).toHaveCount(0);
 });
 
 test('a reminder row shows its object\'s tags on the dashboard and the reminders tab', async ({ page }) => {
