@@ -17,6 +17,12 @@
   let picker: HTMLInputElement;
   let field: HTMLInputElement;
 
+  /** `value` as this component last set it itself (in `commit()` or the picker's `onchange`).
+   *  What tells the reformat effect below a change is genuinely from OUTSIDE -- a picked photo
+   *  date, a different activity/template loading -- as opposed to the effect merely reacting to
+   *  its own component's own write a moment before. */
+  let lastSeenValue = value;
+
   function invalidMessage(fmt: DateFormat): string {
     return $t('date.invalid', { example: fmtDate('2026-09-15', fmt) });
   }
@@ -32,9 +38,9 @@
     return $t('date.after', { min: fmtDate(min, fmt) });
   }
 
-  /** The message committing `raw` right now, under `fmt`, would produce -- shared by `commit()`,
-   *  the hidden picker's `onchange`, and the effect that refreshes an already-showing message
-   *  when the date-format setting changes underneath it. */
+  /** The message committing `raw` right now, under `fmt`, would produce -- shared by `commit()`
+   *  and the effect that refreshes an already-showing message when the date-format setting
+   *  changes underneath it. */
   function messageFor(raw: string, fmt: DateFormat): string | null {
     if (raw.trim() === '') return null;
     const parsed = parseDate(raw, fmt);
@@ -50,37 +56,56 @@
     field?.setCustomValidity(msg ?? '');
   }
 
-  // Keeps the field showing the canonical rendering of `value` whenever nothing more urgent is
-  // going on: `value`/`$dateFormat` are read unconditionally (so an outside change -- a picked
-  // photo date, a different activity loading, the format setting itself changing -- is never
-  // missed), but the write only happens while the field is not focused (never fights typing) and
-  // while there is no error showing (a blurred, still-wrong date stays on screen with its error
-  // until the user fixes it, rather than silently reverting to the last valid value).
-  $effect(() => {
-    const canonical = fmtDate(value, $dateFormat);
-    if (focused) return;
-    if (untrack(() => error) !== null) return;
-    if (text !== canonical) text = canonical;
-  });
-
-  // A showing message embeds a formatted date (the invalid-input example, or the min/max in an
-  // out-of-range one) -- refresh it if the date-format setting changes while it is up, even
-  // mid-edit. `text`/`error` are read through `untrack` so typing alone never re-runs this.
-  $effect(() => {
-    const fmt = $dateFormat;
-    if (untrack(() => error) === null) return;
-    markError(untrack(() => messageFor(text, fmt)));
-  });
-
   function commit() {
-    if (text.trim() === '') { value = ''; markError(null); return; }
+    if (text.trim() === '') { value = ''; lastSeenValue = ''; markError(null); return; }
     const parsed = parseDate(text, $dateFormat);
     if (parsed === null) { markError(invalidMessage($dateFormat)); return; }
     const range = rangeMessage(parsed, $dateFormat);
     if (range) { markError(range); return; }
     markError(null);
-    value = parsed; text = fmtDate(parsed, $dateFormat);
+    value = parsed; lastSeenValue = parsed; text = fmtDate(parsed, $dateFormat);
   }
+
+  // `value`/`$dateFormat` are read unconditionally, so neither an outside change nor a format
+  // change is ever missed. Two different things can have happened, and they get different
+  // treatment:
+  //  - `value` itself moved since this component last set it (a picked photo date, a different
+  //    activity or template loading): that is new ground truth, shown immediately -- even mid-
+  //    edit (`focused`) or with an unresolved error still up -- because the alternative is a
+  //    field that silently disagrees with the record it is bound to.
+  //  - `value` is unchanged and only the format (or nothing) did: reformatting stale text here
+  //    must not fight active typing, nor clobber a still-unresolved error out from under the
+  //    user -- that softer case stays gated on `focused`/`error`, and is handled below by
+  //    whichever of the two effects actually applies (this one when there is no error, the next
+  //    one when there is).
+  $effect(() => {
+    const v = value;
+    const fmt = $dateFormat;
+    if (v !== lastSeenValue) {
+      lastSeenValue = v;
+      text = fmtDate(v, fmt);
+      markError(null);
+      return;
+    }
+    if (focused) return;
+    if (untrack(() => error) !== null) return;
+    const canonical = fmtDate(v, fmt);
+    if (text !== canonical) text = canonical;
+  });
+
+  // The format-change-only case for an already-showing error: if the currently typed text would
+  // now commit cleanly under the new format, actually commit it (not just clear the message --
+  // the field would otherwise show a plain, unremarked-on date that was never saved to `value`).
+  // Otherwise refresh the message text, which embeds a formatted date (the invalid-input example,
+  // or the min/max of an out-of-range one) and so is itself format-dependent. `text`/`error` are
+  // read through `untrack` so typing alone never re-runs this.
+  $effect(() => {
+    const fmt = $dateFormat;
+    if (untrack(() => error) === null) return;
+    const msg = untrack(() => messageFor(text, fmt));
+    if (msg === null) untrack(() => commit());
+    else markError(msg);
+  });
 
   function openPicker() {
     picker.value = value;
@@ -99,8 +124,14 @@
     picker.value = '';
     if (!picked) return; // the picker's own "Clear" control
     const range = rangeMessage(picked, $dateFormat);
+    // An out-of-range PICK still goes into the field: the error then describes what is actually
+    // on screen, rather than referring to a value the user never typed. `value`/`lastSeenValue`
+    // stay at whatever was last valid -- only the display changes -- exactly like an out-of-range
+    // TYPED date, where `commit()` likewise leaves `value` alone and shows the error next to what
+    // was typed.
+    text = fmtDate(picked, $dateFormat);
     markError(range);
-    if (!range) { value = picked; text = fmtDate(picked, $dateFormat); }
+    if (!range) { value = picked; lastSeenValue = picked; }
   }
 </script>
 

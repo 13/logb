@@ -57,3 +57,31 @@ export function pngPayload(name = 'photo.png') {
     ),
   };
 }
+
+/**
+ * A tiny (4×4) JPEG carrying a real EXIF `DateTimeOriginal` of 2025-12-25 10:00 -- built with
+ * Pillow and round-tripped through the server's own upload endpoint to confirm
+ * `process_image()` (src/files.rs) reads it back as `taken_at: "2025-12-25T10:00:00"` before
+ * this was hardcoded here. Exists so a test can drive ActivityForm's "Use photo date" hint --
+ * the one place in the app that changes a `DateInput`'s bound value from outside the component
+ * itself, rather than through its own text field or calendar picker.
+ */
+export function jpegWithExifPayload(name = 'photo.jpg') {
+  return {
+    name,
+    mimeType: 'image/jpeg',
+    buffer: Buffer.from(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/4QBIRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAZADAAIAAAAUAAAALAAAAAAyMDI1' +
+      'OjEyOjI1IDEwOjAwOjAwAP/bAEMACAYGBwYFCAcHBwkJCAoMFA0MCwsMGRITDxQdGh8eHRocHCAkLicgIiwjHBwoNyksMDE0NDQfJzk9' +
+      'ODI8LjM0Mv/bAEMBCQkJDAsMGA0NGDIhHCEyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMv/A' +
+      'ABEIAAQABAMBIgACEQEDEQH/xAAfAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgv/xAC1EAACAQMDAgQDBQUEBAAAAX0BAgMABBE' +
+      'FEiExQQYTUWEHInEUMoGRoQgjQrHBFVLR8CQzYnKCCQoWFxgZGiUmJygpKjQ1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdH' +
+      'V2d3h5eoOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4eLj5OXm5+jp6vHy8/T19vf4' +
+      '+fr/xAAfAQADAQEBAQEBAQEBAAAAAAAAAQIDBAUGBwgJCgv/xAC1EQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQ' +
+      'gUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeI' +
+      'iYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDE' +
+      'QA/AOeoooryT9DP/9k=',
+      'base64',
+    ),
+  };
+}

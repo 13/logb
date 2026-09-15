@@ -1,5 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { jpegWithExifPayload, signInFresh } from './helpers';
+
+/** Fixed at noon on the app's own example date (2026-09-15), so the max-date coverage below
+ *  (item 4/2 of the review) reads its "today" from this pinned clock rather than the real one --
+ *  otherwise that assertion would start failing the day after this was written. Every other date
+ *  in this file is a literal (`3.4.2026`, `31.02.2026`, ...), not derived from "today", so pinning
+ *  the clock once here is enough for the whole spec. */
+const FIXED_NOW = new Date('2026-09-15T12:00:00');
 
 /** The persistent shell nav (see AppNav.svelte): every destination is a client-side route
  *  change, never a full page load, which is what lets the later assertions prove a setting
@@ -15,6 +22,7 @@ async function chooseDateFormat(page: Page, label: string) {
 }
 
 test('the date format setting is used everywhere, and the typed date field validates', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED_NOW);
   await signInFresh(page, '26-date-format');
 
   // 1. Choose dmy-dot in Appearance, then create an object and an entry through the form,
@@ -96,11 +104,60 @@ test('the date format setting is used everywhere, and the typed date field valid
   await expect(page.getByText('03.04.2026').first()).toBeVisible();
 
   // 4. A max-bounded field (the reading form's date, the only field with a `max` in the app)
-  // reports being out of range in words, not just silently refusing a value.
+  // reports being out of range in words, not just silently refusing a value -- one day after the
+  // clock pinned at the top of this test, not the real "today", so this keeps passing regardless
+  // of when it actually runs.
   await page.goto(`/objects/${objectId}/reading`);
   const readingDate = page.getByLabel('Date', { exact: true });
-  await readingDate.fill('16.09.2026'); // one day after the fixed "today" (2026-09-15)
+  await readingDate.fill('16.09.2026');
   await readingDate.blur();
   await expect(page.getByText('Choose a date on or before 15.09.2026')).toBeVisible();
   expect(await readingDate.evaluate((el) => (el as HTMLInputElement).validationMessage)).not.toBe('');
+});
+
+/**
+ * An outside change to a `DateInput`'s bound `value` -- something the PARENT does directly, not
+ * something typed into the field or picked through its own calendar button -- must reach the
+ * field immediately, even while it is mid-edit (focused) or already showing an error from
+ * something typed moments before. ActivityForm's "Use photo date" hint (`input.date = photoDate`,
+ * set the instant an attachment's EXIF date is known) is the one place in the app that does this
+ * to an already-mounted field, so it drives this test rather than a synthetic trigger.
+ */
+test('an outside value change reaches the field even mid-error, and clears it', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED_NOW);
+  await signInFresh(page, '26-date-format-outside');
+  await chooseDateFormat(page, '15.09.2026');
+
+  await nav(page, 'Objects');
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Outside Change Car');
+  await page.getByLabel('Type').selectOption('car');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Outside Change Car' })).toBeVisible();
+
+  await page.getByRole('button', { name: /Log activity/ }).click();
+  await page.getByLabel('Title').fill('Photo entry');
+
+  // Break the date field first, and blur it, so it is genuinely mid-error -- not just mid-edit --
+  // when the outside change below arrives.
+  const dateField = page.getByLabel('Date', { exact: true });
+  await dateField.fill('31.02.2026');
+  await dateField.blur();
+  await expect(page.getByText('Enter a date like 15.09.2026')).toBeVisible();
+
+  // Attaching a photo with a known EXIF date makes the hint button available; clicking it sets
+  // `input.date` directly, from OUTSIDE `DateInput` -- not through its text field or picker.
+  await page.getByRole('button', { name: /Add photos or files/ }).click();
+  await page.setInputFiles('input[type=file]', jpegWithExifPayload());
+  await page.getByRole('button', { name: 'Use photo date 25.12.2025' }).click();
+
+  // The outside change reaches the field right away: shown, no error, native validity cleared --
+  // none of that waits for a blur, and none of it was fought off by the error that was up before.
+  await expect(dateField).toHaveValue('25.12.2025');
+  await expect(page.getByText('Enter a date like 15.09.2026')).toHaveCount(0);
+  expect(await dateField.evaluate((el) => (el as HTMLInputElement).validationMessage)).toBe('');
+
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Photo entry').first()).toBeVisible();
+  await expect(page.getByText('25.12.2025').first()).toBeVisible();
 });
