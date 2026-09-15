@@ -8,6 +8,9 @@ test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }
   await page.getByLabel('Name').fill('Hierarchy House');
   await page.getByLabel('Type').selectOption('home');
   await page.getByRole('button', { name: 'Save' }).click();
+  // Wait for the save to land: going to '/' at once can abort the create, and the next form's
+  // "Inside" picker then never offers the object this test just made.
+  await page.waitForURL(/\/objects\/\d+$/);
 
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
@@ -33,12 +36,18 @@ test('an archived object deep inside the tree is still reachable from the archiv
   await page.getByLabel('Name').fill('Attic Nest House');
   await page.getByLabel('Type').selectOption('home');
   await page.getByRole('button', { name: 'Save' }).click();
+  // Wait for the save to land: going to '/' at once can abort the create, and the next form's
+  // "Inside" picker then never offers the object this test just made.
+  await page.waitForURL(/\/objects\/\d+$/);
 
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Attic Nest Garage');
   await page.getByLabel('Inside').selectOption({ label: 'Attic Nest House' });
   await page.getByRole('button', { name: 'Save' }).click();
+  // Wait for the save to land: going to '/' at once can abort the create, and the next form's
+  // "Inside" picker then never offers the object this test just made.
+  await page.waitForURL(/\/objects\/\d+$/);
 
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
