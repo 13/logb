@@ -33,7 +33,8 @@ test('a row carries its current value', async ({ page }) => {
   await page.goto('/settings/people');
   // The list loads after the page renders. Counting Remove buttons before it arrives finds none,
   // skips the cleanup, and the assertion below then reads every user earlier specs left behind.
-  await expect(page.locator('.card.row', { hasText: 'ben' })).toBeVisible();
+  // Anchored to the start of the name: other specs' random usernames can contain "ben" too.
+  await expect(page.locator('.card.row').filter({ has: page.locator('span', { hasText: /^ben\b/ }) })).toBeVisible();
   for (;;) {
     const removeButtons = page.getByRole('button', { name: /Remove|Entfernen/ });
     const remaining = await removeButtons.count();
