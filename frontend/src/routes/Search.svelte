@@ -78,7 +78,7 @@
               </span>
             </button>
             {#if (o.tags ?? []).length > 0}
-              <div class="hit-tags"><TagChips tags={o.tags} onselect={(tag) => go(`/objects/${o.id}?tag=${encodeURIComponent(tag)}`)} /></div>
+              <div class="hit-tags"><TagChips navigates tags={o.tags} onselect={(tag) => go(`/objects/${o.id}?tag=${encodeURIComponent(tag)}`)} /></div>
             {/if}
           </div>
         {/each}
@@ -97,7 +97,7 @@
             </button>
             {#if (a.tags ?? []).length > 0}
               <!-- A tapped chip opens the entry's object with its timeline narrowed to that tag. -->
-              <div class="hit-tags"><TagChips tags={a.tags} onselect={(tag) => go(`/objects/${a.object_id}?tag=${encodeURIComponent(tag)}`)} /></div>
+              <div class="hit-tags"><TagChips navigates tags={a.tags} onselect={(tag) => go(`/objects/${a.object_id}?tag=${encodeURIComponent(tag)}`)} /></div>
             {/if}
           </div>
         {/each}

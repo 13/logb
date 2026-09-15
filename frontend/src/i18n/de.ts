@@ -405,6 +405,7 @@ export default {
   'tags.too-many': 'Höchstens 10 Tags.',
   'tags.filter': 'Tag: {tag}',
   'tags.clear': 'Tag-Filter aufheben',
+  'tags.show': 'Einträge mit Tag {tag} anzeigen',
   'settings.types': 'Typen',
   'types.built-in': 'Eingebaute Typen',
   'types.yours': 'Eigene Typen',

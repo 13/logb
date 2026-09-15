@@ -46,6 +46,8 @@
       if (text.trim() === '' || add(text)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
+      // The submit may have come from far down the form: bring the field and its error into view.
+      field.focus();
     };
     form.addEventListener('submit', commit, { capture: true });
     return () => form.removeEventListener('submit', commit, { capture: true });

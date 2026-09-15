@@ -405,6 +405,7 @@ export default {
   'tags.too-many': 'Up to 10 tags.',
   'tags.filter': 'Tag: {tag}',
   'tags.clear': 'Clear tag filter',
+  'tags.show': 'Show entries tagged {tag}',
   'settings.types': 'Types',
   'types.built-in': 'Built-in types',
   'types.yours': 'Your types',

@@ -25,7 +25,9 @@
   const oid = $derived(Number(id));
   type Tab = 'timeline' | 'documents' | 'reminders' | 'info';
   const initialQuery = new URLSearchParams(location.search);
-  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag. */
+  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag.
+   *  Read on mount only: the router's `path` store holds just the pathname, so a later change to
+   *  the query string alone does not reach this component. */
   const initialTag = initialQuery.get('tag')?.trim() || null;
   let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);

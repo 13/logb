@@ -205,7 +205,12 @@ test('a typed tag that cannot be added stops the submit and keeps its error', as
   await page.locator('form').evaluate((f: HTMLFormElement) => f.requestSubmit());
   await expect(page.getByText('A tag can be at most 32 characters.')).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/objects/${objectId}/activities/new$`));
-  expect(await storedTags(page, objectId, 'Zu lang')).toBeUndefined();
+  // Once nothing is in flight, a save that slipped through would have landed: check again.
+  await page.waitForLoadState('networkidle');
+  await expect(page).toHaveURL(new RegExp(`/objects/${objectId}/activities/new$`));
+  await expect(page.getByLabel('Tags', { exact: true })).toBeFocused();
+  const rows = (await (await page.request.get(`/api/objects/${objectId}/activities`)).json()) as unknown[];
+  expect(rows).toHaveLength(0);
 });
 
 test('search shows tags on hits, and a tapped chip opens the object narrowed to that tag', async ({ page }) => {
@@ -224,6 +229,10 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
   const entryHit = page.locator('.hit-row', { hasText: 'Suchkette geölt' });
   await expect(entryHit.locator('.tag', { hasText: 'Antrieb' })).toBeVisible();
   await expect(page.locator('.hit-row', { hasText: 'Suchlicht getauscht' }).locator('.tag')).toHaveCount(0);
+  // It leads elsewhere rather than toggling a filter here, so it says where and is no toggle.
+  const searchChip = entryHit.getByRole('button', { name: 'Show entries tagged Antrieb' });
+  await expect(searchChip).toBeVisible();
+  await expect(searchChip).not.toHaveAttribute('aria-pressed');
 
   await entryHit.locator('.tag', { hasText: 'Antrieb' }).click();
   await page.waitForURL(new RegExp(`/objects/${objectId}$`));
