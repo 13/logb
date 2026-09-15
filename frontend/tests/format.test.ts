@@ -56,6 +56,38 @@ describe('parseDate', () => {
     expect(parseDate('abc', 'iso')).toBeNull();
     expect(parseDate('', 'dmy-dot')).toBeNull();
   });
+  it('also reads a comma or a single space as a separator', () => {
+    expect(parseDate('15,09,2026', 'dmy-dot')).toBe('2026-09-15');
+    expect(parseDate('15 09 2026', 'dmy-dot')).toBe('2026-09-15');
+  });
+  it('rejects a doubled separator rather than treating it as one', () => {
+    expect(parseDate('15  09 2026', 'dmy-dot')).toBeNull();
+  });
+  // The iOS numeric keypad (what `inputmode="numeric"` offers there) has no `.`/`-`/`/` key at
+  // all, so a date typed on it has no separators -- these read the digits in the chosen
+  // format's own field order instead.
+  it('reads separator-free digits in the format\'s own field order', () => {
+    expect(parseDate('15092026', 'dmy-dot')).toBe('2026-09-15');
+    expect(parseDate('15092026', 'dmy-slash')).toBe('2026-09-15');
+    expect(parseDate('09152026', 'mdy-slash')).toBe('2026-09-15');
+    expect(parseDate('20260915', 'iso')).toBe('2026-09-15');
+  });
+  it('reads 6 separator-free digits as a 2-digit year, except for iso', () => {
+    expect(parseDate('150926', 'dmy-dot')).toBe('2026-09-15');
+    expect(parseDate('091526', 'mdy-slash')).toBe('2026-09-15');
+    // Unlike dmy/mdy, ISO 8601's own YYYYMMDD order has no 2-digit-year form to fall back to,
+    // so 6 digits is ambiguous rather than a shorter version of the same pattern.
+    expect(parseDate('202609', 'iso')).toBeNull();
+  });
+  it('rejects separator-free digits of any other length', () => {
+    expect(parseDate('1234567', 'dmy-dot')).toBeNull();
+    expect(parseDate('12345', 'dmy-dot')).toBeNull();
+    expect(parseDate('1234567', 'iso')).toBeNull();
+    expect(parseDate('12345', 'iso')).toBeNull();
+  });
+  it('rejects an impossible date typed without separators', () => {
+    expect(parseDate('31022026', 'dmy-dot')).toBeNull();
+  });
 });
 
 describe('resolveDateFormat', () => {

@@ -18,6 +18,9 @@ export default {
   'error.offline': 'Keine Verbindung',
   'date.pick': 'Datum wählen',
   'date.invalid': 'Datum wie {example} eingeben',
+  'date.out-of-range': 'Datum zwischen {min} und {max} wählen',
+  'date.before': 'Datum am oder vor dem {max} wählen',
+  'date.after': 'Datum am oder nach dem {min} wählen',
 
   'setup.title': 'Willkommen bei LogB',
   'setup.intro': 'Lege den ersten Benutzer an. Er wird Administrator.',

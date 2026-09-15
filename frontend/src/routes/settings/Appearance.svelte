@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
-  import { locale, t } from '../../i18n';
-  import { LANG_NAMES, SUPPORTED, navigatorTags } from '../../i18n/detect';
+  import { locale, navigatorLangs, t } from '../../i18n';
+  import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
   import { settings } from '../../stores/settings';
   import { currency, rememberCurrentCurrency, user } from '../../stores/session';
   import { DATE_FORMATS, fmtDate, resolveDateFormat, type DateFormat } from '../../lib/format';
@@ -11,8 +11,10 @@
 
   const EXAMPLE = '2026-09-15';
   /** What `auto` itself would resolve to right now -- shown in its own label so picking
-   *  "Automatic" is not a leap of faith about what it means on this device. */
-  const resolvedAuto = $derived(resolveDateFormat('auto', $locale, navigatorTags(globalThis.navigator)));
+   *  "Automatic" is not a leap of faith about what it means on this device. `navigatorLangs`
+   *  (not an imperative `navigatorTags()` call) so a `languagechange` -- a region change alone
+   *  included -- updates this label live. */
+  const resolvedAuto = $derived(resolveDateFormat('auto', $locale, $navigatorLangs));
   const dateFormatLabel = (id: (typeof DATE_FORMATS)[number]): string =>
     id === 'auto'
       ? $t('settings.date-format-auto', { example: fmtDate(EXAMPLE, resolvedAuto) })

@@ -29,20 +29,48 @@ export function fmtDate(iso: string | null | undefined, format: DateFormat): str
   }
 }
 
-/** Reads the chosen pattern back, leniently: `.`/`/`/`-` separators, 1-digit day/month, and a
- *  2-digit year as 20YY. Rejects malformed and calendar-impossible dates (31.02.) rather than
- *  silently clamping them. */
+/**
+ * Reads the chosen pattern back, leniently: `.`/`/`/`-`/`,`/single-space separators, 1-digit
+ * day/month, and a 2-digit year as 20YY. Also reads separator-free digits in the format's own
+ * field order (8 digits with a 4-digit year, or 6 with a 2-digit one) -- the keypad an iOS text
+ * field offers for `inputmode="numeric"` has no `.`/`-`/`/` key at all, so typing a date there
+ * has to work without one. `iso`'s 6-digit form is rejected rather than guessed at: unlike
+ * `dmy`/`mdy`, a 2-digit year does not belong anywhere in ISO 8601's own YYYYMMDD order, and
+ * `202609` (6 digits) could otherwise be misread as either "2026, day 09 of an implied month" or
+ * a 2-digit-year form nothing else in the format supports. Rejects malformed and
+ * calendar-impossible dates (31.02.) rather than silently clamping them.
+ */
 export function parseDate(text: string, format: DateFormat): string | null {
-  const parts = text.trim().split(/[./-]/);
-  if (parts.length !== 3 || parts.some((p) => !/^\d+$/.test(p))) return null;
-  const [a, b, c] = parts.map(Number);
+  const trimmed = text.trim();
+  let a: number, b: number, c: number, yearDigits: number;
+
+  if (/^\d+$/.test(trimmed)) {
+    if (format === 'iso') {
+      if (trimmed.length !== 8) return null;
+      a = Number(trimmed.slice(0, 4)); b = Number(trimmed.slice(4, 6)); c = Number(trimmed.slice(6, 8));
+      yearDigits = 4;
+    } else if (trimmed.length === 8) {
+      a = Number(trimmed.slice(0, 2)); b = Number(trimmed.slice(2, 4)); c = Number(trimmed.slice(4, 8));
+      yearDigits = 4;
+    } else if (trimmed.length === 6) {
+      a = Number(trimmed.slice(0, 2)); b = Number(trimmed.slice(2, 4)); c = Number(trimmed.slice(4, 6));
+      yearDigits = 2;
+    } else {
+      return null; // notably: 5 and 7 digits, both ambiguous, are neither of the two widths above
+    }
+  } else {
+    const parts = trimmed.split(/[./,\-\s]/);
+    if (parts.length !== 3 || parts.some((p) => !/^\d+$/.test(p))) return null;
+    [a, b, c] = parts.map(Number);
+    yearDigits = (format === 'iso' ? parts[0] : parts[2]).length;
+    if (yearDigits !== 2 && yearDigits !== 4) return null;
+  }
+
   let y: number, m: number, d: number;
   if (format === 'iso') [y, m, d] = [a, b, c];
   else if (format === 'mdy-slash') [m, d, y] = [a, b, c];
   else [d, m, y] = [a, b, c];
-  const yearDigits = (format === 'iso' ? parts[0] : parts[2]).length;
   if (yearDigits === 2) y += 2000;
-  else if (yearDigits !== 4) return null;
   const date = new Date(Date.UTC(y, m - 1, d));
   if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
   return `${y}-${pad(m)}-${pad(d)}`;
