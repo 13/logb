@@ -121,10 +121,17 @@ A route change (or a session end) also bumps a `routeGeneration` counter; each r
 the current generation alongside `sentAt` when it is sent, and a response whose captured
 generation no longer matches is ignored entirely -- a request made for a screen the user has since
 left cannot re-add a key the route change already cleared once its (possibly very late) answer
-finally arrives. Known limit: changing a filter or search on the SAME screen re-fetches under a
-new query string without a route change, so a stale key left by the OLD query is not cleared until
-the next navigation or a fresh response to that exact query -- harmless in practice, since the
-screen itself no longer shows anything from that superseded request.
+finally arrives.
+
+A screen that replaces its query WITHOUT a route change -- the activity timeline's category and
+tag filters, and its refresh -- calls `supersedeStale(prefix)` (`/objects/<id>/activities?`)
+before it fetches. That drops the stale keys under the prefix, so the note does not stay up over
+a list that now came fresh, and ignores answers to requests under the prefix that were sent
+before the call (each request is numbered as it is sent), so a slow stale answer to the old query
+cannot put its key back. Loading older entries ("Show N older") does not supersede: the rows
+already shown stay on screen, and so does their staleness. The objects list filters and sorts in
+the browser from one fetch, and search and statistics are never cached, so no other screen needs
+this.
 
 Clock skew: a self-hosted instance's server clock can be far off from the client's -- no RTC on a
 Raspberry Pi that boots believing it's 1970, or simply the wrong timezone -- by much more than the

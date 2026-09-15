@@ -15,10 +15,11 @@ export { ApiError, isRejection, isUnauthenticated } from './api-error';
  * answering in milliseconds, say -- while another was still visibly showing data from `logb-api`.
  *
  * A key is added by a stale response and removed only by a FRESH response to that SAME path,
- * never by an unrelated one. The whole set is dropped on a route change (`clearServingSaved`,
- * wired to the router's `path` below -- each screen re-fetches what it needs, so staleness
- * recorded for the previous screen's requests stops being meaningful) and when a session ends
- * (same function, called from `endSession` in ../stores/session.ts).
+ * never by an unrelated one -- or by the screen replacing that query in place (`supersedeStale`).
+ * The whole set is dropped on a route change (`clearServingSaved`, wired to the router's `path`
+ * below -- each screen re-fetches what it needs, so staleness recorded for the previous screen's
+ * requests stops being meaningful) and when a session ends (same function, called from
+ * `endSession` in ../stores/session.ts).
  */
 const staleKeys = new Set<string>();
 const servingSavedState = writable(false);
@@ -41,9 +42,59 @@ let routeGeneration = 0;
  *  clear and store update are skipped when there is nothing to do. */
 export function clearServingSaved(): void {
   routeGeneration++;
+  // Every request sent so far now belongs to an old generation, so no prefix cutoff below can
+  // matter any more; dropping them keeps the map from growing with every object visited.
+  supersededUpTo.clear();
   if (staleKeys.size === 0) return;
   staleKeys.clear();
   servingSavedState.set(false);
+}
+
+/** Numbers every request as it is sent, so `supersedeStale` can tell requests made before a
+ *  query was replaced from those made after. */
+let requestSeq = 0;
+
+/** Path prefix -> the last request number sent before that prefix's query was replaced. */
+const supersededUpTo = new Map<string, number>();
+
+/**
+ * For a screen that replaces what it shows WITHOUT a route change -- a category or tag filter on
+ * the activity timeline re-fetches under a new query string. Staleness recorded for the old
+ * query would otherwise keep the note up over a list that now came fresh from the network, since
+ * only a fresh answer to that exact old query (never asked again) or a navigation cleared it.
+ * Drops every stale key under `prefix` and ignores answers to requests under it that were sent
+ * before this call, so a slow answer to the old query cannot put the key back. Requests sent
+ * afterwards are judged normally.
+ */
+export function supersedeStale(prefix: string): void {
+  supersededUpTo.set(prefix, requestSeq);
+  let dropped = false;
+  for (const key of staleKeys) {
+    if (key.startsWith(prefix)) {
+      staleKeys.delete(key);
+      dropped = true;
+    }
+  }
+  if (dropped) servingSavedState.set(staleKeys.size > 0);
+}
+
+/**
+ * For a screen that could not reach the network at all and fell back to data it saved itself
+ * (outside the service worker, so no response ever reached `handle`). Without this, superseding
+ * the old query before a load that then fails would hide the note over saved or empty data once
+ * the connection dropped mid-session, since `offline` mode is only set when the app starts
+ * offline. Use a key under the prefix the screen supersedes, so its next load clears it.
+ */
+export function markServingSaved(key: string): void {
+  staleKeys.add(key);
+  servingSavedState.set(true);
+}
+
+function isSuperseded(path: string, seq: number): boolean {
+  for (const [prefix, upTo] of supersededUpTo) {
+    if (seq <= upTo && path.startsWith(prefix)) return true;
+  }
+  return false;
 }
 // Each screen re-fetches what it shows on mount, so navigating away makes any staleness recorded
 // for the PREVIOUS screen's requests meaningless -- without this, a note earned by one slow load
@@ -147,7 +198,7 @@ function isOurs(op: QueuedOp): boolean {
  * wrapper's response passes through, rather than in each of them, so every path is tracked the
  * same way regardless of which wrapper fetched it.
  */
-async function handle<T>(res: Response, path: string, sentAt?: number, gen?: number): Promise<T> {
+async function handle<T>(res: Response, path: string, sentAt?: number, gen?: number, seq?: number): Promise<T> {
   if (sentAt !== undefined && res.ok) {
     const dateHeader = res.headers.get('date');
     // Calibrate the clock-skew estimate from a response that is never a cache hit (see
@@ -172,8 +223,9 @@ async function handle<T>(res: Response, path: string, sentAt?: number, gen?: num
     // Skip touching `staleKeys` for a response whose captured generation is stale (see
     // `routeGeneration`) -- a route change (or session end) has already happened since this
     // request was sent, so neither adding nor removing its path means anything for what is on
-    // screen now.
-    if (gen === undefined || gen === routeGeneration) {
+    // screen now. The same holds for a request whose query the screen has since replaced (see
+    // `supersedeStale`).
+    if ((gen === undefined || gen === routeGeneration) && (seq === undefined || !isSuperseded(path, seq))) {
       if (servedFromCache(dateHeader, sentAt, clockSkewMs)) staleKeys.add(path);
       else staleKeys.delete(path);
       servingSavedState.set(staleKeys.size > 0);
@@ -207,8 +259,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   }
   const sentAt = Date.now();
   const gen = routeGeneration;
+  const seq = ++requestSeq;
   const res = await fetch(`/api${path}`, init);
-  return handle<T>(res, path, sentAt, gen);
+  return handle<T>(res, path, sentAt, gen, seq);
 }
 
 /**
@@ -219,8 +272,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
 export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; total: number }> {
   const sentAt = Date.now();
   const gen = routeGeneration;
+  const seq = ++requestSeq;
   const res = await fetch(`/api${path}`, { method: 'GET', credentials: 'same-origin' });
-  const items = await handle<T[]>(res, path, sentAt, gen);
+  const items = await handle<T[]>(res, path, sentAt, gen, seq);
   const header = res.headers.get('x-total-count');
   const total = header === null ? items.length : Number(header);
   return { items, total: Number.isFinite(total) ? total : items.length };
@@ -229,15 +283,17 @@ export async function apiPage<T = unknown>(path: string): Promise<{ items: T[]; 
 export async function upload<T = unknown>(path: string, form: FormData): Promise<T> {
   const sentAt = Date.now();
   const gen = routeGeneration;
+  const seq = ++requestSeq;
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', body: form });
-  return handle<T>(res, path, sentAt, gen);
+  return handle<T>(res, path, sentAt, gen, seq);
 }
 
 export async function uploadRaw<T = unknown>(path: string, blob: Blob, contentType: string): Promise<T> {
   const sentAt = Date.now();
   const gen = routeGeneration;
+  const seq = ++requestSeq;
   const res = await fetch(`/api${path}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': contentType }, body: blob });
-  return handle<T>(res, path, sentAt, gen);
+  return handle<T>(res, path, sentAt, gen, seq);
 }
 
 export function fileUrl(fileId: number, thumb = false): string {

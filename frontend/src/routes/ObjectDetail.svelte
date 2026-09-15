@@ -10,7 +10,7 @@
   import TagChips from '../lib/TagChips.svelte';
   import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
-  import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor } from '../lib/api';
+  import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { go } from '../lib/router';
   import { counter, fmtDate, money } from '../lib/format';
@@ -104,12 +104,21 @@
   /// Several triggers can overlap (the `oid`/`category` effect, "load more", a flush), and
   /// whichever resolved last used to win regardless of which started last.
   let loadSeq = 0;
+  // Leaving the page makes every in-flight load non-current, so a slow failure arriving after
+  // the user moved on cannot raise the saved-data note over the screen they moved to.
+  $effect(() => () => { loadSeq++; });
 
   /// The window arithmetic, the chunk loop and the merge live in ../lib/timeline-load.ts, where
   /// they are unit-testable; what stays here is the part that genuinely needs the component:
   /// reading and assigning its state, the offline-cache fallback, and the supersede check.
   async function loadActivities(mode: LoadMode = 'reset') {
     const token = ++loadSeq;
+    const activitiesPrefix = `/objects/${oid}/activities?`;
+    // A reset or refresh replaces the whole list under a new query string without a route change,
+    // so staleness recorded for the list it replaces must not keep the saved-data note up.
+    // Loading older entries keeps the rows already shown, and their staleness with them. Before
+    // any await, so overlapping loads supersede in the order they started.
+    if (mode !== 'append') supersedeStale(activitiesPrefix);
     // The offline cache holds one page per object: the unfiltered one. A filtered page written
     // there would later show as the whole timeline offline, and reading it back under a filter
     // would show unfiltered entries as if they matched -- so a filtered load neither writes nor
@@ -128,16 +137,24 @@
     let fetched = false;
     try {
       const page = await fetchWindow<Activity>(want, base, (limit, offset) => {
+        // A newer load has started: stop asking for this one's next chunks. Nobody will show
+        // them, and an answer sent after the newer load superseded the old query would count
+        // as staleness again and bring the stuck note back.
+        if (token !== loadSeq) throw new Error('superseded');
         const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (category) params.set('category', category);
         if (tagFilter) params.set('tag', tagFilter);
-        return apiPage<Activity>(`/objects/${oid}/activities?${params}`);
+        return apiPage<Activity>(`${activitiesPrefix}${params}`);
       });
       items = page.items;
       total = page.total;
       fetched = true;
     } catch (e) {
+      if (token !== loadSeq) return; // a newer load owns the list, and its errors
       if (append) throw e;
+      // No network at all: what shows next is saved (or nothing), so the note must say so --
+      // the supersede above already dropped whatever kept it up before.
+      if (!isRejection(e)) markServingSaved(`${activitiesPrefix}saved`);
       const cached = isRejection(e) || filtered ? undefined : getCachedActivities(oid);
       items = cached?.items ?? [];
       total = cached?.total ?? 0;

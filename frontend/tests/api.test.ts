@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { api, ApiError, clearServingSaved, isRejection, resetClockSkewForTesting, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl } from '../src/lib/api';
+import { api, ApiError, clearServingSaved, isRejection, resetClockSkewForTesting, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl, markServingSaved, supersedeStale } from '../src/lib/api';
 
 /** `dateHeader` defaults to absent, matching every existing call site of this helper: none of
  *  them cared about `servingSaved` before this response header existed. */
@@ -270,5 +270,68 @@ describe('servingSaved', () => {
     await pending;
 
     expect(get(servingSaved)).toBe(false); // ignored: its captured generation is stale
+  });
+
+  // A filter change on the same screen re-fetches under a new query string without a route
+  // change: the old query's stale key must go, or the note stays over a list that is now fresh.
+  it('a superseded query no longer counts, while other paths keep their staleness', async () => {
+    const old = new Date(Date.now() - 61_000).toUTCString();
+    mockFetch(200, { items: [] }, old);
+    await api('GET', '/objects/5/activities?limit=20&offset=0');
+    await api('GET', '/objects?parent_id=5&archived=false');
+    expect(get(servingSaved)).toBe(true);
+
+    supersedeStale('/objects/5/activities?');
+    expect(get(servingSaved)).toBe(true); // the children list is still stale
+
+    mockFetch(200, { items: [] }, new Date().toUTCString());
+    await api('GET', '/objects?parent_id=5&archived=false');
+    expect(get(servingSaved)).toBe(false); // nothing left: the old activities query was dropped
+  });
+
+  it('a stale answer to a superseded query, still in flight, adds nothing', async () => {
+    const resolve = deferredMockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
+    const pending = api('GET', '/objects/5/activities?limit=20&offset=0');
+
+    supersedeStale('/objects/5/activities?'); // the user picked a category before it answered
+
+    resolve();
+    await pending;
+    expect(get(servingSaved)).toBe(false);
+  });
+
+  it('superseding one object\'s activities leaves a similar-looking path alone', async () => {
+    mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
+    await api('GET', '/objects/50/activities?limit=20&offset=0');
+    supersedeStale('/objects/5/activities?');
+    expect(get(servingSaved)).toBe(true);
+  });
+
+  it('a fresh answer to a superseded query, still in flight, changes nothing either', async () => {
+    const resolve = deferredMockFetch(200, { items: [] }, new Date().toUTCString());
+    const early = api('GET', '/objects/5/activities?limit=20&offset=0'); // sent before the switch
+    supersedeStale('/objects/5/activities?');
+
+    mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
+    await api('GET', '/objects/5/activities?limit=20&offset=0'); // sent after: stale, and counts
+    expect(get(servingSaved)).toBe(true);
+
+    resolve(); // had the early fresh answer counted, it would remove the key just recorded
+    await early;
+    expect(get(servingSaved)).toBe(true);
+  });
+
+  it('a screen that fell back to its own saved data can raise the note, and its next load clears it', () => {
+    markServingSaved('/objects/5/activities?saved');
+    expect(get(servingSaved)).toBe(true);
+    supersedeStale('/objects/5/activities?');
+    expect(get(servingSaved)).toBe(false);
+  });
+
+  it('a request sent after the switch still reports its own staleness', async () => {
+    supersedeStale('/objects/5/activities?');
+    mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
+    await api('GET', '/objects/5/activities?limit=20&offset=0&category=fuel');
+    expect(get(servingSaved)).toBe(true);
   });
 });
