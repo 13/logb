@@ -71,7 +71,10 @@ async fn write(AdminUser(_): AdminUser, State(state): State<App>, Json(body): Js
     let tz = match body.timezone.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(raw) => {
             let tz = parse_timezone(raw)?;
-            if state.config.timezone.is_some() && tz != db::timezone() {
+            // Compared with the configured value, not the process-wide `db::timezone()`: they are
+            // the same in a running server, but tests start several apps in one process, and one
+            // app's setup must not decide whether another app's locked timezone may change.
+            if state.config.timezone.is_some_and(|locked| tz != locked) {
                 return Err(AppError::BadRequest("the timezone is set by LOGB_TIMEZONE and cannot be changed here".into()));
             }
             Some(tz)
