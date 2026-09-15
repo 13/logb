@@ -439,3 +439,33 @@ async fn a_reminder_create_honours_and_replays_on_client_uuid() {
     let second: serde_json::Value = res.json().await.unwrap();
     assert_eq!(first["id"], second["id"]);
 }
+
+#[tokio::test]
+async fn reminder_rows_carry_their_objects_tags() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tagged bike", None).await;
+    let bid = bike["id"].as_i64().unwrap();
+    let res = app.client.patch(app.url(&format!("/objects/{bid}")))
+        .json(&json!({ "name": "Tagged bike", "type": "other", "tags": ["Bremse", "E-Bike"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let plain = app.create_object(&app.client, "Plain shed", None).await;
+    let pid = plain["id"].as_i64().unwrap();
+    for id in [bid, pid] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+            .json(&json!({ "title": "Check", "due_date": "2000-01-01" })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due")).send().await.unwrap().json().await.unwrap();
+    let tags_of = |object_id: i64| due.iter().find(|r| r["object_id"] == object_id).unwrap()["object_tags"].clone();
+    assert_eq!(tags_of(bid), json!(["Bremse", "E-Bike"]));
+    assert_eq!(tags_of(pid), json!([]));
+
+    let listed: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{bid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["object_tags"], json!(["Bremse", "E-Bike"]));
+    let listed: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{pid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(listed[0]["object_tags"], json!([]));
+}

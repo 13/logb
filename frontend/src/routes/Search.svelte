@@ -9,6 +9,7 @@
   import type { SearchResults } from '../lib/types';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import Icon from '../lib/Icon.svelte';
+  import TagChips from '../lib/TagChips.svelte';
 
   let q = $state(new URLSearchParams(location.search).get('q') ?? '');
   let results = $state<SearchResults | null>(null);
@@ -66,13 +67,20 @@
       <h2>{$t('search.objects')}</h2>
       <div class="list">
         {#each results.objects as o (o.id)}
-          <button class="hit" onclick={() => go(`/objects/${o.id}`)}>
-            <span class="hit-title">{o.name}</span>
-            <span class="muted small type-row">
-              <Icon name={typeIcon(o.type, $customTypes)} size={14} />
-              {typeLabel(o.type, $customTypes, $t, $typesLoaded)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
-            </span>
-          </button>
+          <!-- The chips can be buttons, and a button cannot sit inside the hit's button, so they
+               sit below it; `.hit-row` keeps the two together, as `.entry-row` does on the timeline. -->
+          <div class="hit-row">
+            <button class="hit" onclick={() => go(`/objects/${o.id}`)}>
+              <span class="hit-title">{o.name}</span>
+              <span class="muted small type-row">
+                <Icon name={typeIcon(o.type, $customTypes)} size={14} />
+                {typeLabel(o.type, $customTypes, $t, $typesLoaded)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
+              </span>
+            </button>
+            {#if (o.tags ?? []).length > 0}
+              <div class="hit-tags"><TagChips tags={o.tags} onselect={(tag) => go(`/objects/${o.id}?tag=${encodeURIComponent(tag)}`)} /></div>
+            {/if}
+          </div>
         {/each}
       </div>
     {/if}
@@ -80,12 +88,18 @@
       <h2>{$t('search.activities')}</h2>
       <div class="list">
         {#each results.activities as a (a.id)}
-          <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
-            <span class="hit-title">{a.title}</span>
-            <span class="muted small tnum">
-              {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}
-            </span>
-          </button>
+          <div class="hit-row">
+            <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
+              <span class="hit-title">{a.title}</span>
+              <span class="muted small tnum">
+                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}
+              </span>
+            </button>
+            {#if (a.tags ?? []).length > 0}
+              <!-- A tapped chip opens the entry's object with its timeline narrowed to that tag. -->
+              <div class="hit-tags"><TagChips tags={a.tags} onselect={(tag) => go(`/objects/${a.object_id}?tag=${encodeURIComponent(tag)}`)} /></div>
+            {/if}
+          </div>
         {/each}
       </div>
     {/if}
@@ -93,8 +107,10 @@
 </main>
 
 <style>
-  .hit { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); text-align: left; background: var(--surface-2); }
+  /* Full width inside its `.hit-row`, as it was when it sat in the list directly. */
+  .hit { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); text-align: left; background: var(--surface-2); width: 100%; }
   .hit-title { font-weight: 600; }
+  .hit-tags { margin-top: var(--space-1); padding-left: var(--space-3); }
   .small { font-size: var(--text-xs); }
   .type-row { display: flex; align-items: center; gap: var(--space-1); }
   .type-row :global(svg) { flex: none; }

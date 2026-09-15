@@ -6,6 +6,7 @@
   import { locale, t } from '../i18n';
   import { intervalDays, splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
+  import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
   let { objectId, unit, activities, onchanged }:
@@ -115,6 +116,7 @@
           {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
         </span>
       </div>
+      <TagChips tags={r.object_tags ?? []} />
       {#if r.kind === 'reading'}
         <div class="muted"><span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span> {every(r)}</div>
         <div class="muted tnum">{reading(r)}</div>

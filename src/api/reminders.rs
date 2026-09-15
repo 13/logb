@@ -54,6 +54,10 @@ pub struct ReminderRow {
     pub client_uuid: Option<String>,
     // joined
     pub object_name: String,
+    /// The object's tags, answered as an array like `ObjectRow::tags`: a reminder listed on the
+    /// dashboard, away from its object, still shows which of several similar things it is about.
+    #[serde(serialize_with = "crate::domain::tags::serialize_json_text")]
+    pub object_tags: String,
     pub counter_unit: Option<String>,
     pub current_counter: Option<i64>,
     /// The date of the object's newest counter reading, up to `reading_horizon`.
@@ -165,7 +169,7 @@ pub(crate) fn select_reminders(where_and_order: &str) -> String {
     format!(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, \
-         r.kind, r.every_n, r.every_unit, r.client_uuid, o.name AS object_name, o.counter_unit, \
+         r.kind, r.every_n, r.every_unit, r.client_uuid, o.name AS object_name, o.tags AS object_tags, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter, \
          (SELECT MAX(a.date) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL \
             AND a.counter_value IS NOT NULL AND a.date <= $1) AS last_reading_date \
@@ -625,7 +629,7 @@ mod tests {
             due_date: None, due_counter: None, repeat_months: None, repeat_counter: None,
             done_at: None, done_activity_id: None, created_at: "2024-01-01T00:00:00Z".into(),
             snoozed_until: None, kind: KIND_SERVICE.into(), every_n: None, every_unit: None, client_uuid: None,
-            object_name: "Golf".into(), counter_unit: None, current_counter: None, last_reading_date: None,
+            object_name: "Golf".into(), object_tags: "[]".into(), counter_unit: None, current_counter: None, last_reading_date: None,
         }
     }
 

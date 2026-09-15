@@ -13,6 +13,7 @@
   import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
   import Icon from '../lib/Icon.svelte';
+  import TagChips from '../lib/TagChips.svelte';
 
   let active = $state<MemObject[]>([]);
   let archived = $state<MemObject[]>([]);
@@ -80,6 +81,7 @@
         {#each due.slice(0, 5) as r (r.id)}
           <li>
             <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
+            <TagChips tags={r.object_tags ?? []} />
             {#if r.kind === 'reading'}
               <!-- The whole job is one number, so it is one tap from here. -->
               <button class="ghost snooze" onclick={() => go(`/objects/${r.object_id}/reading`)}>{$t('reminder.record')}</button>
@@ -98,6 +100,7 @@
         {#each soon.slice(0, 5) as r (r.id)}
           <li>
             <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
+            <TagChips tags={r.object_tags ?? []} />
             <span class="muted">
               {#if r.days_until !== null}{r.days_until === 1 ? $t('dash.in-day') : $t('dash.in-days', { n: r.days_until })}{/if}
               {#if r.counter_until !== null && r.counter_unit} · {$t('dash.in-counter', { n: r.counter_until, unit: r.counter_unit })}{/if}

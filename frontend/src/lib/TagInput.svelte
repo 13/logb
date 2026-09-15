@@ -30,6 +30,26 @@
     const r = splitTyped(tags, value);
     tags = r.tags; text = r.text; error = r.error ? $t(`tags.${r.error}`) : '';
   }
+
+  let field: HTMLInputElement;
+  // Enter, a comma and blur all turn typed text into a tag, but a form can be submitted without
+  // any of them reaching this field: an Android keyboard's Enter often arrives as key
+  // "Unidentified" (so `onkeydown` lets it through) and submits with the focus still here. The
+  // typed tag was then silently left out of the save. So the typed text is added on the form's
+  // submit too -- in the capture phase, which runs before the form's own `onsubmit` reads
+  // `tags` -- and a tag that cannot be added stops the submit, keeping its error on screen
+  // instead of saving without it.
+  $effect(() => {
+    const form = field.form;
+    if (!form) return;
+    const commit = (e: SubmitEvent) => {
+      if (text.trim() === '' || add(text)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    form.addEventListener('submit', commit, { capture: true });
+    return () => form.removeEventListener('submit', commit, { capture: true });
+  });
 </script>
 
 <div class="field">
@@ -40,7 +60,7 @@
         <button type="button" class="remove" aria-label={$t('tags.remove', { tag })} onclick={() => (tags = removeTag(tags, tag))}>×</button>
       </span>
     {/each}
-    <input {id} bind:value={text} {onkeydown} {oninput} onblur={() => text.trim() && add(text)} placeholder={$t('tags.placeholder')} autocomplete="off" list={`${id}-list`}
+    <input {id} bind:this={field} bind:value={text} {onkeydown} {oninput} onblur={() => text.trim() && add(text)} placeholder={$t('tags.placeholder')} autocomplete="off" list={`${id}-list`}
            aria-describedby={error ? `${id}-error` : undefined} />
     <datalist id={`${id}-list`}>{#each offered as s (s)}<option value={s}></option>{/each}</datalist>
   </div>

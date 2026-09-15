@@ -24,7 +24,10 @@
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
   type Tab = 'timeline' | 'documents' | 'reminders' | 'info';
-  let tab = $state<Tab>((new URLSearchParams(location.search).get('tab') as Tab) || 'timeline');
+  const initialQuery = new URLSearchParams(location.search);
+  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag. */
+  const initialTag = initialQuery.get('tag')?.trim() || null;
+  let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
@@ -32,7 +35,7 @@
   let loadingMore = $state(false);
   let category = $state<Category | ''>('');
   /** Session-only, like `category`: a tag tapped on an entry narrows the timeline to it. */
-  let tagFilter = $state<string | null>(null);
+  let tagFilter = $state<string | null>(initialTag);
   let children = $state<MemObject[]>([]);
   /** Archived children are not listed under Contents, but their costs still count with "Include
    *  contents", so having any is enough to offer the switch. */
@@ -203,6 +206,9 @@
   $effect(() => {
     const url = new URL(location.href);
     if (tab === 'timeline') url.searchParams.delete('tab'); else url.searchParams.set('tab', tab);
+    // `?tag=` is read once, on load; the filter is session state from then on, like `category`,
+    // so a stale tag left in the address would come back on a reload after being cleared.
+    url.searchParams.delete('tag');
     const next = url.pathname + url.search;
     if (next !== location.pathname + location.search) history.replaceState(null, '', next);
   });

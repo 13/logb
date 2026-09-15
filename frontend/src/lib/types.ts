@@ -96,6 +96,8 @@ export interface Reminder {
   next_due_date: string | null;
   /** A counter target's projected date from recent usage; never makes it due. */
   estimated_due_date: string | null;
+  /** The object's tags, so a reminder listed away from its object still says what it belongs to. */
+  object_tags?: string[];
 }
 export interface ReminderInput {
   title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null;
@@ -113,7 +115,7 @@ export interface ImportCounts {
 
 export interface ActivityHit {
   id: number; object_id: number; object_name: string; date: string; category: Category; title: string;
-  notes: string; counter_value: number | null; cost_cents: number | null;
+  notes: string; counter_value: number | null; cost_cents: number | null; tags: string[];
 }
 /** An object hit carries the name of the object it sits inside, so a list of four things
  *  called "Filter" can be told apart without opening any of them. `null` is a root object.

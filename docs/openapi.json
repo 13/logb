@@ -2973,6 +2973,13 @@
           "object_name": {
             "type": "string"
           },
+          "object_tags": {
+            "type": "array",
+            "description": "The tags of the reminder's object, normalised as stored; empty when it has none.",
+            "items": {
+              "type": "string"
+            }
+          },
           "title": {
             "type": "string"
           },
