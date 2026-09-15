@@ -178,6 +178,31 @@ fn canonical_place(text: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// An activity row's trip-relevant columns, read fresh from the database for the cross-field
+/// checks below -- a named struct rather than a wide tuple, which clippy's `type_complexity`
+/// refuses to let through, and which would be unreadable at every call site besides.
+#[derive(sqlx::FromRow)]
+struct TripRow {
+    category: String,
+    counter_value: Option<i64>,
+    start_counter: Option<i64>,
+    from_place: Option<String>,
+    to_place: Option<String>,
+    duration_minutes: Option<i64>,
+    battery_used_pct: Option<i64>,
+    /// The object's `counter_unit`, joined in because only a `km`/`mi` object may hold a trip.
+    counter_unit: Option<String>,
+}
+
+impl TripRow {
+    /// Whether any of the five trip-only fields is stored -- the same test
+    /// `ActivityInput::validate` names `has_trip_fields`, over the row instead of a REST body.
+    fn has_trip_fields(&self) -> bool {
+        self.start_counter.is_some() || self.from_place.is_some() || self.to_place.is_some()
+            || self.duration_minutes.is_some() || self.battery_used_pct.is_some()
+    }
+}
+
 /// The stored spelling of a pushed `tags` value: JSON text holding an array of strings, run
 /// through the same `domain::tags::normalize` REST uses, so the two doors store the same tags.
 /// `Err` is the rejection reason.
@@ -614,51 +639,91 @@ pub async fn apply_op(
 
             // The trip cross-field rules: something no single field's shape or range can say on
             // its own, so they are checked against the row's OTHER current values, the way
-            // `ActivityInput::validate` checks them against the rest of a REST PATCH's body (a
-            // REST PATCH always resends every trip field together; a synced `set` touches one
-            // field at a time, so the row itself is where "the other fields" live).
+            // `ActivityInput::validate` checks them against the rest of a REST PATCH's body. A
+            // REST PATCH resends every field together and is validated as one combination; a
+            // synced `set` touches exactly one field, checked against what is stored RIGHT NOW
+            // -- so a client meaning to change several of these together, especially `category`
+            // to or from `trip`, has to either order its ops so each one lands in a state the
+            // next one's check can pass, or send the whole change as one REST PATCH instead,
+            // which is what a category change to or from `trip` is meant to go through (see
+            // `docs/openapi.json`'s `/sync/push` description).
+            //
+            // This also has to sit ahead of the last-write-wins comparison below, not after:
+            // an op that is invalid against the row as it stands is Rejected outright, on
+            // purpose, never Superseded. Superseded is for a stale but otherwise valid value
+            // losing a race it would have won moments earlier; invalid data is never stored
+            // regardless of timing, so an old, invalid op must not reach the one comparison
+            // that only ever decides who wins a race between two values that were each fine on
+            // their own.
             if op.entity == Entity::Activity && matches!(
                 field,
-                "start_counter" | "from_place" | "to_place" | "duration_minutes"
+                "category" | "start_counter" | "from_place" | "to_place" | "duration_minutes"
                     | "battery_used_pct" | "counter_value"
             ) {
-                let (category, stored_counter_value, stored_start_counter): (String, Option<i64>, Option<i64>) =
-                    sqlx::query_as("SELECT category, counter_value, start_counter FROM activities WHERE client_uuid = $1")
-                        .bind(&op.entity_uuid)
-                        .fetch_one(&mut *tx)
-                        .await?;
-                // `counter_value` is not trip-only -- every category may carry one -- so only
-                // the other four are refused outright on a non-trip row, and only when they are
-                // actually being set to something (clearing one with `null` stays legal
-                // regardless of category, exactly as on the REST door).
-                if field != "counter_value" && category != "trip" && !matches!(&bound, Binding::Null) {
-                    return Ok(Outcome::Rejected {
-                        reason: "only a trip has start_counter, places, duration or battery".into(),
-                    });
-                }
-                if category == "trip" {
-                    // The value this write leaves behind for whichever of the two this op
-                    // names -- not the stored one, which is what it is about to stop being
-                    // true; the OTHER of the pair keeps its stored value, since this op does
-                    // not touch it.
-                    let end = if field == "counter_value" {
-                        match &bound { Binding::Integer(n) => Some(*n), _ => None }
-                    } else {
-                        stored_counter_value
-                    };
-                    let start = if field == "start_counter" {
-                        match &bound { Binding::Integer(n) => Some(*n), _ => None }
-                    } else {
-                        stored_start_counter
-                    };
-                    if let (Some(s), Some(e)) = (start, end) {
-                        if s < 0 || s > e {
-                            return Ok(Outcome::Rejected {
-                                reason: "start_counter must be between 0 and counter_value".into(),
-                            });
+                let stored: TripRow = sqlx::query_as(
+                    "SELECT a.category, a.counter_value, a.start_counter, a.from_place, a.to_place, \
+                     a.duration_minutes, a.battery_used_pct, o.counter_unit \
+                     FROM activities a JOIN objects o ON o.id = a.object_id WHERE a.client_uuid = $1",
+                )
+                .bind(&op.entity_uuid)
+                .fetch_one(&mut *tx)
+                .await?;
+
+                const ONLY_A_TRIP: &str = "only a trip has start_counter, places, duration or battery";
+                const NEEDS_BOTH: &str = "a trip needs start_counter and counter_value";
+                const START_RANGE: &str = "start_counter must be between 0 and counter_value";
+                const NEEDS_KM_MI: &str = "a trip needs an object that counts km or mi";
+
+                if field == "category" {
+                    // A `null` category cannot reach here as `Binding::Text`; `binding` already
+                    // shaped it as `Binding::Null`, and the column's own NOT NULL constraint is
+                    // what refuses that, exactly as it does for any other required TEXT field.
+                    if let Binding::Text(new_category) = &bound {
+                        if new_category == "trip" {
+                            if !matches!(stored.counter_unit.as_deref(), Some("km") | Some("mi")) {
+                                return Ok(Outcome::Rejected { reason: NEEDS_KM_MI.into() });
+                            }
+                            match (stored.start_counter, stored.counter_value) {
+                                (Some(s), Some(e)) if (0..=e).contains(&s) => {}
+                                (Some(_), Some(_)) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
+                                _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                            }
+                        } else if stored.has_trip_fields() {
+                            return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
                         }
                     }
+                } else if field == "counter_value" {
+                    // Not trip-only -- every category may carry one -- so only checked against
+                    // `start_counter` when the row IS a trip, and a trip may never lose it: an
+                    // end with no start left is exactly the row `ActivityInput::validate`
+                    // refuses to create in the first place.
+                    if stored.category == "trip" {
+                        match &bound {
+                            Binding::Integer(n) if stored.start_counter.is_some_and(|s| (0..=*n).contains(&s)) => {}
+                            Binding::Integer(_) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
+                            _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                        }
+                    }
+                } else if stored.category != "trip" {
+                    // The four trip-only fields, plus `start_counter`: refused outright on a
+                    // non-trip row, unless they are being cleared -- clearing stays legal
+                    // regardless of category, exactly as on the REST door.
+                    if !matches!(&bound, Binding::Null) {
+                        return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
+                    }
+                } else if field == "start_counter" {
+                    // On a trip row specifically: a trip may never lose its start either,
+                    // mirroring `counter_value` above.
+                    match &bound {
+                        Binding::Integer(n) if stored.counter_value.is_some_and(|e| (0..=e).contains(n)) => {}
+                        Binding::Integer(_) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
+                        _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                    }
                 }
+                // The three other trip-only fields need no further check here on a trip row:
+                // clearing or resetting `from_place`/`to_place`/`duration_minutes`/
+                // `battery_used_pct` never makes the row invalid the way losing `start_counter`
+                // or `counter_value` would.
             }
 
             // A type key needs the database: a built-in key, or one of the caller's own live types
@@ -668,6 +733,28 @@ pub async fn apply_op(
                     if !crate::object_type::is_valid_for_user(&mut *tx, user_id, key).await? {
                         return Ok(Outcome::Rejected { reason: crate::api::objects::TYPE_REJECTION.into() });
                     }
+                }
+            }
+
+            // A trip needs its object to keep counting km or mi -- see the doc comment on
+            // `api::objects::COUNTER_UNIT_TRIP_REJECTION`, which both doors answer with. `km`
+            // and `mi` are each other's only legal replacement, so this only has to ask about
+            // the ones that leave that pair: `h`, and clearing the counter entirely.
+            if op.entity == Entity::Object
+                && field == "counter_unit"
+                && !matches!(&bound, Binding::Text(u) if matches!(u.as_str(), "km" | "mi"))
+            {
+                let has_trip: Option<(i64,)> = sqlx::query_as(
+                    "SELECT a.id FROM activities a JOIN objects o ON o.id = a.object_id \
+                     WHERE o.client_uuid = $1 AND a.category = 'trip' AND a.deleted_at IS NULL LIMIT 1",
+                )
+                .bind(&op.entity_uuid)
+                .fetch_optional(&mut *tx)
+                .await?;
+                if has_trip.is_some() {
+                    return Ok(Outcome::Rejected {
+                        reason: crate::api::objects::COUNTER_UNIT_TRIP_REJECTION.into(),
+                    });
                 }
             }
             let bound = if op.entity == Entity::ObjectType {

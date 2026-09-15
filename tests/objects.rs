@@ -839,3 +839,48 @@ async fn every_object_response_carries_its_client_uuid() {
         .json(&json!({ "name": "Bike", "type": "bike" })).send().await.unwrap().json().await.unwrap();
     assert_eq!(other["client_uuid"].as_str().unwrap().len(), 36);
 }
+
+/// A trip only means anything against a `km`/`mi` counter (`ActivityInput::validate`), so an
+/// object that already has one may not have its counter moved away from that pair -- `km` and
+/// `mi` stay freely interchangeable, since a trip is equally meaningful under either.
+#[tokio::test]
+async fn a_counter_unit_cannot_leave_km_mi_while_the_object_has_trips() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-06-01", "category": "trip", "title": "", "notes": "",
+        "start_counter": 400, "counter_value": 600
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    for unit in [json!("h"), json!(null)] {
+        let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+            "name": "Tern", "type": "e_bike", "counter_unit": unit, "description": "",
+            "purchase_date": null, "purchase_price_cents": null
+        })).send().await.unwrap();
+        assert_eq!(res.status(), 400, "{unit}: {}", res.text().await.unwrap());
+        let body: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(body["message"], "this object has trips; its counter must stay km or mi");
+    }
+
+    // km <-> mi stays allowed.
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Tern", "type": "e_bike", "counter_unit": "mi", "description": "",
+        "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let updated: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(updated["counter_unit"], "mi");
+
+    // Deleting the trip lifts the restriction.
+    let acts: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{id}/activities")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(app.client.delete(app.url(&format!("/activities/{}", acts[0]["id"]))).send().await.unwrap().status(), 204);
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Tern", "type": "e_bike", "counter_unit": "h", "description": "",
+        "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "no live trips left: {}", res.text().await.unwrap());
+}

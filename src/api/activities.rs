@@ -115,7 +115,12 @@ pub struct ActivityInput {
 /// A trip's place, trimmed; blank becomes `None`. `Err` if what remains is over 80 characters,
 /// counted with `chars().count()` rather than bytes so "Bäckerei Müller" is judged by its own
 /// 15 letters, not by how many bytes UTF-8 spends on the umlaut.
-fn trim_place(place: Option<String>) -> Result<Option<String>, AppError> {
+///
+/// `pub(crate)`: `api::export::import` binds the same trimmed spelling into the row it inserts,
+/// rather than the archive's raw text, so an import stores the identical value a REST create of
+/// the same body would -- see the call there for why `validate_import` alone, which discards
+/// the trimmed value it computes, is not enough.
+pub(crate) fn trim_place(place: Option<String>) -> Result<Option<String>, AppError> {
     let Some(p) = place else { return Ok(None) };
     let trimmed = p.trim();
     if trimmed.is_empty() {

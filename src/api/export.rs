@@ -488,6 +488,13 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let mut activity_ids = Vec::new();
         for a in &o.activities {
             let activity_uuid = uuid::Uuid::new_v4().to_string();
+            // Trimmed the same way a REST create trims them (`ActivityInput`'s `trim_place`,
+            // blank -> `None`), so an imported row stores the identical spelling a REST create
+            // of the same body would -- `validate_import` already ran this same trim over every
+            // activity to check the 80-character limit, but only to validate; its result never
+            // reached the row until now.
+            let from_place = super::activities::trim_place(a.from_place.clone())?;
+            let to_place = super::activities::trim_place(a.to_place.clone())?;
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
                  start_counter, from_place, to_place, duration_minutes, battery_used_pct) \
@@ -495,7 +502,7 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
-                .bind(a.start_counter).bind(&a.from_place).bind(&a.to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
+                .bind(a.start_counter).bind(&from_place).bind(&to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
                 .fetch_one(&mut *tx).await?;
             record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
             activity_ids.push(aid);

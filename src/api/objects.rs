@@ -129,6 +129,13 @@ pub const PARENT_REJECTION: &str =
 /// sentence as before custom types existed, so no client has to learn a new one.
 pub const TYPE_REJECTION: &str = "type is not one of the known object types";
 
+/// The one sentence both doors answer a `counter_unit` change with, when it would leave a
+/// stored trip's `counter_value` meaningless -- a trip is only ever allowed on an object whose
+/// counter is `km` or `mi` (`ActivityInput::validate`), so an object that already has one may
+/// never move its counter away from that pair. `km` and `mi` remain freely interchangeable:
+/// only a change that leaves the pair (to `h`, or to no counter at all) is refused.
+pub const COUNTER_UNIT_TRIP_REJECTION: &str = "this object has trips; its counter must stay km or mi";
+
 /// Refuses a type the caller may not use. On the write transaction's connection, so a type
 /// deleted concurrently cannot slip in between this check and the write (see `types::delete`).
 async fn check_type(conn: &mut sqlx::AnyConnection, user_id: i64, type_key: &str) -> Result<(), AppError> {
@@ -561,6 +568,20 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // SQLite's write lock does not fail, it hangs.
     let existing = load_owned_object_on(&mut tx, user.id, id).await?;
     check_type(&mut tx, user.id, &body.type_).await?;
+    // `km` and `mi` may always trade places; only a change that leaves that pair (to `h`, or to
+    // no counter at all) is checked against the object's trips -- see
+    // `COUNTER_UNIT_TRIP_REJECTION`'s doc comment for why one may never exist without the other.
+    if !matches!(body.counter_unit.as_deref(), Some("km") | Some("mi")) {
+        let has_trip: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM activities WHERE object_id = $1 AND category = 'trip' AND deleted_at IS NULL LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if has_trip.is_some() {
+            return Err(AppError::BadRequest(COUNTER_UNIT_TRIP_REJECTION.into()));
+        }
+    }
     let archived_at = match body.archived {
         Some(true) => existing.archived_at.clone().or_else(|| Some(db::now())),
         Some(false) => None,

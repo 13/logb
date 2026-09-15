@@ -520,6 +520,34 @@ async fn import_succeeds_without_trip_fields() {
     }
 }
 
+/// `validate_import` trims and length-checks every place the same way a REST create does, but
+/// used to discard the trimmed value: the archive's raw, untrimmed text reached the row. An
+/// import must store what a REST create of the same body would, not what the archive happened
+/// to spell.
+#[tokio::test]
+async fn import_trims_trip_places() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+
+    let mut object = base_object();
+    object["activities"] = json!([{
+        "date": "2024-01-01", "category": "trip", "title": "", "notes": "",
+        "counter_value": 600, "cost_cents": null, "created_at": "2024-01-01T00:00:00Z",
+        "attachments": [], "start_counter": 400, "from_place": " Home ", "to_place": "   "
+    }]);
+    let zip_bytes = zip_data_json(&export_shell(object));
+
+    let res = anna.post(app.url("/import")).header("content-type", "application/zip").body(zip_bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let objs: Vec<serde_json::Value> = anna.get(app.url("/objects")).send().await.unwrap().json().await.unwrap();
+    let id = objs[0]["id"].as_i64().unwrap();
+    let acts: Vec<serde_json::Value> = anna.get(app.url(&format!("/objects/{id}/activities"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(acts[0]["from_place"], "Home", "trimmed, not the archive's padded spelling");
+    assert_eq!(acts[0]["to_place"], serde_json::Value::Null, "blank after trimming stores null");
+}
+
 /// The archive is built into a scratch file and streamed back; the scratch file must not
 /// survive the request, and the response must still be a complete, readable zip.
 #[tokio::test]

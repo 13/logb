@@ -1918,7 +1918,7 @@
     "/sync/push": {
       "post": {
         "summary": "Apply a batch of offline ops with field-level last-write-wins.",
-        "description": "Every op in the batch is applied inside one transaction, so a client that retries after a lost response finds either all of its ops recorded or none. `results` is positional: `results[i]` describes `ops[i]`. An op that loses the last-write-wins comparison is `superseded` -- recorded in the change feed, but not written to the row; only a malformed or unauthorised op is `rejected`. Replaying a `client_op_id` already in the log reports `accepted` without applying it a second time.",
+        "description": "Every op in the batch is applied inside one transaction, so a client that retries after a lost response finds either all of its ops recorded or none. `results` is positional: `results[i]` describes `ops[i]`. An op that loses the last-write-wins comparison is `superseded` -- recorded in the change feed, but not written to the row; only a malformed or unauthorised op is `rejected`. Replaying a `client_op_id` already in the log reports `accepted` without applying it a second time. A `set` on a field with a cross-field rule (for example an activity's trip fields) is checked one op at a time against the row as currently stored, not against the rest of the same batch, so a client changing several such fields together must order its ops so each one lands in a state the next one's check can pass. A change to an activity's `category` to or from `trip` is meant to be sent as a REST `PATCH /activities/{id}` instead, which validates the whole combination -- category and the five trip fields -- atomically in one request; pushed as a lone `set category`, it is checked only against what is already stored and will usually be rejected for exactly that reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3747,7 +3747,7 @@
       },
       "ActivityHit": {
         "type": "object",
-        "description": "An activity as `/search` returns it: a subset of `Activity`'s columns plus the owning object's name. It carries no `quantity_milli`, `client_op_id`, `created_at`, `updated_at` or `attachments`; fetch the activity itself for those.",
+        "description": "An activity as `/search` returns it: a subset of `Activity`'s columns plus the owning object's name. It carries no `quantity_milli`, `client_op_id`, `created_at`, `updated_at` or `attachments`; fetch the activity itself for those. `from_place` and `to_place` are a trip's places, matched by `q` the same way `title` and `notes` are.",
         "properties": {
           "id": {
             "type": "integer",
@@ -3793,6 +3793,20 @@
             "items": {
               "type": "string"
             }
+          },
+          "from_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A trip's start place; null on every other category or when not given."
+          },
+          "to_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A trip's end place; null on every other category or when not given."
           }
         }
       },
