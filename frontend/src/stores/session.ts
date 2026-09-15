@@ -163,6 +163,9 @@ globalThis.addEventListener?.('storage', (e: StorageEvent) => {
   user.set(undefined);
   clearObjectMemory();
   clearCustomTypes();
+  // This tab's sessionStorage survives the reload, so a draft kept for the previous user must go
+  // here too, not only in `endSession`.
+  forgetObjectDraft();
   globalThis.location?.replace('/');
 });
 
