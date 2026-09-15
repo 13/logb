@@ -2,6 +2,7 @@
   import { api } from './api';
   import { go } from './router';
   import { counter, fmtDate } from './format';
+  import { activityTitle } from './activity-form';
   import { dateFormat } from '../stores/date-format';
   import { locale, t } from '../i18n';
   import { intervalDays, splitReminders } from './reminder-form';
@@ -176,7 +177,7 @@
     <select id="link" bind:value={linkId}>
       <option value="">{$t('reminder.done-none')}</option>
       {#each linkable as a (a.id)}
-        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {a.title}</option>
+        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {activityTitle(a.title, $t)}</option>
       {/each}
     </select>
   </div>

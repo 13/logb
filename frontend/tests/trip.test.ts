@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, parseDuration, placesLabel, spanLabel, tripDistance } from '../src/lib/trip';
+import {
+  formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, placesLabel, spanLabel, tripDistance,
+  type TripLink,
+} from '../src/lib/trip';
 
 describe('parseDuration', () => {
   it('reads h:mm', () => {
@@ -75,5 +78,45 @@ describe('placesLabel', () => {
 describe('spanLabel', () => {
   it('joins two already-formatted readings with the trip arrow', () => {
     expect(spanLabel('400 km', '600 km')).toBe('400 km → 600 km');
+  });
+});
+
+const link = (start: number | null, end: number | null, distance: number | null): TripLink => ({ start, end, distance });
+
+describe('linkTripEnd', () => {
+  it('fills distance from end - start', () => {
+    expect(linkTripEnd(link(400, 600, null)).distance).toBe(200);
+  });
+
+  it('clears distance when end is cleared, rather than leaving a stale span', () => {
+    expect(linkTripEnd(link(400, null, 200)).distance).toBeNull();
+  });
+
+  it('leaves distance alone when start is not known yet', () => {
+    expect(linkTripEnd(link(null, 600, null)).distance).toBeNull();
+  });
+});
+
+describe('linkTripDistance', () => {
+  it('fills end from start + distance', () => {
+    expect(linkTripDistance(link(400, null, 200)).end).toBe(600);
+  });
+
+  it('does nothing without a start to add onto', () => {
+    expect(linkTripDistance(link(null, null, 200))).toEqual(link(null, null, 200));
+  });
+});
+
+describe('linkTripStart', () => {
+  it('moves end, keeping an already-known distance', () => {
+    expect(linkTripStart(link(500, 600, 200)).end).toBe(700);
+  });
+
+  it('derives distance from an existing end when none was known yet', () => {
+    expect(linkTripStart(link(400, 600, null)).distance).toBe(200);
+  });
+
+  it('does nothing with neither an end nor a distance yet', () => {
+    expect(linkTripStart(link(400, null, null))).toEqual(link(400, null, null));
   });
 });

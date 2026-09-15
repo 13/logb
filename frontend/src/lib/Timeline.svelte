@@ -5,7 +5,7 @@
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import { groupByYear } from './activity-form';
+  import { activityTitle, groupByYear } from './activity-form';
   import { foldReadings, readingSpan } from './timeline-fold';
   import { placesLabel, spanLabel, tripDistance, formatDuration } from './trip';
   import { categoriesFor, customTypes } from './type-registry';
@@ -15,12 +15,17 @@
   import { tagColorIndex } from './tags';
 
   let {
-    objectId, type, activities, total, loadingMore = false, onmore, onlog, unit,
+    objectId, type, activities, total, loadingMore = false, onmore, onlog, ontriplog, unit,
     category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
   }:
     {
       objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
-      onmore?: () => void; onlog?: () => void; unit: CounterUnit; category?: Category | '';
+      onmore?: () => void; onlog?: () => void;
+      /** Set only on a km/mi object (see ObjectDetail.svelte) -- offers "+ Log trip" in the
+       *  empty state beside the plain "+ Log activity" one, the same pair the object page's own
+       *  floating buttons offer once there is at least one entry. */
+      ontriplog?: () => void;
+      unit: CounterUnit; category?: Category | '';
       tagFilter?: string | null; titleFilter?: string | null;
     } = $props();
   const groups = $derived(groupByYear(activities));
@@ -79,7 +84,10 @@
        category: this one narrows by exact title (a "Last done" row tapped on the Info tab),
        not by tag. -->
   <div class="tag-filter">
-    <span class="chip">{$t('lastdone.filter', { title: titleFilter })}</span>
+    <!-- `titleFilter` itself stays the real (possibly empty, for an untitled trip) value the
+         server matches on; only the chip's own text falls back to "Trip", same as every other
+         place a trip's title is shown. -->
+    <span class="chip">{$t('lastdone.filter', { title: activityTitle(titleFilter, $t) })}</span>
     <button class="ghost" onclick={() => (titleFilter = null)}>{$t('lastdone.clear')}</button>
   </div>
 {/if}
@@ -92,6 +100,7 @@
       <span class="empty-icon"><Icon name="edit" size={40} /></span>
       <p>{$t('timeline.empty')}</p>
       {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}
+      {#if ontriplog}<button class="ghost" onclick={() => ontriplog()}>+ {$t('trip.log')}</button>{/if}
     {:else}
       <p>{$t('timeline.none-in-filter')}</p>
     {/if}
@@ -140,10 +149,7 @@
             onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
           >
             <div class="row head">
-              <!-- A trip's title defaults to "Trip" when left empty (ActivityForm shows the same
-                   word as a placeholder rather than pre-filling it); every other category's
-                   title is required, so `a.title` is never actually empty for one of those. -->
-              <b>{a.title || $t('cat.trip')}</b>
+              <b>{activityTitle(a.title, $t)}</b>
               <span class="chip">{$t(`cat.${a.category}`)}</span>
               {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>

@@ -55,10 +55,28 @@ export function exifDate(a: { taken_at: string | null }): string | null {
   return a.taken_at ? a.taken_at.slice(0, 10) : null;
 }
 
-/** Suggestions for the chosen category (all of them when none is chosen), one per title. */
+/**
+ * An activity's display title -- itself for anything but an untitled trip, which falls back to
+ * `cat.trip` the same word ActivityForm shows as that field's own placeholder.
+ *
+ * `validateActivity` above is what makes an empty title mean "this is a trip" everywhere: every
+ * other category is refused a blank one, so nothing else needs its own `category` to make this
+ * call, which is why every list this appears on (a `LastDone` row, an `ActivityHit`, the
+ * "link to activity" dropdown, ...) can use it even where that field was never sent down.
+ * Centralised so every place an activity's title is rendered agrees on the fallback, rather than
+ * repeating `title || t('cat.trip')` at each call site.
+ */
+export function activityTitle(title: string, t: (key: string) => string): string {
+  return title || t('cat.trip');
+}
+
+/** Suggestions for the chosen category (all of them when none is chosen), one per title. An
+ *  untitled trip has nothing worth repeating -- a "Repeat: " chip with nothing after the colon --
+ *  so it is dropped here rather than only hidden by the template that renders these. */
 export function suggestionsFor(all: TitleSuggestion[], category: Category | null): TitleSuggestion[] {
   const seen = new Set<string>();
   return all
+    .filter((s) => s.title.trim() !== '')
     .filter((s) => category === null || s.category === category)
     .filter((s) => {
       if (seen.has(s.title)) return false;

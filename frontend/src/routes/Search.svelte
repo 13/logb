@@ -3,6 +3,7 @@
   import { api } from '../lib/api';
   import { go } from '../lib/router';
   import { fmtDate, money } from '../lib/format';
+  import { activityTitle } from '../lib/activity-form';
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
@@ -92,7 +93,7 @@
         {#each results.activities as a (a.id)}
           <div class="hit-row">
             <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
-              <span class="hit-title">{a.title}</span>
+              <span class="hit-title">{activityTitle(a.title, $t)}</span>
               <span class="muted small tnum">
                 {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}
               </span>

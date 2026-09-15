@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
+import { activityTitle, emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
 import { categoriesFor } from '../src/lib/type-registry';
 import type { Activity, TitleSuggestion } from '../src/lib/types';
 
@@ -83,6 +83,18 @@ describe('activity form', () => {
   });
 });
 
+describe('activityTitle', () => {
+  const t = (key: string) => (key === 'cat.trip' ? 'Trip' : key);
+
+  it('is the title itself when there is one', () => {
+    expect(activityTitle('Repaint', t)).toBe('Repaint');
+  });
+
+  it('falls back to "Trip" for an untitled entry', () => {
+    expect(activityTitle('', t)).toBe('Trip');
+  });
+});
+
 const s = (title: string, category: string): TitleSuggestion =>
   ({ title, category, last_date: '2026-01-01', last_cost_cents: null, last_counter: null }) as TitleSuggestion;
 
@@ -99,6 +111,13 @@ describe('suggestionsFor', () => {
 
   it('returns an empty list when nothing matches', () => {
     expect(suggestionsFor([s('Fuel', 'fuel')], 'repair')).toEqual([]);
+  });
+
+  // An untitled trip's own recent-title entry has nothing worth repeating -- a "Repeat: " chip
+  // with nothing after the colon -- so it never reaches the list at all.
+  it('drops an untitled trip', () => {
+    const all = [s('', 'trip'), s('Commute', 'trip')];
+    expect(suggestionsFor(all, 'trip').map((x) => x.title)).toEqual(['Commute']);
   });
 });
 

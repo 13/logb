@@ -13,7 +13,7 @@
   import { dateFormat } from '../stores/date-format';
   import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
-  import { formatDuration, parseDuration, tripDistance } from '../lib/trip';
+  import { formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, tripDistance, type TripLink } from '../lib/trip';
   import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
   import { CATEGORIES, type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
@@ -180,27 +180,29 @@
     api<TripPlaces>('GET', `/objects/${oid}/trip-places`).then((p) => (tripPlaces = p), () => {});
   });
 
-  /** End (`input.counter_value`) typed directly: distance follows it, same as the spec says.
+  /** The three linked fields as `linkTrip*` (../lib/trip.ts) takes and returns them.
    *  `start_counter` is declared optional on `ActivityInput` (`?:`, for the benefit of every
    *  non-trip caller that never sets it at all) -- `?? null` reads that absent case the same as
    *  an explicit null, since the two mean the same thing here: no start typed yet. */
+  const tripLink = (): TripLink => ({ start: input.start_counter ?? null, end: input.counter_value, distance });
+
+  /** End typed directly: distance follows it, same as the spec says -- the actual arithmetic
+   *  (including clearing distance when End is cleared) lives in `linkTripEnd`, tested on its
+   *  own in `tests/trip.test.ts`. */
   function onTripEndChange() {
-    const start = input.start_counter ?? null;
-    if (start !== null && input.counter_value !== null) distance = input.counter_value - start;
+    distance = linkTripEnd(tripLink()).distance;
   }
   /** Distance typed directly: end follows it (start + distance), unless start is not known yet. */
   function onTripDistanceChange() {
-    const start = input.start_counter ?? null;
-    if (start !== null && distance !== null) input.counter_value = start + distance;
+    input.counter_value = linkTripDistance(tripLink()).end;
   }
   /** Start changed: an already-known distance is kept and the end moves with it; with no
    *  distance yet (a freshly prefilled or freshly typed start, end not yet touched) there is
    *  nothing to move, so this falls back to deriving distance from whatever end is already there. */
   function onTripStartChange() {
-    const start = input.start_counter ?? null;
-    if (start === null) return;
-    if (distance !== null) input.counter_value = start + distance;
-    else if (input.counter_value !== null) distance = input.counter_value - start;
+    const linked = linkTripStart(tripLink());
+    input.counter_value = linked.end;
+    distance = linked.distance;
   }
 
   // `saved.id` is the temp id ActivityForm minted for its own draft (see `mintTempId` below)
@@ -454,7 +456,11 @@
         <!-- No `min="0"` (unlike Start/End): distance is `end - start`, so an end typed below
              start makes it negative -- exactly the mistake `trip.error-end` exists to explain.
              A native `min` would instead block the browser's own submit outright before that
-             message ever runs, leaving Save looking like it silently does nothing. -->
+             message ever runs, leaving Save looking like it silently does nothing.
+             No `step` either, on purpose: the default (whole numbers only) matches Start/End,
+             which are themselves whole counter units, so a decimal distance could never actually
+             be reached by any real start/end pair -- typing one is simply refused by the field,
+             the same way Start/End already refuse one. -->
         <input id="tds" type="number" inputmode="numeric" bind:value={distance} oninput={onTripDistanceChange} />
       </div>
       <div class="row">
@@ -476,7 +482,11 @@
         </div>
         <div class="field">
           <label for="tba">{$t('trip.battery')} (%)</label>
-          <input id="tba" type="number" inputmode="numeric" min="0" max="100" bind:value={input.battery_used_pct} />
+          <!-- No `min`/`max`: same reason the Distance field below has no `min="0"` -- a native
+               bound would block the browser's own submit before `validateActivity`'s own
+               `trip.error-battery` message ever ran, so typing 101 would look like Save
+               silently did nothing instead of showing that message. -->
+          <input id="tba" type="number" inputmode="numeric" bind:value={input.battery_used_pct} />
         </div>
       </div>
     {/if}

@@ -59,3 +59,32 @@ export function placesLabel(from: string | null | undefined, to: string | null |
 export function spanLabel(from: string, to: string): string {
   return `${from} → ${to}`;
 }
+
+/** The trip form's three linked counter fields, as ActivityForm holds them: `start`/`end` travel
+ *  to the server (`start_counter`/`counter_value`); `distance` is local-only. */
+export interface TripLink { start: number | null; end: number | null; distance: number | null }
+
+/**
+ * End typed directly: distance follows it (`end - start`). Clearing End -- typing it down to
+ * nothing -- clears distance too, rather than leaving it showing a span that no longer has an
+ * end: there is nothing left to describe a distance _of_.
+ */
+export function linkTripEnd(f: TripLink): TripLink {
+  if (f.end === null) return { ...f, distance: null };
+  return f.start === null ? f : { ...f, distance: f.end - f.start };
+}
+
+/** Distance typed directly: end follows it (`start + distance`), unless start is not known yet
+ *  (nothing to add the distance onto). */
+export function linkTripDistance(f: TripLink): TripLink {
+  return f.start === null || f.distance === null ? f : { ...f, end: f.start + f.distance };
+}
+
+/** Start changed: an already-known distance is kept and end moves with it (`start + distance`);
+ *  with no distance yet -- a start typed or prefilled before any end -- there is nothing to
+ *  move, so this instead derives distance from whatever end is already there, if any. */
+export function linkTripStart(f: TripLink): TripLink {
+  if (f.start === null) return f;
+  if (f.distance !== null) return { ...f, end: f.start + f.distance };
+  return f.end === null ? f : { ...f, distance: f.end - f.start };
+}

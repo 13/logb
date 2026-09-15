@@ -40,6 +40,10 @@
   const initialTag = tagParam();
   let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
+  /** Whether a trip can be logged here at all -- the same condition `categoriesFor`'s own
+   *  `counterUnit` argument checks, so "+ Log trip" (both the FAB and the empty-state one) and
+   *  the category the entry form actually offers never disagree. */
+  const offersTrip = $derived(object?.counter_unit === 'km' || object?.counter_unit === 'mi');
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
   let activityTotal = $state(0);
@@ -331,17 +335,19 @@
       <Timeline
         objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
+        ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
         unit={object.counter_unit} bind:category bind:tagFilter bind:titleFilter
       />
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
            already is; two of them would be two calls to the same action. -->
       {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
         <div class="fab-row">
-          <!-- Only on an object that could actually hold one (a distance counter) -- the same
-               condition `categoriesFor`'s own `counterUnit` argument uses to offer the category
-               at all, so this button and the select it opens onto never disagree. -->
-          {#if object.counter_unit === 'km' || object.counter_unit === 'mi'}
-            <button class="ghost fab-btn" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
+          {#if offersTrip}
+            <!-- Not `.ghost`: this floats over the scrolling timeline, and a transparent
+                 button there shows whatever card/text is currently scrolled beneath it through
+                 its own label. `.fab-secondary` gives it the same solid surface + border a card
+                 has, so it reads as a button regardless of what is behind it. -->
+            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
           {/if}
           <button class="primary fab-btn" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
         </div>
@@ -395,6 +401,8 @@
     z-index: 6; display: flex; gap: var(--space-2);
   }
   .fab-btn { border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+  /* A solid surface + border, not `.ghost`'s transparent: see the comment on the button itself. */
+  .fab-secondary { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
   @media (width < 900px) {
     .fab-row { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
   }
