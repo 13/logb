@@ -180,14 +180,17 @@ fn wanted_tag(q: &ListQuery) -> Option<String> {
     (!tag.is_empty()).then(|| tags::fold(&tag))
 }
 
-/// The key two titles are compared under: trimmed, then case-folded in Rust rather than SQL.
+/// The key two titles are compared under: trimmed, then lowercased in Rust rather than SQL.
 /// SQLite's `LOWER()` folds ASCII only (this build has no ICU extension), so `LOWER(TRIM(title))`
 /// would leave "BREMSBELÄGE" and "Bremsbeläge" as different groups there while PostgreSQL's
 /// (Unicode-aware) `LOWER()` would merge them -- the same query would then answer differently
-/// depending only on which database happens to be configured. `str::to_lowercase` performs full
-/// Unicode case folding in the application instead, so it runs identically on both backends.
-/// Both `last_done`'s grouping and the `title` filter below call this one helper, so a title
-/// tapped in one always matches what the other shows for it.
+/// depending only on which database happens to be configured. `str::to_lowercase` performs the
+/// same Unicode-aware lowercasing in the application instead, so it runs identically on both
+/// backends. It is still only lowercasing, not full Unicode case *folding*: "STRASSE" and
+/// "Straße" do not match (folding would map both to "strasse"; `to_lowercase` leaves the ß),
+/// which is fine here -- the spec asks for case-insensitivity, not a ß/ss equivalence, and both
+/// `last_done`'s grouping and the `title` filter below call this one helper either way, so a
+/// title tapped in one always matches what the other shows for it.
 fn fold_title(title: &str) -> String {
     title.trim().to_lowercase()
 }

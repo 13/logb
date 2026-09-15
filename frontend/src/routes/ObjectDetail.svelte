@@ -26,10 +26,18 @@
   const oid = $derived(Number(id));
   type Tab = 'timeline' | 'documents' | 'reminders' | 'info';
   const initialQuery = new URLSearchParams(location.search);
-  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag.
-   *  Read on mount only: the router's `path` store holds just the pathname, so a later change to
-   *  the query string alone does not reach this component. */
-  const initialTag = initialQuery.get('tag')?.trim() || null;
+  /** The `?tag=` query parameter of the CURRENT address, trimmed; blank/absent is `null`. A
+   *  function, not a value read once: `App.svelte`'s route table maps every `/objects/:id` to
+   *  this same `ObjectDetail` instance, so navigating from one object to another (a card tapped
+   *  under Contents, say) only changes the `id` prop -- it does not remount this component or
+   *  re-run the `let` initialisers below. The oid-reset effect further down calls this again on
+   *  every such navigation, so a fresh `?tag=` on the object just navigated to still wins, the
+   *  same way it does here at mount. */
+  function tagParam(): string | null {
+    return new URLSearchParams(location.search).get('tag')?.trim() || null;
+  }
+  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag. */
+  const initialTag = tagParam();
   let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
   let activities = $state<Activity[]>([]);
@@ -73,12 +81,23 @@
     catch { archivedChildCount = 0; }
   }
 
+  /// Guards a `loadLastDone` response against a since-superseded request, the same way
+  /// `loadSeq` guards the timeline -- see the oid-reset effect below, which bumps this on every
+  /// navigation to another object so a response for the object just left cannot land (or be
+  /// tapped into) after this component has moved on to a different one.
+  let lastDoneSeq = 0;
+
   /** The "Last done" list, for the Info tab. Hidden by `LastDone.svelte` itself when empty, so
    *  a failed request (like an offline load) just leaves it hidden rather than showing an error
    *  of its own -- this list is a convenience shortcut into the timeline, not primary data. */
   async function loadLastDone() {
-    try { lastDone = await api<LastDoneT[]>('GET', `/objects/${oid}/last-done`); }
-    catch { lastDone = []; }
+    const token = ++lastDoneSeq;
+    try {
+      const rows = await api<LastDoneT[]>('GET', `/objects/${oid}/last-done`);
+      if (token === lastDoneSeq) lastDone = rows;
+    } catch {
+      if (token === lastDoneSeq) lastDone = [];
+    }
   }
 
   /** A "Last done" row switches to the timeline, narrowed to its title. */
@@ -213,6 +232,21 @@
   }
 
   $effect(() => { oid; loadObject(); });
+  // The instance is reused across objects (see `tagParam`'s comment above): without this, a
+  // category/tag/title filter chosen while looking at one object would silently keep narrowing
+  // the next one's timeline, and a stale "Last done" row from the object just left could still
+  // be shown -- and tapped into -- after this component has moved on to a different one. Placed
+  // before the two effects below, in the same flush order they run in on an oid change, so both
+  // already see the reset values instead of loading once with the old ones and once more right
+  // after with the new.
+  $effect(() => {
+    oid;
+    category = '';
+    tagFilter = tagParam();
+    titleFilter = null;
+    lastDone = [];
+    lastDoneSeq++;
+  });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
   $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); } });
   // A background replay can succeed while this view is mounted; without this the synthetic
