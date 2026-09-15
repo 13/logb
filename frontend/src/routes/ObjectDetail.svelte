@@ -106,9 +106,12 @@
 
   /** A "Last done" row switches to the timeline, narrowed to its title. */
   function selectLastDone(title: string) {
-    titleFilter = title;
+    // An untitled row can only be trips (every other category needs a title), and the server
+    // treats a blank title as no filter at all, so the closest honest filter is "trips".
+    const untitled = title.trim() === '';
+    titleFilter = untitled ? null : title;
     // A category or tag chosen earlier would hide the very entries the row stands for.
-    category = '';
+    category = untitled ? 'trip' : '';
     tagFilter = null;
     tab = 'timeline';
   }

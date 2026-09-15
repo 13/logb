@@ -100,7 +100,7 @@
       {#each dead as op (op.id)}
         <div class="card row">
           <span>
-            <b>{String(op.body.title ?? op.kind)}</b>
+            <b>{String(op.body.title || op.kind)}</b>
             <span class="muted">{op.path}</span>
           </span>
           <button class="ghost danger-text" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</button>
