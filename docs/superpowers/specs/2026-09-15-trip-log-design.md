@@ -17,8 +17,10 @@ nullable columns, used only by trips:
 | `battery_used_pct` | INTEGER | optional, 0–100 |
 
 The trip's end is the existing `counter_value`, so a trip moves the object's current counter
-(`MAX(counter_value)`) and "last done", counter reminders and usage per month keep working
-unchanged. A trip needs `counter_value` and `start_counter`; a trip is allowed only on an object whose
+(`MAX(counter_value)`), and counter reminders and usage per month keep working unchanged. "Last
+done" excludes trips entirely (a trip is something logged, not something done, and its title is
+optional besides) -- `GET /objects/{id}/last-done` never returns a row sourced from a trip, titled
+or not. A trip needs `counter_value` and `start_counter`; a trip is allowed only on an object whose
 `counter_unit` is `km` or `mi` (400 otherwise). On any other category the five fields must be absent
 or null (400 otherwise). Distance = `counter_value - start_counter`, never stored.
 
@@ -65,7 +67,7 @@ over trips that have a duration) and distance per 10 % battery (over trips that 
 shown only when at least one trip carries the value.
 
 Endpoint `GET /objects/{id}/trips/summary?today=YYYY-MM-DD` (owner only) →
-`{ month, year, all }` each `{ trips, distance, avg_distance, speed_kmh_x10, distance_per_10pct }`
+`{ month, year, all }` each `{ trips, distance, avg_distance, speed_x10, distance_per_10pct }`
 (integers; `null` where not computable). Periods use the trip `date`; `today` defaults to the
 server date in the configured timezone. Portable SQL or Rust aggregation, tested on both backends.
 

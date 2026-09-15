@@ -71,10 +71,14 @@ export function formatSpeed(speedX10: number, unit: 'km' | 'mi', locale: string)
 }
 
 /** `TripSummary`'s `distance_per_10pct` -- distance covered per 10 percentage points of battery
- *  used -- as "59 km / 10 %" / "59 km / 10 %". `unit` is the object's own distance unit
- *  (`counter_unit`, "km" or "mi"), the same as everywhere else a distance is shown. */
+ *  used -- as a plain distance, "62 km" / "62 km". The "per 10 %" is not repeated here: the row
+ *  it fills (`TripTotals.svelte`) already labels itself `$t('trips.per-battery')` ("Per 10 %
+ *  battery" / "Pro 10 % Akku"), so saying it again in every cell would be redundant, and
+ *  crowded the row off a 390px screen alongside its two sibling columns. `unit` is the object's
+ *  own distance unit (`counter_unit`, "km" or "mi"), the same as everywhere else a distance is
+ *  shown. */
 export function formatPer10Pct(value: number, unit: string, locale: string): string {
-  return `${new Intl.NumberFormat(locale).format(value)} ${unit} / 10 %`;
+  return `${new Intl.NumberFormat(locale).format(value)} ${unit}`;
 }
 
 /** The trip form's three linked counter fields, as ActivityForm holds them: `start`/`end` travel

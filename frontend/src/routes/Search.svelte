@@ -4,6 +4,7 @@
   import { go } from '../lib/router';
   import { fmtDate, money } from '../lib/format';
   import { activityTitle } from '../lib/activity-form';
+  import { placesLabel } from '../lib/trip';
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
@@ -95,7 +96,7 @@
             <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
               <span class="hit-title">{activityTitle(a.title, $t)}</span>
               <span class="muted small tnum">
-                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}
+                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
               </span>
             </button>
             {#if (a.tags ?? []).length > 0}

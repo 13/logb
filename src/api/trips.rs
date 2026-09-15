@@ -85,6 +85,14 @@ async fn trips_summary(
     load_owned_object(&state, user.id, object_id).await?;
     let today = match q.today {
         Some(t) => {
+            // `validate_date` alone accepts chrono's lenient parsing of single-digit month/day
+            // (`2026-9-15`), which would then be sliced below (`&today[..4]`/`&today[..7]`) on
+            // the assumption that byte 5 and 8 are always `-` -- true only for the full
+            // `YYYY-MM-DD` width. The length check makes that assumption an enforced contract
+            // instead of a silent one.
+            if t.len() != 10 {
+                return Err(AppError::BadRequest(format!("invalid date '{t}', expected YYYY-MM-DD")));
+            }
             validate_date(&t)?;
             t
         }

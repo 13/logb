@@ -127,12 +127,9 @@
 
   /** A "Last done" row switches to the timeline, narrowed to its title. */
   function selectLastDone(title: string) {
-    // An untitled row can only be trips (every other category needs a title), and the server
-    // treats a blank title as no filter at all, so the closest honest filter is "trips".
-    const untitled = title.trim() === '';
-    titleFilter = untitled ? null : title;
+    titleFilter = title;
     // A category or tag chosen earlier would hide the very entries the row stands for.
-    category = untitled ? 'trip' : '';
+    category = '';
     tagFilter = null;
     tab = 'timeline';
   }
@@ -286,7 +283,7 @@
     tripSummarySeq++;
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
-  $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); loadTripSummary(); } });
+  $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); if (offersTrip) loadTripSummary(); } });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //

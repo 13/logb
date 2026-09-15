@@ -28,36 +28,42 @@
 
 {#if summary && summary.all.trips > 0}
   <h3>{$t('trips.title')}</h3>
-  <div class="table-wrap" data-testid="trip-totals">
+  <!-- `tabindex="0"` and `aria-label` (the heading text, since the scrolled box has no visible
+       heading of its own) let a keyboard/AT user reach and identify the scroller even when the
+       table inside it does not overflow at their width. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="table-wrap" data-testid="trip-totals" tabindex="0" aria-label={$t('trips.title')}>
     <table class="tnum">
       <thead>
         <tr>
           <th></th>
-          {#each periods as p (p.key)}<th>{p.label}</th>{/each}
+          {#each periods as p (p.key)}<th scope="col">{p.label}</th>{/each}
         </tr>
       </thead>
       <tbody>
         <tr>
-          <th>{$t('trips.count')}</th>
+          <th scope="row">{$t('trips.count')}</th>
           {#each periods as p (p.key)}<td>{p.totals.trips}</td>{/each}
         </tr>
         <tr>
-          <th>{$t('trips.distance')}</th>
+          <th scope="row">{$t('trips.distance')}</th>
           {#each periods as p (p.key)}<td>{counter(p.totals.distance, unit, $locale)}</td>{/each}
         </tr>
         <tr>
-          <th>{$t('trips.avg')}</th>
+          <th scope="row">{$t('trips.avg')}</th>
           {#each periods as p (p.key)}<td>{p.totals.avg_distance === null ? '–' : counter(p.totals.avg_distance, unit, $locale)}</td>{/each}
         </tr>
         {#if showSpeed}
           <tr>
-            <th>{$t('trips.speed')}</th>
+            <th scope="row">{$t('trips.speed')}</th>
             {#each periods as p (p.key)}<td>{p.totals.speed_x10 === null ? '–' : formatSpeed(p.totals.speed_x10, unit, $locale)}</td>{/each}
           </tr>
         {/if}
         {#if showBattery}
           <tr>
-            <th>{$t('trips.per-battery')}</th>
+            <!-- The cells themselves are a plain distance (`formatPer10Pct`) -- this label is
+                 the only place "per 10 %" is said at all. -->
+            <th scope="row">{$t('trips.per-battery')}</th>
             {#each periods as p (p.key)}<td>{p.totals.distance_per_10pct === null ? '–' : formatPer10Pct(p.totals.distance_per_10pct, unit, $locale)}</td>{/each}
           </tr>
         {/if}
@@ -69,10 +75,15 @@
 <style>
   /* Four columns (row label + three periods) can outrun 390px with longer German labels --
      scrolled inside its own box rather than shrinking the page, like `.hint`-adjacent tables
-     elsewhere never need to (there are none); this is the first. */
+     elsewhere never need to (there are none); this is the first. Kept as a belt-and-braces
+     fallback even with the row labels wrapping and the narrower padding below, which between
+     them keep all three period columns on screen at 390px without it. */
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
-  th, td { padding: var(--space-1) var(--space-2); text-align: right; white-space: nowrap; }
+  th, td { padding: var(--space-1); text-align: right; white-space: nowrap; }
   thead th { font-weight: 600; }
-  tbody th { text-align: left; font-weight: 400; color: var(--muted); }
+  /* Row labels wrap rather than force the table wider than the screen: "Ø Geschwindigkeit" is
+     longer than any single period's own values, and a wrapped two-line label costs far less
+     horizontal room than a `nowrap` one that pushes the value columns off a 390px screen. */
+  tbody th { text-align: left; font-weight: 400; color: var(--muted); white-space: normal; }
 </style>

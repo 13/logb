@@ -454,7 +454,7 @@ async fn last_done(
     // occurrence, and any later one for the same key only adds to the count.
     let entry_rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
         "SELECT id, title, date, counter_value FROM activities \
-         WHERE object_id = $1 AND deleted_at IS NULL AND category <> 'reading' \
+         WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip') \
          ORDER BY date DESC, id DESC",
     )
     .bind(object_id)

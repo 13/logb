@@ -308,6 +308,26 @@ async fn trips_summary_totals_month_year_and_all_time() {
 }
 
 #[tokio::test]
+async fn trips_summary_rejects_a_malformed_today() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    // Single-digit month: chrono's own parsing is lenient enough to accept this, but the
+    // downstream `&today[..4]`/`&today[..7]` slices assume the full ten-byte width.
+    let short = app.client
+        .get(app.url(&format!("/objects/{id}/trips/summary?today=2026-9-15")))
+        .send().await.unwrap();
+    assert_eq!(short.status(), 400, "{}", short.text().await.unwrap());
+
+    let garbage = app.client
+        .get(app.url(&format!("/objects/{id}/trips/summary?today=not-a-date")))
+        .send().await.unwrap();
+    assert_eq!(garbage.status(), 400, "{}", garbage.text().await.unwrap());
+}
+
+#[tokio::test]
 async fn trip_places_and_summary_of_another_users_object_are_404() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

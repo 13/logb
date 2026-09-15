@@ -60,6 +60,41 @@ async fn insights_roll_up_cost_and_consumption() {
     assert_eq!(out["fuel"]["cost_per_counter_milli"], 10_000);
 }
 
+/// A trip's `start_counter` is a genuine counter reading, often the earliest one on record --
+/// the cost-per-counter span must reach back to it, not stop at the trip's own end just because
+/// `counter_value` is the only column a plain reading or a cost entry ever populates.
+#[tokio::test]
+async fn cost_per_counter_span_reaches_back_to_a_trips_start_counter() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let trip = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-01-01", "category": "trip", "title": "Commute", "notes": "",
+        "start_counter": 400, "counter_value": 600,
+    })).send().await.unwrap();
+    assert_eq!(trip.status(), 201, "{}", trip.text().await.unwrap());
+
+    let maint = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-02-01", "category": "maintenance", "title": "Service", "notes": "",
+        "counter_value": 700, "cost_cents": 6_000,
+    })).send().await.unwrap();
+    assert_eq!(maint.status(), 201, "{}", maint.text().await.unwrap());
+
+    let out: serde_json::Value = app.client
+        .get(app.url(&format!("/objects/{id}/insights")))
+        .send().await.unwrap().json().await.unwrap();
+
+    // MIN(counter_value) alone would put the span at 600 -> 700 = 100 km; the trip started at
+    // 400, so the true span is 300 km, and 6_000 cents over it is 20_000 milli-cents/km, not the
+    // 60_000 a 100 km span would give.
+    assert_eq!(
+        out["cost_per_counter_milli"], 20_000,
+        "the span must reach back to the trip's start_counter (400), not just its end (600): {out}"
+    );
+}
+
 #[tokio::test]
 async fn insights_of_an_empty_object_are_all_null() {
     let app = common::spawn().await;

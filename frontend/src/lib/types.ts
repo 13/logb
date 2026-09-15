@@ -134,6 +134,8 @@ export interface ImportCounts {
 export interface ActivityHit {
   id: number; object_id: number; object_name: string; date: string; category: Category; title: string;
   notes: string; counter_value: number | null; cost_cents: number | null; tags: string[];
+  /** Only ever set on a `trip` hit -- see `placesLabel` in ./trip. */
+  from_place: string | null; to_place: string | null;
 }
 /** An object hit carries the name of the object it sits inside, so a list of four things
  *  called "Filter" can be told apart without opening any of them. `null` is a root object.

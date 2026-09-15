@@ -466,12 +466,12 @@
       <div class="row">
         <div class="field">
           <label for="tfr">{$t('trip.from')}</label>
-          <input id="tfr" list="trip-from" bind:value={fromText} />
+          <input id="tfr" list="trip-from" maxlength="80" bind:value={fromText} />
           <datalist id="trip-from">{#each tripPlaces.from as p (p)}<option value={p}></option>{/each}</datalist>
         </div>
         <div class="field">
           <label for="tto">{$t('trip.to')}</label>
-          <input id="tto" list="trip-to" bind:value={toText} />
+          <input id="tto" list="trip-to" maxlength="80" bind:value={toText} />
           <datalist id="trip-to">{#each tripPlaces.to as p (p)}<option value={p}></option>{/each}</datalist>
         </div>
       </div>

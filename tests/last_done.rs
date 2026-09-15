@@ -154,3 +154,51 @@ async fn caps_at_fifty_rows() {
     let rows: Vec<Value> = last_done(&app, id).await.json().await.unwrap();
     assert_eq!(rows.len(), 50);
 }
+
+/// A trip is "something logged", not "something done" -- see the spec's note that trips are
+/// excluded from last done. Titled or not, and however many times a title repeats, a trip must
+/// never produce a row, and an open reminder that happens to share a trip's title must not pull
+/// one in either (the reminder path only ever re-admits a title that already has a non-trip
+/// occurrence, and a trip-only title has none).
+#[tokio::test]
+async fn trips_never_count_towards_last_done() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    async fn trip(app: &common::TestApp, object_id: i64, date: &str, title: &str, start: i64, end: i64) {
+        let res = app.client
+            .post(app.url(&format!("/objects/{object_id}/activities")))
+            .json(&json!({
+                "date": date, "category": "trip", "title": title, "notes": "",
+                "counter_value": end, "start_counter": start,
+            }))
+            .send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    // Two trips titled "Commute", twice over -- would clear the occurrences bar on its own if
+    // trips counted at all.
+    trip(&app, id, "2026-01-01", "Commute", 100, 150).await;
+    trip(&app, id, "2026-02-01", "Commute", 150, 200).await;
+    // Two untitled trips too.
+    trip(&app, id, "2026-03-01", "", 200, 220).await;
+    trip(&app, id, "2026-04-01", "", 220, 240).await;
+
+    // An open reminder sharing the trip-only title must not re-admit it: the reminder path only
+    // re-admits a title that already has a (non-trip) occurrence, and "Commute" has none.
+    let rem = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Commute", "due_date": "2030-01-01" }))
+        .send().await.unwrap();
+    assert_eq!(rem.status(), 201, "{}", rem.text().await.unwrap());
+
+    // A maintenance pair still clears the bar as before.
+    act(&app, id, "2026-05-01", "maintenance", "Oil change", None).await;
+    act(&app, id, "2026-05-15", "maintenance", "Oil change", None).await;
+
+    let rows: Vec<Value> = last_done(&app, id).await.json().await.unwrap();
+    assert_eq!(rows.len(), 1, "trips never count toward last done, titled or not: {rows:?}");
+    assert_eq!(rows[0]["title"], "Oil change");
+    assert_eq!(rows[0]["occurrences"], 2);
+}

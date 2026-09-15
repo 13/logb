@@ -160,6 +160,7 @@
               <div class="muted tnum">
                 {fmtDate(a.date, $dateFormat)} · {spanLabel(counter(a.start_counter, unit, $locale), counter(a.counter_value, unit, $locale))}
                 {#if dist !== null} · {counter(dist, unit, $locale)}{/if}
+                {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
               </div>
               {#if placesLabel(a.from_place, a.to_place)}
                 <div class="muted">{placesLabel(a.from_place, a.to_place)}</div>

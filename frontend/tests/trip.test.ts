@@ -122,8 +122,8 @@ describe('formatSpeed', () => {
 });
 
 describe('formatPer10Pct', () => {
-  it('renders the distance with its unit and the fixed 10 % denominator', () => {
-    expect(formatPer10Pct(59, 'km', 'de')).toBe('59 km / 10 %');
+  it('renders a plain distance, without repeating "per 10 %" -- the row label already says that', () => {
+    expect(formatPer10Pct(62, 'km', 'de')).toBe('62 km');
   });
 });
 

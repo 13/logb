@@ -194,8 +194,9 @@ async fn read(
     );
     let by_category = sqlx::query_as::<_, Bucket>(sqlx::AssertSqlSafe(by_category_sql)).bind(object_id).fetch_all(&state.db).await?;
 
-    let (min_counter, max_counter, total_cost): (Option<i64>, Option<i64>, i64) = sqlx::query_as(
-        "SELECT MIN(counter_value), MAX(counter_value), COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) \
+    let (min_counter, max_counter, min_start_counter, total_cost): (Option<i64>, Option<i64>, Option<i64>, i64) = sqlx::query_as(
+        "SELECT MIN(counter_value), MAX(counter_value), MIN(start_counter), \
+           COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL",
     )
     .bind(object_id)
@@ -203,7 +204,19 @@ async fn read(
     .await?;
 
     let counter_span = min_counter.zip(max_counter).map(|(from, to)| Span { from, to });
-    let span = counter_span.as_ref().map(|s| s.to - s.from).unwrap_or(0);
+    // A trip's `start_counter` is a real counter reading too, often the earliest one on record
+    // (the object's counter was already there before the first trip was ever logged) -- so the
+    // cost-per-counter span reaches back to it when it is lower than every plain `counter_value`,
+    // rather than understating the span (and so overstating cost-per-unit) by starting only at
+    // the first trip's *end*. `counter_span` above is left alone: it already reports the
+    // observed counter *readings*, and a trip's start is not a reading a user took, just the
+    // value the trip moved off from.
+    let span_from = match (min_counter, min_start_counter) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+    let span = span_from.zip(max_counter).map(|(from, to)| to - from).unwrap_or(0);
     let overall_cost_per_counter_milli = cost_per_counter_milli(total_cost, span);
 
     let running_sql = format!(
