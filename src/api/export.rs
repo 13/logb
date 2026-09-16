@@ -69,6 +69,10 @@ struct ActivityExport {
     duration_minutes: Option<i64>,
     #[serde(default)]
     battery_used_pct: Option<i64>,
+    // Added with charging: an older archive's entries carry no such key, and every one of them
+    // was never a full charge -- exactly what a non-fuel entry already stores.
+    #[serde(default)]
+    charged_full: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,6 +125,9 @@ struct ObjectExport {
     // Added with tags; an older archive's objects are untagged.
     #[serde(default)]
     tags: Vec<String>,
+    // Added with charging; an older archive's objects carry no price.
+    #[serde(default)]
+    energy_price_milli: Option<i64>,
 }
 
 /// A user's own type. Objects keep `type` as `custom:<client_uuid>`, so the uuid is what ties
@@ -184,7 +191,8 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-             purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags \
+             purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
+             energy_price_milli \
              FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
@@ -197,7 +205,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-             start_counter, from_place, to_place, duration_minutes, battery_used_pct \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full \
              FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
@@ -215,12 +223,14 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
             name: o.name, type_: Some(o.type_), category: None, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
             purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
+            energy_price_milli: o.energy_price_milli,
             activities: acts.iter().map(|a| Ok(ActivityExport {
                 date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
                 counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
                 tags: tags::from_json(&a.tags),
                 start_counter: a.start_counter, from_place: a.from_place.clone(), to_place: a.to_place.clone(),
                 duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
+                charged_full: a.charged_full,
                 attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
             })).collect::<Result<Vec<_>, AppError>>()?,
             attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
@@ -477,10 +487,11 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let (ty, description) = resolve_type(&o, &type_uuids);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13) RETURNING id")
+             archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags, energy_price_milli) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .bind(&object_uuid).bind(normalised_tags(&o.tags)?)
+            .bind(&object_uuid).bind(normalised_tags(&o.tags)?).bind(o.energy_price_milli)
             .fetch_one(&mut *tx).await?;
         record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
         counts.objects += 1;
@@ -497,12 +508,13 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let to_place = super::activities::trim_place(a.to_place.clone())?;
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
-                 start_counter, from_place, to_place, duration_minutes, battery_used_pct) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id")
+                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
                 .bind(a.start_counter).bind(&from_place).bind(&to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
+                .bind(a.charged_full)
                 .fetch_one(&mut *tx).await?;
             record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
             activity_ids.push(aid);
@@ -586,6 +598,9 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             parent_id: None,
             client_uuid: None,
             tags: Some(o.tags.clone()),
+            // An archive's value is always explicit, never "absent" -- there is no stored value
+            // to keep it from, exactly like the trip fields on `ActivityInput` below.
+            energy_price_milli: Some(o.energy_price_milli),
         };
         obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
 
@@ -597,7 +612,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
             archived_at: o.archived_at.clone(), cover_attachment_id: None, parent_id: None,
             created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
-            client_uuid: None, tags: "[]".into(),
+            client_uuid: None, tags: "[]".into(), energy_price_milli: o.energy_price_milli,
         };
 
         for (ai, a) in o.activities.iter().enumerate() {
@@ -612,6 +627,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                 start_counter: Some(a.start_counter), from_place: Some(a.from_place.clone()),
                 to_place: Some(a.to_place.clone()), duration_minutes: Some(a.duration_minutes),
                 battery_used_pct: Some(a.battery_used_pct),
+                charged_full: Some(a.charged_full),
             };
             act_input.validate(&object_stub)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;

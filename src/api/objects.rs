@@ -44,6 +44,10 @@ pub struct ObjectRow {
     /// responses carry it as the array it holds.
     #[serde(serialize_with = "tags::serialize_json_text")]
     pub tags: String,
+    /// Cents per `fuel_unit` times 1000 (0.30 EUR/kWh -> 30000), the same scale as
+    /// `cost_per_counter_milli`. Nullable, and only meaningful alongside a `fuel_unit` -- see
+    /// `ObjectInput::validate`. `>= 0` when present.
+    pub energy_price_milli: Option<i64>,
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -117,6 +121,11 @@ pub struct ObjectInput {
     /// replaces a present list with its normalised form.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Three-state on PATCH, exactly as `cover_attachment_id` above: absent keeps the current
+    /// price, `null` clears it, a number sets it. On POST, omitted and `null` both mean "no
+    /// price". See `ENERGY_PRICE_NEEDS_FUEL_UNIT` and `validate` for the cross-field rule.
+    #[serde(default, deserialize_with = "double_option")]
+    pub energy_price_milli: Option<Option<i64>>,
 }
 
 /// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
@@ -135,6 +144,13 @@ pub const TYPE_REJECTION: &str = "type is not one of the known object types";
 /// never move its counter away from that pair. `km` and `mi` remain freely interchangeable:
 /// only a change that leaves the pair (to `h`, or to no counter at all) is refused.
 pub const COUNTER_UNIT_TRIP_REJECTION: &str = "this object has trips; its counter must stay km or mi";
+
+/// The 400 (and sync rejection) for a stored or incoming `energy_price_milli` with no
+/// `fuel_unit` to price -- whether the price is what just changed, or `fuel_unit` was cleared
+/// out from under an already-stored price. See `ObjectInput::validate` and the block in
+/// `update` below that checks a price kept from `existing` against a `fuel_unit` the same PATCH
+/// clears; `sync::apply` answers the same two directions with the same sentence.
+pub const ENERGY_PRICE_NEEDS_FUEL_UNIT: &str = "energy_price_milli needs a fuel unit";
 
 /// Refuses a type the caller may not use. On the write transaction's connection, so a type
 /// deleted concurrently cannot slip in between this check and the write (see `types::delete`).
@@ -191,6 +207,20 @@ impl ObjectInput {
         if let Some(t) = &self.tags {
             self.tags = Some(tags::normalize(t).map_err(AppError::BadRequest)?);
         }
+        // Self-contained half of the price/fuel_unit rule: an explicit price (present and
+        // non-null) is checked here against this same body's `fuel_unit`, which is always fully
+        // resent (never three-state) -- see `ObjectInput`'s own doc comment on `fuel_unit`. A
+        // PATCH that OMITS the price keeps the stored one instead (three-state, like
+        // `cover_attachment_id`), so that half of the rule cannot be decided from the body alone
+        // and is checked in `create`/`update` once the stored value is known.
+        if let Some(Some(p)) = self.energy_price_milli {
+            if p < 0 {
+                return Err(AppError::BadRequest("energy_price_milli must be >= 0".into()));
+            }
+            if self.fuel_unit.is_none() {
+                return Err(AppError::BadRequest(ENERGY_PRICE_NEEDS_FUEL_UNIT.into()));
+            }
+        }
         Ok(())
     }
 }
@@ -200,7 +230,8 @@ impl ObjectInput {
 /// the tests happened not to cover.
 const OWNED_OBJECT: &str =
     "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags \
+     purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
+     energy_price_milli \
      FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
 
 /// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
@@ -446,7 +477,8 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
+         energy_price_milli \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
            AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
@@ -500,16 +532,21 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
             return Err(AppError::BadRequest(PARENT_REJECTION.into()));
         }
     }
+    // Omitted and `null` both mean "no price" on create, same as `parent_id` above.
+    let energy_price_milli = body.energy_price_milli.flatten();
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14) \
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
+         energy_price_milli) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
-         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags",
+         purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
+         energy_price_milli",
     )
     .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
     .bind(&object_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
+    .bind(energy_price_milli)
     .fetch_one(&mut *tx).await;
     let row = match row {
         Ok(row) => row,
@@ -612,6 +649,20 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
             Some(pid)
         }
     };
+    // A price omitted on PATCH keeps its stored value (three-state, like `cover_attachment_id`
+    // above) -- so the other half of `ObjectInput::validate`'s rule, which only ever sees an
+    // explicit price in the body, cannot by itself catch a PATCH that clears `fuel_unit` while
+    // leaving an already-stored price untouched. Checked here instead, against the row this
+    // transaction is holding the write lock on -- `sync::apply`'s `Set` path asks the identical
+    // question, from inside its own `begin_write`, for the same reason `parent_id`'s cycle
+    // check above does.
+    let energy_price_milli = match body.energy_price_milli {
+        None => existing.energy_price_milli,
+        Some(v) => v,
+    };
+    if energy_price_milli.is_some() && body.fuel_unit.is_none() {
+        return Err(AppError::BadRequest(ENERGY_PRICE_NEEDS_FUEL_UNIT.into()));
+    }
 
     // Only fields whose value actually differs are logged -- see `record::record_update` --
     // so a PATCH that rewrites a field with its existing value produces no `changes` row.
@@ -636,15 +687,20 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // same shape a sync `set` op carries for any other text field.
     let tags = body.tags.as_deref().map(tags::to_json).unwrap_or_else(|| existing.tags.clone());
     if tags != existing.tags { changed.push(("tags", json!(tags))); }
+    if energy_price_milli != existing.energy_price_milli {
+        changed.push(("energy_price_milli", json!(energy_price_milli)));
+    }
 
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
-         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11, tags = $12 \
-         WHERE id = $13 AND deleted_at IS NULL",
+         purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11, tags = $12, \
+         energy_price_milli = $13 \
+         WHERE id = $14 AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
-    .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(&tags).bind(id)
+    .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(&tags)
+    .bind(energy_price_milli).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;

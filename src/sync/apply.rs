@@ -109,7 +109,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
             matches!((entity, field), (Entity::Reminder, "repeat_months" | "repeat_counter" | "every_n"));
         let non_negative = matches!(
             (entity, field),
-            (Entity::Object, "purchase_price_cents")
+            (Entity::Object, "purchase_price_cents" | "energy_price_milli")
                 | (Entity::Activity, "cost_cents" | "counter_value" | "quantity_milli" | "start_counter")
                 | (Entity::Reminder, "due_counter")
         );
@@ -126,6 +126,11 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         }
         if entity == Entity::Activity && field == "duration_minutes" && !(1..=10080).contains(n) {
             return Err("duration_minutes must be between 1 and 10080".into());
+        }
+        // `charged_full` is a flag, not a free integer -- the same 0/1 bound
+        // `ActivityInput::validate` enforces on the REST door.
+        if entity == Entity::Activity && field == "charged_full" && !(0..=1).contains(n) {
+            return Err("charged_full must be 0 or 1".into());
         }
         return Ok(());
     };
@@ -724,6 +729,54 @@ pub async fn apply_op(
                 // clearing or resetting `from_place`/`to_place`/`duration_minutes`/
                 // `battery_used_pct` never makes the row invalid the way losing `start_counter`
                 // or `counter_value` would.
+            }
+
+            // The charge cross-field rule, independent of the trip checks above: `charged_full`
+            // may only ever sit at 1 on a `fuel` row, in either direction -- setting the flag
+            // directly, or moving the row's own category away from `fuel` while the flag is
+            // still stored. A separate query rather than folding into `TripRow`/its `matches!`
+            // list above: `charged_full` is not one of the trip-only fields that block's
+            // catch-all (`stored.category != "trip"`) exists to guard, and it needs none of
+            // that block's other state.
+            if op.entity == Entity::Activity && matches!(field, "category" | "charged_full") {
+                let (stored_category, stored_charged_full): (String, i64) = sqlx::query_as(
+                    "SELECT category, charged_full FROM activities WHERE client_uuid = $1")
+                    .bind(&op.entity_uuid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if field == "charged_full" {
+                    if matches!(&bound, Binding::Integer(1)) && stored_category != "fuel" {
+                        return Ok(Outcome::Rejected { reason: crate::api::activities::CHARGE_FULL_ONLY.into() });
+                    }
+                } else if let Binding::Text(new_category) = &bound {
+                    if new_category != "fuel" && stored_charged_full == 1 {
+                        return Ok(Outcome::Rejected { reason: crate::api::activities::CHARGE_FULL_ONLY.into() });
+                    }
+                }
+            }
+
+            // The energy price cross-field rule: a price may exist only alongside a fuel unit,
+            // checked against the row as it stands right now -- mirrors
+            // `ObjectInput::validate`'s combined check on the REST door, for the same reason the
+            // `counter_unit`/trip guard below reads the stored row instead of the rest of the
+            // PATCH body: a synced `set` touches one field at a time, so the other half of the
+            // pair has to come from storage.
+            if op.entity == Entity::Object && matches!(field, "energy_price_milli" | "fuel_unit") {
+                let (stored_fuel_unit, stored_price): (Option<String>, Option<i64>) = sqlx::query_as(
+                    "SELECT fuel_unit, energy_price_milli FROM objects WHERE client_uuid = $1")
+                    .bind(&op.entity_uuid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let needs_fuel_unit = if field == "energy_price_milli" {
+                    !matches!(&bound, Binding::Null) && stored_fuel_unit.is_none()
+                } else {
+                    matches!(&bound, Binding::Null) && stored_price.is_some()
+                };
+                if needs_fuel_unit {
+                    return Ok(Outcome::Rejected {
+                        reason: crate::api::objects::ENERGY_PRICE_NEEDS_FUEL_UNIT.into(),
+                    });
+                }
             }
 
             // A type key needs the database: a built-in key, or one of the caller's own live types

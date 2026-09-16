@@ -44,6 +44,8 @@ async fn validation() {
         json!({ "name": "x", "type": "car", "counter_unit": "furlongs" }),
         json!({ "name": "x", "type": "car", "purchase_date": "01.03.2020" }),
         json!({ "name": "x", "type": "car", "purchase_price_cents": -1 }),
+        json!({ "name": "x", "type": "car", "energy_price_milli": -1 }),
+        json!({ "name": "x", "type": "car", "counter_unit": "km", "energy_price_milli": 30000 }),
     ] {
         let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
         assert_eq!(res.status(), 400, "{body}");
@@ -86,6 +88,28 @@ async fn fuel_unit_round_trips_and_is_validated() {
         "name": "Car", "type": "car", "fuel_unit": "barrels"
     })).send().await.unwrap();
     assert_eq!(res.status(), 400);
+}
+
+/// `energy_price_milli`'s two 400 messages, exactly as the spec states them --
+/// `tests/charging.rs` covers the round trip and the cross-field rule with `fuel_unit` in full.
+#[tokio::test]
+async fn energy_price_milli_error_messages() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "E-bike", "type": "bike", "counter_unit": "km", "fuel_unit": "kwh", "energy_price_milli": -1
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["message"], "energy_price_milli must be >= 0");
+
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Car", "type": "car", "counter_unit": "km", "energy_price_milli": 30000
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["message"], "energy_price_milli needs a fuel unit");
 }
 
 async fn due_reminder_count(app: &common::TestApp, object_id: i64) -> i64 {

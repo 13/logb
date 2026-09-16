@@ -43,11 +43,17 @@ export interface MemObject {
    *  fills this in; a list response leaves it out, so it is optional rather than empty. */
   ancestors?: { id: number; name: string }[];
   tags: string[];
+  /** Cents per fuel_unit x1000 (0.30 EUR/kWh -> 30000); null unless set. Only meaningful
+   *  alongside a fuel_unit -- see ObjectInput's doc comment. */
+  energy_price_milli: number | null;
 }
 export interface ObjectInput {
   name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
   parent_id?: number | null; tags?: string[];
+  /** Three-state on PATCH like cover_attachment_id: omit to keep the current price, null to
+   *  clear it, a number to set it. >= 0, and only alongside a fuel_unit (400 otherwise). */
+  energy_price_milli?: number | null;
 }
 
 export interface Attachment {
@@ -76,12 +82,16 @@ export interface Activity {
   to_place: string | null;
   duration_minutes: number | null;
   battery_used_pct: number | null;
+  /** Whether this charge (or fill) topped the battery/tank up: 1 only on a fuel entry, 0
+   *  otherwise -- never null. Absent on PATCH keeps the stored value. */
+  charged_full: number;
 }
 export interface ActivityInput {
   date: string; category: Category; title: string; notes: string; counter_value: number | null;
   cost_cents: number | null; quantity_milli: number | null; tags?: string[];
   start_counter?: number | null; from_place?: string | null; to_place?: string | null;
   duration_minutes?: number | null; battery_used_pct?: number | null;
+  charged_full?: number;
 }
 
 /** `GET /tags`: every distinct tag in use, with how many objects and entries carry it. */

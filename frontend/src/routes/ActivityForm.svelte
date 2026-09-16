@@ -265,7 +265,7 @@
       id: tempId, object_id: oid, ...body, tags: body.tags ?? [],
       start_counter: body.start_counter ?? null, from_place: body.from_place ?? null,
       to_place: body.to_place ?? null, duration_minutes: body.duration_minutes ?? null,
-      battery_used_pct: body.battery_used_pct ?? null,
+      battery_used_pct: body.battery_used_pct ?? null, charged_full: body.charged_full ?? 0,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       attachments: [], pending: true,
     };

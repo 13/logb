@@ -7,6 +7,7 @@ function a(id: number, category: Category, counter: number | null = null, pendin
     id, object_id: 1, date: '2026-09-01', category, title: `t${id}`, notes: '', counter_value: counter,
     cost_cents: null, quantity_milli: null, created_at: '', updated_at: '', attachments: [], pending, tags: [],
     start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+    charged_full: 0,
   };
 }
 

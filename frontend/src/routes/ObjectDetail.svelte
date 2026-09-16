@@ -162,6 +162,7 @@
       to_place: typeof b.to_place === 'string' ? b.to_place : null,
       duration_minutes: typeof b.duration_minutes === 'number' ? b.duration_minutes : null,
       battery_used_pct: typeof b.battery_used_pct === 'number' ? b.battery_used_pct : null,
+      charged_full: typeof b.charged_full === 'number' ? b.charged_full : 0,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
       pending: true, tags: Array.isArray(b.tags) ? b.tags : [],
     };
