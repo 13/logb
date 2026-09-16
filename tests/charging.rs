@@ -265,3 +265,146 @@ async fn patch_omitting_charged_full_keeps_the_stored_value() {
     assert_eq!(a["charged_full"], 1, "omitted on PATCH keeps the stored value");
     assert_eq!(a["quantity_milli"], 9000, "the resent field did change");
 }
+
+/// A full charge, with an optional amount and cost. `counter_value` and `charged_full` are the
+/// only fields every charge needs -- `domain::energy`'s own worked example leaves the opening
+/// charge of a window without either.
+fn full_charge(date: &str, counter: i64, quantity_milli: Option<i64>, cost_cents: Option<i64>) -> Value {
+    let mut body = json!({
+        "date": date, "category": "fuel", "title": "Charge", "notes": "",
+        "charged_full": 1, "counter_value": counter
+    });
+    let obj = body.as_object_mut().unwrap();
+    if let Some(q) = quantity_milli {
+        obj.insert("quantity_milli".into(), json!(q));
+    }
+    if let Some(c) = cost_cents {
+        obj.insert("cost_cents".into(), json!(c));
+    }
+    body
+}
+
+fn trip(date: &str, start: i64, end: i64, battery_used_pct: Option<i64>) -> Value {
+    json!({
+        "date": date, "category": "trip", "title": "", "notes": "",
+        "start_counter": start, "counter_value": end, "battery_used_pct": battery_used_pct
+    })
+}
+
+/// `GET /objects/{id}/energy`'s figures -- see `docs/superpowers/specs/2026-09-16-charging-energy-design.md`
+/// and `domain::energy::energy`, which this endpoint only loads rows for.
+#[tokio::test]
+async fn energy_endpoint_matches_the_domain_worked_example() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, Some("kwh")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let res = app.client.patch(app.url(&format!("/objects/{id}"))).json(&json!({
+        "name": "Golf", "type": "car", "counter_unit": "km", "fuel_unit": "kwh",
+        "description": "", "purchase_date": null, "purchase_price_cents": null,
+        "energy_price_milli": 30000
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    // The same three full charges as `domain::energy`'s worked example: 1000 -> 1400 -> 1800.
+    for body in [
+        full_charge("2026-09-01", 1000, None, None),
+        full_charge("2026-09-05", 1400, Some(8000), Some(240)),
+        full_charge("2026-09-10", 1800, Some(8000), Some(260)),
+    ] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    // Two trips after the last full charge, carrying battery_used_pct 30 and 25 over 60 and 50
+    // counter units -- the same figures as `domain::energy`'s battery test.
+    for body in [
+        trip("2026-09-12", 1800, 1860, Some(30)),
+        trip("2026-09-14", 1860, 1910, Some(25)),
+    ] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let out = app.get_json(&format!("/objects/{id}/energy")).await;
+    assert_eq!(out["unit"], "kwh");
+    assert_eq!(out["price_milli"], 30000);
+    // Mean window distance: 400.
+    assert_eq!(out["distance_per_charge"], 400);
+    // Mean of 400*1000/8000 twice: 50.
+    assert_eq!(out["distance_per_unit_milli"], 50);
+    // Mean of 240*1000/400 (600) and 260*1000/400 (650): 625.
+    assert_eq!(out["cost_per_counter_milli"], 625);
+    // used = 30 + 25 = 55, remaining = 45; km_per_pct = (60+50)/(30+25) = 2; range_left = 90.
+    assert_eq!(out["battery"]["remaining_pct"], 45);
+    assert_eq!(out["battery"]["range_left"], 90);
+    assert_eq!(out["battery"]["warn"], false);
+}
+
+#[tokio::test]
+async fn energy_of_another_users_object_is_404() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, Some("kwh")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let anna = app.create_user_client("anna", "password123").await;
+    let res = anna.get(app.url(&format!("/objects/{id}/energy"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
+
+#[tokio::test]
+async fn an_object_with_no_charges_has_every_energy_figure_null() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, None).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let out = app.get_json(&format!("/objects/{id}/energy")).await;
+    assert!(out["unit"].is_null());
+    assert!(out["price_milli"].is_null());
+    assert!(out["distance_per_charge"].is_null());
+    assert!(out["distance_per_unit_milli"].is_null());
+    assert!(out["cost_per_counter_milli"].is_null());
+    assert!(out["battery"].is_null());
+}
+
+#[tokio::test]
+async fn energy_endpoint_ignores_deleted_charges_and_trips() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, Some("kwh")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&full_charge("2026-09-01", 1000, None, None)).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&full_charge("2026-09-05", 1200, Some(6000), Some(180))).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    // A third full charge that, if it survived, would extend the window and skew every rate --
+    // deleted straight after creation.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&full_charge("2026-09-10", 5000, Some(1), Some(999_999))).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let doomed_charge: Value = res.json().await.unwrap();
+    let res = app.client.delete(app.url(&format!("/activities/{}", doomed_charge["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    // The only trip that carries a battery figure -- deleted, so no battery block should remain.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&trip("2026-09-07", 1200, 1250, Some(10))).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let doomed_trip: Value = res.json().await.unwrap();
+    let res = app.client.delete(app.url(&format!("/activities/{}", doomed_trip["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+
+    let out = app.get_json(&format!("/objects/{id}/energy")).await;
+    // Only the surviving window (1000 -> 1200, 200 units, 6000 milli-units, 180 cents) counts.
+    assert_eq!(out["distance_per_charge"], 200, "the deleted charge must not extend the window");
+    assert_eq!(out["distance_per_unit_milli"], 200 * 1000 / 6000);
+    assert_eq!(out["cost_per_counter_milli"], 180 * 1000 / 200);
+    assert!(out["battery"].is_null(), "the only trip with a battery figure was deleted");
+}

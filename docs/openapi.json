@@ -648,6 +648,38 @@
         }
       }
     },
+    "/objects/{id}/energy": {
+      "get": {
+        "summary": "Distance and cost per charge, and when to charge next.",
+        "description": "Computed from the object's non-deleted `fuel` entries that carry a `counter_value` (a charge), oldest first, and its non-deleted `trip` entries. A window is the distance between two consecutive full charges when any charge is marked full, or between consecutive charges otherwise; each figure is null when no window can supply it. `battery` is null with no full charge yet, or when no trip carries `battery_used_pct`. See `domain::energy::energy` for the exact maths.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnergyOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's object"
+          }
+        }
+      }
+    },
     "/objects/{id}/activities": {
       "get": {
         "summary": "One page of the object's timeline, newest first. `X-Total-Count` carries the unpaged total. `limit` is clamped to 500 rather than refused.",
@@ -1990,7 +2022,7 @@
     "/sync/push": {
       "post": {
         "summary": "Apply a batch of offline ops with field-level last-write-wins.",
-        "description": "Every op in the batch is applied inside one transaction, so a client that retries after a lost response finds either all of its ops recorded or none. `results` is positional: `results[i]` describes `ops[i]`. An op that loses the last-write-wins comparison is `superseded` -- recorded in the change feed, but not written to the row; only a malformed or unauthorised op is `rejected`. Replaying a `client_op_id` already in the log reports `accepted` without applying it a second time. A `set` on a field with a cross-field rule (for example an activity's trip fields) is checked one op at a time against the row as currently stored, not against the rest of the same batch, so a client changing several such fields together must order its ops so each one lands in a state the next one's check can pass. A change to an activity's `category` to or from `trip` is meant to be sent as a REST `PATCH /activities/{id}` instead, which validates the whole combination -- category and the five trip fields -- atomically in one request; pushed as a lone `set category`, it is checked only against what is already stored and will usually be rejected for exactly that reason.",
+        "description": "Every op in the batch is applied inside one transaction, so a client that retries after a lost response finds either all of its ops recorded or none. `results` is positional: `results[i]` describes `ops[i]`. An op that loses the last-write-wins comparison is `superseded` -- recorded in the change feed, but not written to the row; only a malformed or unauthorised op is `rejected`. Replaying a `client_op_id` already in the log reports `accepted` without applying it a second time. A `set` on a field with a cross-field rule (for example an activity's trip fields) is checked one op at a time against the row as currently stored, not against the rest of the same batch, so a client changing several such fields together must order its ops so each one lands in a state the next one's check can pass. A change to an activity's `category` to or from `trip` is meant to be sent as a REST `PATCH /activities/{id}` instead, which validates the whole combination -- category and the five trip fields -- atomically in one request; pushed as a lone `set category`, it is checked only against what is already stored and will usually be rejected for exactly that reason. An activity's `charged_full` (checked against its stored `category`) and an object's `energy_price_milli` (checked against its stored `fuel_unit`) are cross-field rules of the same shape, and each is satisfiable within one push when the ops are ordered so the flag or the price is cleared first -- for example `set charged_full 0` before `set category maintenance`, or `set energy_price_milli null` before `set fuel_unit null`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3518,6 +3550,62 @@
           "all": { "$ref": "#/components/schemas/TripTotals" }
         },
         "required": ["month", "year", "all"]
+      },
+      "EnergyBattery": {
+        "type": "object",
+        "properties": {
+          "remaining_pct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "max(0, 100 - the battery percent used by trips after the last full charge)"
+          },
+          "range_left": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "remaining_pct x (distance / battery percent), summed over every trip that carries both; null when no trip does"
+          },
+          "warn": {
+            "type": "boolean",
+            "description": "true once remaining_pct drops to 20 or below -- \"charge soon\""
+          }
+        },
+        "required": ["remaining_pct", "range_left", "warn"]
+      },
+      "EnergyOut": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": ["string", "null"],
+            "description": "The object's fuel_unit, unchanged; null on an object with none"
+          },
+          "price_milli": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "The object's energy_price_milli, unchanged"
+          },
+          "distance_per_charge": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Mean window distance; null with fewer than two qualifying charges"
+          },
+          "distance_per_unit_milli": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Mean of each window's distance per unit, scaled by 1000; null when no window's closing charge carries an amount"
+          },
+          "cost_per_counter_milli": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Mean of each window's cost per counter unit, scaled by 1000 (cents x1000, like other rate fields); null when no window's cost can be known from cost_cents or quantity_milli x price_milli"
+          },
+          "battery": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/EnergyBattery" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["unit", "price_milli", "distance_per_charge", "distance_per_unit_milli", "cost_per_counter_milli", "battery"]
       },
       "Insights": {
         "type": "object",

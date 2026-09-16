@@ -200,6 +200,35 @@ export interface TripTotals {
  *  this year and all time. */
 export interface TripSummary { month: TripTotals; year: TripTotals; all: TripTotals }
 
+/** "Charge due", part of `EnergyOut`. */
+export interface EnergyBattery {
+  /** max(0, 100 - the battery percent used by trips after the last full charge). */
+  remaining_pct: number;
+  /** remaining_pct x (distance / battery percent), summed over every trip that carries both;
+   *  null when no trip does. */
+  range_left: number | null;
+  /** true once remaining_pct drops to 20 or below -- "charge soon". */
+  warn: boolean;
+}
+/** `GET /objects/{id}/energy`: distance and cost per charge, and when to charge next -- see
+ *  `domain::energy::energy`. */
+export interface EnergyOut {
+  /** The object's fuel_unit, unchanged; null on an object with none. */
+  unit: string | null;
+  /** The object's energy_price_milli, unchanged. */
+  price_milli: number | null;
+  /** Mean window distance; null with fewer than two qualifying charges. */
+  distance_per_charge: number | null;
+  /** Mean of each window's distance per unit, scaled by 1000; null when no window's closing
+   *  charge carries an amount. */
+  distance_per_unit_milli: number | null;
+  /** Mean of each window's cost per counter unit, scaled by 1000 (cents x1000, like other rate
+   *  fields); null when no window's cost can be known. */
+  cost_per_counter_milli: number | null;
+  /** Null with no full charge yet, or when no trip carries a battery percentage. */
+  battery: EnergyBattery | null;
+}
+
 /** `GET /stats`. `bucket` is `YYYY`, `YYYY-MM`, an object type, a category, or `purchase_price`. */
 export interface Amount { bucket: string; cost_cents: number }
 /** `cost_cents` includes every descendant's spend. */
