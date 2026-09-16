@@ -248,6 +248,13 @@ export interface ApiToken {
   id: number; name: string; prefix: string; created_at: string; last_used_at: string | null;
 }
 
+/** A fresh QR sign-in code, as `POST /auth/pair` returns it (see `src/api/pairing.rs`). `qr_svg`
+ *  is server-rendered SVG for the same `uri` -- never user input, so it is safe to inline as
+ *  HTML. `expires_at` is RFC 3339 (`SecondsFormat::Secs`, `Z`-suffixed). */
+export interface PairCode {
+  code: string; uri: string; qr_svg: string; expires_at: string;
+}
+
 /** Where a database is, said in a way that can be put on screen. The server builds this from a
  *  redacted URL and never sends the URL itself, so there is no user, password or query string
  *  here to leak back out through the UI. */
