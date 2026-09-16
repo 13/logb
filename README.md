@@ -290,12 +290,12 @@ until it is started by hand.
 | `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here, for every user without a webhook of their own (Settings > Notifications)          |
 | `LOGB_NOTIFY_HOUR`   | `8`       | hour (in the instance timezone) the digest goes out, to webhooks and browsers alike                                          |
 | `LOGB_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
-| `LOGB_PUBLIC_URL`    | unset     | the address LogB is opened at (`https://logb.example.com`); puts links into the digest, so a notification opens the right form |
+| `LOGB_PUBLIC_URL`    | unset     | the address LogB is opened at (`https://logb.example.com`); puts links into the digest, so a notification opens the right form. Also the recommended setting behind a reverse proxy for QR sign-in (Account > Connect a phone): unset, the address in the pairing link and QR code is rebuilt from the request's `Host` (or `X-Forwarded-Host`, only when `LOGB_TRUST_PROXY` is set), which is right for a direct connection but easy to get wrong through a proxy that rewrites paths or terminates TLS somewhere the browser cannot see; setting `LOGB_PUBLIC_URL` makes it exact |
 | `LOGB_TIMEZONE`      | unset     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against. Unset, first-run setup stores the browser's and an admin can change it in Settings; set, it wins and Settings shows it as fixed |
 | `LOGB_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
 | `LOGB_LOG`           | `info`    | tracing filter                                                                                                               |
 | `LOGB_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
-| `LOGB_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address |
+| `LOGB_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address. QR sign-in's redeem step (a phone swapping a pairing code for a token) shares this same limit and counter, by the same IP — it is not a separate budget |
 | `LOGB_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
 
 Put LogB behind a reverse proxy with HTTPS when exposing it beyond your LAN.
