@@ -22,6 +22,19 @@ async fn health_reports_ok_and_creates_database() {
     assert_eq!(body["status"], "ok");
 }
 
+/// QR sign-in is not tied to a version, so a client has to be told it exists another way: this
+/// is what the app's `ServerCapabilities` reads. A missing `features` field must be readable as
+/// "no features" by an app talking to an older server, so this only ever adds entries.
+#[tokio::test]
+async fn health_announces_the_pairing_feature() {
+    let app = common::spawn().await;
+    let res = reqwest::get(app.url("/health")).await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    let features = body["features"].as_array().unwrap();
+    assert!(features.iter().any(|f| f == "pairing"), "{body}");
+}
+
 #[tokio::test]
 async fn migration_creates_all_tables() {
     let dir = tempfile::tempdir().unwrap();

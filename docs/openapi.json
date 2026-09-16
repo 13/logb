@@ -254,6 +254,76 @@
         ]
       }
     },
+    "/auth/pair": {
+      "post": {
+        "summary": "Issue a one-time pairing code: a `logb://pair` URI and its QR code, for a phone to scan. Requires a session cookie, never a bearer token -- exactly like issuing an API token.",
+        "responses": {
+          "201": {
+            "description": "Created; the code is single-use and expires in 5 minutes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/auth/pair/redeem": {
+      "post": {
+        "summary": "Redeem a pairing code for a named API token. No credential is required -- the code itself is one -- so this is rate-limited by IP exactly like `POST /auth/login`. An unknown, expired or already-used code all answer with the same 401.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRedeem"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The code was valid; a token was issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemedToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown, expired or already-used code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts from this IP",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/objects": {
       "get": {
         "summary": "Objects owned by this user, one level of the tree at a time: top-level objects by default, one object's direct children with `parent_id`, or every object the user owns regardless of nesting with `all=true`. `archived` selects which half of the tree is listed either way.",
@@ -2449,6 +2519,59 @@
             }
           }
         ]
+      },
+      "PairingCode": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The plaintext code; also embedded in `uri`"
+          },
+          "uri": {
+            "type": "string",
+            "description": "`logb://pair?server=...&code=...`, what the QR code encodes"
+          },
+          "qr_svg": {
+            "type": "string",
+            "description": "The URI above, rendered as an SVG QR code"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PairRedeem": {
+        "type": "object",
+        "required": [
+          "code",
+          "device_name"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "device_name": {
+            "type": "string",
+            "description": "Names the issued token: `LogB Android · <device_name>`, trimmed and capped at 64 characters"
+          }
+        }
+      },
+      "RedeemedToken": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The plaintext, readable only in this response"
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
       },
       "Category": {
         "type": "string",

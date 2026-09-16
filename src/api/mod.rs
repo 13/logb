@@ -7,6 +7,7 @@ pub mod export;
 pub mod insights;
 pub mod notifications;
 pub mod objects;
+pub mod pairing;
 pub mod reminders;
 pub mod search;
 pub mod settings;
@@ -28,6 +29,7 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
     Router::new()
         .route("/health", get(health))
         .merge(auth::router())
+        .merge(pairing::router())
         .merge(users::router())
         .merge(settings::router())
         .merge(notifications::router())
@@ -90,6 +92,11 @@ async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, App
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "migrations": applied,
+        // What this instance can do, for a client that would otherwise have to infer it from
+        // the version number -- QR sign-in is not tied to one, see `api::pairing`. A missing
+        // field means no features, so an older server answering health without this key at all
+        // is read the same way as one that lists none.
+        "features": ["pairing"],
     })))
 }
 
