@@ -38,9 +38,13 @@ Migrations: SQLite `0016_energy.sql`, PostgreSQL `0007_energy.sql`; `schema_pari
 
 ## Figures (object Info tab, section "Energy" / "Energie")
 
-All computed from charges of the object that carry a `counter_value`, oldest first; a window is
-the distance between two consecutive **full** charges, or between consecutive charges when no
-charge is marked full (so older data still yields figures).
+All computed from charges of the object that carry a `counter_value`, ordered by date (ties
+broken by counter) rather than by counter itself, so a replaced or reset counter cannot be read
+as one huge -- or negative -- window; a window is the distance between two consecutive **full**
+charges, or between consecutive charges when fewer than two charges are marked full (so older
+data, and the first full charge after adopting the habit, still yield figures). A window whose
+distance is zero or negative -- a duplicate counter reading, or a counter that went backwards --
+is dropped before any figure is computed from it.
 
 - **Distance per charge** — mean window distance. Shown when at least two qualifying charges exist.
 - **Distance per unit** — window distance ÷ the closing charge's `quantity_milli`, averaged over
@@ -48,7 +52,9 @@ charge is marked full (so older data still yields figures).
 - **Energy cost per distance** — the closing charge's known cost ÷ window distance, averaged over
   windows where the cost is known; known cost = `cost_cents`, else `quantity_milli × energy_price`
   when both exist. Null when no window qualifies.
-- **Charge due** — `used` = sum of `battery_used_pct` over trips dated after the last full charge;
+- **Charge due** — `used` = sum of `battery_used_pct` over trips dated after the last full charge,
+  or dated the same day and starting at or after its counter (a trip on the charging day itself
+  still counts, unless it ran before the charge was plugged in);
   `remaining = max(0, 100 - used)`; `km_per_pct` = distance ÷ battery percent summed over trips
   that carry both; `range_left = remaining × km_per_pct`. Shown as "≈ 35 % · ≈ 40 km"; at
   `remaining <= 20` the line adds "charge soon" / "bald laden". Hidden when no trip carries a

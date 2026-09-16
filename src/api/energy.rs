@@ -27,8 +27,8 @@ pub struct EnergyOut {
 async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<EnergyOut>, AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
 
-    // Oldest first, as the brief asks; `energy` re-sorts by counter itself for windowing, so
-    // this order only matters for readability of a query someone might run by hand.
+    // Oldest first, as the brief asks; `energy` re-sorts by date itself for windowing, so this
+    // order only matters for readability of a query someone might run by hand.
     #[allow(clippy::type_complexity)]
     let charge_rows: Vec<(String, i64, Option<i64>, Option<i64>, i64)> = sqlx::query_as(
         "SELECT date, counter_value, quantity_milli, cost_cents, charged_full FROM activities \
@@ -62,7 +62,12 @@ async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     .await?;
     let trips: Vec<Trip> = trip_rows
         .into_iter()
-        .map(|(date, start, end, battery_used_pct)| Trip { date, distance: end - start, battery_used_pct })
+        .map(|(date, start, end, battery_used_pct)| Trip {
+            date,
+            start_counter: start,
+            distance: end - start,
+            battery_used_pct,
+        })
         .collect();
 
     let figures = energy(&charges, &trips, object.energy_price_milli);

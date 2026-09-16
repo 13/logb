@@ -404,7 +404,9 @@ async fn energy_endpoint_ignores_deleted_charges_and_trips() {
     let out = app.get_json(&format!("/objects/{id}/energy")).await;
     // Only the surviving window (1000 -> 1200, 200 units, 6000 milli-units, 180 cents) counts.
     assert_eq!(out["distance_per_charge"], 200, "the deleted charge must not extend the window");
-    assert_eq!(out["distance_per_unit_milli"], 200 * 1000 / 6000);
-    assert_eq!(out["cost_per_counter_milli"], 180 * 1000 / 200);
+    // 200*1000/6000 = 33 (0.033 distance/unit x1000).
+    assert_eq!(out["distance_per_unit_milli"], 33);
+    // 180*1000/200 = 900 (cents x1000 per counter unit).
+    assert_eq!(out["cost_per_counter_milli"], 900);
     assert!(out["battery"].is_null(), "the only trip with a battery figure was deleted");
 }
