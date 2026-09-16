@@ -80,6 +80,12 @@ test('the date format setting is used everywhere, and the typed date field valid
   await expect(page).toHaveURL(/\/activities\/\d+$/);
 
   const dateField = page.getByLabel('Date', { exact: true });
+  // Wait for the entry to load first, same as the digits-field navigation above: this is a fresh
+  // route change (through Objects), so ActivityForm remounts and its own `/activities/:id` fetch
+  // is in flight again -- typing before it resolves races the load, which (correctly, per
+  // DateInput's "outside value always wins" behaviour, see the next test in this file) replaces
+  // whatever was just typed the moment the real date arrives.
+  await expect(dateField).toHaveValue('03.04.2026');
   await dateField.fill('31.02.2026');
   await dateField.blur();
   const errorText = page.getByText('Enter a date like 15.09.2026');
