@@ -203,19 +203,18 @@ async fn read(
     .fetch_one(&state.db)
     .await?;
 
-    let counter_span = min_counter.zip(max_counter).map(|(from, to)| Span { from, to });
     // A trip's `start_counter` is a real counter reading too, often the earliest one on record
-    // (the object's counter was already there before the first trip was ever logged) -- so the
-    // cost-per-counter span reaches back to it when it is lower than every plain `counter_value`,
-    // rather than understating the span (and so overstating cost-per-unit) by starting only at
-    // the first trip's *end*. `counter_span` above is left alone: it already reports the
-    // observed counter *readings*, and a trip's start is not a reading a user took, just the
-    // value the trip moved off from.
+    // (the object's counter was already there before the first trip was ever logged) -- so
+    // both the displayed `counter_span.from` and the cost-per-counter span reach back to it
+    // when it is lower than every plain `counter_value`, rather than understating the span (and
+    // so overstating cost-per-unit) by starting only at the first trip's *end*, and showing a
+    // "from" on screen that the rate right next to it silently disagrees with.
     let span_from = match (min_counter, min_start_counter) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (Some(a), None) => Some(a),
         (None, b) => b,
     };
+    let counter_span = span_from.zip(max_counter).map(|(from, to)| Span { from, to });
     let span = span_from.zip(max_counter).map(|(from, to)| to - from).unwrap_or(0);
     let overall_cost_per_counter_milli = cost_per_counter_milli(total_cost, span);
 

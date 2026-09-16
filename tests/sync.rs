@@ -3670,3 +3670,44 @@ async fn pushing_counter_unit_away_from_km_mi_with_a_live_trip_is_rejected() {
         .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(unit.as_deref(), Some("mi"));
 }
+
+/// `null` is the other way to leave `km`/`mi` besides switching to `h` (see the comment on the
+/// check in `sync::apply::apply_op`, just above the one `has_trip` query both share) -- clearing
+/// the counter entirely must be rejected the same way while a live trip depends on it, and
+/// accepted once that trip is gone.
+#[tokio::test]
+async fn pushing_counter_unit_to_null_with_a_live_trip_is_rejected_until_the_trip_is_deleted() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let object_id = bike["id"].as_i64().unwrap();
+    let trip = create_trip(&app, object_id, json!({})).await;
+    let trip_id = trip["id"].as_i64().unwrap();
+    let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-unit-null-with-trip", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "counter_unit", "value": null,
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "this object has trips; its counter must stay km or mi");
+
+    let res = app.client.delete(app.url(&format!("/activities/{trip_id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-unit-null-no-trip", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "counter_unit", "value": null,
+        "edited_at": after_now(120), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let unit: Option<String> = sqlx::query_scalar("SELECT counter_unit FROM objects WHERE client_uuid = $1")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(unit, None, "once the trip is gone, clearing the counter entirely is accepted");
+}

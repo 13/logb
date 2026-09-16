@@ -90,6 +90,8 @@ export interface TagCount { tag: string; count: number }
 export interface TitleSuggestion {
   title: string; category: Category; last_date: string;
   last_cost_cents: number | null; last_counter: number | null;
+  /** The newest occurrence's trip places -- always null for any other category. */
+  last_from_place: string | null; last_to_place: string | null;
 }
 
 /** `GET /objects/{id}/last-done`: a title the object has logged more than once (or once,

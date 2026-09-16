@@ -295,7 +295,11 @@ fn wanted_tag(q: &ListQuery) -> Option<String> {
 /// which is fine here -- the spec asks for case-insensitivity, not a ß/ss equivalence, and both
 /// `last_done`'s grouping and the `title` filter below call this one helper either way, so a
 /// title tapped in one always matches what the other shows for it.
-fn fold_title(title: &str) -> String {
+///
+/// `pub(crate)`: `api::trips::distinct_places` folds a trip's from/to places by this same key,
+/// so "Home" and "home" collapse into one suggestion the same way two title spellings collapse
+/// into one `last_done` entry, rather than a second, possibly-diverging fold living there.
+pub(crate) fn fold_title(title: &str) -> String {
     title.trim().to_lowercase()
 }
 
@@ -391,6 +395,11 @@ pub struct TitleSuggestion {
     pub last_date: String,
     pub last_cost_cents: Option<i64>,
     pub last_counter: Option<i64>,
+    /// The newest occurrence's trip places -- always `None` for any other category, the same
+    /// way `from_place`/`to_place` are `None` on the stored row itself. Lets the frontend's
+    /// "Repeat" chip prefill From/To for a trip exactly as it already does title/category/cost.
+    pub last_from_place: Option<String>,
+    pub last_to_place: Option<String>,
 }
 
 const SUGGESTION_LIMIT: i64 = 20;
@@ -416,7 +425,13 @@ async fn recent_titles(
               ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_cost_cents, \
            (SELECT x.counter_value FROM activities x WHERE x.object_id = a.object_id \
               AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
-              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter \
+              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter, \
+           (SELECT x.from_place FROM activities x WHERE x.object_id = a.object_id \
+              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
+              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_from_place, \
+           (SELECT x.to_place FROM activities x WHERE x.object_id = a.object_id \
+              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
+              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_to_place \
          FROM activities a WHERE a.object_id = $1 AND a.deleted_at IS NULL \
          GROUP BY a.object_id, a.title, a.category ORDER BY last_date DESC LIMIT $2",
     )

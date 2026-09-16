@@ -93,6 +93,10 @@ async fn cost_per_counter_span_reaches_back_to_a_trips_start_counter() {
         out["cost_per_counter_milli"], 20_000,
         "the span must reach back to the trip's start_counter (400), not just its end (600): {out}"
     );
+    // The displayed range must agree with the rate computed from it: MIN(counter_value) alone
+    // would show "from" as 600 (the trip's end) while the rate above already counts from 400.
+    assert_eq!(out["counter_span"]["from"], 400, "counter_span.from must match the same lower bound as the rate: {out}");
+    assert_eq!(out["counter_span"]["to"], 700);
 }
 
 #[tokio::test]

@@ -152,6 +152,44 @@ async fn recent_titles_are_distinct_and_newest_first() {
     assert_eq!(out[1]["title"], "Oil change");
 }
 
+/// A trip suggestion's `last_from_place`/`last_to_place` come from the same newest occurrence
+/// as its `last_cost_cents`/`last_counter` -- see the "Repeat" chip's use of them in
+/// `ActivityForm.svelte`. Any other category's suggestion carries neither, exactly as the
+/// stored row itself never carries a place outside `trip`.
+#[tokio::test]
+async fn recent_titles_carry_trip_places_from_the_newest_occurrence() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    for (date, from, to, start, end) in [
+        ("2026-01-01", "Home", "Office", 0, 10),
+        ("2026-02-01", "Office", "Home", 10, 20),
+    ] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+            "date": date, "category": "trip", "title": "Commute", "notes": "",
+            "start_counter": start, "counter_value": end, "from_place": from, "to_place": to
+        })).send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-03-01", "category": "maintenance", "title": "Brakes", "notes": ""
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    let out: Vec<serde_json::Value> = app.client
+        .get(app.url(&format!("/objects/{id}/recent-titles")))
+        .send().await.unwrap().json().await.unwrap();
+
+    let commute = out.iter().find(|s| s["title"] == "Commute").unwrap();
+    assert_eq!(commute["last_from_place"], "Office", "the newest (2026-02-01) trip's own from: {commute}");
+    assert_eq!(commute["last_to_place"], "Home");
+    let brakes = out.iter().find(|s| s["title"] == "Brakes").unwrap();
+    assert_eq!(brakes["last_from_place"], serde_json::Value::Null);
+    assert_eq!(brakes["last_to_place"], serde_json::Value::Null);
+}
+
 #[tokio::test]
 async fn fuel_quantity_round_trips_and_is_validated() {
     let app = common::spawn().await;

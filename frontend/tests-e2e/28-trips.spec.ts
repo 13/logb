@@ -108,3 +108,25 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await expect(page.getByRole('heading', { name: 'Trip distance per month' })).toBeVisible();
   await expect(page.getByTestId('insights-trip-distance').locator('.bar-row')).toHaveCount(12);
 });
+
+test('repeating a titled trip also carries its From/To places', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED_NOW);
+  await signInFresh(page, '28-trips-repeat');
+
+  const bike = await object(page, { name: 'Trip E-Bike', type: 'e_bike', counter_unit: 'km' });
+  // Seeded through the API (like the rest of this file) so the test itself only drives the
+  // repeat chip -- an untitled trip has nothing worth repeating (see `suggestionsFor`), so this
+  // one is given a title.
+  await entry(page, bike, {
+    category: 'trip', title: 'Commute', date: '2026-01-01',
+    start_counter: 0, counter_value: 10, from_place: 'Home', to_place: 'Office',
+  });
+
+  await page.goto(`/objects/${bike}`);
+  await page.getByRole('button', { name: /Log trip/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=trip`));
+
+  await page.getByRole('button', { name: 'Repeat: Commute' }).click();
+  await expect(page.getByLabel(/^From/)).toHaveValue('Home');
+  await expect(page.getByLabel(/^To/)).toHaveValue('Office');
+});

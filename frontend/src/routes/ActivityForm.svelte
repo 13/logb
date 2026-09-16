@@ -309,6 +309,11 @@
     input.category = s.category;
     categoryTouched = true;
     if (s.last_cost_cents !== null) costText = centsToInput(s.last_cost_cents);
+    // A trip suggestion also carries where it went, so repeating one prefills From/To exactly
+    // as it already prefills title/category/cost -- `last_from_place`/`last_to_place` are only
+    // ever set on a trip suggestion in the first place (see `TitleSuggestion` on the backend).
+    if (s.last_from_place !== null) fromText = s.last_from_place;
+    if (s.last_to_place !== null) toText = s.last_to_place;
   }
 
   async function submit(e: SubmitEvent) {

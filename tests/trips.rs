@@ -288,6 +288,58 @@ async fn trip_places_are_distinct_most_recent_first_and_skip_deleted_trips_and_n
     assert_eq!(out["to"], json!(["Home", "Office"]));
 }
 
+/// "Home", "home" and "HOME" are the same place typed three different ways -- see
+/// `api::trips::distinct_places`. They must collapse into one suggestion, spelled the way the
+/// newest trip wrote it, without disturbing the order of any other (genuinely distinct) place.
+#[tokio::test]
+async fn trip_places_dedup_case_insensitively_keeping_the_newest_spelling() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    create_trip(&app, id, "2026-01-01", 0, 50, "Work", "HOME").await;
+    create_trip(&app, id, "2026-01-02", 50, 100, "Work", "Office").await;
+    create_trip(&app, id, "2026-01-03", 100, 150, "Work", "home").await;
+    create_trip(&app, id, "2026-01-04", 150, 200, "Work", "Home").await;
+
+    let out: Value = app.client.get(app.url(&format!("/objects/{id}/trip-places"))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(
+        out["to"], json!(["Home", "Office"]),
+        "'Home'/'home'/'HOME' fold into one entry spelled like the newest (2026-01-04) trip; \
+         'Office' is unrelated and keeps its own most-recent-first place: {out}"
+    );
+}
+
+/// The summary the Info tab shows must only ever total live trips -- a soft-deleted trip or an
+/// ordinary entry with a big counter jump must not sneak into its counts or distance.
+#[tokio::test]
+async fn trips_summary_ignores_deleted_trips_and_non_trip_entries() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = create_e_bike(&app).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    create_trip(&app, id, "2026-09-02", 100, 150, "Home", "Office").await; // 50 km, stays live
+    let deleted = create_trip(&app, id, "2026-09-03", 150, 500, "Office", "Home").await; // 350 km, deleted below
+    let res = app.client.delete(app.url(&format!("/activities/{deleted}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    // A big counter jump on a non-trip entry must not be mistaken for trip distance.
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities"))).json(&json!({
+        "date": "2026-09-04", "category": "maintenance", "title": "Service", "notes": "", "counter_value": 900
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+
+    let out: Value = app.client
+        .get(app.url(&format!("/objects/{id}/trips/summary?today=2026-09-15")))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(
+        (out["all"]["trips"].as_i64(), out["all"]["distance"].as_i64()), (Some(1), Some(50)),
+        "the deleted trip and the maintenance entry must not contribute: {out}"
+    );
+}
+
 #[tokio::test]
 async fn trips_summary_totals_month_year_and_all_time() {
     let app = common::spawn().await;

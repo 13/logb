@@ -1,3 +1,4 @@
+use super::activities::fold_title;
 use super::objects::{load_owned_object, validate_date};
 use crate::auth::AuthUser;
 use crate::db;
@@ -28,6 +29,11 @@ const PLACE_LIMIT: usize = 20;
 
 /// `places`, most recent trip first (the order the caller's query already reads them in),
 /// deduplicated and capped -- the first occurrence of a place is its most recent one.
+///
+/// Deduplicated by `fold_title`'s folded key (trim + lowercase), the same key `last_done` and
+/// the `title` filter compare by, so "Home", "home" and "HOME" collapse into a single
+/// suggestion rather than three. Because rows arrive newest first, the first spelling seen for
+/// a folded key is already the newest trip's own spelling, which is the one kept.
 fn distinct_places(places: impl Iterator<Item = Option<String>>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -35,7 +41,7 @@ fn distinct_places(places: impl Iterator<Item = Option<String>>) -> Vec<String> 
         if out.len() >= PLACE_LIMIT {
             break;
         }
-        if seen.insert(place.clone()) {
+        if seen.insert(fold_title(&place)) {
             out.push(place);
         }
     }
@@ -46,10 +52,16 @@ fn distinct_places(places: impl Iterator<Item = Option<String>>) -> Vec<String> 
 /// the spec's "From / To suggest earlier places of this object".
 async fn trip_places(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<TripPlaces>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
+    // Capped to the newest 500 trips before `distinct_places` dedups in Rust: `PLACE_LIMIT`
+    // (20) distinct places is all either list ever needs, and no household logs anywhere near
+    // 500 trips without 20 distinct places turning up long before the cap -- so this only
+    // guards against reading an entire multi-thousand-row history just to throw most of it
+    // away. `ORDER BY date DESC, id DESC` is unchanged, so the rows `distinct_places` sees stay
+    // newest-first either way.
     let rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT from_place, to_place FROM activities \
          WHERE object_id = $1 AND category = 'trip' AND deleted_at IS NULL \
-         ORDER BY date DESC, id DESC",
+         ORDER BY date DESC, id DESC LIMIT 500",
     )
     .bind(object_id)
     .fetch_all(&state.db)
