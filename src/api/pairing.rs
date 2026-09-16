@@ -70,6 +70,34 @@ fn public_base_url(state: &App, headers: &HeaderMap) -> Result<String, AppError>
     Ok(format!("{scheme}://{host}/"))
 }
 
+/// Refuses a same-site check ONLY when the browser's `Sec-Fetch-Site` header actively says the
+/// request crossed a site boundary -- present, and neither `same-origin` nor `none`.
+///
+/// `create_pair` takes a session cookie and no JSON body, so it is exactly the shape a plain
+/// cross-site `<form method=post>` can hit: the cookie rides along automatically, and a form
+/// needs no CORS preflight to fire, unlike a cross-site `fetch()` sending a body a form cannot
+/// send. `create_token` needs no equivalent check despite taking the same `SessionUser`,
+/// because it requires `Content-Type: application/json` -- a plain HTML form cannot set that
+/// content type, so the cross-site form vector this function closes for `create_pair` does not
+/// exist against `create_token` in the first place.
+///
+/// `none` is allowed alongside `same-origin` rather than treated as "no header, so unknown":
+/// browsers send it for a top-level navigation the user typed or clicked into existence
+/// themselves (the address bar, a bookmark, a search result) rather than for any subresource
+/// request an already-loaded page issues on its own -- `fetch()`, which is all this route is
+/// ever called from, cannot produce it. Allowing it here is therefore not a hole a same-site
+/// form could climb through; it only accommodates a browser old enough to send the header
+/// inconsistently, or a future first-party client this route has not been asked to distrust.
+/// A missing header (an old browser, or a non-browser API client) is let through for the same
+/// reason `create_token` needs no check at all: the absence of Fetch Metadata is not evidence
+/// of a cross-site form, only of a browser that predates it.
+fn same_site_request(headers: &HeaderMap) -> Result<(), AppError> {
+    match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+        None | Some("same-origin") | Some("none") => Ok(()),
+        Some(_) => Err(AppError::Forbidden),
+    }
+}
+
 /// Issues a fresh pairing code for the caller: a browser's Account page, not the phone.
 ///
 /// `SessionUser`, exactly like `create_token` -- creating something that can sign a device in
@@ -79,6 +107,10 @@ async fn create_pair(
     State(state): State<App>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    // See `same_site_request`'s own comment for why this route needs it and `create_token`
+    // does not: no JSON body here means no content-type guard against a plain cross-site form.
+    same_site_request(&headers)?;
+
     // Resolved -- and, on an unset LOGB_PUBLIC_URL, validated -- before anything is written: a
     // malformed X-Forwarded-Host or Host must fail this request without first creating and
     // committing a code the caller never gets back in a usable response.

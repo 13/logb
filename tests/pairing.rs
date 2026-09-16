@@ -79,6 +79,25 @@ async fn an_invalid_host_header_is_refused_with_400() {
     assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
 }
 
+/// `create_pair` takes only a session cookie and no JSON body -- exactly what a plain
+/// cross-site `<form method=post>` can hit -- so a `Sec-Fetch-Site` that actively says the
+/// request crossed a site boundary must be refused.
+#[tokio::test]
+async fn a_same_origin_sec_fetch_site_is_allowed_but_cross_site_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let same_origin = app.client.post(app.url("/auth/pair"))
+        .header("sec-fetch-site", "same-origin")
+        .send().await.unwrap();
+    assert_eq!(same_origin.status(), 201, "{}", same_origin.text().await.unwrap());
+
+    let cross_site = app.client.post(app.url("/auth/pair"))
+        .header("sec-fetch-site", "cross-site")
+        .send().await.unwrap();
+    assert_eq!(cross_site.status(), 403, "{}", cross_site.text().await.unwrap());
+}
+
 /// `SessionUser`, exactly like `create_token`: a bearer token must be refused the same way.
 #[tokio::test]
 async fn creating_a_pair_code_with_only_an_api_token_is_refused_like_create_token() {
