@@ -202,6 +202,105 @@ async fn a_new_code_invalidates_the_previous_one() {
     assert_eq!(redeem_b.status(), 200, "{}", redeem_b.text().await.unwrap());
 }
 
+/// An empty `device_name` is refused before the code is touched: the error is a plain 400, in
+/// the style of `create_token`'s "name must be 1 to 64 characters", and the code that was not
+/// yet spent on it goes on working -- a phone that sends a bad name once should not have burned
+/// the QR code the person is still looking at.
+#[tokio::test]
+async fn an_empty_device_name_is_refused_and_does_not_spend_the_code() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair = create_pair_code(&app).await;
+    let anon = bare_client();
+
+    let empty = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "" }))
+        .send().await.unwrap();
+    assert_eq!(empty.status(), 400);
+    let body: serde_json::Value = empty.json().await.unwrap();
+    assert!(body["message"].as_str().unwrap().contains("empty"), "{body}");
+
+    let retry = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "phone" }))
+        .send().await.unwrap();
+    assert_eq!(retry.status(), 200, "the refused attempt must not have spent the code: {}", retry.text().await.unwrap());
+}
+
+/// Whitespace of any width is not a name: `split_whitespace` treats every Unicode space the
+/// same way `trim` already did, so this is not merely the ASCII-space case.
+#[tokio::test]
+async fn a_whitespace_only_device_name_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair = create_pair_code(&app).await;
+    let anon = bare_client();
+
+    let res = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "   \u{2003}\u{00A0}  " }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+}
+
+/// A name made only of control characters (category Cc) must not leave a control byte hiding
+/// in a token name a person reads in Settings.
+#[tokio::test]
+async fn a_device_name_of_only_control_characters_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair = create_pair_code(&app).await;
+    let anon = bare_client();
+
+    let res = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "\u{0000}\u{0001}\u{0007}" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+}
+
+/// A bidi override does not make it into the stored token name: U+202E can make everything
+/// after it in a naive renderer display as if reversed, which is exactly the kind of thing a
+/// name from an untrusted device must not be able to do to the token list in Settings.
+#[tokio::test]
+async fn a_bidi_override_is_stripped_from_the_device_name() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair = create_pair_code(&app).await;
+    let anon = bare_client();
+
+    let res = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "\u{202E}evil.txt" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/auth/tokens"))
+        .send().await.unwrap().json().await.unwrap();
+    let name = listed[0]["name"].as_str().unwrap();
+    assert!(!name.contains('\u{202E}'), "{name}");
+    assert_eq!(name, "LogB Android · evil.txt");
+}
+
+/// A 200-character name is still capped at 64 characters total, prefix included, and does not
+/// panic slicing mid multi-byte character -- exercised with the same all-ASCII shape as A2's
+/// original truncation test, now going through the cleaning step first.
+#[tokio::test]
+async fn a_200_character_device_name_is_still_capped_at_64() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair = create_pair_code(&app).await;
+    let anon = bare_client();
+    let long_name = "p".repeat(200);
+
+    let res = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": long_name }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/auth/tokens"))
+        .send().await.unwrap().json().await.unwrap();
+    let name = listed[0]["name"].as_str().unwrap();
+    assert_eq!(name.chars().count(), 64, "{name}");
+    assert!(name.starts_with("LogB Android · ppp"), "{name}");
+}
+
 /// Redeem has no session and no token of its own, so it is rate-limited by IP exactly like
 /// `login` -- otherwise it is a fresh place to brute-force codes from.
 #[tokio::test]

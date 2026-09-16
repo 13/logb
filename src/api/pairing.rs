@@ -105,12 +105,63 @@ struct PairRedeem {
     device_name: String,
 }
 
-/// `LogB Android · <device name>`, trimmed and capped at 64 characters -- the same length
-/// `create_token` enforces on a name a person types, applied here to one a device supplies
-/// instead.
-fn device_token_name(device_name: &str) -> String {
-    let full = format!("LogB Android · {}", device_name.trim());
-    full.chars().take(64).collect()
+/// Unicode "Format" (Cf) code points a device name has no business carrying: characters with no
+/// glyph of their own whose entire job is to change how neighbouring characters are laid out or
+/// read. `char::is_control` (category Cc) does not cover this category at all -- it is a
+/// different one -- so a bidi override such as U+202E, which can make the rest of a token name
+/// display as if it read right to left, sails straight through it. This list is not every Cf
+/// code point Unicode has ever assigned (a handful of format controls for historic scripts are
+/// left out), but it covers the ones an ordinary keyboard, IME or copy-paste can produce: the
+/// zero-width and bidi-control block, the deprecated Arabic number-shape signs, the interlinear
+/// annotation controls, and the language/emoji tag range.
+fn is_unicode_format_char(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' // soft hyphen
+        | '\u{0600}'..='\u{0605}' // Arabic number-shape / sign signs
+        | '\u{061C}' // Arabic letter mark
+        | '\u{06DD}'
+        | '\u{070F}' // Syriac abbreviation mark
+        | '\u{08E2}'
+        | '\u{180E}' // Mongolian vowel separator
+        | '\u{200B}'..='\u{200F}' // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        | '\u{202A}'..='\u{202E}' // LRE, RLE, PDF, LRO, RLO -- the bidi overrides
+        | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
+        | '\u{2066}'..='\u{206F}' // bidi isolates, and a few deprecated format characters
+        | '\u{FEFF}' // BOM / zero width no-break space
+        | '\u{FFF9}'..='\u{FFFB}' // interlinear annotation anchor/separator/terminator
+        | '\u{E0001}' // language tag
+        | '\u{E0020}'..='\u{E007F}' // tag characters
+    )
+}
+
+/// A device name a person did not choose, cleaned to plain, visible text before it becomes part
+/// of an API token's name: control characters (category Cc) and Unicode format characters
+/// (category Cf, see `is_unicode_format_char`) are dropped outright rather than merely trimmed,
+/// runs of whitespace collapse to a single space, and the ends are trimmed. `split_whitespace`
+/// does both the collapsing and the trimming in one pass.
+///
+/// A name that is empty, or was nothing BUT whitespace and/or the characters just stripped, is
+/// refused with a 400 rather than silently accepted as an empty string glued onto the prefix --
+/// the same judgment `create_token` already makes about a name a person types by hand.
+fn clean_device_name(device_name: &str) -> Result<String, AppError> {
+    let visible: String =
+        device_name.chars().filter(|c| !c.is_control() && !is_unicode_format_char(*c)).collect();
+    let cleaned = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return Err(AppError::BadRequest("device_name must not be empty".into()));
+    }
+    Ok(cleaned)
+}
+
+/// `LogB Android · <device name>`, cleaned (see `clean_device_name`), truncated by character to
+/// 64 -- the same length `create_token` enforces on a name a person types, applied here to one a
+/// device supplies instead -- and trimmed again, since truncating by character count can land
+/// exactly on a space the cleaning step left inside the name.
+fn device_token_name(device_name: &str) -> Result<String, AppError> {
+    let cleaned = clean_device_name(device_name)?;
+    let full = format!("LogB Android · {cleaned}");
+    let truncated: String = full.chars().take(64).collect();
+    Ok(truncated.trim().to_string())
 }
 
 /// Swaps a one-time code for a named API token. No session or token of its own is needed -- the
@@ -128,6 +179,9 @@ async fn redeem(
     Json(body): Json<PairRedeem>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
+    // Validated before the code is touched: a device name that fails this must not burn a
+    // one-time code for nothing -- the phone can fix the name and try the same code again.
+    let name = device_token_name(&body.device_name)?;
 
     let now = db::now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
@@ -148,7 +202,6 @@ async fn redeem(
     // otherwise either burn a valid code for no token, or hand out a token from a redeem that
     // never committed.
     let token = auth::new_api_token();
-    let name = device_token_name(&body.device_name);
     let id: (i64,) = sqlx::query_as(
         "INSERT INTO api_tokens (user_id, name, token_hash, prefix, created_at) \
          VALUES ($1, $2, $3, $4, $5) RETURNING id",
