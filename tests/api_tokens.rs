@@ -81,25 +81,138 @@ async fn a_revoked_token_stops_working_immediately() {
     assert!(listed.is_empty());
 }
 
-/// Managing tokens is the one thing a token may not do: a leak that can mint replacements, and
-/// revoke the ones its owner would use to notice, repairs itself faster than it is spotted.
+/// Minting is the one thing a token may not do at all: a leak that can mint replacements
+/// repairs itself faster than it is spotted. Revoking a DIFFERENT token is refused the same
+/// way, for the same reason -- self-revoke (below) is the one narrow exception.
 #[tokio::test]
-async fn a_token_cannot_mint_or_revoke_tokens() {
+async fn a_token_cannot_mint_another_or_revoke_a_different_one() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let (id, token) = issue(&app, "phone").await;
+    let (other_id, _other_token) = issue(&app, "laptop").await;
     let anon = bare_client();
 
     let res = anon.post(app.url("/auth/tokens")).bearer_auth(&token)
         .json(&json!({ "name": "another" })).send().await.unwrap();
     assert_eq!(res.status(), 401, "a token must not be able to issue another");
 
-    let res = anon.delete(app.url(&format!("/auth/tokens/{id}"))).bearer_auth(&token)
+    assert_ne!(id, other_id);
+    let res = anon.delete(app.url(&format!("/auth/tokens/{other_id}"))).bearer_auth(&token)
         .send().await.unwrap();
-    assert_eq!(res.status(), 401, "nor revoke one");
+    assert_eq!(res.status(), 401, "nor revoke a token that isn't the one it authenticated with");
 
     // Reading its own account is still fine -- it is only management that is closed off.
     assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token).send().await.unwrap().status(), 200);
+}
+
+/// The app's sign-out call: `DELETE /api/auth/tokens/{id}` with `Authorization: Bearer <that
+/// same token>`. A token may revoke ITSELF -- unlike minting, this cannot be used to leave the
+/// owner unable to notice or replace it, since it only ever ends the very credential that was
+/// just used, and never touches any other token or session.
+#[tokio::test]
+async fn a_bearer_token_revokes_itself() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (id, token) = issue(&app, "phone").await;
+    let anon = bare_client();
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token).send().await.unwrap().status(), 200);
+
+    let res = anon.delete(app.url(&format!("/auth/tokens/{id}"))).bearer_auth(&token)
+        .send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    // The same bearer, used again, is refused: the revoke took effect immediately.
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token).send().await.unwrap().status(), 401);
+}
+
+/// A bearer token trying to revoke a DIFFERENT token of the same user is refused, and that
+/// other token is unaffected. Same case as
+/// `a_token_cannot_mint_another_or_revoke_a_different_one`, checked here from the angle of "the
+/// untouched token still works" rather than "the call was refused".
+#[tokio::test]
+async fn a_bearer_token_cannot_revoke_a_different_token_of_the_same_user() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (_, token_a) = issue(&app, "phone").await;
+    let (id_b, token_b) = issue(&app, "laptop").await;
+    let anon = bare_client();
+
+    let res = anon.delete(app.url(&format!("/auth/tokens/{id_b}"))).bearer_auth(&token_a)
+        .send().await.unwrap();
+    assert_eq!(res.status(), 401, "a token may revoke only itself, never a sibling");
+
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token_b).send().await.unwrap().status(), 200);
+    // And the caller's own token, which it did not try to touch, is unaffected too.
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token_a).send().await.unwrap().status(), 200);
+}
+
+/// A bearer token trying to revoke another USER's token gets the same refusal as today, not a
+/// weaker one just because it is naming an id it happens not to own.
+#[tokio::test]
+async fn a_bearer_token_cannot_revoke_another_users_token() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (bens_id, _bens_token) = issue(&app, "ben's phone").await;
+    let anna = app.create_user_client("anna", "another horse").await;
+    let issued = anna.post(app.url("/auth/tokens")).json(&json!({ "name": "anna's phone" }))
+        .send().await.unwrap();
+    assert_eq!(issued.status(), 201);
+    let annas_token = issued.json::<serde_json::Value>().await.unwrap()["token"].as_str().unwrap().to_string();
+
+    let anon = bare_client();
+    let res = anon.delete(app.url(&format!("/auth/tokens/{bens_id}"))).bearer_auth(&annas_token)
+        .send().await.unwrap();
+    assert_eq!(res.status(), 401, "a token may revoke only the token it authenticated with");
+
+    // Ben's token is untouched.
+    let listed: Vec<serde_json::Value> = app.client.get(app.url("/auth/tokens"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(listed.len(), 1, "ben's token must still be there: {listed:?}");
+}
+
+/// The route's other, older caller: a password session revoking one of its own tokens still
+/// works exactly as before self-revoke was added.
+#[tokio::test]
+async fn a_session_still_revokes_its_own_token() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (id, token) = issue(&app, "phone").await;
+    let anon = bare_client();
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token).send().await.unwrap().status(), 200);
+
+    let res = app.client.delete(app.url(&format!("/auth/tokens/{id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(&token).send().await.unwrap().status(), 401);
+}
+
+/// The app's actual use case end to end: QR sign-in mints a token via `/auth/pair/redeem`
+/// (never `POST /auth/tokens`, which stays session-only), and that token can still revoke
+/// itself on sign-out just like one issued the ordinary way.
+#[tokio::test]
+async fn a_redeemed_pairing_token_can_revoke_itself() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let pair_res = app.client.post(app.url("/auth/pair")).send().await.unwrap();
+    assert_eq!(pair_res.status(), 201, "{}", pair_res.text().await.unwrap());
+    let pair: serde_json::Value = pair_res.json().await.unwrap();
+
+    let anon = bare_client();
+    let redeem_res = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": pair["code"], "device_name": "phone" }))
+        .send().await.unwrap();
+    assert_eq!(redeem_res.status(), 200, "{}", redeem_res.text().await.unwrap());
+    let redeemed: serde_json::Value = redeem_res.json().await.unwrap();
+    let token = redeemed["token"].as_str().unwrap();
+    let token_id = redeemed["token_id"].as_i64().unwrap();
+
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(token).send().await.unwrap().status(), 200);
+
+    let res = anon.delete(app.url(&format!("/auth/tokens/{token_id}"))).bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(res.status(), 204, "{}", res.text().await.unwrap());
+
+    assert_eq!(anon.get(app.url("/auth/me")).bearer_auth(token).send().await.unwrap().status(), 401);
 }
 
 #[tokio::test]

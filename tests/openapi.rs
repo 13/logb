@@ -103,16 +103,26 @@ fn the_spec_states_how_to_authenticate() {
     assert_eq!(schemes["sessionCookie"]["name"], "logb_session");
     assert_eq!(schemes["bearerToken"]["scheme"], "bearer");
 
-    // Token management refuses bearer credentials on purpose, and the spec has to say so or an
-    // app will be built around a call that always 401s.
-    for path in ["/auth/tokens", "/auth/tokens/{id}"] {
-        for (method, op) in spec["paths"][path].as_object().unwrap() {
-            let security = op["security"].as_array()
-                .unwrap_or_else(|| panic!("{method} {path} should state its own security"));
-            let names: Vec<_> = security.iter().flat_map(|s| s.as_object().unwrap().keys()).collect();
-            assert_eq!(names, vec!["sessionCookie"], "{method} {path} should be cookie-only");
-        }
+    // Issuing and listing tokens refuse bearer credentials on purpose, and the spec has to say
+    // so or an app will be built around a call that always 401s.
+    for (method, op) in spec["paths"]["/auth/tokens"].as_object().unwrap() {
+        let security = op["security"].as_array()
+            .unwrap_or_else(|| panic!("{method} /auth/tokens should state its own security"));
+        let names: Vec<_> = security.iter().flat_map(|s| s.as_object().unwrap().keys()).collect();
+        assert_eq!(names, vec!["sessionCookie"], "{method} /auth/tokens should be cookie-only");
     }
+
+    // Revoking is the one exception: a bearer token may revoke itself (see `revoke_token`), so
+    // the spec documents both credentials for it, unlike its siblings above.
+    let delete = &spec["paths"]["/auth/tokens/{id}"]["delete"];
+    let security = delete["security"].as_array()
+        .expect("delete /auth/tokens/{id} should state its own security");
+    let names: Vec<_> = security.iter().flat_map(|s| s.as_object().unwrap().keys()).collect();
+    assert_eq!(
+        names,
+        vec!["sessionCookie", "bearerToken"],
+        "delete /auth/tokens/{{id}} should accept a session or a bearer token",
+    );
 
     // And the routes that need nothing must say so, or a client will try to log in before it
     // can ask whether the instance even has a user yet.

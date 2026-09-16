@@ -22,6 +22,16 @@ pub struct AuthUser {
     pub username: String,
     pub is_admin: crate::db::Bool,
     pub lang: String,
+    /// The id of the API token that authenticated this request, or `None` for a session
+    /// (cookie) caller. `#[serde(skip)]` so it never reaches a response body -- notably
+    /// `/auth/me`, which returns this struct directly -- and `#[sqlx(default)]` so every query
+    /// that does not select a `token_id` column (every session lookup, and every place this
+    /// struct was already built before this field existed) still populates it as `None` rather
+    /// than failing to decode. It exists purely so `revoke_token` can check that a token caller
+    /// is revoking only itself; no other handler reads it.
+    #[serde(skip)]
+    #[sqlx(default)]
+    pub token_id: Option<i64>,
 }
 
 pub struct AdminUser(pub AuthUser);
@@ -241,8 +251,11 @@ fn bearer_from_parts(parts: &Parts) -> Option<String> {
 /// perfectly well, and a write per request would turn every read of the API into a write.
 async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>, AppError> {
     let hash = hash_api_token(token);
+    // `t.id AS token_id` is the only reason this differs from the session lookup below: it
+    // lands in `AuthUser::token_id` by column name, so a caller authenticated this way carries
+    // the id of the very token it used.
     let row = sqlx::query_as::<_, AuthUser>(
-        "SELECT u.id, u.username, u.is_admin, u.lang FROM api_tokens t \
+        "SELECT u.id, u.username, u.is_admin, u.lang, t.id AS token_id FROM api_tokens t \
          JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
     )
     .bind(&hash)

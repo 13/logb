@@ -90,11 +90,28 @@ async fn create_token(
 }
 
 /// Revoking takes effect on the next request: nothing caches the lookup.
+///
+/// A session may revoke any of its own tokens, exactly as before. A bearer token may
+/// additionally revoke ITSELF: `AuthUser::token_id` carries the id of the token that
+/// authenticated this request, and a caller authenticated that way is allowed through only when
+/// it names that same id. This does not weaken `create_token`'s session-only rule -- a token
+/// that could mint replacements would be a leak that repairs itself, but a token that can end
+/// only its own validity can make itself no more dangerous than a leaked token already is; at
+/// most it lets the app that holds it sign itself out.
+///
+/// A token naming any OTHER id -- including one it does not own -- gets exactly the refusal a
+/// token caller has always gotten from this route: today that is `SessionUser` rejecting the
+/// request outright with `AppError::Unauthorized` before a handler ever runs, so that is what a
+/// mismatched id gets here too, rather than the `NotFound` a session caller gets for someone
+/// else's id below. `tests/openapi.rs` and `tests/api_tokens.rs` pin both refusals.
 async fn revoke_token(
-    SessionUser(user): SessionUser,
+    user: AuthUser,
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
+    if user.token_id.is_some_and(|token_id| token_id != id) {
+        return Err(AppError::Unauthorized);
+    }
     let done = sqlx::query("DELETE FROM api_tokens WHERE id = $1 AND user_id = $2")
         .bind(id).bind(user.id)
         .execute(&state.db).await?;

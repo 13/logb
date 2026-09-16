@@ -483,9 +483,11 @@ curl -sS https://logb.example/api/objects -H 'authorization: Bearer logb_pat_...
 ```
 
 The plaintext is shown once and stored only as a hash; there is no way to
-recover it afterwards, so a lost token is revoked and replaced. Issuing and
-revoking tokens deliberately require a session cookie, never a token, so a
-leaked token cannot mint replacements or revoke the ones you would notice with.
+recover it afterwards, so a lost token is revoked and replaced. Issuing a
+token deliberately requires a session cookie, never a token, so a leaked
+token cannot mint replacements. Revoking one accepts a session cookie too,
+and additionally the token's own bearer credential — never another token's —
+so an app can revoke its own token on sign-out without holding a cookie.
 Changing a password revokes every token as well as every session.
 
 Writes that may be retried — `POST` of an activity or an attachment — accept a
