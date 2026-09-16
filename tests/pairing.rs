@@ -177,6 +177,31 @@ async fn unknown_expired_and_used_codes_all_answer_with_the_same_body() {
     assert_eq!(used_again_body, unknown_body, "used vs unknown must read the same");
 }
 
+/// The frontend (and the plan) both say a fresh code replaces the old one: showing a new QR
+/// must retire whatever was on screen before, even if that older code was never used and has
+/// not expired. Without this, a code shown, then hidden by requesting a new one, would go on
+/// being a live sign-in nobody watching the Account page could see any more.
+#[tokio::test]
+async fn a_new_code_invalidates_the_previous_one() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let a = create_pair_code(&app).await;
+    let b = create_pair_code(&app).await;
+    assert_ne!(a["code"], b["code"]);
+
+    let anon = bare_client();
+    let redeem_a = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": a["code"], "device_name": "phone" }))
+        .send().await.unwrap();
+    assert_eq!(redeem_a.status(), 401, "the superseded code must no longer redeem");
+
+    let redeem_b = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": b["code"], "device_name": "phone" }))
+        .send().await.unwrap();
+    assert_eq!(redeem_b.status(), 200, "{}", redeem_b.text().await.unwrap());
+}
+
 /// Redeem has no session and no token of its own, so it is rate-limited by IP exactly like
 /// `login` -- otherwise it is a fresh place to brute-force codes from.
 #[tokio::test]

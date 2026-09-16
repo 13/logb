@@ -64,24 +64,29 @@ async fn create_pair(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let now = db::now();
-    // Any code this user already had that can no longer be redeemed is cleared first, so the
-    // table does not accumulate one dead row per "show a new code" click forever.
-    sqlx::query("DELETE FROM pairing_codes WHERE user_id = $1 AND (used_at IS NOT NULL OR expires_at <= $2)")
-        .bind(user.id)
-        .bind(&now)
-        .execute(&state.db)
-        .await?;
-
     let code = pairing::new_code();
     let expires_at = (chrono::Utc::now() + chrono::Duration::from_std(pairing::TTL).unwrap())
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+    // A new code replaces whatever this user already had -- used, expired, or still perfectly
+    // live -- not just the dead rows: the frontend shows only ever the most recent code, so an
+    // older one that could still be redeemed would be a working sign-in nobody can see any more
+    // to notice or revoke. Delete and insert share one write transaction (the same
+    // `db::begin_write` `redeem` uses) so a crash between them cannot leave this user with the
+    // old code deleted and no new one in its place.
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    sqlx::query("DELETE FROM pairing_codes WHERE user_id = $1")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO pairing_codes (user_id, code_hash, created_at, expires_at) VALUES ($1, $2, $3, $4)")
         .bind(user.id)
         .bind(pairing::hash(&code))
         .bind(&now)
         .bind(&expires_at)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     let base_url = public_base_url(&state, &headers);
     let uri = pairing::uri(&base_url, &code);
