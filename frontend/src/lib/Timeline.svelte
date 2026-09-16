@@ -1,21 +1,22 @@
 <script lang="ts">
   import { fileUrl } from './api';
   import { go } from './router';
-  import { counter, fmtDate, money } from './format';
+  import { counter, fmtDate, money, quantity } from './format';
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import { activityTitle, groupByYear } from './activity-form';
+  import { energyCost, energyLabelKey } from './energy';
   import { foldReadings, readingSpan } from './timeline-fold';
   import { placesLabel, spanLabel, tripDistance, formatDuration } from './trip';
   import { categoriesFor, customTypes } from './type-registry';
-  import { CATEGORIES, type Activity, type Category, type CounterUnit, type ObjectType } from './types';
+  import { CATEGORIES, type Activity, type Category, type CounterUnit, type FuelUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
   import { tagColorIndex } from './tags';
 
   let {
-    objectId, type, activities, total, loadingMore = false, onmore, onlog, ontriplog, unit,
+    objectId, type, activities, total, loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, energyRate = null,
     category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
   }:
     {
@@ -25,9 +26,21 @@
        *  empty state beside the plain "+ Log activity" one, the same pair the object page's own
        *  floating buttons offer once there is at least one entry. */
       ontriplog?: () => void;
+      /** Set only on an object with a `fuel_unit` (see ObjectDetail.svelte) -- offers "+ Log
+       *  charge"/"+ Log fill" in the empty state, the same way `ontriplog` offers a trip. */
+      onchargelog?: () => void;
       unit: CounterUnit; category?: Category | '';
       tagFilter?: string | null; titleFilter?: string | null;
+      /** The object's fuel unit, for a fuel row's amount and the empty-state log button's
+       *  wording (`energyLabelKey`); `null` on an object with none. */
+      fuelUnit?: FuelUnit;
+      /** The object's `cost_per_counter_milli` (see EnergyOut), loaded by ObjectDetail alongside
+       *  the Info tab's Energy section rather than fetched here per row; `null` when it is not
+       *  known yet, or genuinely not computable, in which case a trip row shows no cost at all. */
+      energyRate?: number | null;
     } = $props();
+  /** "energy.charged"/"energy.filled", picking the empty-state log button's wording. */
+  const chargeStem = $derived(energyLabelKey(fuelUnit));
   const groups = $derived(groupByYear(activities));
   const hasMore = $derived(activities.length < total);
   // The type's vocabulary, plus any category the loaded entries actually use. The second half
@@ -101,6 +114,7 @@
       <p>{$t('timeline.empty')}</p>
       {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}
       {#if ontriplog}<button class="ghost" onclick={() => ontriplog()}>+ {$t('trip.log')}</button>{/if}
+      {#if onchargelog}<button class="ghost" onclick={() => onchargelog()}>+ {$t(`${chargeStem}-log`)}</button>{/if}
     {:else}
       <p>{$t('timeline.none-in-filter')}</p>
     {/if}
@@ -161,6 +175,10 @@
                 {fmtDate(a.date, $dateFormat)} · {spanLabel(counter(a.start_counter, unit, $locale), counter(a.counter_value, unit, $locale))}
                 {#if dist !== null} · {counter(dist, unit, $locale)}{/if}
                 {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
+                <!-- Never stored, always an estimate -- the "≈" tells it apart from `cost_cents`
+                     just before it, which is a real recorded amount. Nothing shown at all once
+                     the rate (or the distance itself) is not known. -->
+                {#if dist !== null && energyRate !== null} · ≈ {energyCost(dist, energyRate, $currency, $locale)}{/if}
               </div>
               {#if placesLabel(a.from_place, a.to_place)}
                 <div class="muted">{placesLabel(a.from_place, a.to_place)}</div>
@@ -173,6 +191,17 @@
                   ].filter((s) => s !== null).join(' · ')}
                 </div>
               {/if}
+            {:else if a.category === 'fuel'}
+              <!-- Counter first (a charge/fill marks the odometer like any reading), then "full"
+                   when it topped up, the amount, and the cost -- see the design spec's own
+                   example row. -->
+              <div class="muted tnum">
+                {fmtDate(a.date, $dateFormat)}
+                {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
+                {#if a.charged_full} · {$t('energy.full')}{/if}
+                {#if a.quantity_milli !== null} · {quantity(a.quantity_milli, fuelUnit ?? (unit === 'mi' ? 'gal' : 'l'), $locale)}{/if}
+                {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
+              </div>
             {:else}
               <div class="muted tnum">
                 {fmtDate(a.date, $dateFormat)}

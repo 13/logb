@@ -2,11 +2,12 @@
   import { api } from './api';
   import BarList from './BarList.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
+  import { energyLabelKey } from './energy';
   import { fillLabel, insightsPath, monthLabel, sinceLabel } from './insights';
   import { persisted } from '../stores/persisted';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { CounterUnit, Insights } from './types';
+  import type { CounterUnit, FuelUnit, Insights } from './types';
 
   let { objectId, unit, hasContents = false }: { objectId: number; unit: CounterUnit; hasContents?: boolean } = $props();
 
@@ -76,7 +77,11 @@
   {/if}
   {#if data.fuel}
     {@const fuel = data.fuel}
-    <p class="muted">{$t('insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuel.unit, $locale)}</b></p>
+    <!-- A kWh object reads "Charged"/"Energy cost per {unit}" here instead of the petrol
+         wording -- `energyLabelKey` also drives the "+ Log charge" button and the Energy
+         section's own log button, so a kWh object never mixes the two vocabularies. -->
+    {@const charged = energyLabelKey(fuel.unit as FuelUnit) === 'energy.charged'}
+    <p class="muted">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuel.unit, $locale)}</b></p>
     {#if fuel.per_100_milli !== null && unit}
       <p class="muted">{$t('insights.consumption')}: <b>{quantity(fuel.per_100_milli, fuel.unit, $locale)}/100 {unit}</b></p>
       <!-- `cost_per_counter_milli` is null under exactly the same condition as `per_100_milli`
@@ -85,7 +90,7 @@
            src/domain/insights.rs), so this guard covers both. Same scale as the overall
            per-counter figure above (milli-cents per unit), hence the same `perCounter`
            formatter. -->
-      <p class="muted">{$t('insights.fuel-per-counter', { unit })}: <b>{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b></p>
+      <p class="muted">{$t(charged ? 'energy.charged-cost-per-counter' : 'insights.fuel-per-counter', { unit })}: <b>{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b></p>
     {/if}
   {/if}
   {#if data.counter_per_day_milli !== null && unit}

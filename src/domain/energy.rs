@@ -44,7 +44,7 @@ pub struct Battery {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Energy {
     /// Mean window distance, over windows -- see `energy`'s doc comment for what a window is.
-    /// `None` with fewer than two windows.
+    /// `None` with no windows at all (a single window still yields a figure).
     pub distance_per_charge: Option<i64>,
     /// Mean of each window's distance per unit, scaled by 1000 (0.05 distance/unit -> 50) --
     /// the same milli scale as `quantity_milli` itself. `None` when no window's closing charge
@@ -81,8 +81,8 @@ fn mean(values: &[i64]) -> Option<i64> {
 /// arrives. A window whose distance is not positive -- a duplicate counter reading, or one that
 /// went backwards (a replaced odometer, a reset battery) -- is dropped before any figure is
 /// computed from it, once, so `distance_per_charge` can never disagree with the rate figures
-/// about which windows exist. Fewer than two windows at all leaves every figure but `battery` as
-/// `None`.
+/// about which windows exist. No windows at all leaves every figure but `battery` as `None` (a
+/// single surviving window still yields one).
 ///
 /// Each figure is the mean of its own per-window rate, not one rate over the combined windows,
 /// so a single window missing an amount or a cost only drops out of the average that needs it

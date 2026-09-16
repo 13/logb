@@ -651,7 +651,7 @@
     "/objects/{id}/energy": {
       "get": {
         "summary": "Distance and cost per charge, and when to charge next.",
-        "description": "Computed from the object's non-deleted `fuel` entries that carry a `counter_value` (a charge), oldest first, and its non-deleted `trip` entries. A window is the distance between two consecutive full charges when any charge is marked full, or between consecutive charges otherwise; each figure is null when no window can supply it. `battery` is null with no full charge yet, or when no trip carries `battery_used_pct`. See `domain::energy::energy` for the exact maths.",
+        "description": "Computed from the object's non-deleted `fuel` entries that carry a `counter_value` (a charge), ordered by date and, for ties, by counter -- not by counter alone, so a replaced or reset counter cannot be read as one huge or negative window -- and its non-deleted `trip` entries. A window is the distance between two consecutive full charges when at least two charges are marked full, or between consecutive charges otherwise; a window whose distance is zero or negative is dropped before any figure is computed from it, and each remaining figure is null when no window can supply it. `battery` is null with no full charge yet, or when no trip carries `battery_used_pct`; a trip counts once it happens after the last full charge, or on the same day at or after that charge's own counter. See `domain::energy::energy` for the exact maths.",
         "parameters": [
           {
             "name": "id",
@@ -3557,7 +3557,7 @@
           "remaining_pct": {
             "type": "integer",
             "format": "int64",
-            "description": "max(0, 100 - the battery percent used by trips after the last full charge)"
+            "description": "max(0, 100 - the battery percent used by trips after the last full charge, or dated the same day and starting at or after its counter -- a trip on the charging day itself still counts, unless it ran before the charge was plugged in)"
           },
           "range_left": {
             "type": ["integer", "null"],
@@ -3586,7 +3586,7 @@
           "distance_per_charge": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "Mean window distance; null with fewer than two qualifying charges"
+            "description": "Mean window distance; null with no windows at all (a single window still yields a figure)"
           },
           "distance_per_unit_milli": {
             "type": ["integer", "null"],

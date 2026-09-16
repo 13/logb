@@ -27,6 +27,10 @@
   let costText = $state('');
   let counterText = $state('');
   let quantityText = $state('');
+  /** The "Charged full" checkbox, fuel-only. Ticked by default on a new entry -- most charges
+   *  (or fill-ups) do top up -- and read back from the loaded row's own `charged_full` on an
+   *  edit, same as every other fuel-only field below. */
+  let chargedFull = $state(true);
   // Trip-only text fields: `from_place`/`to_place` are nullable strings, so (unlike `input.title`
   // or `.notes`) they cannot be bound to a text input directly without the field showing the
   // literal word "null" the moment the category becomes trip -- same reason `counterText` above
@@ -128,6 +132,7 @@
         costText = centsToInput(a.cost_cents);
         counterText = a.counter_value === null ? '' : String(a.counter_value);
         quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
+        chargedFull = a.charged_full === 1;
         fromText = a.from_place ?? '';
         toText = a.to_place ?? '';
         durationText = a.duration_minutes === null ? '' : formatDuration(a.duration_minutes);
@@ -290,6 +295,11 @@
       // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
       // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
       quantity_milli: input.category === 'fuel' ? parseQuantity(quantityText) : null,
+      // Same pattern as `quantity_milli` just above: 1 only while this IS a fuel entry and the
+      // box is ticked, 0 otherwise -- so switching category away from fuel after ticking it
+      // can't leave the flag stuck set on a repair/maintenance/... row (the backend rejects it
+      // there outright: "only a charge can be marked full").
+      charged_full: input.category === 'fuel' && chargedFull ? 1 : 0,
       // The five trip fields exist in the form only for the trip category (see the template
       // below) -- sent as null otherwise, mirroring `quantity_milli` above, so switching away
       // from trip after filling any of them in can't leave them stuck on a repair/maintenance/...
@@ -441,6 +451,12 @@
         {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
       </datalist>
     </div>
+    {#if input.category === 'fuel'}
+      <label class="row toggle">
+        <input type="checkbox" bind:checked={chargedFull} />
+        {$t('activity.charged-full')}
+      </label>
+    {/if}
     {#if input.category === 'trip'}
       <!-- `object?.counter_unit` (not a plain `object.counter_unit`): an existing trip must
            still be editable offline even if the object itself failed to load (no cache either),

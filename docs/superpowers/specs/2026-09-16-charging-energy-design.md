@@ -1,6 +1,6 @@
 # Charges and energy cost
 
-Status: approved, not implemented. Builds on the trip log (0.10.0): what a charge (or fill) gives
+Status: implemented. Builds on the trip log (0.10.0): what a charge (or fill) gives
 you, what a trip costs in energy, and when to charge next.
 
 ## Data

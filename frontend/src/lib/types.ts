@@ -202,7 +202,9 @@ export interface TripSummary { month: TripTotals; year: TripTotals; all: TripTot
 
 /** "Charge due", part of `EnergyOut`. */
 export interface EnergyBattery {
-  /** max(0, 100 - the battery percent used by trips after the last full charge). */
+  /** max(0, 100 - the battery percent used by trips after the last full charge, or dated the
+   *  same day and starting at or after its counter -- a trip on the charging day itself still
+   *  counts, unless it ran before the charge was plugged in). */
   remaining_pct: number;
   /** remaining_pct x (distance / battery percent), summed over every trip that carries both;
    *  null when no trip does. */
@@ -217,7 +219,7 @@ export interface EnergyOut {
   unit: string | null;
   /** The object's energy_price_milli, unchanged. */
   price_milli: number | null;
-  /** Mean window distance; null with fewer than two qualifying charges. */
+  /** Mean window distance; null with no windows at all (a single window still yields a figure). */
   distance_per_charge: number | null;
   /** Mean of each window's distance per unit, scaled by 1000; null when no window's closing
    *  charge carries an amount. */

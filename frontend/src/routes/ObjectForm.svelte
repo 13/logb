@@ -7,14 +7,14 @@
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
   import { centsToInput, counter, parseMoney } from '../lib/format';
-  import { emptyInput, toInput, validate } from '../lib/object-form';
+  import { clearsPriceOn, emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
   import { reminderBody } from '../lib/reminder-form';
   import { readingActivity } from '../lib/reading';
   import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
-  import { OBJECT_TYPES, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
+  import { OBJECT_TYPES, type FuelUnit, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
   import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
   import { saveObjectDraft, takeObjectDraft } from '../lib/object-draft';
 
@@ -28,6 +28,9 @@
     untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
   );
   let priceText = $state('');
+  /** The "Price per {unit}" field, next to the fuel unit -- kept as its own text state like
+   *  `priceText`, parsed at submit time. */
+  let energyPriceText = $state('');
   /** Ticked template ids. Opt-in, never automatic: a reminder nobody asked for is the kind that
    *  gets muted. */
   let chosen = $state<string[]>([]);
@@ -66,6 +69,15 @@
     input.type = ty as ObjectType;
     if (input.counter_unit === null) input.counter_unit = defaultUnit(ty, $customTypes);
   }
+
+  /** A price kept from the previous fuel unit would misread as the new one (a €/kWh figure
+   *  surviving a switch to litres) -- `clearsPriceOn` (../lib/object-form.ts) says so on any
+   *  actual change, and this is a UI-side clear only: the server still allows the stale
+   *  combination. */
+  function setFuelUnit(next: FuelUnit) {
+    if (clearsPriceOn(input.fuel_unit, next)) energyPriceText = '';
+    input.fuel_unit = next;
+  }
   /** An object whose own type is gone (deleted elsewhere, not synced here yet) still has to show
    *  something selected, or the select would sit on a blank and look like it lost the type. */
   const missingType = $derived(input.type.startsWith('custom:') && !$customTypes.some((c) => c.key === input.type));
@@ -102,10 +114,12 @@
     if (draft) {
       input = draft;
       priceText = centsToInput(draft.purchase_price_cents);
+      energyPriceText = centsToInput(draft.energy_price_milli == null ? null : Math.round(draft.energy_price_milli / 1000));
     } else if (id) {
       const o = await api<MemObject>('GET', `/objects/${id}`);
       input = toInput(o);
       priceText = centsToInput(o.purchase_price_cents);
+      energyPriceText = centsToInput(o.energy_price_milli === null ? null : Math.round(o.energy_price_milli / 1000));
     }
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
@@ -149,6 +163,11 @@
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     input.purchase_price_cents = parseMoney(priceText);
+    // Cents x1000, the same scale as `cost_per_counter_milli`; empty (or no fuel unit at all,
+    // which hides the field) means no price. `Number.isNaN(cents) * 1000` stays `NaN`, so an
+    // unparseable price still reaches `validate` below rather than being silently swallowed.
+    const energyPriceCents = parseMoney(energyPriceText);
+    input.energy_price_milli = input.fuel_unit === null || energyPriceCents === null ? null : energyPriceCents * 1000;
     const bad = validate(input);
     if (bad) { error = fieldError(bad, $t); return; }
     busy = true; error = '';
@@ -231,13 +250,19 @@
     {/if}
     <div class="field">
       <label for="fu">{$t('object.fuel-unit')}</label>
-      <select id="fu" bind:value={input.fuel_unit}>
+      <select id="fu" bind:value={() => input.fuel_unit, setFuelUnit}>
         <option value={null}>{$t('object.counter-none')}</option>
         <option value="l">l</option>
         <option value="gal">gal</option>
         <option value="kwh">kwh</option>
       </select>
     </div>
+    {#if input.fuel_unit}
+      <div class="field">
+        <label for="ep">{$t('object.energy-price', { unit: input.fuel_unit })}</label>
+        <input id="ep" type="text" inputmode="decimal" bind:value={energyPriceText} />
+      </div>
+    {/if}
     <div class="field">
       <label for="p">{$t('object.parent')}</label>
       <select id="p" bind:value={input.parent_id}>

@@ -10,6 +10,8 @@
   import TagChips from '../lib/TagChips.svelte';
   import LastDone from '../lib/LastDone.svelte';
   import TripTotals from '../lib/TripTotals.svelte';
+  import EnergyFigures from '../lib/EnergyFigures.svelte';
+  import { energyLabelKey } from '../lib/energy';
   import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
@@ -19,7 +21,7 @@
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, ActivityInput, Category, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
+  import type { Activity, ActivityInput, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import type { QueuedOp } from '../lib/outbox';
 
@@ -45,6 +47,9 @@
    *  `counterUnit` argument checks, so "+ Log trip" (both the FAB and the empty-state one) and
    *  the category the entry form actually offers never disagree. */
   const offersTrip = $derived(object?.counter_unit === 'km' || object?.counter_unit === 'mi');
+  /** Whether a charge (or fill) can be logged here at all -- "+ Log charge" (both the FAB and
+   *  the Timeline empty state), and whether the Energy section's own figures are worth loading. */
+  const offersEnergy = $derived(object?.fuel_unit != null);
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
   let activityTotal = $state(0);
@@ -64,6 +69,12 @@
   /** The Info tab's "Trips" totals, loaded the same way and for the same reason -- see
    *  `loadTripSummary`. `null` until loaded, and again on a failed request. */
   let tripSummary = $state<TripSummary | null>(null);
+  /** Distance and cost per charge, and when to charge next -- backs both the Info tab's Energy
+   *  section and (via `energyData?.cost_per_counter_milli`) the Timeline's own trip-cost
+   *  estimate and the Trips table's "Energy cost" row, so it is loaded proactively below rather
+   *  than only while the Info tab is open, unlike `tripSummary`/`lastDone`. `null` until loaded,
+   *  and again on a failed request, exactly like those two. */
+  let energyData = $state<EnergyOut | null>(null);
   let error = $state('');
 
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
@@ -122,6 +133,22 @@
       if (token === tripSummarySeq) tripSummary = s;
     } catch {
       if (token === tripSummarySeq) tripSummary = null;
+    }
+  }
+
+  /// Guards `loadEnergy` against a since-superseded request, the same way `tripSummarySeq` does.
+  let energySeq = 0;
+
+  /** The Energy section's figures (and the Timeline/Trips-table rate riding along with them).
+   *  Hidden by `EnergyFigures.svelte` itself when every figure is null, so a failed request just
+   *  leaves it hidden -- same reasoning as `loadTripSummary`. */
+  async function loadEnergy() {
+    const token = ++energySeq;
+    try {
+      const e = await api<EnergyOut>('GET', `/objects/${oid}/energy`);
+      if (token === energySeq) energyData = e;
+    } catch {
+      if (token === energySeq) energyData = null;
     }
   }
 
@@ -282,9 +309,16 @@
     lastDoneSeq++;
     tripSummary = null;
     tripSummarySeq++;
+    energyData = null;
+    energySeq++;
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
   $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); if (offersTrip) loadTripSummary(); } });
+  // Unlike `loadTripSummary` above, not gated to the Info tab: the Timeline (the default tab)
+  // needs `energyData.cost_per_counter_milli` for its own trip-cost estimate, so this loads as
+  // soon as the object is known to have a fuel unit, whichever tab is open. `offersEnergy`
+  // starts false (before `object` itself has loaded) and this effect re-runs once it flips true.
+  $effect(() => { oid; if (offersEnergy) loadEnergy(); });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -360,7 +394,9 @@
         objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
         ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
-        unit={object.counter_unit} bind:category bind:tagFilter bind:titleFilter
+        onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=fuel`) : undefined}
+        unit={object.counter_unit} fuelUnit={object.fuel_unit} energyRate={energyData?.cost_per_counter_milli ?? null}
+        bind:category bind:tagFilter bind:titleFilter
       />
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
            already is; two of them would be two calls to the same action. -->
@@ -372,6 +408,9 @@
                  its own label. `.fab-secondary` gives it the same solid surface + border a card
                  has, so it reads as a button regardless of what is behind it. -->
             <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
+          {/if}
+          {#if offersEnergy}
+            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=fuel`)}>+ {$t(`${energyLabelKey(object.fuel_unit)}-log`)}</button>
           {/if}
           <button class="primary fab-btn" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
         </div>
@@ -387,7 +426,10 @@
       {#if object.description}<p class="desc">{object.description}</p>{/if}
       {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
       <LastDone items={lastDone} {object} onselect={selectLastDone} />
-      {#if offersTrip}<TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} />{/if}
+      {#if offersTrip}
+        <TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} energyRate={energyData?.cost_per_counter_milli ?? null} />
+      {/if}
+      {#if offersEnergy}<EnergyFigures energy={energyData} unit={object.counter_unit} />{/if}
       <h3>{$t('object.contents')}</h3>
       {#if children.length === 0}
         <p class="muted">{$t('object.contents-empty')}</p>

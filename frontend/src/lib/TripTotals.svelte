@@ -1,6 +1,8 @@
 <script lang="ts">
   import { counter } from './format';
+  import { energyCost } from './energy';
   import { formatPer10Pct, formatSpeed } from './trip';
+  import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { TripSummary } from './types';
 
@@ -9,8 +11,10 @@
    *  yet" and a failed request, and is treated the same as "no trips": a table of dashes over a
    *  request that just failed would read as data, not as the harmless miss it is. `unit` is
    *  always `'km'`/`'mi'` here -- the parent only renders this component on an object that
-   *  offers trips at all, which needs exactly one of those two counter units. */
-  let { summary, unit }: { summary: TripSummary | null; unit: 'km' | 'mi' } = $props();
+   *  offers trips at all, which needs exactly one of those two counter units. `energyRate` is
+   *  the object's `cost_per_counter_milli` (see EnergyOut), loaded alongside the Info tab's
+   *  Energy section; `null` hides the "Energy cost" row entirely rather than showing dashes. */
+  let { summary, unit, energyRate = null }: { summary: TripSummary | null; unit: 'km' | 'mi'; energyRate?: number | null } = $props();
 
   const periods = $derived(summary
     ? ([
@@ -65,6 +69,12 @@
                  the only place "per 10 %" is said at all. -->
             <th scope="row">{$t('trips.per-battery')}</th>
             {#each periods as p (p.key)}<td>{p.totals.distance_per_10pct === null ? '–' : formatPer10Pct(p.totals.distance_per_10pct, unit, $locale)}</td>{/each}
+          </tr>
+        {/if}
+        {#if energyRate !== null}
+          <tr>
+            <th scope="row">{$t('trips.energy-cost')}</th>
+            {#each periods as p (p.key)}<td>{energyCost(p.totals.distance, energyRate, $currency, $locale)}</td>{/each}
           </tr>
         {/if}
       </tbody>

@@ -1,14 +1,17 @@
-import type { MemObject, ObjectInput } from './types';
+import type { FuelUnit, MemObject, ObjectInput } from './types';
 
 export function emptyInput(): ObjectInput {
-  return { name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null, archived: false, parent_id: null, tags: [] };
+  return {
+    name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null,
+    archived: false, parent_id: null, tags: [], energy_price_milli: null,
+  };
 }
 
 export function toInput(o: MemObject): ObjectInput {
   return {
     name: o.name, type: o.type, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
     purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents, archived: o.archived_at !== null,
-    parent_id: o.parent_id, tags: [...o.tags],
+    parent_id: o.parent_id, tags: [...o.tags], energy_price_milli: o.energy_price_milli,
   };
 }
 
@@ -20,5 +23,16 @@ export function toInput(o: MemObject): ObjectInput {
 export function validate(input: ObjectInput): string | null {
   if (!input.name.trim()) return 'object.name';
   if (input.purchase_price_cents !== null && Number.isNaN(input.purchase_price_cents)) return 'object.purchase-price';
+  if (input.energy_price_milli !== null && input.energy_price_milli !== undefined && Number.isNaN(input.energy_price_milli)) return 'object.energy-price';
   return null;
+}
+
+/**
+ * Whether a price kept from the previous fuel unit should survive a change to `next` -- never: a
+ * price is only meaningful against the unit it was entered for (a €/kWh figure would misread as
+ * €/l after a switch to litres), so any actual change clears it. Pure so the object form's fuel
+ * unit `onchange` can be exercised without a DOM (see ObjectForm.svelte's `setFuelUnit`).
+ */
+export function clearsPriceOn(prev: FuelUnit, next: FuelUnit): boolean {
+  return prev !== next;
 }
