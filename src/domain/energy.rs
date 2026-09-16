@@ -115,7 +115,12 @@ pub fn energy(charges: &[Charge], trips: &[Trip], price_milli: Option<i64>) -> E
             // (An earlier version divided by only 1000, which cancelled `quantity_milli`'s own
             // x1000 instead of compounding it, landing 1000x too small -- e.g. reading 0.1
             // km/kWh for a rate that is really 50 times higher.)
-            Some(distance * 1_000_000 / quantity)
+            //
+            // `i128`: `counter_value` is only validated `>= 0`, not bounded above, so
+            // `distance * 1_000_000` could in principle overflow `i64` for a fat-fingered import
+            // -- widen for the multiply and narrow back once the division has brought the
+            // result down to a sane range, rather than risk a panic in a debug build.
+            Some((distance as i128 * 1_000_000 / quantity as i128) as i64)
         })
         .collect();
     let distance_per_unit_milli = mean(&unit_rates);
@@ -137,7 +142,10 @@ pub fn energy(charges: &[Charge], trips: &[Trip], price_milli: Option<i64>) -> E
                 None => {
                     let quantity = b.quantity_milli?;
                     let price = price_milli?;
-                    quantity * price / 1000 / distance
+                    // `i128` for the same reason as the unit-rate multiply above: `quantity` and
+                    // `price` are each only validated `>= 0`, and their product alone (before
+                    // this is even divided down) could overflow `i64`.
+                    (quantity as i128 * price as i128 / 1000 / distance as i128) as i64
                 },
             };
             Some(rate)

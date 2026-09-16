@@ -100,11 +100,13 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   // The Info tab's Energy section: distance per charge (400 km, the one surviving window),
   // distance per unit (400 km / 8 kWh = 50 km/kWh, via `distance_per_unit_milli` = 50_000
   // milli -> formatPerUnit divides back down and appends the reader-facing "kWh"), and energy
-  // cost per distance (the same 600 milli-cents/km as above, rendered as money -- €0.01).
+  // cost per 100 km (the same 600 milli-cents/km as above, x100 -> 60_000 milli -> €0.60 --
+  // per-100 like `insights.consumption`, not per single km, which would round to an
+  // uninformative and ~40 % high €0.01).
   await page.goto(`/objects/${bike}?tab=info`);
   await expect(page.getByText('Distance per charge: 400 km')).toBeVisible();
   await expect(page.getByText('Distance per unit: 50 km/kWh')).toBeVisible();
-  await expect(page.getByText('Energy cost per distance: €0.01')).toBeVisible();
+  await expect(page.getByText('Energy cost per 100 km: €0.60')).toBeVisible();
 
   // A further trip after the second (now latest) full charge, using 85 % of the battery: past
   // the "charge soon" threshold (remaining <= 20). remaining = 100 - 85 = 15; km_per_pct is

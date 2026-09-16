@@ -487,24 +487,38 @@ async fn last_done(
     State(state): State<App>,
     Path(object_id): Path<i64>,
 ) -> Result<Json<Vec<LastDone>>, AppError> {
-    load_owned_object(&state, user.id, object_id).await?;
+    let object = load_owned_object(&state, user.id, object_id).await?;
     // Grouped in Rust by `fold_title`, not by a SQL GROUP BY on a folded expression -- see the
     // comment on `fold_title` for why SQL's own folding would disagree between backends. Rows
     // arrive newest first, so the first one seen for a given key is already that title's newest
     // occurrence, and any later one for the same key only adds to the count.
     //
-    // `trip` and `fuel` are excluded the same way `reading` is: a trip is something logged, not
-    // something done, and a charge is likewise logged at (rather than "done to") the current
-    // counter -- a charge's own row would otherwise show the meaningless "0 km ago" every single
-    // time (the Energy section is where a charge's own figures belong instead).
-    let entry_rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT id, title, date, counter_value FROM activities \
-         WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'fuel') \
-         ORDER BY date DESC, id DESC",
-    )
-    .bind(object_id)
-    .fetch_all(&state.db)
-    .await?;
+    // `trip` is always excluded: a trip is something logged, not something done, and its title
+    // is optional besides. `fuel` is excluded only when the object actually has a `fuel_unit` --
+    // that object gets an Energy section instead, where a charge's own figures belong, and a
+    // charge's row would otherwise show the meaningless "0 km ago" every single time. An object
+    // that offers the `fuel` category (car/e_bike/motorcycle, regardless of `fuel_unit`) but has
+    // none set gets no Energy section at all, so "distance since the last fill" still belongs
+    // here for it, exactly as it did before the Energy section existed.
+    let entry_rows: Vec<(i64, String, String, Option<i64>)> = if object.fuel_unit.is_some() {
+        sqlx::query_as(
+            "SELECT id, title, date, counter_value FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'fuel') \
+             ORDER BY date DESC, id DESC",
+        )
+        .bind(object_id)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, title, date, counter_value FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip') \
+             ORDER BY date DESC, id DESC",
+        )
+        .bind(object_id)
+        .fetch_all(&state.db)
+        .await?
+    };
 
     let mut by_key: HashMap<String, LastDone> = HashMap::new();
     for (id, title, date, counter_value) in entry_rows {

@@ -36,9 +36,11 @@ Migrations: SQLite `0016_energy.sql`, PostgreSQL `0007_energy.sql`; `schema_pari
 - Timeline row: title (or "Charged" / "Geladen"), date, counter, "full" when ticked, amount and
   cost when given — e.g. `16.09.2026 · 3.420 km · full · 8,5 kWh · 2,55 €`.
 - "Last done" excludes `fuel` entries too, the same way it already excludes `trip` (see the trip
-  log spec): a charge is something logged at the current counter, not something "done", and the
-  Energy section below is where its own figures belong -- a charge would otherwise show the
-  meaningless "0 km ago" every single time.
+  log spec), but only on an object that actually has a `fuel_unit` set: that object gets an Energy
+  section instead, where a charge's own figures belong, and a charge would otherwise show the
+  meaningless "0 km ago" every single time. `fuel` is offered on car/e_bike/motorcycle regardless
+  of `fuel_unit`, so an object that logs fills but has never set one keeps seeing "distance since
+  the last fill" here, same as before the Energy section existed.
 
 ## Figures (object Info tab, section "Energy" / "Energie")
 

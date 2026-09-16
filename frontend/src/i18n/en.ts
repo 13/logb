@@ -161,7 +161,7 @@ export default {
   'energy.title': 'Energy',
   'energy.distance-per-charge': 'Distance per charge',
   'energy.distance-per-unit': 'Distance per unit',
-  'energy.cost-per-distance': 'Energy cost per distance',
+  'energy.cost-per-100': 'Energy cost per 100 {unit}',
   'energy.charge-due': 'Charge due',
   'energy.charge-soon': 'charge soon',
 

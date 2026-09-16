@@ -525,7 +525,9 @@
     </div>
     {#if input.category === 'fuel' && object?.counter_unit}
       <div class="field">
-        <label for="qt">{$t('activity.quantity')} ({object.fuel_unit ? fuelUnitLabel(object.fuel_unit) : (object.counter_unit === 'mi' ? 'gal' : 'l')})</label>
+        <!-- A bare label, not an invented "l"/"gal", once the object declares no fuel unit at
+             all -- matches the bare number Timeline.svelte now shows for the same case. -->
+        <label for="qt">{$t('activity.quantity')}{object.fuel_unit ? ` (${fuelUnitLabel(object.fuel_unit)})` : ''}</label>
         <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
       </div>
     {/if}

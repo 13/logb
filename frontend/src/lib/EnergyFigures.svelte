@@ -22,7 +22,7 @@
     energy !== null
     && ((energy.distance_per_charge !== null && !!unit)
       || (energy.distance_per_unit_milli !== null && !!energy.unit && !!unit)
-      || energy.cost_per_counter_milli !== null
+      || (energy.cost_per_counter_milli !== null && !!unit)
       || !!energy.battery),
   );
 </script>
@@ -35,8 +35,13 @@
   {#if energy.distance_per_unit_milli !== null && energy.unit && unit}
     <p class="muted">{$t('energy.distance-per-unit')}: <b>{formatPerUnit(energy.distance_per_unit_milli, fuelUnitLabel(energy.unit), unit, $locale)}</b></p>
   {/if}
-  {#if energy.cost_per_counter_milli !== null}
-    <p class="muted">{$t('energy.cost-per-distance')}: <b>{perCounter(energy.cost_per_counter_milli, $currency, $locale)}</b></p>
+  {#if energy.cost_per_counter_milli !== null && unit}
+    <!-- Per 100 units, not per single unit: `insights.consumption` already reads "/100 km",
+         and a single-unit rate here would be both an odd fraction of a cent (a plain "€0.01"
+         claims far less precision than the mean it actually is) and ~40 % off once rounded to
+         cents at all -- `cost_per_counter_milli` (600 -> €0.006/km) rounds to €0.01, while the
+         same rate over 100 units (60 000 milli -> €0.60) rounds true. -->
+    <p class="muted">{$t('energy.cost-per-100', { unit })}: <b>{perCounter(energy.cost_per_counter_milli * 100, $currency, $locale)}</b></p>
   {/if}
   {#if energy.battery}
     <p class="muted" data-testid="energy-battery">

@@ -203,14 +203,28 @@ async fn trips_never_count_towards_last_done() {
     assert_eq!(rows[0]["occurrences"], 2);
 }
 
-/// A charge is likewise "something logged" -- at the current counter, not "done" to it -- see
-/// the charging spec's own note that charges are excluded from last done the same way trips are.
-/// A charge at the current counter would otherwise show the meaningless "0 km ago" every time.
+/// Creates a car with the given `fuel_unit` (or none) and a `km` counter. `app.create_object`
+/// has no `fuel_unit` parameter, hence this -- mirrors `create_car` in `tests/charging.rs`.
+async fn create_car(app: &common::TestApp, fuel_unit: Option<&str>) -> Value {
+    let res = app.client.post(app.url("/objects")).json(&json!({
+        "name": "Golf", "type": "car", "counter_unit": "km", "fuel_unit": fuel_unit,
+        "description": "", "purchase_date": null, "purchase_price_cents": null
+    })).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    res.json().await.unwrap()
+}
+
+/// A charge is "something logged" -- at the current counter, not "done" to it -- see the
+/// charging spec's own note that charges are excluded from last done the same way trips are,
+/// but only once the object has a `fuel_unit`: that object gets an Energy section instead,
+/// where a charge's own figures belong, and a charge at the current counter would otherwise
+/// show the meaningless "0 km ago" every time. See `fills_still_count_towards_last_done...`
+/// below for the opposite case -- an object that logs fuel but has never set a `fuel_unit`.
 #[tokio::test]
-async fn charges_never_count_towards_last_done() {
+async fn charges_never_count_towards_last_done_once_a_fuel_unit_is_set() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    let bike = app.create_object(&app.client, "E-Bike", Some("km")).await;
+    let bike = create_car(&app, Some("kwh")).await;
     let id = bike["id"].as_i64().unwrap();
 
     // Two charges titled "Charge", twice over -- would clear the occurrences bar on its own if
@@ -230,7 +244,27 @@ async fn charges_never_count_towards_last_done() {
     act(&app, id, "2026-05-15", "maintenance", "Oil change", None).await;
 
     let rows: Vec<Value> = last_done(&app, id).await.json().await.unwrap();
-    assert_eq!(rows.len(), 1, "charges never count toward last done: {rows:?}");
+    assert_eq!(rows.len(), 1, "charges never count toward last done once a fuel_unit is set: {rows:?}");
     assert_eq!(rows[0]["title"], "Oil change");
     assert_eq!(rows[0]["occurrences"], 2);
+}
+
+/// `fuel` is offered on car/e_bike/motorcycle regardless of `fuel_unit`, and an object that logs
+/// fills but has never set one gets no Energy section either -- "distance since the last fill"
+/// still belongs here for it, exactly as it did before the Energy section existed.
+#[tokio::test]
+async fn a_repeated_fill_still_counts_towards_last_done_with_no_fuel_unit_set() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, None).await;
+    let id = car["id"].as_i64().unwrap();
+
+    act(&app, id, "2026-01-01", "fuel", "Diesel", Some(1000)).await;
+    act(&app, id, "2026-02-01", "fuel", "Diesel", Some(1400)).await;
+
+    let rows: Vec<Value> = last_done(&app, id).await.json().await.unwrap();
+    assert_eq!(rows.len(), 1, "a fill counts toward last done with no fuel_unit set: {rows:?}");
+    assert_eq!(rows[0]["title"], "Diesel");
+    assert_eq!(rows[0]["occurrences"], 2);
+    assert_eq!(rows[0]["last_counter"], 1400);
 }
