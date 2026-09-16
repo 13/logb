@@ -38,8 +38,10 @@ export interface PairingSession {
   showCode: () => void;
   /** Switches back to the QR. A no-op outside `code`. */
   showQr: () => void;
-  /** Stops the countdown timer without clearing what is on screen. Call from `onDestroy` so a
-   *  timer set by one mount never outlives it and keeps firing after the component is gone. */
+  /** Stops the countdown timer without clearing what is on screen, and invalidates any
+   *  `request()` still in flight so its response cannot start a timer of its own once it
+   *  arrives. Call from `onDestroy` so a timer -- or a request -- from one mount never outlives
+   *  it and keeps firing, or starts firing, after the component is gone. */
   stop: () => void;
 }
 
@@ -48,8 +50,22 @@ const initial: PairingState = { phase: 'idle', pair: null, secondsLeft: 0 };
 export function createPairing(): PairingSession {
   const store = writable<PairingState>({ ...initial });
   let timer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Bumped by every call to `stop()` -- including the one `request()` itself makes before it
+   * starts, and the one a component's `onDestroy` makes through the very same function. A
+   * `request()` call captures the value right after that bump as its own identity (`mine`
+   * below); if the value has moved on by the time its response arrives, a *newer* `request()`
+   * call or a teardown has happened in the meantime, and this response is stale. A stale
+   * response must never replace what a newer call already put on screen -- the bug a double
+   * click used to trigger, since two overlapping calls both reached `store.set` and
+   * `setInterval` in whichever order their two fetches happened to resolve, so the one that
+   * finished LAST won even if it was the FIRST one sent -- and, after a destroy, it must never
+   * start a timer with nothing left around to ever clear it.
+   */
+  let generation = 0;
 
   function stop(): void {
+    generation++;
     if (timer !== null) { clearInterval(timer); timer = null; }
   }
 
@@ -68,7 +84,16 @@ export function createPairing(): PairingSession {
 
   async function request(): Promise<void> {
     stop();
+    const mine = generation;
     const pair = await api<PairCode>('POST', '/auth/pair');
+    // Stale: a newer `request()` (a second click before this one answered) or a `stop()` from
+    // `onDestroy` happened while this fetch was in flight. Dropping it here, before touching
+    // the store, is what keeps an older response from ever replacing or hiding a newer one.
+    if (mine !== generation) return;
+    // `mine` is still current, so this has nothing to clear -- called anyway as insurance
+    // against relying on that invariant rather than re-asserting it right before the timer it
+    // guards is created.
+    stop();
     store.set({ phase: 'qr', pair, secondsLeft: 0 });
     tick(pair.expires_at);
     timer = setInterval(() => tick(pair.expires_at), 1000);
