@@ -84,19 +84,24 @@
     <p class="muted">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuelUnitLabel(fuel.unit), $locale)}</b></p>
     {#if fuel.per_100_milli !== null && unit}
       <p class="muted">{$t('insights.consumption')}: <b>{quantity(fuel.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 {unit}</b></p>
-      <!-- `cost_per_counter_milli` is null under exactly the same condition as `per_100_milli`
-           (both need >= 2 fills spanning a positive counter distance -- see
+      <!-- Petrol only. `cost_per_counter_milli` is null under exactly the same condition as
+           `per_100_milli` (both need >= 2 fills spanning a positive counter distance -- see
            `fuel_cost_per_counter_milli` / `consumption_per_100_milli` in
-           src/domain/insights.rs), so this guard covers both. A single-unit kWh rate rounds to
-           uselessly few cents at a typical per-kWh price (and reads ~40 % high once rounded at
-           all) -- reuses the Energy section's own "Energy cost per 100 {unit}" row
-           (`energy.cost-per-100`) rather than a second, differently-worded row, so the two can
-           never disagree on the name or the scale. Petrol keeps the existing per-single-unit
-           wording, which is not squeezed the same way at typical per-litre prices. -->
-      <p class="muted">
-        {$t(charged ? 'energy.cost-per-100' : 'insights.fuel-per-counter', { unit })}:
-        <b>{perCounter(charged && fuel.cost_per_counter_milli !== null ? fuel.cost_per_counter_milli * 100 : fuel.cost_per_counter_milli, $currency, $locale)}</b>
-      </p>
+           src/domain/insights.rs), so this guard covers both.
+
+           A kWh object gets no cost row here at all: the Energy section states the same quantity
+           for the same object, under the same "at least two charges" condition, but measures it
+           differently -- full-charge-to-full-charge windows with the object's price filling in a
+           missing cost, against this one's whole-span average over every fill that counts an
+           unrecorded cost as zero. Two rows, one label, two numbers (€0.60 here, €0.00 there for
+           a priced object whose charges carry no cost) reads as a bug, so the authoritative one
+           is the only one shown. -->
+      {#if !charged}
+        <p class="muted">
+          {$t('insights.fuel-per-counter', { unit })}:
+          <b>{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b>
+        </p>
+      {/if}
     {/if}
   {/if}
   {#if data.counter_per_day_milli !== null && unit}
