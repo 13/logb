@@ -98,6 +98,26 @@ async fn a_same_origin_sec_fetch_site_is_allowed_but_cross_site_is_refused() {
     assert_eq!(cross_site.status(), 403, "{}", cross_site.text().await.unwrap());
 }
 
+/// Both responses on this router carry a secret -- a code that signs a device in, or the token
+/// it was redeemed for -- and neither may be replayed from a cache.
+#[tokio::test]
+async fn create_pair_and_redeem_answer_cache_control_no_store() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let created = app.client.post(app.url("/auth/pair")).send().await.unwrap();
+    assert_eq!(created.status(), 201);
+    assert_eq!(created.headers().get("cache-control").unwrap(), "no-store");
+    let created: serde_json::Value = created.json().await.unwrap();
+
+    let anon = bare_client();
+    let redeemed = anon.post(app.url("/auth/pair/redeem"))
+        .json(&json!({ "code": created["code"], "device_name": "phone" }))
+        .send().await.unwrap();
+    assert_eq!(redeemed.status(), 200, "{}", redeemed.text().await.unwrap());
+    assert_eq!(redeemed.headers().get("cache-control").unwrap(), "no-store");
+}
+
 /// `SessionUser`, exactly like `create_token`: a bearer token must be refused the same way.
 #[tokio::test]
 async fn creating_a_pair_code_with_only_an_api_token_is_refused_like_create_token() {

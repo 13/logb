@@ -9,7 +9,7 @@ use crate::domain::pairing;
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -21,6 +21,17 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/auth/pair", post(create_pair))
         .route("/auth/pair/redeem", post(redeem))
+}
+
+/// Both responses on this router carry a secret -- a code that signs a device in, or the API
+/// token it was redeemed for -- so neither may be reused from a cache: a browser's back/forward
+/// cache, or a shared machine's disk cache, replaying a `create_pair` response would show a
+/// stale code as if it were live, and replaying `redeem`'s would hand out a token again to
+/// whoever next has that history entry. `create_token` and `login` carry the same secrets and
+/// have the same gap; this fixes it for pairing's two responses only, and leaves the other two
+/// for a separate decision.
+fn no_store() -> [(HeaderName, HeaderValue); 1] {
+    [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))]
 }
 
 /// The origin this instance is reachable at, to embed in a pairing URI's `server` parameter.
@@ -106,7 +117,7 @@ async fn create_pair(
     SessionUser(user): SessionUser,
     State(state): State<App>,
     headers: HeaderMap,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], Json<serde_json::Value>), AppError> {
     // See `same_site_request`'s own comment for why this route needs it and `create_token`
     // does not: no JSON body here means no content-type guard against a plain cross-site form.
     same_site_request(&headers)?;
@@ -143,7 +154,7 @@ async fn create_pair(
 
     let uri = pairing::uri(&base_url, &code);
     let qr_svg = pairing::qr_svg(&uri);
-    Ok((StatusCode::CREATED, Json(json!({
+    Ok((StatusCode::CREATED, no_store(), Json(json!({
         "code": code,
         "uri": uri,
         "qr_svg": qr_svg,
@@ -229,7 +240,7 @@ async fn redeem(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<PairRedeem>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<([(HeaderName, HeaderValue); 1], Json<serde_json::Value>), AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
     // Validated before the code is touched: a device name that fails this must not burn a
     // one-time code for nothing -- the phone can fix the name and try the same code again.
@@ -271,9 +282,9 @@ async fn redeem(
         .await?;
     tx.commit().await?;
 
-    Ok(Json(json!({
+    Ok((no_store(), Json(json!({
         "token": token,
         "token_id": id.0,
         "user": { "id": user.0, "username": user.1 },
-    })))
+    }))))
 }
