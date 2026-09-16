@@ -33,6 +33,52 @@ async fn creating_a_pair_code_with_a_password_session_returns_code_uri_qr_and_ex
     assert!(body["expires_at"].as_str().is_some(), "{body}");
 }
 
+/// A reverse proxy may append to `X-Forwarded-Host` rather than replace it -- the same shape
+/// `X-Forwarded-For` can take -- so only the first, trimmed entry must end up in the pairing
+/// URI, exactly as `auth::client_ip` already does for the forwarded client address.
+#[tokio::test]
+async fn x_forwarded_host_takes_only_the_first_of_a_comma_separated_list() {
+    let app = common::spawn_with(|c| c.trust_proxy = true).await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.post(app.url("/auth/pair"))
+        .header("x-forwarded-host", "first.example.com, second.example.com")
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    let body: serde_json::Value = res.json().await.unwrap();
+    let uri = body["uri"].as_str().unwrap();
+    assert!(uri.contains("first.example.com"), "{uri}");
+    assert!(!uri.contains("second.example.com"), "{uri}");
+}
+
+/// Whichever header supplies the host that lands in the pairing URI, it must first parse as a
+/// bare `host[:port]` authority: a value with an embedded `/` or space is not a host, it is an
+/// attempt to smuggle extra path or query into a URI this browser is about to render as a link
+/// and a QR code.
+#[tokio::test]
+async fn an_invalid_forwarded_host_is_refused_with_400() {
+    let app = common::spawn_with(|c| c.trust_proxy = true).await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.post(app.url("/auth/pair"))
+        .header("x-forwarded-host", "not a host/with a slash")
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+}
+
+/// The same check applies to the plain `Host` header, which is what a deployment with no
+/// trusted proxy in front of it falls back to.
+#[tokio::test]
+async fn an_invalid_host_header_is_refused_with_400() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    let res = app.client.post(app.url("/auth/pair"))
+        .header(reqwest::header::HOST, "not a valid host")
+        .send().await.unwrap();
+    assert_eq!(res.status(), 400, "{}", res.text().await.unwrap());
+}
+
 /// `SessionUser`, exactly like `create_token`: a bearer token must be refused the same way.
 #[tokio::test]
 async fn creating_a_pair_code_with_only_an_api_token_is_refused_like_create_token() {

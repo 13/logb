@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -36,10 +37,18 @@ pub fn router() -> Router<App> {
 /// the same trust boundary `auth::client_ip` already applies to `X-Forwarded-For` -- so a
 /// caller cannot hand a signed-in browser's own QR code an arbitrary host by forging a header
 /// on a deployment that never promised to rewrite one.
-fn public_base_url(state: &App, headers: &HeaderMap) -> String {
+///
+/// A proxy is free to append to `X-Forwarded-Host` rather than replace it, so -- exactly as
+/// `auth::client_ip` does for `X-Forwarded-For` -- only the first comma-separated entry is
+/// read, trimmed. Whichever header ends up supplying the host, its value is checked against
+/// `http::uri::Authority` syntax before it is glued into a URI this browser will render as a
+/// link and a QR code: a value that is not valid `host[:port]` (an embedded `/` or `?` that
+/// would smuggle extra path or query into the pairing URI, say) is a 400 rather than a broken
+/// or hostile deep link.
+fn public_base_url(state: &App, headers: &HeaderMap) -> Result<String, AppError> {
     if let Some(url) = state.config.public_url.as_deref() {
         let trimmed = url.trim_end_matches('/');
-        return format!("{trimmed}/");
+        return Ok(format!("{trimmed}/"));
     }
     let scheme = if auth::wants_secure(state, headers) { "https" } else { "http" };
     let forwarded_host = state
@@ -47,11 +56,18 @@ fn public_base_url(state: &App, headers: &HeaderMap) -> String {
         .trust_proxy
         .then(|| headers.get("x-forwarded-host"))
         .flatten()
-        .and_then(|v| v.to_str().ok());
-    let host = forwarded_host
-        .or_else(|| headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()))
-        .unwrap_or("localhost");
-    format!("{scheme}://{host}/")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').next().unwrap_or("").trim())
+        .filter(|v| !v.is_empty());
+    let host_header =
+        headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()).map(str::trim);
+    for candidate in [forwarded_host, host_header].into_iter().flatten() {
+        if axum::http::uri::Authority::from_str(candidate).is_err() {
+            return Err(AppError::BadRequest(format!("invalid host {candidate:?}")));
+        }
+    }
+    let host = forwarded_host.or(host_header).unwrap_or("localhost");
+    Ok(format!("{scheme}://{host}/"))
 }
 
 /// Issues a fresh pairing code for the caller: a browser's Account page, not the phone.
@@ -63,6 +79,11 @@ async fn create_pair(
     State(state): State<App>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    // Resolved -- and, on an unset LOGB_PUBLIC_URL, validated -- before anything is written: a
+    // malformed X-Forwarded-Host or Host must fail this request without first creating and
+    // committing a code the caller never gets back in a usable response.
+    let base_url = public_base_url(&state, &headers)?;
+
     let now = db::now();
     let code = pairing::new_code();
     let expires_at = (chrono::Utc::now() + chrono::Duration::from_std(pairing::TTL).unwrap())
@@ -88,7 +109,6 @@ async fn create_pair(
         .await?;
     tx.commit().await?;
 
-    let base_url = public_base_url(&state, &headers);
     let uri = pairing::uri(&base_url, &code);
     let qr_svg = pairing::qr_svg(&uri);
     Ok((StatusCode::CREATED, Json(json!({
