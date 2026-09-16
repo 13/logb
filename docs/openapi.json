@@ -545,6 +545,7 @@
     "/objects/{id}/last-done": {
       "get": {
         "summary": "Titles this object has logged more than once (or once, alongside an open reminder of the same title), newest last-done first, at most 50.",
+        "description": "Excludes `reading` and `trip` entries always (a reading is not something \"done\", and a trip's title is optional besides), and `fuel` entries too but only on an object that has a `fuel_unit` set -- that object gets its own Energy section (`GET /objects/{id}/energy`) instead, where a charge's own figures belong, and a charge at the current counter would otherwise show a meaningless \"0 km ago\". `fuel` is offered on car/e_bike/motorcycle regardless of `fuel_unit`, so an object that logs fuel but has never set one still sees its fills here.",
         "parameters": [
           {
             "name": "id",
@@ -2884,7 +2885,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Cents per fuel_unit x1000 (0.30 EUR/kWh -> 30000); >= 0, and only alongside a fuel_unit (400 otherwise, 'energy_price_milli needs a fuel unit'). Three-state on PATCH: omit to keep the stored price, null to clear it, a number to set it. On POST, omitted and null both mean no price."
+            "description": "Cents per fuel_unit x1000 (0.30 EUR/kWh -> 30000); >= 0, and only alongside a fuel_unit (400 otherwise, 'energy_price_milli needs a fuel unit'). Three-state on PATCH: omit to keep the stored price, null to clear it, a number to set it. On POST, omitted and null both mean no price. Unlike this field, `fuel_unit` itself is NOT three-state on PATCH -- omitting it clears it, same as every other plain field on this door -- so a PATCH that means to keep a stored price while touching unrelated fields must resend the object's current `fuel_unit` too, or the omitted `fuel_unit` clears while the kept price still names it, and the whole PATCH is refused."
           }
         }
       },
@@ -3905,7 +3906,7 @@
       },
       "ObjectHit": {
         "type": "object",
-        "description": "An object as `/search` returns it: the stored columns plus the parent's name, so a list of four things called \"Filter\" says which object each one lives in. Deliberately not an `Object` -- it carries no `stats`, `cover_file_id` or `ancestors`, none of which the search computes.",
+        "description": "An object as `/search` returns it: almost every stored column plus the parent's name, so a list of four things called \"Filter\" says which object each one lives in -- `energy_price_milli` is the one stored column left out, since search has no use for it. Deliberately not an `Object` -- it carries no `stats`, `cover_file_id` or `ancestors`, none of which the search computes.",
         "properties": {
           "id": {
             "type": "integer",

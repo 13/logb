@@ -23,7 +23,11 @@ export function toInput(o: MemObject): ObjectInput {
 export function validate(input: ObjectInput): string | null {
   if (!input.name.trim()) return 'object.name';
   if (input.purchase_price_cents !== null && Number.isNaN(input.purchase_price_cents)) return 'object.purchase-price';
-  if (input.energy_price_milli !== null && input.energy_price_milli !== undefined && Number.isNaN(input.energy_price_milli)) return 'object.energy-price';
+  // A dedicated, placeholder-free key -- `fieldError` (../lib/form-error.ts) calls `t(key)` with
+  // no `vars` to build "Check <field>: …", and `object.energy-price` (the field's own LABEL,
+  // used with `{unit}` interpolated at the template) would leave the literal text "{unit}" in
+  // that sentence with none supplied.
+  if (input.energy_price_milli !== null && input.energy_price_milli !== undefined && Number.isNaN(input.energy_price_milli)) return 'object.energy-price-error';
   return null;
 }
 

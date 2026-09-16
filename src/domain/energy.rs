@@ -47,12 +47,15 @@ pub struct Energy {
     /// `None` with no windows at all (a single window still yields a figure).
     pub distance_per_charge: Option<i64>,
     /// Mean of each window's distance per unit, scaled by 1000 (50 distance/unit -> 50_000) --
-    /// the same milli scale as `quantity_milli` itself. `None` when no window's closing charge
-    /// carries a (non-zero) amount.
+    /// the same milli scale as `quantity_milli` itself. Each window's own rate is distance over
+    /// the SUM of every charge's amount in that window, not the closing charge's alone -- see
+    /// `energy`'s doc comment. `None` when no charge in the window carries a (non-zero) amount.
     pub distance_per_unit_milli: Option<i64>,
     /// Mean of each window's cost per counter unit, scaled by 1000 -- the same "cents x1000"
-    /// scale as `domain::insights::cost_per_counter_milli`. `None` when no window's cost can be
-    /// known (see `energy`'s doc comment on the fallback through `price_milli`).
+    /// scale as `domain::insights::cost_per_counter_milli`. Summed the same way as
+    /// `distance_per_unit_milli`, one charge's cost falling back to its own amount x
+    /// `price_milli` when that charge has no cost of its own. `None` when no charge in the
+    /// window has a cost that can be known one way or the other.
     pub cost_per_counter_milli: Option<i64>,
     /// `None` with no full charge yet, or when no trip anywhere carries a battery percentage.
     pub battery: Option<Battery>,
@@ -87,28 +90,48 @@ fn mean(values: &[i64]) -> Option<i64> {
 /// Each figure is the mean of its own per-window rate, not one rate over the combined windows,
 /// so a single window missing an amount or a cost only drops out of the average that needs it
 /// -- `distance_per_charge` still counts every window's distance.
+///
+/// A window's amount and cost are the SUM of every charge strictly after its opening one, up to
+/// and including its closing one -- not the closing charge's own amount and cost alone. A
+/// partial top-up logged between two full charges does not open a window of its own (see
+/// above), but the vehicle still consumed whatever went into it: full at 0, a 5 kWh top-up at
+/// 200 km, full again at 400 km with 8 kWh means 13 kWh were used to cover those 400 km (≈30.8
+/// km/kWh), not the 8 kWh the closing charge alone would suggest (a physically wrong 50 km/kWh).
+/// The same summing applies to cost, each charge in the window falling back to its own amount x
+/// `price_milli` individually when it has no cost of its own, before the per-charge amounts are
+/// added together.
 pub fn energy(charges: &[Charge], trips: &[Trip], price_milli: Option<i64>) -> Energy {
     let mut sorted: Vec<&Charge> = charges.iter().collect();
     sorted.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.counter.cmp(&b.counter)));
 
-    let full: Vec<&Charge> = sorted.iter().copied().filter(|c| c.full).collect();
-    let pairs: Vec<(&Charge, &Charge)> = if full.len() >= 2 {
-        full.windows(2).map(|w| (w[0], w[1])).collect()
+    let full_idx: Vec<usize> = sorted.iter().enumerate().filter(|(_, c)| c.full).map(|(i, _)| i).collect();
+    let pair_idx: Vec<(usize, usize)> = if full_idx.len() >= 2 {
+        full_idx.windows(2).map(|w| (w[0], w[1])).collect()
     } else {
-        sorted.windows(2).map(|w| (w[0], w[1])).collect()
+        (0..sorted.len().saturating_sub(1)).map(|i| (i, i + 1)).collect()
     };
     // Filtered once, ahead of every figure below, so a duplicate or backwards counter reading is
     // simply not a window -- not a window that happens to contribute a 0 or a wildly wrong rate.
-    let windows: Vec<(&Charge, &Charge)> = pairs.into_iter().filter(|(a, b)| b.counter > a.counter).collect();
+    // Indices into `sorted`, not `(&Charge, &Charge)` pairs, are what the rest of this function
+    // needs: the amount/cost figures below sum every charge BETWEEN a window's two endpoints
+    // too, not just the endpoints themselves, which a pair of references cannot reach back into.
+    let windows: Vec<(usize, usize)> = pair_idx.into_iter().filter(|&(ai, bi)| sorted[bi].counter > sorted[ai].counter).collect();
 
-    let distances: Vec<i64> = windows.iter().map(|(a, b)| b.counter - a.counter).collect();
+    let distances: Vec<i64> = windows.iter().map(|&(ai, bi)| sorted[bi].counter - sorted[ai].counter).collect();
     let distance_per_charge = mean(&distances);
 
     let unit_rates: Vec<i64> = windows
         .iter()
-        .filter_map(|(a, b)| {
-            let distance = b.counter - a.counter;
-            let quantity = b.quantity_milli.filter(|&q| q != 0)?;
+        .filter_map(|&(ai, bi)| {
+            let distance = sorted[bi].counter - sorted[ai].counter;
+            // Every charge after the opening one, up to and including the closing one -- see
+            // this function's own doc comment for why a partial mid-window charge must count
+            // too. A charge with no amount at all contributes nothing to the sum, the same as
+            // it always has.
+            let quantity: i64 = sorted[ai + 1..=bi].iter().filter_map(|c| c.quantity_milli).sum();
+            if quantity == 0 {
+                return None;
+            }
             // `quantity` is milli-units (a real quantity x1000), and the result is the real rate
             // ALSO scaled by 1000 -- distance / (quantity/1000) x1000 = distance x1_000_000 /
             // quantity: 400 km / 8.000 units -> 400*1_000_000/8000 = 50_000 (50 km/unit, x1000).
@@ -127,28 +150,41 @@ pub fn energy(charges: &[Charge], trips: &[Trip], price_milli: Option<i64>) -> E
 
     let cost_rates: Vec<i64> = windows
         .iter()
-        .filter_map(|(a, b)| {
-            let distance = b.counter - a.counter;
-            let rate = match b.cost_cents {
-                // cost (cents) x1000 / distance -- the same "cents x1000 per counter unit" scale
-                // as `domain::insights::cost_per_counter_milli`.
-                Some(cost) => cost * 1000 / distance,
-                // No recorded cost: derive one from the price, in one division rather than
-                // rounding to whole cents first and rescaling. `quantity_milli` (milli-units) x
-                // `price_milli` (cents x1000 per unit) is cents x1000 x1000, so dividing by 1000
-                // once lands on cents x1000 -- the same numerator the `cost_cents` branch above
-                // reaches directly -- before it is divided by distance; only a single truncation
-                // happens, not one at the cents step and another at the rate step.
-                None => {
-                    let quantity = b.quantity_milli?;
-                    let price = price_milli?;
-                    // `i128` for the same reason as the unit-rate multiply above: `quantity` and
-                    // `price` are each only validated `>= 0`, and their product alone (before
-                    // this is even divided down) could overflow `i64`.
-                    (quantity as i128 * price as i128 / 1000 / distance as i128) as i64
-                },
-            };
-            Some(rate)
+        .filter_map(|&(ai, bi)| {
+            let distance = sorted[bi].counter - sorted[ai].counter;
+            // Summed in "cents x1000" (milli-cents) so only the final total is ever divided by
+            // distance -- one truncation per charge that needs the price fallback (as before),
+            // plus exactly one more for the window's total, rather than rounding each charge to
+            // whole cents first and losing precision at every step along the way. `i128`: same
+            // overflow headroom as the unit-rate multiply above, for the same reason.
+            let mut known = false;
+            let mut total_milli_cents: i128 = 0;
+            for c in &sorted[ai + 1..=bi] {
+                match c.cost_cents {
+                    // A charge's own recorded cost, cents x1000 -- the same "cents x1000 per
+                    // counter unit" scale `domain::insights::cost_per_counter_milli` uses.
+                    Some(cost) => {
+                        known = true;
+                        total_milli_cents += cost as i128 * 1000;
+                    }
+                    // No recorded cost for this one charge: derive it from its own amount x the
+                    // price, if both are known -- `quantity_milli` (milli-units) x `price_milli`
+                    // (cents x1000 per unit) is cents x1000 x1000, so dividing by 1000 once
+                    // lands on cents x1000, the same scale the `Some(cost)` arm reaches directly.
+                    // A charge with neither a cost nor a derivable one contributes nothing, and
+                    // does not mark the window `known` on its own.
+                    None => {
+                        if let (Some(quantity), Some(price)) = (c.quantity_milli, price_milli) {
+                            known = true;
+                            total_milli_cents += quantity as i128 * price as i128 / 1000;
+                        }
+                    }
+                }
+            }
+            if !known {
+                return None;
+            }
+            Some((total_milli_cents / distance as i128) as i64)
         })
         .collect();
     let cost_per_counter_milli = mean(&cost_rates);
@@ -255,17 +291,42 @@ mod tests {
     }
 
     #[test]
-    fn a_non_full_charge_between_two_full_charges_does_not_split_the_window() {
+    fn a_partial_charge_between_two_full_ones_does_not_split_the_window_but_counts_toward_its_rates() {
+        // The worked example from the design spec's own correction: full at 0 (here 1000, to
+        // share the rest of this file's counters), a partial top-up mid-window, full again --
+        // the window is still the whole span (not split by the partial), but its amount and
+        // cost are the SUM of both charges, not the closing one's alone. An earlier version of
+        // this test used an absurd partial (1 milli-unit, 999_999 cents) specifically because it
+        // was invisible to the rates below; now that it is not, the numbers have to be sane.
         let charges = [
             c("2026-09-01", 1000, None, None, true),
-            // If this counted as a window boundary it would wreck every rate below.
-            c("2026-09-03", 1200, Some(1), Some(999_999), false),
+            c("2026-09-03", 1200, Some(5000), Some(150), false),
             c("2026-09-05", 1800, Some(8000), Some(240), true),
         ];
         let e = energy(&charges, &[], None);
-        assert_eq!(e.distance_per_charge, Some(800), "one window, 1000 -> 1800");
-        assert_eq!(e.distance_per_unit_milli, Some(100_000), "800*1_000_000/8000, from the 1800 charge alone");
-        assert_eq!(e.cost_per_counter_milli, Some(300), "240*1000/800, from the 1800 charge alone");
+        assert_eq!(e.distance_per_charge, Some(800), "one window, 1000 -> 1800, not split by the partial");
+        // 5 + 8 = 13 units over 800: 800*1_000_000/13_000 = 61_538, not the 100_000 the closing
+        // charge's 8 units alone would give.
+        assert_eq!(e.distance_per_unit_milli, Some(61_538), "sums the partial's amount with the closing charge's");
+        // (150 + 240 = 390 cents) x1000 / 800 = 487, not the 300 the closing charge's cost alone
+        // would give.
+        assert_eq!(e.cost_per_counter_milli, Some(487), "sums the partial's cost with the closing charge's");
+    }
+
+    #[test]
+    fn two_partial_charges_in_one_window_both_count_toward_its_rates() {
+        let charges = [
+            c("2026-09-01", 0, None, None, true),
+            c("2026-09-02", 200, Some(5000), Some(150), false),
+            c("2026-09-03", 300, Some(3000), Some(90), false),
+            c("2026-09-05", 400, Some(8000), Some(240), true),
+        ];
+        let e = energy(&charges, &[], None);
+        assert_eq!(e.distance_per_charge, Some(400), "one window, 0 -> 400, not split by either partial");
+        // 5 + 3 + 8 = 16 units over 400: 400*1_000_000/16_000 = 25_000 (25 km/kWh).
+        assert_eq!(e.distance_per_unit_milli, Some(25_000));
+        // 150 + 90 + 240 = 480 cents, x1000 / 400 = 1_200.
+        assert_eq!(e.cost_per_counter_milli, Some(1_200));
     }
 
     #[test]

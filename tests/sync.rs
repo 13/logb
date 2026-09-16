@@ -3923,3 +3923,78 @@ async fn pushing_fuel_unit_to_null_without_a_stored_price_is_accepted() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
 }
+
+/// A pushed `fuel_unit` outside `l`/`gal`/`kwh` used to reach the row anyway with no cross-field
+/// check standing in its way (only `Null` -- "clear it" -- is special-cased), relying entirely
+/// on the CHECK constraint and its savepoint recovery to turn the write into a rejection with a
+/// generic "violates a database constraint" reason instead of the specific one the REST door
+/// gives for the identical mistake. `validate_value`'s new arm rejects it before either.
+#[tokio::test]
+async fn pushing_an_out_of_whitelist_fuel_unit_is_rejected_with_the_rest_wording() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_uuid = object_uuid(&app, car["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-fuel-unit-empty", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "fuel_unit", "value": "",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "fuel_unit must be l, gal, kwh or null");
+
+    let stored: Option<String> = sqlx::query_scalar("SELECT fuel_unit FROM objects WHERE client_uuid = $1")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored, None, "the rejected write must not land");
+}
+
+/// A legal value on the same field still lands, the same door open on either side of the arm
+/// added above.
+#[tokio::test]
+async fn pushing_a_whitelisted_fuel_unit_is_accepted() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_uuid = object_uuid(&app, car["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-fuel-unit-kwh", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "fuel_unit", "value": "kwh",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "accepted", "{body}");
+
+    let stored: Option<String> = sqlx::query_scalar("SELECT fuel_unit FROM objects WHERE client_uuid = $1")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored.as_deref(), Some("kwh"));
+}
+
+/// `counter_unit` carries the identical CHECK-constraint-only hole `fuel_unit` had -- no
+/// `validate_value` arm of its own, just the schema's CHECK and the savepoint recovery behind
+/// it -- so it gets the same explicit arm and the same REST wording.
+#[tokio::test]
+async fn pushing_an_out_of_whitelist_counter_unit_is_rejected_with_the_rest_wording() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let object_uuid = object_uuid(&app, car["id"].as_i64().unwrap()).await;
+
+    let res = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id": "op-counter-unit-bad", "entity": "object", "entity_uuid": object_uuid,
+        "op": "set", "field": "counter_unit", "value": "furlongs",
+        "edited_at": after_now(60), "device_id": "phone"
+    }]))).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["results"][0]["outcome"], "rejected", "{body}");
+    assert_eq!(body["results"][0]["reason"], "counter_unit must be km, mi, h or null");
+
+    let stored: Option<String> = sqlx::query_scalar("SELECT counter_unit FROM objects WHERE client_uuid = $1")
+        .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(stored.as_deref(), Some("km"), "the rejected write must not land");
+}

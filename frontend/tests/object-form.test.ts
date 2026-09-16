@@ -34,7 +34,7 @@ describe('object form', () => {
   });
 
   it('rejects an unparseable energy price', () => {
-    expect(validate({ ...emptyInput(), name: 'x', energy_price_milli: NaN })).toBe('object.energy-price');
+    expect(validate({ ...emptyInput(), name: 'x', energy_price_milli: NaN })).toBe('object.energy-price-error');
     expect(validate({ ...emptyInput(), name: 'x', energy_price_milli: 30_000 })).toBeNull();
   });
 

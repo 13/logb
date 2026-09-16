@@ -70,6 +70,7 @@ export default {
   'object.parent-none': 'Nothing — a top-level object',
   'object.fuel-unit': 'Fuel unit',
   'object.energy-price': 'Price per {unit}',
+  'object.energy-price-error': 'Price per unit',
   'object.description': 'Description',
   'object.purchase-date': 'Purchase date',
   'object.purchase-price': 'Purchase price',
@@ -103,7 +104,6 @@ export default {
   'insights.fuel-per-counter': 'Fuel cost per {unit}',
   'insights.fuel-total': 'Fuel logged',
   'energy.charged-total': 'Charged',
-  'energy.charged-cost-per-counter': 'Energy cost per {unit}',
   'insights.none': 'Not enough data yet.',
   'insights.usage': 'Usage',
   'insights.per-month': '≈ {amount} a month',
@@ -155,6 +155,7 @@ export default {
   'trip.error-duration': 'Enter a duration like 1:15',
 
   'activity.charged-full': 'Charged full',
+  'activity.filled-full': 'Filled up',
   'energy.full': 'full',
   'energy.charged-log': 'Log charge',
   'energy.filled-log': 'Log fill',

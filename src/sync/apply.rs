@@ -157,6 +157,19 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         (Entity::Activity, "from_place" | "to_place") if text.chars().count() > 80 => {
             return Err("from_place and to_place must be at most 80 characters".into());
         }
+        // `counter_unit`/`fuel_unit` each carry a SQLite/PostgreSQL CHECK constraint that
+        // happens to reject anything outside their own whitelist too (the module doc comment
+        // above calls this out), and `apply_op`'s savepoint already turns that into a clean
+        // `Rejected` rather than a 500 -- but only with a generic "violates a database
+        // constraint" reason, not the specific one `ObjectInput::validate` gives the REST door
+        // for the exact same mistake. Explicit arms here make the two doors agree word for word,
+        // and stop depending on a constraint that is schema, not policy, to enforce it at all.
+        (Entity::Object, "counter_unit") if !matches!(text.as_str(), "km" | "mi" | "h") => {
+            return Err("counter_unit must be km, mi, h or null".into());
+        }
+        (Entity::Object, "fuel_unit") if !matches!(text.as_str(), "l" | "gal" | "kwh") => {
+            return Err("fuel_unit must be l, gal, kwh or null".into());
+        }
         _ => {}
     }
     Ok(())

@@ -87,10 +87,16 @@
       <!-- `cost_per_counter_milli` is null under exactly the same condition as `per_100_milli`
            (both need >= 2 fills spanning a positive counter distance -- see
            `fuel_cost_per_counter_milli` / `consumption_per_100_milli` in
-           src/domain/insights.rs), so this guard covers both. Same scale as the overall
-           per-counter figure above (milli-cents per unit), hence the same `perCounter`
-           formatter. -->
-      <p class="muted">{$t(charged ? 'energy.charged-cost-per-counter' : 'insights.fuel-per-counter', { unit })}: <b>{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b></p>
+           src/domain/insights.rs), so this guard covers both. A single-unit kWh rate rounds to
+           uselessly few cents at a typical per-kWh price (and reads ~40 % high once rounded at
+           all) -- reuses the Energy section's own "Energy cost per 100 {unit}" row
+           (`energy.cost-per-100`) rather than a second, differently-worded row, so the two can
+           never disagree on the name or the scale. Petrol keeps the existing per-single-unit
+           wording, which is not squeezed the same way at typical per-litre prices. -->
+      <p class="muted">
+        {$t(charged ? 'energy.cost-per-100' : 'insights.fuel-per-counter', { unit })}:
+        <b>{perCounter(charged && fuel.cost_per_counter_milli !== null ? fuel.cost_per_counter_milli * 100 : fuel.cost_per_counter_milli, $currency, $locale)}</b>
+      </p>
     {/if}
   {/if}
   {#if data.counter_per_day_milli !== null && unit}

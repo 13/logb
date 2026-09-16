@@ -40,7 +40,11 @@ Migrations: SQLite `0016_energy.sql`, PostgreSQL `0007_energy.sql`; `schema_pari
   section instead, where a charge's own figures belong, and a charge would otherwise show the
   meaningless "0 km ago" every single time. `fuel` is offered on car/e_bike/motorcycle regardless
   of `fuel_unit`, so an object that logs fills but has never set one keeps seeing "distance since
-  the last fill" here, same as before the Energy section existed.
+  the last fill" here, same as before the Energy section existed. Known gap: on a `fuel_unit`
+  object with exactly one charge logged so far, that charge shows up nowhere at all -- not in
+  "Last done" (excluded once a `fuel_unit` is set) and not in the Energy section either (every
+  figure there needs at least two charges to form a window). It reappears, in the Energy section,
+  the moment a second charge is logged. Left as is rather than special-cased.
 
 ## Figures (object Info tab, section "Energy" / "Energie")
 
@@ -53,11 +57,18 @@ distance is zero or negative -- a duplicate counter reading, or a counter that w
 is dropped before any figure is computed from it.
 
 - **Distance per charge** — mean window distance. Shown when at least two qualifying charges exist.
-- **Distance per unit** — window distance ÷ the closing charge's `quantity_milli`, averaged over
-  windows whose closing charge has an amount ("≈ 7,3 km/kWh").
-- **Energy cost per distance** — the closing charge's known cost ÷ window distance, averaged over
-  windows where the cost is known; known cost = `cost_cents`, else `quantity_milli × energy_price`
-  when both exist. Null when no window qualifies.
+- A window's amount and cost are the SUM of every charge strictly after its opening one, up to and
+  including its closing one — not the closing charge's alone. A partial top-up logged mid-window
+  does not open a window of its own (see above), but the vehicle still consumed whatever went into
+  it: full at 0, a 5 kWh top-up at 200 km, full again at 400 km with 8 kWh means 13 kWh were used
+  to cover those 400 km (≈ 30,8 km/kWh), not the 8 kWh the closing charge alone would suggest (a
+  physically wrong 50 km/kWh).
+- **Distance per unit** — window distance ÷ that window's summed `quantity_milli`, averaged over
+  windows whose sum is known and nonzero ("≈ 7,3 km/kWh").
+- **Energy cost per distance** — that window's summed cost ÷ window distance, averaged over
+  windows where at least one charge's cost is known; each charge's own cost is `cost_cents` when
+  set, else `quantity_milli × energy_price` when both exist, else that charge contributes nothing
+  to the sum. Null when no window qualifies.
 - **Charge due** — `used` = sum of `battery_used_pct` over trips dated after the last full charge,
   or dated the same day and starting at or after its counter (a trip on the charging day itself
   still counts, unless it ran before the charge was plugged in);

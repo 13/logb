@@ -14,7 +14,7 @@
   import { activityTitle, emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
   import { formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, tripDistance, type TripLink } from '../lib/trip';
-  import { fuelUnitLabel } from '../lib/energy';
+  import { energyLabelKey, fuelUnitLabel } from '../lib/energy';
   import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
   import { CATEGORIES, type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
@@ -454,9 +454,14 @@
       </datalist>
     </div>
     {#if input.category === 'fuel'}
+      <!-- "Charged full" for a kWh object, "Filled up" for petrol/diesel -- topping up a tank
+           is not "charging" it. Picked the same way every other charge/fill string is
+           (energyLabelKey), so this checkbox and the "+ Log charge"/"+ Log fill" button that
+           opened this form never disagree about which of the two this object does. The
+           timeline's own short "full"/"voll" stays unit-agnostic -- it reads fine either way. -->
       <label class="row toggle">
         <input type="checkbox" bind:checked={chargedFull} />
-        {$t('activity.charged-full')}
+        {$t(energyLabelKey(object?.fuel_unit ?? null) === 'energy.charged' ? 'activity.charged-full' : 'activity.filled-full')}
       </label>
     {/if}
     {#if input.category === 'trip'}

@@ -70,6 +70,7 @@ export default {
   'object.parent-none': 'Nichts — ein oberstes Objekt',
   'object.fuel-unit': 'Tank-Einheit',
   'object.energy-price': 'Preis pro {unit}',
+  'object.energy-price-error': 'Preis pro Einheit',
   'object.description': 'Beschreibung',
   'object.purchase-date': 'Kaufdatum',
   'object.purchase-price': 'Kaufpreis',
@@ -103,7 +104,6 @@ export default {
   'insights.fuel-per-counter': 'Spritkosten pro {unit}',
   'insights.fuel-total': 'Getankt',
   'energy.charged-total': 'Geladen',
-  'energy.charged-cost-per-counter': 'Stromkosten pro {unit}',
   'insights.none': 'Noch zu wenig Daten.',
   'insights.usage': 'Nutzung',
   'insights.per-month': '≈ {amount} pro Monat',
@@ -155,6 +155,7 @@ export default {
   'trip.error-duration': 'Dauer wie 1:15 eingeben',
 
   'activity.charged-full': 'Voll geladen',
+  'activity.filled-full': 'Vollgetankt',
   'energy.full': 'voll',
   'energy.charged-log': 'Laden eintragen',
   'energy.filled-log': 'Tanken eintragen',
@@ -162,7 +163,7 @@ export default {
   'energy.distance-per-charge': 'Strecke pro Ladung',
   'energy.distance-per-unit': 'Strecke pro Einheit',
   'energy.cost-per-100': 'Energiekosten pro 100 {unit}',
-  'energy.charge-due': 'Ladung fällig',
+  'energy.charge-due': 'Akkustand',
   'energy.charge-soon': 'bald laden',
 
   'trips.title': 'Fahrten',

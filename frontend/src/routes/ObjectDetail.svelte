@@ -333,6 +333,14 @@
     if (!shouldReload(changed, rendered, queued)) return;
     loadObject();
     loadActivities('refresh');
+    // A replayed offline charge or trip changes the Energy section's figures and the Trips
+    // table the same way it changes the timeline above -- without this, either stayed stale
+    // (the pending entry's own numbers, or none at all) until the next remount, exactly the
+    // gap `loadActivities('refresh')` just above exists to close for the timeline itself. Same
+    // guards as the effects that load them in the first place, since neither is worth loading
+    // on an object that never offers it.
+    if (offersEnergy) loadEnergy();
+    if (offersTrip) loadTripSummary();
   }));
 
   // The default tab is left out of the address, and the address is replaced only when it changes:
