@@ -202,3 +202,35 @@ async fn trips_never_count_towards_last_done() {
     assert_eq!(rows[0]["title"], "Oil change");
     assert_eq!(rows[0]["occurrences"], 2);
 }
+
+/// A charge is likewise "something logged" -- at the current counter, not "done" to it -- see
+/// the charging spec's own note that charges are excluded from last done the same way trips are.
+/// A charge at the current counter would otherwise show the meaningless "0 km ago" every time.
+#[tokio::test]
+async fn charges_never_count_towards_last_done() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "E-Bike", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+
+    // Two charges titled "Charge", twice over -- would clear the occurrences bar on its own if
+    // charges counted at all.
+    act(&app, id, "2026-01-01", "fuel", "Charge", Some(1000)).await;
+    act(&app, id, "2026-02-01", "fuel", "Charge", Some(1400)).await;
+
+    // An open reminder sharing the charge-only title must not re-admit it: the reminder path
+    // only re-admits a title that already has a (non-excluded) occurrence, and "Charge" has none.
+    let rem = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Charge", "due_date": "2030-01-01" }))
+        .send().await.unwrap();
+    assert_eq!(rem.status(), 201, "{}", rem.text().await.unwrap());
+
+    // A maintenance pair still clears the bar as before.
+    act(&app, id, "2026-05-01", "maintenance", "Oil change", None).await;
+    act(&app, id, "2026-05-15", "maintenance", "Oil change", None).await;
+
+    let rows: Vec<Value> = last_done(&app, id).await.json().await.unwrap();
+    assert_eq!(rows.len(), 1, "charges never count toward last done: {rows:?}");
+    assert_eq!(rows[0]["title"], "Oil change");
+    assert_eq!(rows[0]["occurrences"], 2);
+}

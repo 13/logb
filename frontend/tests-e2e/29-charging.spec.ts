@@ -59,6 +59,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   await page.goto(`/objects/${bike}?tab=info`);
   await expect(page.getByRole('heading', { name: 'Energy', exact: true })).toBeVisible();
   const battery = page.getByTestId('energy-battery');
+  await expect(battery).toContainText('Charge due');
   await expect(battery).toContainText('60 %');
   await expect(battery).toContainText('300 km');
   await expect(battery).not.toContainText('charge soon');
@@ -85,7 +86,8 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   const secondCharge = page.locator('.card.entry', { hasText: 'Charge' }).first();
   await expect(secondCharge).toContainText('1,400 km');
   await expect(secondCharge).toContainText('full');
-  await expect(secondCharge).toContainText('8 kwh');
+  // "kWh", not the stored lowercase "kwh" -- fuelUnitLabel.
+  await expect(secondCharge).toContainText('8 kWh');
   await expect(secondCharge).toContainText('€2.40');
 
   // The trip's row now shows an estimated cost: cost_per_counter_milli comes from the closing
@@ -96,12 +98,12 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   await expect(trip).toContainText('≈ €1.20');
 
   // The Info tab's Energy section: distance per charge (400 km, the one surviving window),
-  // distance per unit (400 * 1000 / 8,000 = 50 -> 0.1 km/kWh, `distance_per_unit_milli` scaled
-  // down by formatPerUnit), and energy cost per distance (the same 600 milli-cents/km as above,
-  // rendered as money -- €0.01).
+  // distance per unit (400 km / 8 kWh = 50 km/kWh, via `distance_per_unit_milli` = 50_000
+  // milli -> formatPerUnit divides back down and appends the reader-facing "kWh"), and energy
+  // cost per distance (the same 600 milli-cents/km as above, rendered as money -- €0.01).
   await page.goto(`/objects/${bike}?tab=info`);
   await expect(page.getByText('Distance per charge: 400 km')).toBeVisible();
-  await expect(page.getByText('Distance per unit: 0.1 km/kwh')).toBeVisible();
+  await expect(page.getByText('Distance per unit: 50 km/kWh')).toBeVisible();
   await expect(page.getByText('Energy cost per distance: €0.01')).toBeVisible();
 
   // A further trip after the second (now latest) full charge, using 85 % of the battery: past
@@ -118,6 +120,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
 
   await page.goto(`/objects/${bike}?tab=info`);
   const batteryAfter = page.getByTestId('energy-battery');
+  await expect(batteryAfter).toContainText('Charge due');
   await expect(batteryAfter).toContainText('15 %');
   await expect(batteryAfter).toContainText('30 km');
   await expect(batteryAfter).toContainText('charge soon');

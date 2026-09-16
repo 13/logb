@@ -162,6 +162,7 @@ export default {
   'energy.distance-per-charge': 'Distance per charge',
   'energy.distance-per-unit': 'Distance per unit',
   'energy.cost-per-distance': 'Energy cost per distance',
+  'energy.charge-due': 'Charge due',
   'energy.charge-soon': 'charge soon',
 
   'trips.title': 'Trips',

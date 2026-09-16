@@ -46,7 +46,7 @@ pub struct Energy {
     /// Mean window distance, over windows -- see `energy`'s doc comment for what a window is.
     /// `None` with no windows at all (a single window still yields a figure).
     pub distance_per_charge: Option<i64>,
-    /// Mean of each window's distance per unit, scaled by 1000 (0.05 distance/unit -> 50) --
+    /// Mean of each window's distance per unit, scaled by 1000 (50 distance/unit -> 50_000) --
     /// the same milli scale as `quantity_milli` itself. `None` when no window's closing charge
     /// carries a (non-zero) amount.
     pub distance_per_unit_milli: Option<i64>,
@@ -109,10 +109,13 @@ pub fn energy(charges: &[Charge], trips: &[Trip], price_milli: Option<i64>) -> E
         .filter_map(|(a, b)| {
             let distance = b.counter - a.counter;
             let quantity = b.quantity_milli.filter(|&q| q != 0)?;
-            // distance (counter units) x1000 / quantity (milli-units) keeps the milli scale
-            // `Energy::distance_per_unit_milli` documents: 400 km / 8.000 units -> 400*1000/8000
-            // = 50 (0.05 distance per unit, x1000).
-            Some(distance * 1000 / quantity)
+            // `quantity` is milli-units (a real quantity x1000), and the result is the real rate
+            // ALSO scaled by 1000 -- distance / (quantity/1000) x1000 = distance x1_000_000 /
+            // quantity: 400 km / 8.000 units -> 400*1_000_000/8000 = 50_000 (50 km/unit, x1000).
+            // (An earlier version divided by only 1000, which cancelled `quantity_milli`'s own
+            // x1000 instead of compounding it, landing 1000x too small -- e.g. reading 0.1
+            // km/kWh for a rate that is really 50 times higher.)
+            Some(distance * 1_000_000 / quantity)
         })
         .collect();
     let distance_per_unit_milli = mean(&unit_rates);
@@ -207,8 +210,8 @@ mod tests {
         ];
         let e = energy(&charges, &[], None);
         assert_eq!(e.distance_per_charge, Some(400));
-        // Mean of 400*1000/8000 twice: 50 and 50.
-        assert_eq!(e.distance_per_unit_milli, Some(50));
+        // Mean of 400*1_000_000/8000 twice: 50_000 and 50_000.
+        assert_eq!(e.distance_per_unit_milli, Some(50_000));
         // Mean of 240*1000/400 (600) and 260*1000/400 (650): 625.
         assert_eq!(e.cost_per_counter_milli, Some(625));
     }
@@ -224,7 +227,7 @@ mod tests {
         ];
         let e = energy(&charges, &[], None);
         assert_eq!(e.distance_per_charge, Some(400));
-        assert_eq!(e.distance_per_unit_milli, Some(50));
+        assert_eq!(e.distance_per_unit_milli, Some(50_000));
         assert_eq!(e.cost_per_counter_milli, Some(625));
     }
 
@@ -253,7 +256,7 @@ mod tests {
         ];
         let e = energy(&charges, &[], None);
         assert_eq!(e.distance_per_charge, Some(800), "one window, 1000 -> 1800");
-        assert_eq!(e.distance_per_unit_milli, Some(100), "800*1000/8000, from the 1800 charge alone");
+        assert_eq!(e.distance_per_unit_milli, Some(100_000), "800*1_000_000/8000, from the 1800 charge alone");
         assert_eq!(e.cost_per_counter_milli, Some(300), "240*1000/800, from the 1800 charge alone");
     }
 
@@ -288,8 +291,10 @@ mod tests {
         // Surviving windows: 98_000 -> 98_400 (400) and 10 -> 400 (390); the 98_400 -> 10 window
         // is dropped for its negative distance. Mean: (400 + 390) / 2 = 395.
         assert_eq!(e.distance_per_charge, Some(395));
-        // Mean of 400*1000/8000 (50) and 390*1000/8000 (48): 49.
-        assert_eq!(e.distance_per_unit_milli, Some(49));
+        // 400*1_000_000/8000 = 50_000 exactly; 390*1_000_000/8000 = 48_750 exactly (unlike the
+        // old x1000 formula, this doesn't truncate 48.75 down to 48 first -- the extra factor
+        // leaves room for the fraction). Mean: (50_000 + 48_750) / 2 = 49_375.
+        assert_eq!(e.distance_per_unit_milli, Some(49_375));
         // Mean of 240*1000/400 (600) and 260*1000/390 (666): 633.
         assert_eq!(e.cost_per_counter_milli, Some(633));
     }
@@ -321,9 +326,9 @@ mod tests {
         let e = energy(&charges, &[], None);
         // Both windows (400, 400) count: mean is still 400.
         assert_eq!(e.distance_per_charge, Some(400));
-        // Only the second window has an amount: 400*1000/8000 = 50, alone -- not averaged with
-        // a missing first value.
-        assert_eq!(e.distance_per_unit_milli, Some(50));
+        // Only the second window has an amount: 400*1_000_000/8000 = 50_000, alone -- not
+        // averaged with a missing first value.
+        assert_eq!(e.distance_per_unit_milli, Some(50_000));
     }
 
     #[test]

@@ -11,9 +11,10 @@
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
-  import { emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { activityTitle, emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
   import { formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, tripDistance, type TripLink } from '../lib/trip';
+  import { fuelUnitLabel } from '../lib/energy';
   import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
   import { CATEGORIES, type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
@@ -441,12 +442,13 @@
     {/if}
     <div class="field">
       <label for="ti">{$t('activity.title')}</label>
-      <!-- Optional only for a trip (spec: "defaults to $t('cat.trip') when empty") -- shown as
-           the placeholder rather than pre-filled, so it stays plainly a hint and not text the
-           user has to notice and delete. Timeline.svelte falls back to the same string when it
-           renders a trip whose title was in fact left empty. -->
-      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip'}
-             placeholder={input.category === 'trip' ? $t('cat.trip') : undefined} />
+      <!-- Optional only for a trip or a charge (spec: "defaults to $t('cat.trip') when empty",
+           and a charge to "Charged"/"Geladen" or the petrol wording) -- shown as the placeholder
+           rather than pre-filled, so it stays plainly a hint and not text the user has to notice
+           and delete. `activityTitle` (also what Timeline.svelte falls back to for an
+           untitled row) is reused here so the two can never disagree about the fallback word. -->
+      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip' && input.category !== 'fuel'}
+             placeholder={activityTitle('', input.category, $t, object?.fuel_unit ?? undefined) || undefined} />
       <datalist id="titles">
         {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
       </datalist>
@@ -523,7 +525,7 @@
     </div>
     {#if input.category === 'fuel' && object?.counter_unit}
       <div class="field">
-        <label for="qt">{$t('activity.quantity')} ({object.fuel_unit ?? (object.counter_unit === 'mi' ? 'gal' : 'l')})</label>
+        <label for="qt">{$t('activity.quantity')} ({object.fuel_unit ? fuelUnitLabel(object.fuel_unit) : (object.counter_unit === 'mi' ? 'gal' : 'l')})</label>
         <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
       </div>
     {/if}

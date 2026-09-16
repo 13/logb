@@ -6,7 +6,7 @@
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import { activityTitle, groupByYear } from './activity-form';
-  import { energyCost, energyLabelKey } from './energy';
+  import { energyCost, energyLabelKey, fuelUnitLabel } from './energy';
   import { foldReadings, readingSpan } from './timeline-fold';
   import { placesLabel, spanLabel, tripDistance, formatDuration } from './trip';
   import { categoriesFor, customTypes } from './type-registry';
@@ -97,10 +97,11 @@
        category: this one narrows by exact title (a "Last done" row tapped on the Info tab),
        not by tag. -->
   <div class="tag-filter">
-    <!-- `titleFilter` itself stays the real (possibly empty, for an untitled trip) value the
-         server matches on; only the chip's own text falls back to "Trip", same as every other
-         place a trip's title is shown. -->
-    <span class="chip">{$t('lastdone.filter', { title: activityTitle(titleFilter, $t) })}</span>
+    <!-- `titleFilter` itself stays the real value the server matches on; only the chip's own
+         text would fall back for an untitled trip or charge -- moot here in practice, since
+         "Last done" (the only source of this filter) excludes both categories, but `undefined`
+         reads the same as any other category that cannot reach here with a blank title. -->
+    <span class="chip">{$t('lastdone.filter', { title: activityTitle(titleFilter, undefined, $t) })}</span>
     <button class="ghost" onclick={() => (titleFilter = null)}>{$t('lastdone.clear')}</button>
   </div>
 {/if}
@@ -163,7 +164,7 @@
             onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
           >
             <div class="row head">
-              <b>{activityTitle(a.title, $t)}</b>
+              <b>{activityTitle(a.title, a.category, $t, fuelUnit)}</b>
               <span class="chip">{$t(`cat.${a.category}`)}</span>
               {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>
@@ -199,7 +200,9 @@
                 {fmtDate(a.date, $dateFormat)}
                 {#if a.counter_value !== null} · {counter(a.counter_value, unit, $locale)}{/if}
                 {#if a.charged_full} · {$t('energy.full')}{/if}
-                {#if a.quantity_milli !== null} · {quantity(a.quantity_milli, fuelUnit ?? (unit === 'mi' ? 'gal' : 'l'), $locale)}{/if}
+                <!-- A bare number, not an invented "l"/"gal", once the object declares no fuel
+                     unit at all -- `quantity` already treats a `null` unit that way. -->
+                {#if a.quantity_milli !== null} · {quantity(a.quantity_milli, fuelUnit ? fuelUnitLabel(fuelUnit) : null, $locale)}{/if}
                 {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
               </div>
             {:else}

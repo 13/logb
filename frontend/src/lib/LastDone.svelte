@@ -17,11 +17,13 @@
   <div class="list">
     {#each items as row (row.last_activity_id)}
       {@const since = sinceCounter(object.stats.current_counter, row.last_counter)}
-      <!-- `onselect(row.title)` keeps passing the real (possibly empty) title -- the timeline's
-           title filter matches on that exact value -- only the visible text below falls back to
-           "Trip" for an untitled one, same as any other place a trip's title is shown. -->
+      <!-- `onselect(row.title)` keeps passing the real title -- the timeline's title filter
+           matches on that exact value. `undefined` category: "Last done" excludes both trip and
+           fuel entries (the only two categories a blank title can ever reach here from), so the
+           fallback below is never actually exercised, but stays consistent with everywhere else
+           an activity's title is shown. -->
       <button class="card entry" onclick={() => onselect(row.title)}>
-        <b>{activityTitle(row.title, $t)}</b>
+        <b>{activityTitle(row.title, undefined, $t)}</b>
         <span class="muted tnum">
           {fmtDate(row.last_date, $dateFormat)}
           {#if row.last_counter !== null} · {counter(row.last_counter, object.counter_unit, $locale)}{/if}

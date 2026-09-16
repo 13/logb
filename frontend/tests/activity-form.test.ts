@@ -69,8 +69,12 @@ describe('activity form', () => {
     });
   });
 
-  it('still requires a title on a non-trip entry with an empty one', () => {
+  it('still requires a title on a non-trip, non-fuel entry with an empty one', () => {
     expect(validateActivity({ ...emptyActivity(), category: 'maintenance', title: '' })).toBe('activity.title');
+  });
+
+  it('a fuel entry is valid with an empty title too -- ActivityForm defaults it, like a trip', () => {
+    expect(validateActivity({ ...emptyActivity(), category: 'fuel', title: '' })).toBeNull();
   });
 
   it('groups by year, newest first', () => {
@@ -85,14 +89,33 @@ describe('activity form', () => {
 });
 
 describe('activityTitle', () => {
-  const t = (key: string) => (key === 'cat.trip' ? 'Trip' : key);
+  const strings: Record<string, string> = { 'cat.trip': 'Trip', 'energy.charged-total': 'Charged', 'insights.fuel-total': 'Fuel logged' };
+  const t = (key: string) => strings[key] ?? key;
 
   it('is the title itself when there is one', () => {
-    expect(activityTitle('Repaint', t)).toBe('Repaint');
+    expect(activityTitle('Repaint', 'repair', t)).toBe('Repaint');
   });
 
-  it('falls back to "Trip" for an untitled entry', () => {
-    expect(activityTitle('', t)).toBe('Trip');
+  it('falls back to "Trip" for an untitled trip', () => {
+    expect(activityTitle('', 'trip', t)).toBe('Trip');
+  });
+
+  it('falls back to the fill wording for an untitled charge with no fuel unit, or a non-kWh one', () => {
+    expect(activityTitle('', 'fuel', t)).toBe('Fuel logged');
+    expect(activityTitle('', 'fuel', t, 'l')).toBe('Fuel logged');
+    expect(activityTitle('', 'fuel', t, 'gal')).toBe('Fuel logged');
+  });
+
+  it('falls back to "Charged" for an untitled charge on a kWh object', () => {
+    expect(activityTitle('', 'fuel', t, 'kwh')).toBe('Charged');
+  });
+
+  it('stays empty for any other category -- only a trip or a charge ever reaches here blank', () => {
+    expect(activityTitle('', 'maintenance', t)).toBe('');
+  });
+
+  it('reads the same generic wording a caller with no object context (a search hit) gets, since fuelUnit is optional', () => {
+    expect(activityTitle('', 'fuel', t)).toBe(activityTitle('', 'fuel', t, undefined));
   });
 });
 

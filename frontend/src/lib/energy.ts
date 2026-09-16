@@ -17,6 +17,18 @@ export function energyLabelKey(fuelUnit: FuelUnit): 'energy.charged' | 'energy.f
 }
 
 /**
+ * The fuel unit the way a person reads it, rather than the lowercase code `fuel_unit` (and
+ * `EnergyOut.unit`/`Insights.fuel.unit`, both copied straight from it) stores: "kwh" -> "kWh".
+ * Litres and gallons are already fine as stored, so they pass through unchanged; `null` (no
+ * fuel unit) becomes `''`, the same "nothing to show" convention `fmtDate`/`counter` use for a
+ * missing value.
+ */
+export function fuelUnitLabel(u: string | null): string {
+  if (u === 'kwh') return 'kWh';
+  return u ?? '';
+}
+
+/**
  * `distance_per_unit_milli` (the counter distance per fuel unit, scaled by 1000, e.g. `7300` for
  * 7.3 km/kWh) as "7.3 km/kwh". One decimal place: the value is a mean rate over several windows,
  * and more digits would claim a precision it does not have (the same reasoning `formatSpeed` in

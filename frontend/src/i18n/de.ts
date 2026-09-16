@@ -162,6 +162,7 @@ export default {
   'energy.distance-per-charge': 'Strecke pro Ladung',
   'energy.distance-per-unit': 'Strecke pro Einheit',
   'energy.cost-per-distance': 'Energiekosten pro Strecke',
+  'energy.charge-due': 'Ladung fällig',
   'energy.charge-soon': 'bald laden',
 
   'trips.title': 'Fahrten',

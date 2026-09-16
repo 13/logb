@@ -1,5 +1,6 @@
 import { todayIso } from './format';
-import type { Activity, ActivityInput, Category, TitleSuggestion } from './types';
+import { energyLabelKey } from './energy';
+import type { Activity, ActivityInput, Category, FuelUnit, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
   return {
@@ -19,9 +20,11 @@ export function toActivityInput(a: Activity): ActivityInput {
 export function validateActivity(input: ActivityInput): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return 'activity.date';
   const isTrip = input.category === 'trip';
-  // A trip defaults its own title to `cat.trip` when left blank (see ActivityForm) -- every
-  // other category still needs one typed in.
-  if (!isTrip && !input.title.trim()) return 'activity.title';
+  // A trip defaults its own title to `cat.trip` when left blank (see ActivityForm), and a charge
+  // (`fuel`) likewise defaults to "Charged"/"Geladen" or the petrol wording -- see
+  // `activityTitle`. Every other category still needs one typed in.
+  const titleOptional = isTrip || input.category === 'fuel';
+  if (!titleOptional && !input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
   if (isTrip) {
     const start = input.start_counter;
@@ -56,18 +59,28 @@ export function exifDate(a: { taken_at: string | null }): string | null {
 }
 
 /**
- * An activity's display title -- itself for anything but an untitled trip, which falls back to
- * `cat.trip` the same word ActivityForm shows as that field's own placeholder.
+ * An activity's display title -- itself for anything but an untitled trip or charge, which fall
+ * back to a word for what they are: `cat.trip` for a trip (the same word ActivityForm shows as
+ * that field's own placeholder), or "Charged"/"Geladen" (`energy.charged-total`) vs "Fuel
+ * logged"/"Getankt" (`insights.fuel-total`) for a charge, picked by `energyLabelKey` from the
+ * object's fuel unit -- `fuelUnit` is optional exactly because not every caller (a global search
+ * hit, a reminder's "link to activity" list) knows the owning object's, in which case this reads
+ * as though it had none, the same generic wording `energyLabelKey(null)` already falls back to.
  *
- * `validateActivity` above is what makes an empty title mean "this is a trip" everywhere: every
- * other category is refused a blank one, so nothing else needs its own `category` to make this
- * call, which is why every list this appears on (a `LastDone` row, an `ActivityHit`, the
- * "link to activity" dropdown, ...) can use it even where that field was never sent down.
+ * `validateActivity` above is what makes an empty title mean "this is a trip or a charge"
+ * everywhere: every other category is refused a blank one, so a blank `title` reaching any other
+ * `category` here is not expected to happen -- it reads back as the empty string, same as it was
+ * sent, rather than guessing at a fallback that was never asked for.
+ *
  * Centralised so every place an activity's title is rendered agrees on the fallback, rather than
- * repeating `title || t('cat.trip')` at each call site.
+ * repeating the same three-way pick at each call site (a `LastDone` row, an `ActivityHit`, the
+ * "link to activity" dropdown, the timeline itself, ...).
  */
-export function activityTitle(title: string, t: (key: string) => string): string {
-  return title || t('cat.trip');
+export function activityTitle(title: string, category: Category | undefined, t: (key: string) => string, fuelUnit?: FuelUnit): string {
+  if (title) return title;
+  if (category === 'trip') return t('cat.trip');
+  if (category === 'fuel') return t(energyLabelKey(fuelUnit ?? null) === 'energy.charged' ? 'energy.charged-total' : 'insights.fuel-total');
+  return title;
 }
 
 /** Suggestions for the chosen category (all of them when none is chosen), one per title. An

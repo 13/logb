@@ -2,7 +2,7 @@
   import { api } from './api';
   import BarList from './BarList.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
-  import { energyLabelKey } from './energy';
+  import { energyLabelKey, fuelUnitLabel } from './energy';
   import { fillLabel, insightsPath, monthLabel, sinceLabel } from './insights';
   import { persisted } from '../stores/persisted';
   import { currency } from '../stores/session';
@@ -81,9 +81,9 @@
          wording -- `energyLabelKey` also drives the "+ Log charge" button and the Energy
          section's own log button, so a kWh object never mixes the two vocabularies. -->
     {@const charged = energyLabelKey(fuel.unit as FuelUnit) === 'energy.charged'}
-    <p class="muted">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuel.unit, $locale)}</b></p>
+    <p class="muted">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuelUnitLabel(fuel.unit), $locale)}</b></p>
     {#if fuel.per_100_milli !== null && unit}
-      <p class="muted">{$t('insights.consumption')}: <b>{quantity(fuel.per_100_milli, fuel.unit, $locale)}/100 {unit}</b></p>
+      <p class="muted">{$t('insights.consumption')}: <b>{quantity(fuel.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 {unit}</b></p>
       <!-- `cost_per_counter_milli` is null under exactly the same condition as `per_100_milli`
            (both need >= 2 fills spanning a positive counter distance -- see
            `fuel_cost_per_counter_milli` / `consumption_per_100_milli` in
@@ -122,7 +122,7 @@
       <p class="muted hint">{$t('insights.by-fill-hint')}</p>
       <BarList items={fuel.fills.map((f, i) => ({
         key: `${f.date}-${i}`, label: fillLabel(f.date, $locale), value: f.per_100_milli,
-        display: `${quantity(f.per_100_milli, fuel.unit, $locale)}/100 ${unit}`,
+        display: `${quantity(f.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 ${unit}`,
       }))} />
     </section>
   {/if}

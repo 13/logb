@@ -153,11 +153,12 @@ export function perCounter(milli: number | null | undefined, currency: string, l
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 100_000);
 }
 
-/** A milli-scaled amount with its unit: 41_300 -> "41.3 l". */
-export function quantity(milli: number | null | undefined, unit: string, locale: string): string {
+/** A milli-scaled amount with its unit: 41_300 -> "41.3 l". `unit` is nullable like `counter`'s
+ *  own -- a bare number when there is no unit to show, rather than inventing one. */
+export function quantity(milli: number | null | undefined, unit: string | null, locale: string): string {
   if (milli === null || milli === undefined) return '';
   const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
-  return `${n} ${unit}`;
+  return unit ? `${n} ${unit}` : n;
 }
 
 /** When something last happened, as a person says it: "today", "yesterday", "3 days ago" within

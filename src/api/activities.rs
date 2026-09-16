@@ -154,9 +154,11 @@ impl ActivityInput {
             return Err(AppError::BadRequest(format!("category must be one of {}", CATEGORIES.join(", "))));
         }
         self.title = self.title.trim().to_string();
-        // A trip's title defaults to "Trip" ($t('cat.trip')) in the UI when left blank; every
-        // other category still requires one, exactly as before.
-        if self.title.is_empty() && self.category != "trip" {
+        // A trip's title defaults to "Trip" ($t('cat.trip')) in the UI when left blank, and a
+        // charge's likewise defaults to "Charged"/"Geladen" or the petrol wording
+        // ($t(energyLabelKey(fuel_unit))) -- see `activityTitle` on the frontend. Every other
+        // category still requires one, exactly as before.
+        if self.title.is_empty() && self.category != "trip" && self.category != "fuel" {
             return Err(AppError::BadRequest("title is required".into()));
         }
         if let Some(c) = self.counter_value {
@@ -490,9 +492,14 @@ async fn last_done(
     // comment on `fold_title` for why SQL's own folding would disagree between backends. Rows
     // arrive newest first, so the first one seen for a given key is already that title's newest
     // occurrence, and any later one for the same key only adds to the count.
+    //
+    // `trip` and `fuel` are excluded the same way `reading` is: a trip is something logged, not
+    // something done, and a charge is likewise logged at (rather than "done to") the current
+    // counter -- a charge's own row would otherwise show the meaningless "0 km ago" every single
+    // time (the Energy section is where a charge's own figures belong instead).
     let entry_rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
         "SELECT id, title, date, counter_value FROM activities \
-         WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip') \
+         WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'fuel') \
          ORDER BY date DESC, id DESC",
     )
     .bind(object_id)

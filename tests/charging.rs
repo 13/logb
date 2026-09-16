@@ -150,13 +150,33 @@ async fn clearing_fuel_unit_while_a_price_is_set_is_allowed_when_the_price_is_al
     assert!(out["energy_price_milli"].is_null());
 }
 
-/// A `fuel` entry needs a title like every category but `trip` -- `ActivityInput::validate`'s
-/// blank-title exception is `trip`-only.
+/// A titled charge, for the tests below that don't care about the title itself -- see
+/// `a_fuel_entry_may_have_no_title_like_a_trip` for the blank-title case, which
+/// `ActivityInput::validate` now accepts on `fuel` the same way it already does on `trip`.
 fn charge(counter: i64, quantity_milli: i64, cost_cents: i64) -> Value {
     json!({
         "date": "2026-09-16", "category": "fuel", "title": "Charge", "notes": "",
         "charged_full": 1, "counter_value": counter, "quantity_milli": quantity_milli, "cost_cents": cost_cents
     })
+}
+
+/// The frontend falls back to "Charged"/"Geladen" (or the petrol wording) when a charge's title
+/// is blank, mirroring a trip's "Trip" fallback -- see `activityTitle` and `energyLabelKey`. The
+/// server itself does no such thing: it just accepts the empty title, same as a trip's.
+#[tokio::test]
+async fn a_fuel_entry_may_have_no_title_like_a_trip() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = create_car(&app, Some("kwh")).await;
+    let id = car["id"].as_i64().unwrap();
+
+    let mut body = charge(3420, 8500, 255);
+    body["title"] = json!("");
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&body).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let a: Value = res.json().await.unwrap();
+    assert_eq!(a["title"], "");
 }
 
 #[tokio::test]
@@ -332,8 +352,8 @@ async fn energy_endpoint_matches_the_domain_worked_example() {
     assert_eq!(out["price_milli"], 30000);
     // Mean window distance: 400.
     assert_eq!(out["distance_per_charge"], 400);
-    // Mean of 400*1000/8000 twice: 50.
-    assert_eq!(out["distance_per_unit_milli"], 50);
+    // Mean of 400*1_000_000/8000 twice: 50_000.
+    assert_eq!(out["distance_per_unit_milli"], 50_000);
     // Mean of 240*1000/400 (600) and 260*1000/400 (650): 625.
     assert_eq!(out["cost_per_counter_milli"], 625);
     // used = 30 + 25 = 55, remaining = 45; km_per_pct = (60+50)/(30+25) = 2; range_left = 90.
@@ -404,8 +424,8 @@ async fn energy_endpoint_ignores_deleted_charges_and_trips() {
     let out = app.get_json(&format!("/objects/{id}/energy")).await;
     // Only the surviving window (1000 -> 1200, 200 units, 6000 milli-units, 180 cents) counts.
     assert_eq!(out["distance_per_charge"], 200, "the deleted charge must not extend the window");
-    // 200*1000/6000 = 33 (0.033 distance/unit x1000).
-    assert_eq!(out["distance_per_unit_milli"], 33);
+    // 200*1_000_000/6000 = 33_333 (truncated; 33.333 distance/unit, x1000).
+    assert_eq!(out["distance_per_unit_milli"], 33_333);
     // 180*1000/200 = 900 (cents x1000 per counter unit).
     assert_eq!(out["cost_per_counter_milli"], 900);
     assert!(out["battery"].is_null(), "the only trip with a battery figure was deleted");

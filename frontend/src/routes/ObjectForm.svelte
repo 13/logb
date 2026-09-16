@@ -7,6 +7,7 @@
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
   import { centsToInput, counter, parseMoney } from '../lib/format';
+  import { fuelUnitLabel } from '../lib/energy';
   import { clearsPriceOn, emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
@@ -111,6 +112,13 @@
     // to whoever mounts next -- see `takeObjectDraft`.
     const draftToken = params.get('draft');
     const draft = takeObjectDraft(currentPath, draftToken);
+    // `energy_price_milli` is cents x1000 -- sub-cent precision the *field* can carry (a price
+    // agreed to three decimal places) -- but this form's price input is deliberately the same
+    // whole-cent text field every other money amount here uses (`centsToInput`/`parseMoney`, per
+    // the design spec: "parsed like other money input"), so a price entered with a fractional
+    // cent is rounded to the nearest whole one on every load, same as `purchase_price_cents`
+    // already is. Consistent with the rest of the app rather than a precision loss unique to
+    // this field.
     if (draft) {
       input = draft;
       priceText = centsToInput(draft.purchase_price_cents);
@@ -254,12 +262,12 @@
         <option value={null}>{$t('object.counter-none')}</option>
         <option value="l">l</option>
         <option value="gal">gal</option>
-        <option value="kwh">kwh</option>
+        <option value="kwh">{fuelUnitLabel('kwh')}</option>
       </select>
     </div>
     {#if input.fuel_unit}
       <div class="field">
-        <label for="ep">{$t('object.energy-price', { unit: input.fuel_unit })}</label>
+        <label for="ep">{$t('object.energy-price', { unit: fuelUnitLabel(input.fuel_unit) })}</label>
         <input id="ep" type="text" inputmode="decimal" bind:value={energyPriceText} />
       </div>
     {/if}

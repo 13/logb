@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { energyLabelKey, formatPerUnit, energyCost } from '../src/lib/energy';
+import { energyLabelKey, formatPerUnit, energyCost, fuelUnitLabel } from '../src/lib/energy';
 
 describe('energyLabelKey', () => {
   it('picks the charged wording for kWh', () => {
@@ -14,13 +14,26 @@ describe('energyLabelKey', () => {
   });
 });
 
+describe('fuelUnitLabel', () => {
+  it('capitalises kWh the way a person reads it, not the stored lowercase code', () => {
+    expect(fuelUnitLabel('kwh')).toBe('kWh');
+  });
+  it('leaves litres and gallons unchanged', () => {
+    expect(fuelUnitLabel('l')).toBe('l');
+    expect(fuelUnitLabel('gal')).toBe('gal');
+  });
+  it('is empty for a missing unit, never an invented one', () => {
+    expect(fuelUnitLabel(null)).toBe('');
+  });
+});
+
 describe('formatPerUnit', () => {
-  it('formats a distance-per-unit rate with one decimal', () => {
-    expect(formatPerUnit(7300, 'kwh', 'km', 'en')).toBe('7.3 km/kwh');
-    expect(formatPerUnit(7300, 'kwh', 'km', 'de')).toBe('7,3 km/kwh');
+  it('formats a distance-per-unit rate with one decimal, using the reader-facing unit label', () => {
+    expect(formatPerUnit(7300, fuelUnitLabel('kwh'), 'km', 'en')).toBe('7.3 km/kWh');
+    expect(formatPerUnit(7300, fuelUnitLabel('kwh'), 'km', 'de')).toBe('7,3 km/kWh');
   });
   it('works the same for litres', () => {
-    expect(formatPerUnit(16000, 'l', 'km', 'en')).toBe('16 km/l');
+    expect(formatPerUnit(16000, fuelUnitLabel('l'), 'km', 'en')).toBe('16 km/l');
   });
 });
 

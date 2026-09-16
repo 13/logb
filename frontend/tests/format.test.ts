@@ -136,6 +136,9 @@ describe('quantity', () => {
   it('renders nothing when there is no value', () => {
     expect(quantity(null, 'l', 'en')).toBe('');
   });
+  it('renders a bare number rather than inventing a unit when there is none', () => {
+    expect(quantity(41_300, null, 'en')).toBe('41.3');
+  });
 });
 
 describe('parseQuantity', () => {

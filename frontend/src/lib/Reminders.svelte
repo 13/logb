@@ -177,7 +177,7 @@
     <select id="link" bind:value={linkId}>
       <option value="">{$t('reminder.done-none')}</option>
       {#each linkable as a (a.id)}
-        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {activityTitle(a.title, $t)}</option>
+        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {activityTitle(a.title, a.category, $t)}</option>
       {/each}
     </select>
   </div>
