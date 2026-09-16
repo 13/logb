@@ -25,6 +25,10 @@ async fn health_reports_ok_and_creates_database() {
 /// QR sign-in is not tied to a version, so a client has to be told it exists another way: this
 /// is what the app's `ServerCapabilities` reads. A missing `features` field must be readable as
 /// "no features" by an app talking to an older server, so this only ever adds entries.
+///
+/// `token-self-revoke` is the same idea for a bearer token's own `DELETE /api/auth/tokens/{id}`
+/// (see e8ae22f): a client cannot otherwise tell whether the server it is talking to supports
+/// signing out with a token alone, so it reads this flag instead.
 #[tokio::test]
 async fn health_announces_the_pairing_feature() {
     let app = common::spawn().await;
@@ -33,6 +37,7 @@ async fn health_announces_the_pairing_feature() {
     let body: serde_json::Value = res.json().await.unwrap();
     let features = body["features"].as_array().unwrap();
     assert!(features.iter().any(|f| f == "pairing"), "{body}");
+    assert!(features.iter().any(|f| f == "token-self-revoke"), "{body}");
 }
 
 #[tokio::test]

@@ -487,7 +487,10 @@ recover it afterwards, so a lost token is revoked and replaced. Issuing a
 token deliberately requires a session cookie, never a token, so a leaked
 token cannot mint replacements. Revoking one accepts a session cookie too,
 and additionally the token's own bearer credential — never another token's —
-so an app can revoke its own token on sign-out without holding a cookie.
+so an app can revoke its own token on sign-out without holding a cookie. Not
+every server this app talks to is new enough to support it, so `GET /health`
+lists `token-self-revoke` in its `features` array for a client to detect
+support before relying on it.
 Changing a password revokes every token as well as every session.
 
 Writes that may be retried — `POST` of an activity or an attachment — accept a

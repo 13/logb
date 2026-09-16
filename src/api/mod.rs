@@ -96,7 +96,7 @@ async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, App
         // the version number -- QR sign-in is not tied to one, see `api::pairing`. A missing
         // field means no features, so an older server answering health without this key at all
         // is read the same way as one that lists none.
-        "features": ["pairing"],
+        "features": ["pairing", "token-self-revoke"],
     })))
 }
 
