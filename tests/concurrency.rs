@@ -34,6 +34,59 @@ async fn two_write_transactions_do_not_overlap() {
     assert!(after.is_ok(), "the lock was not released when the transaction ended");
 }
 
+/// A pairing code is the credential itself, and it must be usable exactly once -- however many
+/// requests learn about it at the same instant, which is exactly what a phone's own retry (or
+/// two phones scanning the same screen) can produce. `redeem`'s `UPDATE pairing_codes SET
+/// used_at = ... WHERE used_at IS NULL` inside `db::begin_write` is what makes "the code
+/// answered 200 once" and "exactly one token exists for it" the same fact rather than two
+/// things a race could make disagree: remove `Backend::write_lock`'s PostgreSQL arm (or open
+/// `redeem`'s update outside `begin_write` altogether) and two concurrent `UPDATE`s under READ
+/// COMMITTED can both read `used_at IS NULL` before either commits, both mint a token, and this
+/// goes red on PostgreSQL while staying green on SQLite -- whose own `BEGIN IMMEDIATE` already
+/// serialises the two regardless of this test.
+///
+/// Ten is comfortably inside the test harness's `login_max_attempts` of 10 per IP per minute
+/// (see `tests/pairing.rs::too_many_redeem_attempts_from_one_ip_are_rate_limited`), so a 429
+/// from the rate limiter -- a different mechanism entirely -- cannot be mistaken for the
+/// single-use guard this test is actually about.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn ten_concurrent_redeems_of_one_code_succeed_exactly_once() {
+    let app = std::sync::Arc::new(common::spawn().await);
+    app.setup("ben", "correct horse").await;
+    let created = app.client.post(app.url("/auth/pair")).send().await.unwrap();
+    assert_eq!(created.status(), 201);
+    let created: serde_json::Value = created.json().await.unwrap();
+    let code = created["code"].as_str().unwrap().to_string();
+
+    let attempts: Vec<_> = (0..10)
+        .map(|_| {
+            let app = app.clone();
+            let code = code.clone();
+            tokio::spawn(async move {
+                let anon = reqwest::Client::builder().cookie_store(false).build().unwrap();
+                anon.post(app.url("/auth/pair/redeem"))
+                    .json(&serde_json::json!({ "code": code, "device_name": "phone" }))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+            })
+        })
+        .collect();
+
+    let mut ok_count = 0;
+    for attempt in attempts {
+        if attempt.await.unwrap() == reqwest::StatusCode::OK {
+            ok_count += 1;
+        }
+    }
+    assert_eq!(ok_count, 1, "exactly one of ten concurrent redeems of the same code must succeed");
+
+    let tokens: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(tokens, 1, "exactly one token must be minted for the user, however many attempts raced");
+}
+
 /// The cursor's promise, from `0007_sync.sql`: monotonic and in commit order. A device pulls
 /// with `seq > cursor` and remembers the highest it saw, so a number that appears after the
 /// device has moved past it is not late -- it is gone, for that device, permanently and with
