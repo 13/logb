@@ -1,0 +1,13 @@
+-- One-time codes issued to a signed-in browser and redeemed by a phone's camera scanning a QR
+-- code: see `domain::pairing`. `code_hash` is the code's SHA-256, never the code itself, so a
+-- database leak does not let anyone replay a still-live code. `used_at` makes redeem single-use;
+-- `expires_at` bounds how long an unscanned code stays live. Same shape as `api_tokens`.
+CREATE TABLE pairing_codes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT
+);
+CREATE INDEX idx_pairing_codes_user ON pairing_codes(user_id);
