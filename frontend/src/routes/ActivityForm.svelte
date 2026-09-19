@@ -306,6 +306,7 @@
 
   function buildInput(): ActivityInput {
     const isTrip = input.category === 'trip';
+    const isSession = input.category === 'session';
     return {
       ...input,
       title: input.category === 'weight' ? (input.title || $t('cat.weight')) : input.title,
@@ -334,9 +335,9 @@
       // row (the backend rejects them there outright, and PATCH keeps whatever it last stored
       // when a field is merely absent from the body).
       start_counter: isTrip ? input.start_counter : null,
-      from_place: isTrip ? (fromText.trim() || null) : null,
+      from_place: isTrip || isSession ? (fromText.trim() || null) : null,
       to_place: isTrip ? (toText.trim() || null) : null,
-      duration_minutes: isTrip ? parseDuration(durationText) : null,
+      duration_minutes: isTrip || isSession ? parseDuration(durationText) : null,
       battery_used_pct: isTrip ? input.battery_used_pct : null,
     };
   }
@@ -554,6 +555,12 @@
                silently did nothing instead of showing that message. -->
           <input id="tba" type="number" inputmode="numeric" bind:value={input.battery_used_pct} />
         </div>
+      </div>
+    {/if}
+    {#if input.category === 'session'}
+      <div class="row">
+        <div class="field"><label for="session-location">{$t('session.location')}</label><input id="session-location" maxlength="80" bind:value={fromText} /></div>
+        <div class="field"><label for="session-duration">{$t('session.duration')}</label><input id="session-duration" type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} /></div>
       </div>
     {/if}
     {#if input.category !== 'weight'}

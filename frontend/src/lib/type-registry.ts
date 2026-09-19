@@ -9,7 +9,7 @@ const TABLE: Record<BuiltinType, { icon: IconName; categories: Category[] }> = {
   e_bike:     { icon: 'e-bike',     categories: ['maintenance', 'repair', 'inspection', 'fuel', 'reading', 'modification', 'purchase', 'other'] },
   bike:       { icon: 'bike',       categories: ['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other'] },
   motorcycle: { icon: 'motorcycle', categories: ['maintenance', 'repair', 'inspection', 'fuel', 'reading', 'modification', 'purchase', 'other'] },
-  home:       { icon: 'home',       categories: ['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'other'] },
+  home:       { icon: 'home',       categories: ['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'session', 'other'] },
   appliance:  { icon: 'appliance',  categories: ['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other'] },
   tool:       { icon: 'tool',       categories: ['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other'] },
   body:       { icon: 'body',       categories: ['weight', 'symptom', 'treatment', 'appointment', 'medication', 'other'] },

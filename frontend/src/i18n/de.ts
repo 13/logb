@@ -1,5 +1,8 @@
 export default {
   "cat.weight": "Gewicht",
+  "cat.session": "Termin",
+  "session.location": "Ort",
+  "session.duration": "Dauer",
   "weight.log": "Gewicht eintragen",
   "weight.unit": "Gewichtseinheit",
   "weight.starting": "Startgewicht (optional)",

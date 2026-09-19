@@ -3,7 +3,7 @@ import type { IconName } from './icon-names.js';
 export type WeightUnit = 'kg' | 'lb';
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
 export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
-  'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip', 'weight'] as const;
+  'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip', 'weight', 'session'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
 export type BuiltinType = (typeof OBJECT_TYPES)[number];

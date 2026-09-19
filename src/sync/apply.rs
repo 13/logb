@@ -708,7 +708,7 @@ pub async fn apply_op(
                                 (Some(_), Some(_)) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
                                 _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
                             }
-                        } else if stored.has_trip_fields() {
+                        } else if new_category != "session" && stored.has_trip_fields() {
                             return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
                         }
                     }
@@ -724,12 +724,16 @@ pub async fn apply_op(
                             _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
                         }
                     }
-                } else if stored.category != "trip" {
+                } else if stored.category != "trip" && stored.category != "session" {
                     // The four trip-only fields, plus `start_counter`: refused outright on a
                     // non-trip row, unless they are being cleared -- clearing stays legal
                     // regardless of category, exactly as on the REST door.
                     if !matches!(&bound, Binding::Null) {
                         return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
+                    }
+                } else if stored.category == "session" {
+                    if matches!(field, "start_counter" | "to_place" | "battery_used_pct") && !matches!(&bound, Binding::Null) {
+                        return Ok(Outcome::Rejected { reason: "a session only has a place and duration".into() });
                     }
                 } else if field == "start_counter" {
                     // On a trip row specifically: a trip may never lose its start either,

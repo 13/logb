@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 // four health categories alongside the original seven; `reading`, an entry that is nothing but
 // a counter value; and `trip`, an entry whose end is `counter_value` and whose start is the
 // `start_counter` column (see the doc comment on `ActivityRow::start_counter`).
-pub const CATEGORIES: [&str; 14] = [
+pub const CATEGORIES: [&str; 15] = [
     "maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other",
-    "symptom", "treatment", "appointment", "medication", "reading", "trip", "weight",
+    "symptom", "treatment", "appointment", "medication", "reading", "trip", "weight", "session",
 ];
 
 pub fn router() -> Router<App> {
@@ -220,13 +220,13 @@ impl ActivityInput {
 
         let has_trip_fields = start_counter.is_some() || from_place.is_some() || to_place.is_some()
             || duration_minutes.is_some() || battery_used_pct.is_some();
-        if self.category != "trip" {
+        if self.category != "trip" && self.category != "session" {
             if has_trip_fields {
                 return Err(AppError::BadRequest(
                     "only a trip has start_counter, places, duration or battery".into(),
                 ));
             }
-        } else {
+        } else if self.category == "trip" {
             // Allowed only on an object with a distance counter, regardless of the object's
             // type's own category list -- see the module doc on `domain::custom_type` and the
             // spec's "Type categories" note: a `trip` is offered by counter unit, not by type.
@@ -239,6 +239,8 @@ impl ActivityInput {
             if start < 0 || start > end {
                 return Err(AppError::BadRequest("start_counter must be between 0 and counter_value".into()));
             }
+        } else if start_counter.is_some() || to_place.is_some() || battery_used_pct.is_some() {
+            return Err(AppError::BadRequest("a session only has a place and duration".into()));
         }
         if let Some(b) = battery_used_pct {
             if !(0..=100).contains(&b) {

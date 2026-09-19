@@ -1,5 +1,8 @@
 export default {
   "cat.weight": "Weight",
+  "cat.session": "Session",
+  "session.location": "Location",
+  "session.duration": "Duration",
   "weight.log": "Log weight",
   "weight.unit": "Weight unit",
   "weight.starting": "Starting weight (optional)",

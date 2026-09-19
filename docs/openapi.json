@@ -2713,7 +2713,8 @@
           "medication",
           "reading",
           "trip",
-          "weight"
+          "weight",
+          "session"
         ],
         "description": "`reading` is an entry that records nothing but a counter value, and requires `counter_value`. `trip` requires `counter_value` and `start_counter`, and is allowed only on an object whose counter_unit is km or mi; its title may be blank."
       },

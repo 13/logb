@@ -33,7 +33,7 @@ describe('type registry: built-in types', () => {
     expect(categoriesFor('e_bike', custom)).toEqual(vehicle);
     expect(categoriesFor('motorcycle', custom)).toEqual(vehicle);
     expect(categoriesFor('bike', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
-    expect(categoriesFor('home', custom)).toEqual(['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'other']);
+    expect(categoriesFor('home', custom)).toEqual(['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'session', 'other']);
     expect(categoriesFor('appliance', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
     expect(categoriesFor('tool', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
     expect(categoriesFor('body', custom)).toEqual(['weight', 'symptom', 'treatment', 'appointment', 'medication', 'other']);
