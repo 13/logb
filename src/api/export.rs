@@ -180,6 +180,8 @@ fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> Result<A
 #[derive(Deserialize)]
 pub struct ExportQuery {
     pub object_id: Option<i64>,
+    #[serde(default)]
+    pub exclude_body: bool,
 }
 
 /// The app icon, taken from the embedded SPA build rather than a second copy in the tree.
@@ -192,7 +194,7 @@ fn icon_bytes() -> Option<Vec<u8>> {
 }
 
 async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<ExportQuery>) -> Result<Response, AppError> {
-    let objects: Vec<ObjectRow> = match q.object_id {
+    let mut objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
@@ -201,6 +203,7 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
              FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
+    if q.exclude_body { objects.retain(|o| o.type_ != "body"); }
     let sha_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
         .bind(user.id).fetch_all(&state.db).await?;
     let sha_by_file: HashMap<i64, String> = sha_rows.into_iter().collect();

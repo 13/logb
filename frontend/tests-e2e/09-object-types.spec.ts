@@ -12,7 +12,7 @@ test('a body object logs a symptom, and is not offered fuel', async ({ page }) =
 
   await page.getByRole('button', { name: /Log activity/ }).click();
   const select = page.getByLabel('Category');
-  await expect(select.locator('option')).toHaveText(['Symptom', 'Treatment', 'Appointment', 'Medication', 'Other']);
+  await expect(select.locator('option')).toHaveText(['Weight', 'Symptom', 'Treatment', 'Appointment', 'Medication', 'Other']);
 
   await select.selectOption('symptom');
   await page.getByLabel('Title').fill('Pain lifting overhead');

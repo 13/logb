@@ -96,7 +96,7 @@
             <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
               <span class="hit-title">{activityTitle(a.title, a.category, $t)}</span>
               <span class="muted small tnum">
-                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
+                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{a.weight_grams !== null ? ` · ${a.weight_grams} g` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
               </span>
             </button>
             {#if (a.tags ?? []).length > 0}

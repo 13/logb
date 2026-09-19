@@ -13,6 +13,7 @@
   let pending = $state<QueuedOp[]>([]);
   let loaded = $state(false);
   let failed = $state(false);
+  let summary = $state<{ minimum_grams: number | null; maximum_grams: number | null; average_grams: number | null } | null>(null);
   let range = $state<1 | 3 | 0>(3);
   let selected = $state<number | null>(null);
   let sequence = 0;
@@ -20,8 +21,10 @@
     const request = ++sequence;
     try {
       const rows = await api<WeightPoint[]>('GET', `/objects/${objectId}/weight`);
+      const totals = await api<typeof summary>('GET', `/objects/${objectId}/weight/summary`).catch(() => null);
       if (request !== sequence) return;
       history = rows; failed = false; loaded = true;
+      summary = totals;
     } catch {
       if (request !== sequence) return;
       failed = true; loaded = true;
@@ -57,6 +60,7 @@
     <div class="summary">
       <div><span class="muted">{$t('weight.latest')}</span><strong class="tnum">{formatWeight(latest.weight_grams, unit, $locale)}</strong><span class="muted">{fmtDate(latest.date, $dateFormat)}{#if latest.pending} · {$t('weight.pending')}{/if}</span></div>
       {#if previous}<div><span class="muted">{$t('weight.change')}</span><strong class="tnum">{latest.weight_grams > previous.weight_grams ? '+' : ''}{formatWeight(latest.weight_grams - previous.weight_grams, unit, $locale)}</strong></div>{/if}
+      {#if summary?.average_grams != null}<div><span class="muted">{$t('weight.average')}</span><strong class="tnum">{formatWeight(summary.average_grams, unit, $locale)}</strong></div>{/if}
     </div>
   {:else if loaded && !failed}<p class="muted">{$t('weight.empty')}</p>
   {:else if !loaded}<p class="muted">{$t('nav.loading')}</p>{/if}
@@ -81,6 +85,13 @@
       <select id="weight-point-chooser" value={focused?.id} onchange={(e) => selected = Number(e.currentTarget.value)}>
         {#each visible as point (point.id)}<option value={point.id}>{fmtDate(point.date, $dateFormat)} · {formatWeight(point.weight_grams, unit, $locale)}{point.pending ? ` · ${$t('weight.pending')}` : ''}</option>{/each}
       </select>
+      <ol class="history-list" aria-label={$t('weight.history')}>
+        {#each visible as point (point.id)}
+          <li><button class:chosen={focused?.id === point.id} class="ghost" onclick={() => selected = point.id} aria-label={`${fmtDate(point.date, $dateFormat)} ${formatWeight(point.weight_grams, unit, $locale)}`}>
+            <span>{fmtDate(point.date, $dateFormat)}</span><strong>{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="muted"> · {$t('weight.pending')}</span>{/if}
+          </button></li>
+        {/each}
+      </ol>
     {:else}<p class="muted">{$t('weight.no-range')}</p>{/if}
   {/if}
   <button class="ghost reminder" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t('weight.reminder')}</button>
@@ -95,4 +106,7 @@
   [aria-pressed="true"] { background: var(--surface-2); box-shadow: inset 0 -2px currentColor; }
   svg { display: block; width: 100%; max-height: 230px; } text { fill: var(--muted); font-size: var(--text-xs); }
   select { width: 100%; } .reminder { margin-top: var(--space-2); }
+  .history-list { list-style: none; padding: 0; margin: var(--space-2) 0 0; display: grid; gap: var(--space-1); }
+  .history-list button { width: 100%; display: flex; justify-content: space-between; text-align: left; }
+  .history-list .chosen { outline: 2px solid var(--accent); }
 </style>

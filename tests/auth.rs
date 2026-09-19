@@ -203,8 +203,9 @@ async fn sign_in_and_out_clear_the_browsers_http_cache() {
 async fn expired_sessions_are_pruned() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
-    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind("stale-token").bind(1).bind("2020-01-01T00:00:00Z")
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, CAST($3 AS TIMESTAMP))")
+        .bind("stale-token").bind(1)
+        .bind("2020-01-01 00:00:00")
         .execute(&app.state.db).await.unwrap();
     let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.db).await.unwrap();
     assert_eq!(before, 2);

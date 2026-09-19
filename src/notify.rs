@@ -32,6 +32,7 @@ pub struct DueItem {
     pub due_counter: Option<i64>,
     /// `service` or `reading`.
     pub kind: String,
+    pub object_type: String,
     /// Where in the app to act on it, when `LOGB_PUBLIC_URL` says where the app is: the quick
     /// reading form for a reading, the object's reminders for anything else.
     pub link: Option<String>,
@@ -73,15 +74,18 @@ fn words(lang: &str) -> Words {
     }
 }
 
-fn link(public_url: Option<&str>, object_id: i64, kind: &str) -> Option<String> {
+fn link(public_url: Option<&str>, object_id: i64, kind: &str, object_type: &str) -> Option<String> {
     let base = public_url?.trim_end_matches('/');
-    Some(format!("{base}{}", path(object_id, kind)))
+    Some(format!("{base}{}", path(object_id, kind, object_type)))
 }
 
 /// The same place as `link`, inside the app. A push notification opens it against the service
 /// worker's own origin, so it needs no public URL at all.
-fn path(object_id: i64, kind: &str) -> String {
+fn path(object_id: i64, kind: &str, object_type: &str) -> String {
     if kind == KIND_READING {
+        if object_type == "body" {
+            return format!("/objects/{object_id}/activities/new?category=weight");
+        }
         format!("/objects/{object_id}/reading")
     } else {
         format!("/objects/{object_id}?tab=reminders")
@@ -112,13 +116,14 @@ async fn items_for(state: &App, r: &Recipient) -> Result<Vec<DueItem>, AppError>
         .map(|d| DueItem {
             username: r.username.clone(),
             object_id: d.row.object_id,
-            link: link(public_url, d.row.object_id, &d.row.kind),
+            link: link(public_url, d.row.object_id, &d.row.kind, &d.row.object_type),
             object_name: d.row.object_name,
             reminder_id: d.row.id,
             title: d.row.title,
             due_date: d.next_due_date,
             due_counter: d.row.due_counter,
             kind: d.row.kind,
+            object_type: d.row.object_type,
         })
         .collect())
 }
@@ -261,7 +266,7 @@ pub(crate) async fn push_to(state: &App, user_id: i64, title: &str, body: &str, 
 async fn push_digest(state: &App, user_id: i64, d: &Digest) -> Result<(), AppError> {
     // One reminder opens where it is dealt with; several open the dashboard, which lists them.
     let open = match d.reminders.as_slice() {
-        [only] => path(only.object_id, &only.kind),
+        [only] => path(only.object_id, &only.kind, &only.object_type),
         _ => "/".to_string(),
     };
     let (_, failed) = push_to(state, user_id, &d.title, &d.message, &open).await?;
@@ -355,7 +360,7 @@ mod tests {
     fn item(kind: &str) -> DueItem {
         DueItem {
             username: "ben".into(), object_id: 1, object_name: "Golf".into(), reminder_id: 1,
-            title: "Oil".into(), due_date: None, due_counter: None, kind: kind.into(), link: None,
+            title: "Oil".into(), due_date: None, due_counter: None, kind: kind.into(), object_type: "car".into(), link: None,
         }
     }
 

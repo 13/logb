@@ -7,6 +7,7 @@
   let fileEl: HTMLInputElement;
   let message = $state('');
   let error = $state('');
+  let excludeBody = $state(false);
 
   async function doImport(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -23,7 +24,8 @@
   {#if message}<p class="muted">{message}</p>{/if}
 
   <div class="list">
-    <a class="button-like" href="/api/export">{$t('settings.export')}</a>
+    <label><input type="checkbox" bind:checked={excludeBody} /> {$t('settings.export-exclude-body')}</label>
+    <a class="button-like" href={excludeBody ? '/api/export?exclude_body=true' : '/api/export'}>{$t('settings.export')}</a>
     <button onclick={() => fileEl.click()}>{$t('settings.import')}</button>
     <input bind:this={fileEl} type="file" accept=".zip,application/zip" hidden onchange={(e) => doImport((e.currentTarget as HTMLInputElement).files)} />
   </div>

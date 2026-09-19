@@ -78,6 +78,11 @@
   const counterWarn = $derived(
     counterText !== '' && lastCounter !== null && Number(counterText) < lastCounter,
   );
+  const weightWarn = $derived.by(() => {
+    if (input.category !== 'weight' || object?.stats.latest_weight_grams == null) return false;
+    const grams = parseWeight(weightText, weightUnit);
+    return Number.isFinite(grams) && Math.abs(grams - object.stats.latest_weight_grams) / object.stats.latest_weight_grams > 0.1;
+  });
   const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
 
   /** The `?category=` query parameter of a `.../activities/new` link -- ObjectDetail's "+ Log
@@ -470,6 +475,7 @@
       {#if object?.stats.latest_weight_grams != null}
         <p class="hint">{$t('weight.previous')}: {formatWeight(object.stats.latest_weight_grams, weightUnit, $locale)} · {fmtDate(object.stats.latest_weight_date ?? null, $dateFormat)}</p>
       {/if}
+      {#if weightWarn}<p class="hint warning" role="status">{$t('weight.large-change')}</p>{/if}
     {:else}
     <div class="field">
       <label for="ti">{$t('activity.title')}</label>
