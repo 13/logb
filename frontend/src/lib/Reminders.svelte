@@ -10,8 +10,8 @@
   import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
-  let { objectId, unit, activities, onchanged }:
-    { objectId: number; unit: CounterUnit; activities: Activity[]; onchanged?: () => void } = $props();
+  let { objectId, unit, activities, onchanged, body = false }:
+    { objectId: number; body?: boolean; unit: CounterUnit; activities: Activity[]; onchanged?: () => void } = $props();
 
   let items = $state<Reminder[]>([]);
   /** Whether the answer is known -- see Documents.svelte for why an empty list is not one. */
@@ -83,6 +83,7 @@
   }
 
   function reading(r: Reminder): string {
+    if (body) return r.last_reading_date ? `${$t('weight.last-date')}: ${fmtDate(r.last_reading_date, $dateFormat)}` : $t('weight.empty');
     const last = r.last_reading_date && r.current_counter !== null
       ? $t('reminder.last-reading', { counter: counter(r.current_counter, unit, $locale), date: fmtDate(r.last_reading_date, $dateFormat) })
       : $t('reminder.no-reading');
@@ -102,8 +103,8 @@
     <span class="empty-icon"><Icon name="repeat" size={40} /></span>
     <p>{$t('reminder.empty')}</p>
     <button class="primary" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
-    {#if unit}
-      <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t('reminder.new-reading')}</button>
+    {#if unit || body}
+      <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t(body ? 'weight.reminder' : 'reminder.new-reading')}</button>
     {/if}
   </div>
 {/if}
@@ -142,7 +143,7 @@
         {#if r.kind === 'reading'}
           <!-- No "done": logging the reading is what satisfies it, from here or anywhere else. -->
           {#if r.due}<button class="ghost" onclick={() => skip(r)}>{$t('reminder.skip')}</button>{/if}
-          <button class="primary" onclick={() => go(`/objects/${objectId}/reading`)}>{$t('reminder.record')}</button>
+          <button class="primary" onclick={() => go(`/objects/${objectId}/reading`)}>{$t(body ? 'weight.log' : 'reminder.record')}</button>
         {:else}
           <button class="primary" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</button>
         {/if}

@@ -36,7 +36,7 @@ describe('type registry: built-in types', () => {
     expect(categoriesFor('home', custom)).toEqual(['maintenance', 'repair', 'inspection', 'modification', 'purchase', 'other']);
     expect(categoriesFor('appliance', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
     expect(categoriesFor('tool', custom)).toEqual(['maintenance', 'repair', 'inspection', 'reading', 'modification', 'purchase', 'other']);
-    expect(categoriesFor('body', custom)).toEqual(['symptom', 'treatment', 'appointment', 'medication', 'other']);
+    expect(categoriesFor('body', custom)).toEqual(['weight', 'symptom', 'treatment', 'appointment', 'medication', 'other']);
     expect(categoriesFor('other', custom)).toEqual([...CATEGORIES]);
   });
 

@@ -1,8 +1,9 @@
 import type { IconName } from './icon-names.js';
 
+export type WeightUnit = 'kg' | 'lb';
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
 export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
-  'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip'] as const;
+  'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip', 'weight'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
 export type BuiltinType = (typeof OBJECT_TYPES)[number];
@@ -26,6 +27,7 @@ export interface NotificationSettings {
 export interface NotificationTest { webhook: string | null; push_sent: number; push_failed: number }
 
 export interface ObjectStats {
+  latest_weight_grams?: number | null; latest_weight_date?: string | null;
   total_cost_cents: number; activity_count: number; current_counter: number | null; due_reminder_count: number;
   /** The date of the newest entry with a counter value. */
   last_reading_date: string | null;
@@ -36,6 +38,7 @@ export interface ObjectStats {
 }
 export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
 export interface MemObject {
+  weight_unit?: WeightUnit;
   id: number; user_id: number; name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived_at: string | null;
   cover_attachment_id: number | null; cover_file_id: number | null; parent_id: number | null; created_at: string; updated_at: string; stats: ObjectStats;
@@ -48,6 +51,7 @@ export interface MemObject {
   energy_price_milli: number | null;
 }
 export interface ObjectInput {
+  weight_unit?: WeightUnit;
   name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
   purchase_date: string | null; purchase_price_cents: number | null; archived?: boolean; cover_attachment_id?: number | null;
   parent_id?: number | null; tags?: string[];
@@ -69,6 +73,7 @@ export interface Attachment {
 }
 
 export interface Activity {
+  weight_grams?: number | null;
   id: number; object_id: number; date: string; category: Category; title: string; notes: string;
   counter_value: number | null; cost_cents: number | null; quantity_milli: number | null; created_at: string; updated_at: string; attachments: Attachment[];
   /** Set client-side only, for a synthetic entry built from a still-queued outbox op — the
@@ -87,6 +92,7 @@ export interface Activity {
   charged_full: number;
 }
 export interface ActivityInput {
+  weight_grams?: number | null;
   date: string; category: Category; title: string; notes: string; counter_value: number | null;
   cost_cents: number | null; quantity_milli: number | null; tags?: string[];
   start_counter?: number | null; from_place?: string | null; to_place?: string | null;

@@ -1,0 +1,61 @@
+import { test, expect } from '@playwright/test';
+import { signInFresh } from './helpers';
+
+test('Body creation, decreasing weight, unit conversion, editing, chart and reminders', async ({ page }) => {
+  await signInFresh(page, '30-weight');
+  await page.goto('/objects/new');
+  await page.getByLabel('Name', { exact: true }).fill('Weight history test');
+  await page.locator('#c').selectOption('body');
+  await expect(page.locator('#u')).toHaveCount(0);
+  await expect(page.locator('#pp')).toHaveCount(0);
+  await page.getByLabel('Starting weight (optional)').fill('80,5');
+  await page.getByRole('button', {name:'Save', exact:true}).click();
+  await expect(page).toHaveURL(/\/objects\/\d+$/);
+  const objectUrl = page.url();
+  const summary = page.getByRole('region', {name:'Weight history'});
+  await expect(summary).toContainText('80.5 kg');
+  await summary.getByRole('button', {name:'Log weight', exact:true}).click();
+  await expect(page.getByLabel('Weight', {exact:true})).toHaveValue('');
+  await expect(page.getByLabel('Cost', {exact:true})).toHaveCount(0);
+  await page.getByLabel('Weight', {exact:true}).fill('79.25');
+  await page.getByRole('button', {name:'Save', exact:true}).click();
+  await expect(page).toHaveURL(objectUrl);
+  await expect(summary).toContainText('-1.25 kg');
+  await page.getByRole('button', { name: /79.25 kg/ }).click();
+  await expect(page.getByLabel('Weight', {exact:true})).toHaveValue('79.25');
+  await page.getByLabel('Weight unit').selectOption('lb');
+  const pounds = Number(await page.getByLabel('Weight', {exact:true}).inputValue());
+  expect(pounds).toBeCloseTo(174.716, 2);
+  await page.getByRole('button', {name:'Save', exact:true}).click();
+  await expect(summary).toContainText('79.25 kg');
+  await summary.getByRole('button', {name:'All time', exact:true}).click();
+  await expect(summary.locator('svg circle')).toHaveCount(2);
+  await summary.getByRole('button', {name:'Remind me to log weight', exact:true}).click();
+  await expect(page.getByLabel('Title', {exact:true})).toHaveValue('Remind me to log weight');
+  await page.getByRole('button', {name:'Save', exact:true}).click();
+  await page.goto(objectUrl + '?tab=reminders');
+  await expect(page.getByText('Last weight entry:', {exact:false})).toBeVisible();
+});
+
+test('offline weight is queued once and appears after reconnection', async ({ page, context }) => {
+  await signInFresh(page, '30-weight-offline');
+  const response = await page.request.post('/api/objects', {data:{name:'Offline body',type:'body'}});
+  expect(response.ok()).toBeTruthy();
+  const { id } = await response.json();
+  await page.goto(`/objects/${id}`);
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.getByRole('button', {name:'Log weight', exact:true}).click();
+  await page.getByLabel('Weight', {exact:true}).fill('72.35');
+  await context.setOffline(true);
+  await page.getByRole('button', {name:'Save', exact:true}).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}$`));
+  await expect(page.getByRole('region', {name:'Weight history'})).toContainText('72.35 kg', {timeout:15000});
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect.poll(async () => {
+    const r = await page.request.get(`/api/objects/${id}/weight`);
+    return (await r.json()).length;
+  }).toBe(1);
+  await page.reload();
+  await expect(page.getByRole('region', {name:'Weight history'})).toContainText('72.35 kg');
+});

@@ -635,6 +635,14 @@ export async function outboxDeadCount(): Promise<number> {
  * write made offline in the place it would otherwise appear once the server has it, so it is
  * never invisible in the meantime. No component reaches into the store directly.
  */
+/** One owner-scoped queue read for a measurement history, independent of timeline filters. */
+export async function pendingActivityOps(objectId: number, activityIds: number[]): Promise<QueuedOp[]> {
+  const paths = new Set(activityIds.map(id => `/activities/${id}`));
+  return (await store.all()).filter(o => !o.dead && isOurs(o) &&
+    ((o.kind === 'activity.create' && o.path === `/objects/${objectId}/activities`) ||
+     (o.kind === 'activity.update' && paths.has(o.path))));
+}
+
 export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
   return (await store.all()).filter((o) => !o.dead && o.path === path && isOurs(o));
 }

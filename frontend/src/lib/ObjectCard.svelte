@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatWeight, quickLogPath } from './weight';
   import { go } from './router';
   import { fileUrl } from './api';
   import { counter, money, lastActivityLabel, todayIso } from './format';
@@ -40,6 +41,7 @@
       <div class="muted tnum type-row">
         <Icon name={typeIcon(object.type, $customTypes)} size={16} />
         {typeLabel(object.type, $customTypes, $t, $typesLoaded)}
+        {#if object.type === 'body' && object.stats.latest_weight_grams != null} · {formatWeight(object.stats.latest_weight_grams, object.weight_unit ?? 'kg', $locale)}{/if}
         {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
         <!-- A month is the unit people think in; rounded like the Info tab, since it is an average. -->
         {#if object.stats.counter_per_day_milli !== null && object.counter_unit} · {$t('insights.per-month', { amount: counter(Math.round(object.stats.counter_per_day_milli * 30.44 / 1000), object.counter_unit, $locale) })}{/if}
@@ -48,8 +50,8 @@
       </div>
     </div>
   </button>
-  <button class="quicklog" aria-label={$t('dash.log')}
-          onclick={() => go(`/objects/${object.id}/activities/new`)}><Icon name="plus" /></button>
+  <button class="quicklog" aria-label={object.type === 'body' ? $t('weight.log') : $t('dash.log')}
+          onclick={() => go(quickLogPath(object))}><Icon name="plus" /></button>
   </div>
   {#if (object.tags ?? []).length > 0}
     <div class="card-tags"><TagChips tags={object.tags} onselect={ontag} active={activeTag} /></div>

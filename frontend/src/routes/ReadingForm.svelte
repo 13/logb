@@ -34,6 +34,7 @@
       if (cached) object = cached;
       else { error = (e as Error).message; return; }
     }
+    if (object.type === 'body') { go(`/objects/${oid}/activities/new?category=weight`, true); return; }
     if (object.stats.current_counter !== null) valueText = String(object.stats.current_counter);
     lastDate = object.stats.last_reading_date;
     // The rate only sharpens the plausibility check; the form is complete without it.

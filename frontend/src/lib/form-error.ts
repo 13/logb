@@ -22,6 +22,7 @@ const TRIP_MESSAGES: Record<string, string> = {
  * in a sentence that says what to do about it.
  */
 export function fieldError(key: string, t: Translate): string {
+  if (key === 'weight.invalid') return t(key);
   const tripMessage = TRIP_MESSAGES[key];
   if (tripMessage) return t(tripMessage);
   return t('form.check-field', { field: t(key) });

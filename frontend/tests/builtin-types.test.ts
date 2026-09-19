@@ -11,7 +11,7 @@ const typeIcon = (ty: string) => iconOf(ty, []);
 describe('object types', () => {
   it('offers a bike no fuel and a body no inspection', () => {
     expect(categoriesFor('bike')).not.toContain('fuel');
-    expect(categoriesFor('body')).toEqual(['symptom', 'treatment', 'appointment', 'medication', 'other']);
+    expect(categoriesFor('body')).toEqual(['weight', 'symptom', 'treatment', 'appointment', 'medication', 'other']);
     expect(categoriesFor('car')).toContain('fuel');
   });
 

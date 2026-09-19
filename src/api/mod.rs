@@ -17,6 +17,7 @@ pub mod tags;
 pub mod trips;
 pub mod types;
 pub mod users;
+pub mod weight;
 
 use crate::error::AppError;
 use crate::state::App;
@@ -39,6 +40,7 @@ pub fn router(max_upload_bytes: usize, max_import_bytes: usize) -> Router<App> {
         .merge(activities::router())
         .merge(trips::router())
         .merge(energy::router())
+        .merge(weight::router())
         .merge(reminders::router())
         .merge(search::router())
         .merge(tags::router())

@@ -22,13 +22,13 @@
   onMount(async () => {
     object = await api<MemObject>('GET', `/objects/${oid}`);
     if (rid) input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`));
-    else if (presetKind === 'reading' && object.counter_unit) input = readingReminder($t('reading.reminder-title'));
+    else if (presetKind === 'reading' && (object.counter_unit || object.type === 'body')) input = readingReminder($t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title'));
   });
 
   /** Switching kind on a new reminder. A title the user has not touched follows the kind, so
    *  "Log the counter reading" does not stay behind on a reminder that is now about brakes. */
   function setKind(kind: ReminderInput['kind']) {
-    const readingTitle = $t('reading.reminder-title');
+    const readingTitle = $t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title');
     if (kind === 'reading') {
       input = { ...input, kind, every_n: input.every_n ?? 1, every_unit: input.every_unit ?? 'month', title: input.title || readingTitle };
     } else {
@@ -76,11 +76,11 @@
   <form onsubmit={submit}>
     <!-- A reading needs a counter to read, and a reminder keeps its kind once saved (the server
          refuses a change), so the choice is only offered where it can be made. -->
-    {#if !editing && object?.counter_unit}
+    {#if !editing && (object?.counter_unit || object?.type === 'body')}
       <fieldset class="field kind">
         <legend>{$t('reminder.kind')}</legend>
         <label class="row toggle"><input type="radio" name="kind" checked={input.kind === 'service'} onchange={() => setKind('service')} /> {$t('reminder.kind-service')}</label>
-        <label class="row toggle"><input type="radio" name="kind" checked={input.kind === 'reading'} onchange={() => setKind('reading')} /> {$t('reminder.kind-reading')}</label>
+        <label class="row toggle"><input type="radio" name="kind" checked={input.kind === 'reading'} onchange={() => setKind('reading')} /> {$t(object?.type === 'body' ? 'weight.log' : 'reminder.kind-reading')}</label>
       </fieldset>
     {/if}
     <div class="field"><label for="ti">{$t('reminder.title')}</label><input id="ti" bind:value={input.title} required /></div>
@@ -96,7 +96,7 @@
         </div>
       </div>
       <div class="field"><label for="st">{$t('reminder.starts')}</label><DateInput id="st" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
-      <p class="hint">{$t('reminder.reading-hint')}</p>
+      <p class="hint">{$t(object?.type === 'body' ? 'weight.reminder-hint' : 'reminder.reading-hint')}</p>
     {:else}
       <div class="row">
         <div class="field"><label for="dd">{$t('reminder.due-date')}</label><DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>

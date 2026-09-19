@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatWeight } from './weight';
+  import type { WeightUnit } from './types';
   import { fileUrl } from './api';
   import { go } from './router';
   import { counter, fmtDate, money, quantity } from './format';
@@ -16,11 +18,11 @@
   import { tagColorIndex } from './tags';
 
   let {
-    objectId, type, activities, total, loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, energyRate = null,
+    objectId, type, activities, total, weightUnit = 'kg', loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, energyRate = null,
     category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
   }:
     {
-      objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
+      weightUnit?: WeightUnit; objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
       onmore?: () => void; onlog?: () => void;
       /** Set only on a km/mi object (see ObjectDetail.svelte) -- offers "+ Log trip" in the
        *  empty state beside the plain "+ Log activity" one, the same pair the object page's own
@@ -164,7 +166,7 @@
             onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
           >
             <div class="row head">
-              <b>{activityTitle(a.title, a.category, $t, fuelUnit)}</b>
+              <b>{a.weight_grams != null ? formatWeight(a.weight_grams, weightUnit, $locale) : activityTitle(a.title, a.category, $t, fuelUnit)}</b>
               <span class="chip">{$t(`cat.${a.category}`)}</span>
               {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
             </div>

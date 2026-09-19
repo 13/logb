@@ -125,7 +125,7 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             // Cents per fuel_unit x1000; only meaningful alongside a stored `fuel_unit`, a
             // cross-field rule `apply_op`'s `Set` handling enforces against the stored row, the
             // same as it does for the trip fields below.
-            ("energy_price_milli", Integer),
+            ("energy_price_milli", Integer), ("weight_unit", Text),
         ],
         Entity::Activity => &[
             ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
@@ -140,7 +140,7 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             // Whether this charge (or fill) topped the battery/tank up; the cross-field rule
             // that only a `fuel` row may carry 1 is enforced in `apply_op`'s `Set` handling,
             // exactly as `ActivityInput::validate` enforces it on the REST door.
-            ("charged_full", Integer),
+            ("charged_full", Integer), ("weight_grams", Integer),
         ],
         Entity::Reminder => &[
             ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
@@ -213,6 +213,7 @@ mod tests {
         (Entity::Activity, "duration_minutes"),
         (Entity::Activity, "battery_used_pct"),
         (Entity::Activity, "charged_full"),
+        (Entity::Activity, "weight_grams"),
         (Entity::Reminder, "due_counter"),
         (Entity::Reminder, "repeat_months"),
         (Entity::Reminder, "repeat_counter"),

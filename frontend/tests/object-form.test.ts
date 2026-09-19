@@ -13,6 +13,7 @@ const obj = {
 describe('object form', () => {
   it('maps an object to editable input', () => {
     expect(toInput(obj)).toEqual({
+      weight_unit: 'kg',
       name: 'Golf', type: 'car', counter_unit: 'km', fuel_unit: 'l', description: 'grey',
       purchase_date: '2020-03-01', purchase_price_cents: 1500000, archived: false, parent_id: null, tags: ['Lease', 'Winter'],
       energy_price_milli: 30_000,
@@ -22,6 +23,7 @@ describe('object form', () => {
 
   it('starts empty, defaulting to the catch-all type rather than the first in the list', () => {
     expect(emptyInput()).toEqual({
+      weight_unit: 'kg',
       name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null,
       archived: false, parent_id: null, tags: [], energy_price_milli: null,
     });

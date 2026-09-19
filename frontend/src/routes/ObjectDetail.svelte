@@ -1,4 +1,5 @@
 <script lang="ts">
+  import WeightHistory from '../lib/WeightHistory.svelte';
   import { untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import Timeline from '../lib/Timeline.svelte';
@@ -181,6 +182,7 @@
       category: (b.category as Category) ?? 'other',
       title: typeof b.title === 'string' ? b.title : '',
       notes: typeof b.notes === 'string' ? b.notes : '',
+      weight_grams: typeof b.weight_grams === 'number' ? b.weight_grams : null,
       counter_value: typeof b.counter_value === 'number' ? b.counter_value : null,
       cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
       quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
@@ -380,7 +382,7 @@
     {/if}
 
     <div class="stats">
-      <span class="stat"><b>{money(object.stats.total_cost_cents, $currency, $locale)}</b><span>{$t('object.total')}</span></span>
+      {#if object.type !== 'body'}<span class="stat"><b>{money(object.stats.total_cost_cents, $currency, $locale)}</b><span>{$t('object.total')}</span></span>{/if}
       <span class="stat"><b>{object.stats.activity_count}</b><span>{$t('object.activities')}</span></span>
       {#if object.counter_unit}
         <span class="stat"><b>{counter(object.stats.current_counter, object.counter_unit, $locale) || '—'}</b><span>{$t('object.current')}</span></span>
@@ -389,6 +391,10 @@
         <span class="stat"><b>{fmtDate(object.purchase_date, $dateFormat)}</b><span>{$t('object.since')}</span></span>
       {/if}
     </div>
+
+    {#if object.type === 'body'}
+      <WeightHistory objectId={oid} unit={object.weight_unit ?? 'kg'} />
+    {/if}
 
     <nav class="tabs">
       <button class:active={tab === 'timeline'} onclick={() => setTab('timeline')}>{$t('tab.timeline')}</button>
@@ -399,7 +405,7 @@
 
     {#if tab === 'timeline'}
       <Timeline
-        objectId={oid} type={object.type} {activities} total={activityTotal} {loadingMore}
+        objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
         ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
         onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=fuel`) : undefined}
@@ -426,7 +432,7 @@
     {:else if tab === 'documents'}
       <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
     {:else if tab === 'reminders'}
-      <Reminders objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
+      <Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
     {:else}
       <h2>{object.name}</h2>
       <p class="muted">{typeLabel(object.type, $customTypes, $t, $typesLoaded)}</p>

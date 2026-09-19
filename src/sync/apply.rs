@@ -129,6 +129,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         }
         // `charged_full` is a flag, not a free integer -- the same 0/1 bound
         // `ActivityInput::validate` enforces on the REST door.
+        if entity == Entity::Activity && field == "weight_grams" && !(1..=1_000_000_000).contains(n) { return Err("weight_grams must be between 1 and 1000000000".into()); }
         if entity == Entity::Activity && field == "charged_full" && !(0..=1).contains(n) {
             return Err("charged_full must be 0 or 1".into());
         }
@@ -164,6 +165,7 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         // constraint" reason, not the specific one `ObjectInput::validate` gives the REST door
         // for the exact same mistake. Explicit arms here make the two doors agree word for word,
         // and stop depending on a constraint that is schema, not policy, to enforce it at all.
+        (Entity::Object, "weight_unit") if !matches!(text.as_str(), "kg" | "lb") => return Err("weight_unit must be kg or lb".into()),
         (Entity::Object, "counter_unit") if !matches!(text.as_str(), "km" | "mi" | "h") => {
             return Err("counter_unit must be km, mi, h or null".into());
         }
@@ -751,6 +753,20 @@ pub async fn apply_op(
             // list above: `charged_full` is not one of the trip-only fields that block's
             // catch-all (`stored.category != "trip"`) exists to guard, and it needs none of
             // that block's other state.
+            if op.entity == Entity::Activity && matches!(field, "category" | "weight_grams" | "counter_value" | "quantity_milli" | "cost_cents") {
+                let (category, weight, counter, quantity, cost): (String, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+                    "SELECT category, weight_grams, counter_value, quantity_milli, cost_cents FROM activities WHERE client_uuid = $1")
+                    .bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
+                let value = op.value.as_ref().unwrap_or(&serde_json::Value::Null);
+                let category = if field == "category" { value.as_str().unwrap_or("") } else { &category };
+                let weight = if field == "weight_grams" { value.as_i64() } else { weight };
+                let counter = if field == "counter_value" { value.as_i64() } else { counter };
+                let quantity = if field == "quantity_milli" { value.as_i64() } else { quantity };
+                let cost = if field == "cost_cents" { value.as_i64() } else { cost };
+                if (category == "weight" && (weight.is_none() || counter.is_some() || quantity.is_some() || cost.is_some())) || (category != "weight" && weight.is_some()) {
+                    return Ok(Outcome::Rejected { reason: "weight entries require weight_grams and cannot carry counters, fuel or costs".into() });
+                }
+            }
             if op.entity == Entity::Activity && matches!(field, "category" | "charged_full") {
                 let (stored_category, stored_charged_full): (String, i64) = sqlx::query_as(
                     "SELECT category, charged_full FROM activities WHERE client_uuid = $1")

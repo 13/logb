@@ -11,7 +11,7 @@ export function emptyActivity(): ActivityInput {
 
 export function toActivityInput(a: Activity): ActivityInput {
   return {
-    date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags],
+    weight_grams: a.weight_grams ?? null, date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags],
     start_counter: a.start_counter, from_place: a.from_place, to_place: a.to_place, duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
   };
 }
@@ -23,7 +23,8 @@ export function validateActivity(input: ActivityInput): string | null {
   // A trip defaults its own title to `cat.trip` when left blank (see ActivityForm), and a charge
   // (`fuel`) likewise defaults to "Charged"/"Geladen" or the petrol wording -- see
   // `activityTitle`. Every other category still needs one typed in.
-  const titleOptional = isTrip || input.category === 'fuel';
+  const titleOptional = isTrip || input.category === 'fuel' || input.category === 'weight';
+  if (input.category === 'weight' && (!Number.isSafeInteger(input.weight_grams) || (input.weight_grams ?? 0) <= 0 || (input.weight_grams ?? 0) > 1_000_000_000)) return 'weight.invalid';
   if (!titleOptional && !input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
   if (isTrip) {
@@ -78,6 +79,7 @@ export function exifDate(a: { taken_at: string | null }): string | null {
  */
 export function activityTitle(title: string, category: Category | undefined, t: (key: string) => string, fuelUnit?: FuelUnit): string {
   if (title) return title;
+  if (category === 'weight') return t('cat.weight');
   if (category === 'trip') return t('cat.trip');
   if (category === 'fuel') return t(energyLabelKey(fuelUnit ?? null) === 'energy.charged' ? 'energy.charged-total' : 'insights.fuel-total');
   return title;

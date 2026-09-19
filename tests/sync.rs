@@ -2192,14 +2192,14 @@ async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_
 
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
             .bind(&object_uuid).fetch_one(&app.state.db).await.unwrap();
-        // 12, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
+        // 13, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
         // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
-        // than adding a thirteenth. All 12 must survive the sweep untouched. It was 9 until
+        // than adding a fourteenth. All 13 must survive the sweep untouched. It was 9 until
         // `parent_id` joined the whitelist, 10 until `tags` did, and 11 until `energy_price_milli`
-        // did -- this count is deliberately a literal so that widening the whitelist has to be
+        // did, and 12 until weight_unit did -- this count is deliberately a literal so that widening the whitelist has to be
         // noticed here.
         assert_eq!(
-            kept, 12,
+            kept, 13,
             "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
         );
     }

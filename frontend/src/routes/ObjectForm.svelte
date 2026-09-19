@@ -3,7 +3,8 @@
   import TopBar from '../lib/TopBar.svelte';
   import TagInput from '../lib/TagInput.svelte';
   import DateInput from '../lib/DateInput.svelte';
-  import { api } from '../lib/api';
+  import { parseWeight } from '../lib/weight';
+  import { api, createQueued } from '../lib/api';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
   import { centsToInput, counter, parseMoney } from '../lib/format';
@@ -28,6 +29,9 @@
   let input = $state<ObjectInput>(
     untrack(() => (id === undefined ? { ...emptyInput(), parent_id: presetParentId ? Number(presetParentId) : null } : emptyInput())),
   );
+  let startingWeight = $state('');
+  let weightDate = $state(todayIso());
+  let createdId: number | null = null;
   let priceText = $state('');
   /** The "Price per {unit}" field, next to the fuel unit -- kept as its own text state like
    *  `priceText`, parsed at submit time. */
@@ -68,6 +72,7 @@
       return;
     }
     input.type = ty as ObjectType;
+    if (ty === 'body' && !editing) { input.counter_unit = null; input.fuel_unit = null; input.energy_price_milli = null; input.purchase_date = null; priceText = ''; energyPriceText = ''; chosen = []; }
     if (input.counter_unit === null) input.counter_unit = defaultUnit(ty, $customTypes);
   }
 
@@ -178,12 +183,19 @@
     input.energy_price_milli = input.fuel_unit === null || energyPriceCents === null ? null : energyPriceCents * 1000;
     const bad = validate(input);
     if (bad) { error = fieldError(bad, $t); return; }
+    const grams = !editing && input.type === 'body' && startingWeight.trim() ? parseWeight(startingWeight, input.weight_unit ?? 'kg') : null;
+    if (grams !== null && !Number.isFinite(grams)) { error = $t('weight.invalid'); return; }
     busy = true; error = '';
     try {
       if (!input.purchase_date) input.purchase_date = null;
-      const saved = editing
+      const saved = createdId !== null ? await api<MemObject>('PATCH', `/objects/${createdId}`, input) : editing
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
         : await api<MemObject>('POST', '/objects', input);
+      if (!editing) createdId = saved.id;
+      if (grams !== null) {
+        await createQueued(`/objects/${saved.id}/activities`, {date: weightDate, category: 'weight', title: $t('cat.weight'), notes: '', weight_grams: grams, counter_value: null, cost_cents: null, quantity_milli: null});
+        startingWeight = '';
+      }
       if (!editing && ticked.length > 0) {
         const today = todayIso();
         const current = String(readingText).trim() === '' ? null : Number(readingText);
@@ -228,6 +240,7 @@
         <option value={NEW_TYPE}>{$t('types.new-from-form')}</option>
       </select>
     </div>
+    {#if input.type !== 'body' || editing}
     <div class="field">
       <label for="u">{$t('object.counter')}</label>
       <select id="u" bind:value={input.counter_unit}>
@@ -271,6 +284,14 @@
         <input id="ep" type="text" inputmode="decimal" bind:value={energyPriceText} />
       </div>
     {/if}
+    {/if}
+    {#if input.type === 'body'}
+      <div class="field"><label for="wu">{$t('weight.unit')}</label><select id="wu" bind:value={input.weight_unit}><option value="kg">kg</option><option value="lb">lb</option></select></div>
+      {#if !editing}
+        <div class="field"><label for="sw">{$t('weight.starting')}</label><input id="sw" type="text" inputmode="decimal" bind:value={startingWeight} /></div>
+        {#if startingWeight}<div class="field"><label for="wd">{$t('activity.date')}</label><DateInput id="wd" bind:value={weightDate} max={todayIso()} required /></div>{/if}
+      {/if}
+    {/if}
     <div class="field">
       <label for="p">{$t('object.parent')}</label>
       <select id="p" bind:value={input.parent_id}>
@@ -280,10 +301,12 @@
     </div>
     <div class="field"><label for="d">{$t('object.description')}</label><textarea id="d" bind:value={input.description}></textarea></div>
     <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
+    {#if input.type !== 'body' || editing}
     <div class="row">
       <div class="field"><label for="pd">{$t('object.purchase-date')}</label><DateInput id="pd" bind:value={() => input.purchase_date ?? '', (v) => (input.purchase_date = v || null)} /></div>
       <div class="field"><label for="pp">{$t('object.purchase-price')}</label><input id="pp" type="text" inputmode="decimal" bind:value={priceText} /></div>
     </div>
+    {/if}
     {#if editing}
       <label class="row toggle"><input type="checkbox" bind:checked={input.archived} /> {$t('object.archive')}</label>
       <p class="hint">{$t('object.archived-hint')}</p>

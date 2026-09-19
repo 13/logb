@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { parseWeight, weightInput, formatWeight } from '../lib/weight';
+  import type { WeightUnit } from '../lib/types';
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import FilePicker from '../lib/FilePicker.svelte';
@@ -9,7 +11,7 @@
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
-  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity } from '../lib/format';
+  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity, todayIso } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
   import { activityTitle, emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
@@ -25,6 +27,11 @@
 
   let object = $state<MemObject | null>(null);
   let input = $state<ActivityInput>(emptyActivity());
+  let weightText = $state('');
+  let weightUnit = $state<WeightUnit>('kg');
+  let originalWeightText = '';
+  let originalWeightUnit: WeightUnit = 'kg';
+  let originalWeight: number | null = null;
   let costText = $state('');
   let counterText = $state('');
   let quantityText = $state('');
@@ -124,12 +131,15 @@
       // signal. Letting this reject would abandon the whole of onMount below it -- including,
       // when editing, the load of the very row being edited.
     }
+    weightUnit = object?.weight_unit ?? 'kg';
     if (aid) {
       try {
         const a = await api<Activity>('GET', `/activities/${aid}`);
         saved = a;
         autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
         input = toActivityInput(a);
+        weightText = weightInput(a.weight_grams, weightUnit);
+        originalWeightText = weightText; originalWeightUnit = weightUnit; originalWeight = a.weight_grams ?? null;
         costText = centsToInput(a.cost_cents);
         counterText = a.counter_value === null ? '' : String(a.counter_value);
         quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
@@ -271,7 +281,7 @@
       id: tempId, object_id: oid, ...body, tags: body.tags ?? [],
       start_counter: body.start_counter ?? null, from_place: body.from_place ?? null,
       to_place: body.to_place ?? null, duration_minutes: body.duration_minutes ?? null,
-      battery_used_pct: body.battery_used_pct ?? null, charged_full: body.charged_full ?? 0,
+      battery_used_pct: body.battery_used_pct ?? null, charged_full: body.charged_full ?? 0, weight_grams: body.weight_grams ?? null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       attachments: [], pending: true,
     };
@@ -279,18 +289,30 @@
     return saved;
   });
 
+  function changeWeightUnit(next: WeightUnit) {
+    const grams = originalWeight !== null && weightText === originalWeightText && weightUnit === originalWeightUnit
+      ? originalWeight : parseWeight(weightText, weightUnit);
+    if (Number.isFinite(grams)) {
+      weightText = weightInput(grams, next);
+      originalWeight = grams; originalWeightText = weightText; originalWeightUnit = next;
+    }
+    weightUnit = next;
+  }
+
   function buildInput(): ActivityInput {
     const isTrip = input.category === 'trip';
     return {
       ...input,
+      title: input.category === 'weight' ? (input.title || $t('cat.weight')) : input.title,
+      weight_grams: input.category === 'weight' ? (originalWeight !== null && weightText === originalWeightText && weightUnit === originalWeightUnit ? originalWeight : parseWeight(weightText, weightUnit)) : null,
       // A plain copy: `input.tags` is a $state proxy, and IndexedDB cannot clone a proxy, so
       // queuing this body offline (the outbox) would fail with the spread's array left as it is.
       tags: [...(input.tags ?? [])],
-      cost_cents: parseMoney(costText),
+      cost_cents: input.category === 'weight' ? null : parseMoney(costText),
       // A trip's end IS the counter (`input.counter_value` is bound straight to the End field
       // below, unlike the generic Counter field's own `counterText`); every other category keeps
       // reading the generic field, exactly as before.
-      counter_value: isTrip ? input.counter_value : (String(counterText).trim() === '' ? null : Number(counterText)),
+      counter_value: input.category === 'weight' ? null : isTrip ? input.counter_value : (String(counterText).trim() === '' ? null : Number(counterText)),
       // The quantity field only exists in the form for the fuel category (see the template
       // below) -- send it only then, so switching category away from fuel after typing an
       // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
@@ -419,10 +441,10 @@
 </script>
 
 <main>
-  <TopBar title={editing ? $t('activity.edit') : $t('activity.new')} backTo={`/objects/${oid}`} />
+  <TopBar title={editing ? $t('activity.edit') : input.category === 'weight' ? $t('weight.log') : $t('activity.new')} backTo={`/objects/${oid}`} />
   <form onsubmit={submit}>
     <div class="row">
-      <div class="field"><label for="d">{$t('activity.date')}</label><DateInput id="d" bind:value={input.date} required /></div>
+      <div class="field"><label for="d">{$t('activity.date')}</label><DateInput id="d" bind:value={input.date} max={input.category === 'weight' ? todayIso() : undefined} required /></div>
       <div class="field">
         <label for="c">{$t('activity.category')}</label>
         <select id="c" bind:value={input.category} onchange={() => (categoryTouched = true)}>
@@ -433,13 +455,22 @@
     {#if photoDate && photoDate !== input.date}
       <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $dateFormat) })}</button>
     {/if}
-    {#if !editing && suggestions.length > 0}
+    {#if input.category !== 'weight' && !editing && suggestions.length > 0}
       <div class="chips">
         {#each suggestions.slice(0, 3) as s (s.title + s.category)}
           <button type="button" class="chip" onclick={() => repeat(s)}>{$t('activity.repeat')}: {s.title}</button>
         {/each}
       </div>
     {/if}
+    {#if input.category === 'weight'}
+      <div class="row">
+        <div class="field"><label for="weight">{$t('cat.weight')}</label><input id="weight" type="text" inputmode="decimal" bind:value={weightText} required /></div>
+        <div class="field"><label for="weight-unit">{$t('weight.unit')}</label><select id="weight-unit" bind:value={() => weightUnit, changeWeightUnit}><option value="kg">kg</option><option value="lb">lb</option></select></div>
+      </div>
+      {#if object?.stats.latest_weight_grams != null}
+        <p class="hint">{$t('weight.previous')}: {formatWeight(object.stats.latest_weight_grams, weightUnit, $locale)} · {fmtDate(object.stats.latest_weight_date ?? null, $dateFormat)}</p>
+      {/if}
+    {:else}
     <div class="field">
       <label for="ti">{$t('activity.title')}</label>
       <!-- Optional only for a trip or a charge (spec: "defaults to $t('cat.trip') when empty",
@@ -453,6 +484,7 @@
         {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
       </datalist>
     </div>
+    {/if}
     {#if input.category === 'fuel'}
       <!-- "Charged full" for a kWh object, "Filled up" for petrol/diesel -- topping up a tank
            is not "charging" it. Picked the same way every other charge/fill string is
@@ -518,6 +550,7 @@
         </div>
       </div>
     {/if}
+    {#if input.category !== 'weight'}
     <div class="row">
       {#if object?.counter_unit && input.category !== 'trip'}
         <div class="field">
@@ -528,6 +561,7 @@
       {/if}
       <div class="field"><label for="co">{$t('activity.cost')}</label><input id="co" type="text" inputmode="decimal" bind:value={costText} /></div>
     </div>
+    {/if}
     {#if input.category === 'fuel' && object?.counter_unit}
       <div class="field">
         <!-- A bare label, not an invented "l"/"gal", once the object declares no fuel unit at

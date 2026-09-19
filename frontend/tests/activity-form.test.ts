@@ -26,6 +26,7 @@ describe('activity form', () => {
   it('maps an activity to input, trip fields included', () => {
     const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300, tags: ['Winter'] };
     expect(toActivityInput(src)).toEqual({
+      weight_grams: null,
       date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300, tags: ['Winter'],
       start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
     });

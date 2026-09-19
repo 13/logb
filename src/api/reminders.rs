@@ -172,7 +172,7 @@ pub(crate) fn select_reminders(where_and_order: &str) -> String {
          r.kind, r.every_n, r.every_unit, r.client_uuid, o.name AS object_name, o.tags AS object_tags, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter, \
          (SELECT MAX(a.date) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL \
-            AND a.counter_value IS NOT NULL AND a.date <= $1) AS last_reading_date \
+            AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $1) AS last_reading_date \
          FROM reminders r JOIN objects o ON o.id = r.object_id {where_and_order}"
     )
 }
@@ -351,7 +351,7 @@ async fn due_list(user: AuthUser, State(state): State<App>, Query(q): Query<DueQ
 
 async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>, Json(mut body): Json<ReminderInput>) -> Result<(StatusCode, Json<ReminderOut>), AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
-    body.validate(object.counter_unit.as_deref())?;
+    body.validate(if body.kind == KIND_READING && object.type_ == "body" { Some("weight") } else { object.counter_unit.as_deref() })?;
     let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
     if let Some(uuid) = client_uuid.as_deref() {
         // Idempotent on the caller's own live row under this object; a conflict on anyone
@@ -391,7 +391,8 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if body.kind != existing.kind {
         return Err(AppError::BadRequest("kind cannot change".into()));
     }
-    body.validate(existing.counter_unit.as_deref())?;
+    let object = load_owned_object(&state, user.id, existing.object_id).await?;
+    body.validate(if body.kind == KIND_READING && object.type_ == "body" { Some("weight") } else { existing.counter_unit.as_deref() })?;
 
     // Only fields whose value actually differs are logged (see `record::record_update`).
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();

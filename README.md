@@ -119,6 +119,31 @@ nobody else can see, send or discard it. Started without a connection, the app
 opens as the last person signed in, on what it saved for them; signing out
 removes that, and nobody else ever sees another person's saved data.
 
+## Weight tracking
+
+Choose **Body** when adding an object to enable weight tracking. Pick kg or lb and,
+optionally, record a starting weight. **Log weight** accepts decimals (dot or comma), a
+date and optional notes; it works offline using the same queue as other activities.
+
+The Body page shows the latest dated weight, the change from the previous entry, and a
+chart with month, three-month and all-time views. Use the chart's selector to inspect
+individual measurements. Weight entries can be edited or deleted from the timeline.
+Changing the display unit converts the number without changing the stored measurement.
+
+Weight is stored separately from mileage/hours, in integer grams. The latest value is
+ordered by measurement date, creation timestamp, then ID; a backdated entry does not
+replace a more recent measurement. Deleting the newest entry reveals the previous one.
+Pending offline entries are labelled until they sync.
+
+**Remind me to log weight** uses a recurring reading reminder on a Body object. Only a
+weight entry satisfies it; symptoms, treatments, and appointments do not. As with counter
+reminders, dates up to tomorrow count to accommodate device/server timezone differences.
+The reminder's metric follows the object's type if it is changed later.
+
+Weight and unit preferences are included in sync and export/import. Older archives
+remain importable and default to kg. The SQLite upgrade rebuilds the activities table
+while preserving its data and references; take a database backup before upgrading.
+
 ## Backup
 
 ```bash

@@ -3,13 +3,13 @@ import type { FuelUnit, MemObject, ObjectInput } from './types';
 export function emptyInput(): ObjectInput {
   return {
     name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null,
-    archived: false, parent_id: null, tags: [], energy_price_milli: null,
+    weight_unit: 'kg', archived: false, parent_id: null, tags: [], energy_price_milli: null,
   };
 }
 
 export function toInput(o: MemObject): ObjectInput {
   return {
-    name: o.name, type: o.type, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
+    weight_unit: o.weight_unit ?? 'kg', name: o.name, type: o.type, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
     purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents, archived: o.archived_at !== null,
     parent_id: o.parent_id, tags: [...o.tags], energy_price_milli: o.energy_price_milli,
   };

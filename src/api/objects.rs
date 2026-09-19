@@ -48,6 +48,7 @@ pub struct ObjectRow {
     /// `cost_per_counter_milli`. Nullable, and only meaningful alongside a `fuel_unit` -- see
     /// `ObjectInput::validate`. `>= 0` when present.
     pub energy_price_milli: Option<i64>,
+    pub weight_unit: String,
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -55,6 +56,8 @@ pub struct ObjectStats {
     pub total_cost_cents: i64,
     pub activity_count: i64,
     pub current_counter: Option<i64>,
+    pub latest_weight_grams: Option<i64>,
+    pub latest_weight_date: Option<String>,
     pub due_reminder_count: i64,
     /// The date of the newest entry with a counter value, up to `reminders::reading_horizon`.
     pub last_reading_date: Option<String>,
@@ -126,6 +129,8 @@ pub struct ObjectInput {
     /// price". See `ENERGY_PRICE_NEEDS_FUEL_UNIT` and `validate` for the cross-field rule.
     #[serde(default, deserialize_with = "double_option")]
     pub energy_price_milli: Option<Option<i64>>,
+    #[serde(default)]
+    pub weight_unit: Option<String>,
 }
 
 /// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
@@ -185,6 +190,9 @@ pub fn validate_date(s: &str) -> Result<(), AppError> {
 
 impl ObjectInput {
     pub(crate) fn validate(&mut self) -> Result<(), AppError> {
+        if self.weight_unit.as_deref().is_some_and(|u| !matches!(u, "kg" | "lb")) {
+            return Err(AppError::BadRequest("weight_unit must be kg or lb".into()));
+        }
         self.name = self.name.trim().to_string();
         if self.name.is_empty() { return Err(AppError::BadRequest("name is required".into())); }
         // Only normalised here: whether the type exists depends on the caller's own types, which
@@ -231,7 +239,7 @@ impl ObjectInput {
 const OWNED_OBJECT: &str =
     "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
      purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-     energy_price_milli \
+     energy_price_milli, weight_unit \
      FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
 
 /// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
@@ -269,6 +277,8 @@ struct DerivedRow {
     total_cost_cents: i64,
     activity_count: i64,
     current_counter: Option<i64>,
+    latest_weight_grams: Option<i64>,
+    latest_weight_date: Option<String>,
     due_reminder_count: i64,
     last_reading_date: Option<String>,
     last_activity_date: Option<String>,
@@ -302,6 +312,8 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
         "SELECT o.id AS object_id, \
            COALESCE(CAST((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS BIGINT), 0) AS total_cost_cents, \
            (SELECT COUNT(*) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS activity_count, \
+           (SELECT weight_grams FROM activities WHERE object_id = o.id AND deleted_at IS NULL AND weight_grams IS NOT NULL AND date <= $4 ORDER BY date DESC, created_at DESC, id DESC LIMIT 1) AS latest_weight_grams, \
+           (SELECT date FROM activities WHERE object_id = o.id AND deleted_at IS NULL AND weight_grams IS NOT NULL AND date <= $4 ORDER BY date DESC, created_at DESC, id DESC LIMIT 1) AS latest_weight_date, \
            (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS current_counter, \
            (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND r.deleted_at IS NULL \
               AND r.kind = 'service' \
@@ -342,7 +354,7 @@ async fn due_readings(state: &App, user_id: Option<i64>, only: Option<i64>) -> R
     let rows: Vec<ReadingRow> = sqlx::query_as(
         "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, \
            (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
-              AND a.counter_value IS NOT NULL AND a.date <= $2) AS last_reading_date \
+              AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $2) AS last_reading_date \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
          WHERE r.kind = 'reading' AND r.done_at IS NULL AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
            AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
@@ -367,6 +379,8 @@ impl DerivedRow {
             total_cost_cents: self.total_cost_cents,
             activity_count: self.activity_count,
             current_counter: self.current_counter,
+            latest_weight_grams: self.latest_weight_grams,
+            latest_weight_date: self.latest_weight_date.clone(),
             due_reminder_count: self.due_reminder_count,
             last_reading_date: self.last_reading_date.clone(),
             last_activity_date: self.last_activity_date.clone(),
@@ -478,11 +492,13 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli \
+         energy_price_milli, weight_unit \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
            AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
         .bind(user.id).bind(q.parent_id).bind(q.all).fetch_all(&state.db).await?;
+    // Empty archived/child lists need no aggregates across the entire account.
+    if rows.is_empty() { return Ok(Json(Vec::new())); }
     let mut derived = derived(&state, Some(user.id), None).await?;
     let out = rows
         .into_iter()
@@ -537,16 +553,16 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15) \
+         energy_price_milli, weight_unit) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli",
+         energy_price_milli, weight_unit",
     )
     .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
     .bind(&object_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
-    .bind(energy_price_milli)
+    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or("kg"))
     .fetch_one(&mut *tx).await;
     let row = match row {
         Ok(row) => row,
@@ -669,6 +685,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     // Every value is settled before this point, `parent_id` included, so the diff and the
     // single `UPDATE` below always agree about what is being written.
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
+    if let Some(unit) = &body.weight_unit { if unit != &existing.weight_unit { changed.push(("weight_unit", json!(unit))); } }
     if body.name != existing.name { changed.push(("name", json!(body.name))); }
     if body.type_ != existing.type_ { changed.push(("type", json!(body.type_))); }
     if body.counter_unit != existing.counter_unit { changed.push(("counter_unit", json!(body.counter_unit))); }
@@ -694,13 +711,13 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
          purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11, tags = $12, \
-         energy_price_milli = $13 \
-         WHERE id = $14 AND deleted_at IS NULL",
+         energy_price_milli = $13, weight_unit = $14 \
+         WHERE id = $15 AND deleted_at IS NULL",
     )
     .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
     .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(&tags)
-    .bind(energy_price_milli).bind(id)
+    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or(&existing.weight_unit)).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;

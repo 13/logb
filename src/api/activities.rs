@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 // four health categories alongside the original seven; `reading`, an entry that is nothing but
 // a counter value; and `trip`, an entry whose end is `counter_value` and whose start is the
 // `start_counter` column (see the doc comment on `ActivityRow::start_counter`).
-pub const CATEGORIES: [&str; 13] = [
+pub const CATEGORIES: [&str; 14] = [
     "maintenance", "repair", "purchase", "inspection", "modification", "fuel", "other",
-    "symptom", "treatment", "appointment", "medication", "reading", "trip",
+    "symptom", "treatment", "appointment", "medication", "reading", "trip", "weight",
 ];
 
 pub fn router() -> Router<App> {
@@ -69,6 +69,7 @@ pub struct ActivityRow {
     /// 0 on every other row (never `NULL` -- see the migration). A flag on the entry rather than
     /// a table, so it travels through sync, export and offline edits like every other field.
     pub charged_full: i64,
+    pub weight_grams: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +120,8 @@ pub struct ActivityInput {
     /// because a charge can never be cleared to "no value", only ever set to 0 or 1.
     #[serde(default)]
     pub charged_full: Option<i64>,
+    #[serde(default, deserialize_with = "super::objects::double_option")]
+    pub weight_grams: Option<Option<i64>>,
 }
 
 /// A trip's place, trimmed; blank becomes `None`. `Err` if what remains is over 80 characters,
@@ -160,6 +163,17 @@ impl ActivityInput {
         // category still requires one, exactly as before.
         if self.title.is_empty() && self.category != "trip" && self.category != "fuel" {
             return Err(AppError::BadRequest("title is required".into()));
+        }
+        let weight = self.weight_grams.flatten();
+        if self.category == "weight" {
+            if !weight.is_some_and(|w| (1..=1_000_000_000).contains(&w)) {
+                return Err(AppError::BadRequest("weight_grams must be between 1 and 1000000000".into()));
+            }
+            if self.counter_value.is_some() || self.quantity_milli.is_some() || self.cost_cents.is_some() {
+                return Err(AppError::BadRequest("weight entries cannot carry counters, fuel or costs".into()));
+            }
+        } else if weight.is_some() {
+            return Err(AppError::BadRequest("only a weight entry has weight_grams".into()));
         }
         if let Some(c) = self.counter_value {
             if object.counter_unit.is_none() {
@@ -270,7 +284,7 @@ pub async fn load_owned_activity(state: &App, user_id: i64, id: i64) -> Result<A
     sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, \
          a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid, a.tags, \
-         a.start_counter, a.from_place, a.to_place, a.duration_minutes, a.battery_used_pct, a.charged_full \
+         a.start_counter, a.from_place, a.to_place, a.duration_minutes, a.battery_used_pct, a.charged_full, a.weight_grams \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE a.id = $1 AND o.user_id = $2 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
     )
@@ -379,7 +393,7 @@ pub async fn list_for_object(state: &App, object_id: i64, q: &ListQuery) -> Resu
     let (sql_limit, sql_offset) = if filtered { (i64::MAX, 0) } else { (limit, offset) };
     let rows = sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
          ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
@@ -503,7 +517,7 @@ async fn last_done(
     let entry_rows: Vec<(i64, String, String, Option<i64>)> = if object.fuel_unit.is_some() {
         sqlx::query_as(
             "SELECT id, title, date, counter_value FROM activities \
-             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'fuel') \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'fuel', 'weight') \
              ORDER BY date DESC, id DESC",
         )
         .bind(object_id)
@@ -512,7 +526,7 @@ async fn last_done(
     } else {
         sqlx::query_as(
             "SELECT id, title, date, counter_value FROM activities \
-             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip') \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category NOT IN ('reading', 'trip', 'weight') \
              ORDER BY date DESC, id DESC",
         )
         .bind(object_id)
@@ -575,7 +589,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
         if let Some(existing) = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
              quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams \
              FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
         )
         .bind(op)
@@ -608,10 +622,10 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let inserted = sqlx::query_as::<_, ActivityRow>(
         "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
          RETURNING id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full",
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams",
     )
     .bind(object_id).bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(&body.client_op_id).bind(&now).bind(&now)
@@ -619,7 +633,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
     .bind(body.start_counter.flatten()).bind(body.from_place.clone().flatten()).bind(body.to_place.clone().flatten())
     .bind(body.duration_minutes.flatten()).bind(body.battery_used_pct.flatten())
     // Absent on create means "not full" -- see `ActivityInput::charged_full`'s doc comment.
-    .bind(body.charged_full.unwrap_or(0))
+    .bind(body.charged_full.unwrap_or(0)).bind(body.weight_grams.flatten())
     .fetch_one(&mut *tx).await;
     let row = match inserted {
         Ok(row) => row,
@@ -638,7 +652,7 @@ async fn create(user: AuthUser, State(state): State<App>, Path(object_id): Path<
             let winner = sqlx::query_as::<_, ActivityRow>(
                 "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, \
                  quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full \
+                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams \
                  FROM activities WHERE client_op_id = $1 AND deleted_at IS NULL",
             )
             .bind(op)
@@ -696,6 +710,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if body.battery_used_pct.is_none() { body.battery_used_pct = Some(existing.battery_used_pct); }
     // `charged_full` keeps its stored value when omitted too (see `ActivityInput`'s doc comment
     // on the field), merged in the same way and for the same reason as the trip fields above.
+    if body.weight_grams.is_none() { body.weight_grams = Some(existing.weight_grams); }
     if body.charged_full.is_none() { body.charged_full = Some(existing.charged_full); }
     body.validate(&object)?;
 
@@ -729,6 +744,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         if body.to_place.clone().flatten() != existing.to_place && changed_since(&mut tx, &uuid, "to_place", at).await? { body.to_place = Some(existing.to_place.clone()); }
         if body.duration_minutes.flatten() != existing.duration_minutes && changed_since(&mut tx, &uuid, "duration_minutes", at).await? { body.duration_minutes = Some(existing.duration_minutes); }
         if body.battery_used_pct.flatten() != existing.battery_used_pct && changed_since(&mut tx, &uuid, "battery_used_pct", at).await? { body.battery_used_pct = Some(existing.battery_used_pct); }
+        if body.weight_grams.flatten() != existing.weight_grams && changed_since(&mut tx, &uuid, "weight_grams", at).await? { body.weight_grams = Some(existing.weight_grams); }
         if body.charged_full != Some(existing.charged_full) && changed_since(&mut tx, &uuid, "charged_full", at).await? { body.charged_full = Some(existing.charged_full); }
         // Keeping some fields and not others can combine into something no single edit said --
         // a reading without its value, or a trip missing its start -- so the merge is held to
@@ -744,6 +760,7 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     let to_place = body.to_place.clone().flatten();
     let duration_minutes = body.duration_minutes.flatten();
     let battery_used_pct = body.battery_used_pct.flatten();
+    let weight_grams = body.weight_grams.flatten();
     let charged_full = body.charged_full.unwrap_or(0);
 
     // Only fields whose value actually differs are logged -- a PATCH that rewrites a field
@@ -764,16 +781,17 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
     if to_place != existing.to_place { changed.push(("to_place", json!(to_place))); }
     if duration_minutes != existing.duration_minutes { changed.push(("duration_minutes", json!(duration_minutes))); }
     if battery_used_pct != existing.battery_used_pct { changed.push(("battery_used_pct", json!(battery_used_pct))); }
+    if weight_grams != existing.weight_grams { changed.push(("weight_grams", json!(weight_grams))); }
     if charged_full != existing.charged_full { changed.push(("charged_full", json!(charged_full))); }
 
     sqlx::query(
         "UPDATE activities SET date = $1, category = $2, title = $3, notes = $4, counter_value = $5, cost_cents = $6, quantity_milli = $7, updated_at = $8, tags = $9, \
-         start_counter = $10, from_place = $11, to_place = $12, duration_minutes = $13, battery_used_pct = $14, charged_full = $15 WHERE id = $16 AND deleted_at IS NULL",
+         start_counter = $10, from_place = $11, to_place = $12, duration_minutes = $13, battery_used_pct = $14, charged_full = $15, weight_grams = $16 WHERE id = $17 AND deleted_at IS NULL",
     )
     .bind(&body.date).bind(&body.category).bind(&body.title).bind(&body.notes)
     .bind(body.counter_value).bind(body.cost_cents).bind(body.quantity_milli).bind(db::now()).bind(&tags)
     .bind(start_counter).bind(&from_place).bind(&to_place).bind(duration_minutes).bind(battery_used_pct)
-    .bind(charged_full)
+    .bind(charged_full).bind(weight_grams)
     .bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
