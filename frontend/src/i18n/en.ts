@@ -19,6 +19,7 @@ export default {
   "weight.history": "Weight history",
   "weight.pending": "Waiting to sync",
   "weight.chart-hint": "Select a point to see its weight and date.",
+  "weight.chart-point": "Select chart point",
   "weight.unavailable": "Weight history could not be loaded.",
   "weight.no-range": "No measurements in this period.",
 

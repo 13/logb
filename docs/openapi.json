@@ -2419,6 +2419,37 @@
           }
         }
       }
+    },
+    "/objects/{id}/weight/summary": {
+      "get": {
+        "summary": "Weight summary",
+        "description": "Count and aggregate values for an owned object's weight measurements.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weight summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeightSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or inaccessible object"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4976,6 +5007,32 @@
           },
           "weight_grams": {
             "type": "integer"
+          }
+        }
+      },
+      "WeightSummary": {
+        "type": "object",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "latest_grams": {
+            "type": ["integer", "null"]
+          },
+          "previous_grams": {
+            "type": ["integer", "null"]
+          },
+          "minimum_grams": {
+            "type": ["integer", "null"]
+          },
+          "maximum_grams": {
+            "type": ["integer", "null"]
+          },
+          "average_grams": {
+            "type": ["integer", "null"]
           }
         }
       }

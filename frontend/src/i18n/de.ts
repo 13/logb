@@ -19,6 +19,7 @@ export default {
   "weight.history": "Gewichtsverlauf",
   "weight.pending": "Wartet auf Synchronisierung",
   "weight.chart-hint": "Wähle einen Punkt, um Gewicht und Datum zu sehen.",
+  "weight.chart-point": "Diagrammpunkt auswählen",
   "weight.unavailable": "Der Gewichtsverlauf konnte nicht geladen werden.",
   "weight.no-range": "Keine Messungen in diesem Zeitraum.",
 

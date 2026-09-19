@@ -87,7 +87,7 @@
       </select>
       <ol class="history-list" aria-label={$t('weight.history')}>
         {#each visible as point (point.id)}
-          <li><button class:chosen={focused?.id === point.id} class="ghost" onclick={() => selected = point.id} aria-label={`${fmtDate(point.date, $dateFormat)} ${formatWeight(point.weight_grams, unit, $locale)}`}>
+          <li><button class:chosen={focused?.id === point.id} class="ghost" onclick={() => selected = point.id} aria-label={$t('weight.chart-point')}>
             <span>{fmtDate(point.date, $dateFormat)}</span><strong>{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="muted"> · {$t('weight.pending')}</span>{/if}
           </button></li>
         {/each}
