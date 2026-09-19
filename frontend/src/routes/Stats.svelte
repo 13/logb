@@ -8,7 +8,7 @@
   import { persisted } from '../stores/persisted';
   import { locale, t } from '../i18n';
   import { PURCHASE_PRICE, flattenTree, periodLabel, sharePct, statsPath } from '../lib/stats';
-  import type { Amount, Stats } from '../lib/types';
+  import type { Amount, EnergyUsage, Stats } from '../lib/types';
   import { customTypes, typeLabel, typesLoaded } from '../lib/type-registry';
 
   /** Per device and not synced: whether to count purchase prices is a way of looking, not data. */
@@ -29,6 +29,7 @@
     if (next !== location.pathname + location.search) history.replaceState(null, '', next);
   });
   let data = $state<Stats | null>(null);
+  let energy = $state<EnergyUsage | null>(null);
   /** The last year list seen. Kept apart from `data`, which is cleared on every fetch, so the
    *  picker does not empty and reset itself while the next selection loads. */
   let years = $state<string[]>([]);
@@ -39,10 +40,11 @@
     const path = statsPath(year, $includePurchases);
     // Cleared first: a stale total under a new selection would be a wrong number on screen.
     data = null;
+    energy = null;
     error = '';
     let current = true;
-    api<Stats>('GET', path)
-      .then((d) => { if (current) { data = d; years = d.years; } })
+    Promise.all([api<Stats>('GET', path), api<EnergyUsage>('GET', '/stats/energy')])
+      .then(([d, e]) => { if (current) { data = d; energy = e; years = d.years; } })
       .catch((e) => { if (current) error = (e as Error).message; });
     return () => { current = false; };
   });
@@ -58,6 +60,7 @@
   }
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
+  const fmtKwh = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
   const share = (cents: number) => `${fmt(cents)} · ${sharePct(cents, data?.total_cents ?? 0)}%`;
   const bars = (list: Amount[], label: (bucket: string) => string): Bar[] =>
     list.map((a) => ({ key: a.bucket, label: label(a.bucket), value: a.cost_cents, display: share(a.cost_cents) }));
@@ -91,6 +94,15 @@
     </select>
   </div>
   <label class="row toggle"><input type="checkbox" bind:checked={$includePurchases} /> {$t('stats.purchases')}</label>
+
+  {#if energy}
+    <section data-testid="stats-energy">
+      <h2>{$t('stats.energy-title')}</h2>
+      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtKwh(energy.current_kwh_milli)}</b></p>
+      <p class="muted">{$t('stats.energy-previous')}: {fmtKwh(energy.previous_kwh_milli)}</p>
+      <BarList items={energy.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.kwh_milli, display: fmtKwh(m.kwh_milli) }))} />
+    </section>
+  {/if}
 
   {#if error}
     <p class="error">{error}</p>

@@ -247,6 +247,12 @@ export interface Stats {
   years: string[];
   over_time: Amount[]; by_object: StatsObject[]; by_type: Amount[]; by_category: Amount[];
 }
+export interface EnergyUsageMonth { month: string; kwh_milli: number; charges: number; objects: number }
+export interface EnergyUsage {
+  months: EnergyUsageMonth[];
+  current_kwh_milli: number;
+  previous_kwh_milli: number;
+}
 
 /** An API token as it is listed: never the token itself, which the server returns exactly once
  *  at creation and stores only as a hash. */

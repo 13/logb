@@ -1795,6 +1795,37 @@
         }
       }
     },
+    "/stats/energy": {
+      "get": {
+        "summary": "Household monthly electricity usage",
+        "description": "Sums fuel quantities recorded in kWh across all owned, non-deleted objects. Months are oldest first and include the current partial month.",
+        "parameters": [
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36,
+              "default": 12
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household energy usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnergyUsage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "summary": "Instance settings.",
@@ -4206,6 +4237,28 @@
               "$ref": "#/components/schemas/StatsAmount"
             }
           }
+        }
+      },
+      "EnergyUsage": {
+        "type": "object",
+        "required": ["months", "current_kwh_milli", "previous_kwh_milli"],
+        "properties": {
+          "months": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EnergyUsageMonth" }
+          },
+          "current_kwh_milli": { "type": "integer", "format": "int64" },
+          "previous_kwh_milli": { "type": "integer", "format": "int64" }
+        }
+      },
+      "EnergyUsageMonth": {
+        "type": "object",
+        "required": ["month", "kwh_milli", "charges", "objects"],
+        "properties": {
+          "month": { "type": "string", "format": "month" },
+          "kwh_milli": { "type": "integer", "format": "int64" },
+          "charges": { "type": "integer", "format": "int64" },
+          "objects": { "type": "integer", "format": "int64" }
         }
       },
       "Bucket": {

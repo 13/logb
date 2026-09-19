@@ -1,10 +1,42 @@
 mod common;
+use chrono::{Months, NaiveDate};
 use serde_json::{json, Value};
 
 async fn object(app: &common::TestApp, body: Value) -> i64 {
     let res = app.client.post(app.url("/objects")).json(&body).send().await.unwrap();
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     res.json::<Value>().await.unwrap()["id"].as_i64().unwrap()
+}
+
+async fn energy_entry(app: &common::TestApp, object_id: i64, date: String, quantity_milli: i64) {
+    let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
+        .json(&json!({ "date": date, "category": "fuel", "title": "Charge", "quantity_milli": quantity_milli, "counter_value": 1 }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+}
+
+#[tokio::test]
+async fn household_energy_groups_kwh_by_month() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let today: NaiveDate = logb::db::today().parse().unwrap();
+    let current = today.format("%Y-%m-%d").to_string();
+    let previous = today.checked_sub_months(Months::new(1)).unwrap().format("%Y-%m-%d").to_string();
+    let kwh = object(&app, json!({ "name": "Bike", "type": "e_bike", "counter_unit": "km", "fuel_unit": "kwh" })).await;
+    let home = object(&app, json!({ "name": "Home battery", "type": "appliance", "fuel_unit": "kwh", "counter_unit": "h" })).await;
+    let petrol = object(&app, json!({ "name": "Car", "type": "car", "fuel_unit": "l", "counter_unit": "km" })).await;
+    energy_entry(&app, kwh, current.clone(), 200_000).await;
+    energy_entry(&app, home, current.clone(), 112_000).await;
+    energy_entry(&app, kwh, previous, 300_000).await;
+    energy_entry(&app, petrol, current, 999_000).await;
+    let future = (today + chrono::Days::new(2)).format("%Y-%m-%d").to_string();
+    energy_entry(&app, kwh, future, 500_000).await;
+
+    let out = app.get_json("/stats/energy").await;
+    assert_eq!(out["current_kwh_milli"], 312_000);
+    assert_eq!(out["previous_kwh_milli"], 300_000);
+    assert_eq!(out["months"].as_array().unwrap().last().unwrap()["charges"], 2);
+    assert_eq!(out["months"].as_array().unwrap().last().unwrap()["objects"], 2);
 }
 
 async fn cost(app: &common::TestApp, object_id: i64, date: &str, category: &str, cents: i64) -> i64 {

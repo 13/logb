@@ -13,9 +13,9 @@ export type RouteMatch = (ctx: { url: URL; sameOrigin: boolean; request?: Reques
 /** Session, administration, exports, sync and anything that must never be answered from disk. */
 export const neverCached: RouteMatch = ({ url, sameOrigin }) =>
   sameOrigin &&
-  ['/api/auth/', '/api/export', '/api/import', '/api/sync/', '/api/search', '/api/settings', '/api/users',
-    '/api/database', '/api/tokens', '/api/me/', '/api/stats', '/api/health']
-    .some((prefix) => url.pathname === prefix.replace(/\/$/, '') || url.pathname.startsWith(prefix));
+  (url.pathname === '/api/stats' || ['/api/auth/', '/api/export', '/api/import', '/api/sync/', '/api/search', '/api/settings', '/api/users',
+    '/api/database', '/api/tokens', '/api/me/', '/api/health']
+    .some((prefix) => url.pathname === prefix.replace(/\/$/, '') || url.pathname.startsWith(prefix)));
 
 /** Content-addressed blobs: never change under an id. */
 export const files: RouteMatch = ({ url, sameOrigin }) => sameOrigin && url.pathname.startsWith('/api/files/');
@@ -23,7 +23,7 @@ export const files: RouteMatch = ({ url, sameOrigin }) => sameOrigin && url.path
 /** What a household reads with no connection: objects, entries, reminders, types, tags. */
 export const householdData: RouteMatch = ({ url, sameOrigin }) =>
   sameOrigin &&
-  ['/api/objects', '/api/activities', '/api/reminders', '/api/types', '/api/tags']
+  ['/api/objects', '/api/activities', '/api/reminders', '/api/types', '/api/tags', '/api/stats/energy']
     .some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`));
 
 /** Anything else under /api: network only, so a new endpoint is never cached by accident. */
