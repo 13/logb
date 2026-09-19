@@ -1826,6 +1826,26 @@
         }
       }
     },
+    "/stats/fuel": {
+      "get": {
+        "summary": "Household monthly heating fuel usage",
+        "description": "Sums fuel quantities in their recorded litres or gallons across all owned, non-deleted objects. No tank percentage is inferred because objects do not store tank capacity or level readings.",
+        "parameters": [
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 36, "default": 12 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household heating fuel usage",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FuelUsage" } } }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "summary": "Instance settings.",
@@ -4257,6 +4277,28 @@
         "properties": {
           "month": { "type": "string", "format": "month" },
           "kwh_milli": { "type": "integer", "format": "int64" },
+          "charges": { "type": "integer", "format": "int64" },
+          "objects": { "type": "integer", "format": "int64" }
+        }
+      },
+      "FuelUsage": {
+        "type": "object",
+        "required": ["months", "current_liters_milli", "previous_liters_milli", "current_gallons_milli", "previous_gallons_milli"],
+        "properties": {
+          "months": { "type": "array", "items": { "$ref": "#/components/schemas/FuelUsageMonth" } },
+          "current_liters_milli": { "type": "integer", "format": "int64" },
+          "previous_liters_milli": { "type": "integer", "format": "int64" },
+          "current_gallons_milli": { "type": "integer", "format": "int64" },
+          "previous_gallons_milli": { "type": "integer", "format": "int64" }
+        }
+      },
+      "FuelUsageMonth": {
+        "type": "object",
+        "required": ["month", "liters_milli", "gallons_milli", "charges", "objects"],
+        "properties": {
+          "month": { "type": "string", "format": "month" },
+          "liters_milli": { "type": "integer", "format": "int64" },
+          "gallons_milli": { "type": "integer", "format": "int64" },
           "charges": { "type": "integer", "format": "int64" },
           "objects": { "type": "integer", "format": "int64" }
         }

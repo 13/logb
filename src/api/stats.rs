@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub fn router() -> Router<App> {
-    Router::new().route("/stats", get(read)).route("/stats/energy", get(energy_usage))
+    Router::new().route("/stats", get(read)).route("/stats/energy", get(energy_usage)).route("/stats/fuel", get(fuel_usage))
 }
 
 #[derive(Serialize)]
@@ -25,6 +25,24 @@ pub struct EnergyUsage {
     pub months: Vec<EnergyUsageMonth>,
     pub current_kwh_milli: i64,
     pub previous_kwh_milli: i64,
+}
+
+#[derive(Serialize)]
+pub struct FuelUsageMonth {
+    pub month: String,
+    pub liters_milli: i64,
+    pub gallons_milli: i64,
+    pub charges: i64,
+    pub objects: i64,
+}
+
+#[derive(Serialize)]
+pub struct FuelUsage {
+    pub months: Vec<FuelUsageMonth>,
+    pub current_liters_milli: i64,
+    pub previous_liters_milli: i64,
+    pub current_gallons_milli: i64,
+    pub previous_gallons_milli: i64,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +97,47 @@ async fn energy_usage(
     let current_kwh_milli = months.last().map(|m| m.kwh_milli).unwrap_or(0);
     let previous_kwh_milli = months.iter().rev().nth(1).map(|m| m.kwh_milli).unwrap_or(0);
     Ok(Json(EnergyUsage { months, current_kwh_milli, previous_kwh_milli }))
+}
+
+async fn fuel_usage(
+    user: AuthUser,
+    State(state): State<App>,
+    Query(q): Query<EnergyQuery>,
+) -> Result<Json<FuelUsage>, AppError> {
+    let count = q.months.unwrap_or(12).clamp(1, 36);
+    let today = crate::db::today();
+    let (year, month) = today
+        .split_once('-')
+        .and_then(|(y, rest)| rest.split_once('-').map(|(m, _)| (y, m)))
+        .and_then(|(y, m)| Some((y.parse::<i32>().ok()?, m.parse::<u32>().ok()?)))
+        .ok_or_else(|| AppError::Internal("server date is malformed".into()))?;
+    let (start_year, start_month) = month_before(year, month, count - 1);
+    let start = format!("{start_year:04}-{start_month:02}-01");
+    let rows: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT substr(a.date, 1, 7), o.fuel_unit, CAST(SUM(a.quantity_milli) AS BIGINT), COUNT(*), COUNT(DISTINCT a.object_id) \
+         FROM activities a JOIN objects o ON o.id = a.object_id \
+         WHERE o.user_id = $1 AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
+           AND o.fuel_unit IN ('l', 'gal') AND a.category = 'fuel' AND a.quantity_milli IS NOT NULL \
+           AND a.date >= $2 AND a.date <= $3 \
+         GROUP BY substr(a.date, 1, 7), o.fuel_unit",
+    )
+    .bind(user.id).bind(&start).bind(&today).fetch_all(&state.db).await?;
+    let mut by_month: std::collections::HashMap<String, (i64, i64, i64, i64, i64)> = std::collections::HashMap::new();
+    for (month_key, unit, quantity, charges, objects) in rows {
+        let entry = by_month.entry(month_key).or_default();
+        if unit == "l" { entry.0 += quantity; entry.2 += charges; entry.4 += objects; }
+        else { entry.1 += quantity; entry.3 += charges; entry.4 += objects; }
+    }
+    let mut months = Vec::with_capacity(count as usize);
+    for offset in (0..count).rev() {
+        let (y, m) = month_before(year, month, offset);
+        let key = format!("{y:04}-{m:02}");
+        let (liters, gallons, l_charges, g_charges, objects) = by_month.get(&key).copied().unwrap_or_default();
+        months.push(FuelUsageMonth { month: key, liters_milli: liters, gallons_milli: gallons, charges: l_charges + g_charges, objects });
+    }
+    let current = months.last().map(|m| (m.liters_milli, m.gallons_milli)).unwrap_or_default();
+    let previous = months.iter().rev().nth(1).map(|m| (m.liters_milli, m.gallons_milli)).unwrap_or_default();
+    Ok(Json(FuelUsage { months, current_liters_milli: current.0, previous_liters_milli: previous.0, current_gallons_milli: current.1, previous_gallons_milli: previous.1 }))
 }
 
 #[derive(Deserialize)]

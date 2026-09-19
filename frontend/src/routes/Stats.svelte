@@ -8,7 +8,7 @@
   import { persisted } from '../stores/persisted';
   import { locale, t } from '../i18n';
   import { PURCHASE_PRICE, flattenTree, periodLabel, sharePct, statsPath } from '../lib/stats';
-  import type { Amount, EnergyUsage, Stats } from '../lib/types';
+  import type { Amount, EnergyUsage, FuelUsage, Stats } from '../lib/types';
   import { customTypes, typeLabel, typesLoaded } from '../lib/type-registry';
 
   /** Per device and not synced: whether to count purchase prices is a way of looking, not data. */
@@ -30,6 +30,7 @@
   });
   let data = $state<Stats | null>(null);
   let energy = $state<EnergyUsage | null>(null);
+  let fuel = $state<FuelUsage | null>(null);
   /** The last year list seen. Kept apart from `data`, which is cleared on every fetch, so the
    *  picker does not empty and reset itself while the next selection loads. */
   let years = $state<string[]>([]);
@@ -41,10 +42,11 @@
     // Cleared first: a stale total under a new selection would be a wrong number on screen.
     data = null;
     energy = null;
+    fuel = null;
     error = '';
     let current = true;
-    Promise.all([api<Stats>('GET', path), api<EnergyUsage>('GET', '/stats/energy')])
-      .then(([d, e]) => { if (current) { data = d; energy = e; years = d.years; } })
+    Promise.all([api<Stats>('GET', path), api<EnergyUsage>('GET', '/stats/energy'), api<FuelUsage>('GET', '/stats/fuel')])
+      .then(([d, e, f]) => { if (current) { data = d; energy = e; fuel = f; years = d.years; } })
       .catch((e) => { if (current) error = (e as Error).message; });
     return () => { current = false; };
   });
@@ -61,6 +63,8 @@
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
   const fmtKwh = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
+  const fmtLiters = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
+  const fmtGallons = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
   const share = (cents: number) => `${fmt(cents)} · ${sharePct(cents, data?.total_cents ?? 0)}%`;
   const bars = (list: Amount[], label: (bucket: string) => string): Bar[] =>
     list.map((a) => ({ key: a.bucket, label: label(a.bucket), value: a.cost_cents, display: share(a.cost_cents) }));
@@ -101,6 +105,17 @@
       <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtKwh(energy.current_kwh_milli)}</b></p>
       <p class="muted">{$t('stats.energy-previous')}: {fmtKwh(energy.previous_kwh_milli)}</p>
       <BarList items={energy.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.kwh_milli, display: fmtKwh(m.kwh_milli) }))} />
+    </section>
+  {/if}
+  {#if fuel}
+    <section data-testid="stats-fuel">
+      <h2>{$t('stats.fuel-title')}</h2>
+      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtLiters(fuel.current_liters_milli)} · {fmtGallons(fuel.current_gallons_milli)}</b></p>
+      <p class="muted">{$t('stats.energy-previous')}: {fmtLiters(fuel.previous_liters_milli)} · {fmtGallons(fuel.previous_gallons_milli)}</p>
+      <h3>{$t('stats.fuel-liters')}</h3>
+      <BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: fmtLiters(m.liters_milli) }))} />
+      <h3>{$t('stats.fuel-gallons')}</h3>
+      <BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.gallons_milli, display: fmtGallons(m.gallons_milli) }))} />
     </section>
   {/if}
 

@@ -39,6 +39,22 @@ async fn household_energy_groups_kwh_by_month() {
     assert_eq!(out["months"].as_array().unwrap().last().unwrap()["objects"], 2);
 }
 
+#[tokio::test]
+async fn household_fuel_keeps_litres_and_gallons_separate() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let today: NaiveDate = logb::db::today().parse().unwrap();
+    let date = today.format("%Y-%m-%d").to_string();
+    let litres = object(&app, json!({ "name": "Oil tank", "type": "home", "fuel_unit": "l", "counter_unit": "h" })).await;
+    let gallons = object(&app, json!({ "name": "Generator", "type": "other", "fuel_unit": "gal", "counter_unit": "h" })).await;
+    energy_entry(&app, litres, date.clone(), 125_500).await;
+    energy_entry(&app, gallons, date, 12_250).await;
+    let out = app.get_json("/stats/fuel").await;
+    assert_eq!(out["current_liters_milli"], 125_500);
+    assert_eq!(out["current_gallons_milli"], 12_250);
+    assert_eq!(out["months"].as_array().unwrap().last().unwrap()["charges"], 2);
+}
+
 async fn cost(app: &common::TestApp, object_id: i64, date: &str, category: &str, cents: i64) -> i64 {
     let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
         .json(&json!({ "date": date, "category": category, "title": category, "notes": "", "cost_cents": cents }))

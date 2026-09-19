@@ -253,6 +253,12 @@ export interface EnergyUsage {
   current_kwh_milli: number;
   previous_kwh_milli: number;
 }
+export interface FuelUsageMonth { month: string; liters_milli: number; gallons_milli: number; charges: number; objects: number }
+export interface FuelUsage {
+  months: FuelUsageMonth[];
+  current_liters_milli: number; previous_liters_milli: number;
+  current_gallons_milli: number; previous_gallons_milli: number;
+}
 
 /** An API token as it is listed: never the token itself, which the server returns exactly once
  *  at creation and stores only as a hash. */
