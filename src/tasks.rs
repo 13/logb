@@ -62,13 +62,17 @@ pub fn spawn(state: App) {
                 }
             }
             match notify::tick(&state, db::local_hour()).await {
-                Ok(Some(d)) => tracing::info!(reminders = d.reminders.len(), "sent reminder digest"),
+                Ok(Some(d)) => {
+                    tracing::info!(reminders = d.reminders.len(), "sent reminder digest")
+                }
                 Ok(None) => {}
                 Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
             }
             if backup_enabled {
                 match crate::backup::tick(&state, db::local_hour()).await {
-                    Ok(Some(path)) => tracing::info!(path = %path.display(), "wrote database snapshot"),
+                    Ok(Some(path)) => {
+                        tracing::info!(path = %path.display(), "wrote database snapshot")
+                    }
                     Ok(None) => {}
                     Err(e) => tracing::error!(error = %e, "database snapshot failed"),
                 }

@@ -17,8 +17,20 @@ use sqlx::{Any, AnyPool, AssertSqlSafe, Column, Row, ValueRef};
 /// below, which reads the same list. `tests/schema_parity.rs` asserts it names exactly the
 /// tables the schema has.
 pub const TABLES: [&str; 14] = [
-    "users", "object_types", "push_subscriptions", "settings", "api_tokens", "pairing_codes", "sessions", "objects",
-    "activities", "files", "attachments", "reminders", "changes", "field_clock",
+    "users",
+    "object_types",
+    "push_subscriptions",
+    "settings",
+    "api_tokens",
+    "pairing_codes",
+    "sessions",
+    "objects",
+    "activities",
+    "files",
+    "attachments",
+    "reminders",
+    "changes",
+    "field_clock",
 ];
 
 /// Shown when something else still holds the source. Copying out from under a running server
@@ -74,9 +86,15 @@ pub async fn run(source_url: &str, dest_url: &str) -> Result<Report, BoxError> {
         Err(e) => {
             source.close().await;
             return Err(e);
-        },
+        }
     };
-    let result = copy(&source, Backend::of(source_url), &dest, Backend::of(dest_url)).await;
+    let result = copy(
+        &source,
+        Backend::of(source_url),
+        &dest,
+        Backend::of(dest_url),
+    )
+    .await;
     source.close().await;
     dest.close().await;
     result
@@ -105,7 +123,7 @@ pub async fn run_live(db: &AnyPool, backend: Backend, dest_url: &str) -> Result<
         Err(e) => {
             dest.close().await;
             return Err(e.into());
-        },
+        }
     };
     let result = copy_from(&mut src, &dest, Backend::of(dest_url)).await;
     // The source was only ever read. Let go of it explicitly rather than leaving the rollback
@@ -129,7 +147,9 @@ async fn copy(
 
     // The source was only ever read. Let go of it explicitly rather than leaving the rollback
     // to a drop, so the lock is gone before this returns.
-    let _ = sqlx::raw_sql(AssertSqlSafe("ROLLBACK")).execute(&mut *src).await;
+    let _ = sqlx::raw_sql(AssertSqlSafe("ROLLBACK"))
+        .execute(&mut *src)
+        .await;
 
     Ok(report)
 }
@@ -152,7 +172,9 @@ async fn copy_from(
     // here would block against it and hang rather than fail.
     // Whether the destination is somebody's database, which is what `users` answers -- not
     // whether it is empty in general. See `NOT_EMPTY` for what happens to the rest.
-    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
     if users > 0 {
         return Err(NOT_EMPTY.into());
     }
@@ -161,7 +183,9 @@ async fn copy_from(
     // `sync_epoch` and `currency` rows on first open. They are the only rows an "empty"
     // destination can hold, and the source's own settings are what should be there instead --
     // so they go, rather than colliding on the primary key a moment from now.
-    sqlx::query("DELETE FROM settings").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM settings")
+        .execute(&mut *tx)
+        .await?;
 
     let mut tables = Vec::with_capacity(TABLES.len());
     for table in TABLES {
@@ -225,7 +249,7 @@ pub async fn verify(source_url: &str, dest_url: &str) -> Result<(), BoxError> {
         Err(e) => {
             source.close().await;
             return Err(e);
-        },
+        }
     };
     let result = compare_databases(&source, &dest).await;
     source.close().await;
@@ -282,13 +306,22 @@ async fn shapes(conn: &mut sqlx::AnyConnection) -> Result<Vec<Shape>, BoxError> 
     let mut shapes = Vec::with_capacity(TABLES.len());
     for table in TABLES {
         let select = format!("SELECT * FROM {table} LIMIT 1");
-        let row = sqlx::query(AssertSqlSafe(select)).fetch_optional(&mut *conn).await?;
-        let names: Vec<&str> =
-            row.iter().flat_map(|row| row.columns()).map(|column| column.name()).collect();
+        let row = sqlx::query(AssertSqlSafe(select))
+            .fetch_optional(&mut *conn)
+            .await?;
+        let names: Vec<&str> = row
+            .iter()
+            .flat_map(|row| row.columns())
+            .map(|column| column.name())
+            .collect();
         let has = |name: &str| names.contains(&name);
         // `changes` numbers its rows `seq`; everything else that numbers them at all uses `id`.
         let key = ["id", "seq"].into_iter().find(|name| has(name));
-        shapes.push(Shape { table, key, updated: has("updated_at") });
+        shapes.push(Shape {
+            table,
+            key,
+            updated: has("updated_at"),
+        });
     }
     Ok(shapes)
 }
@@ -318,7 +351,11 @@ async fn fingerprints(
         let (rows, keys, updated) = sqlx::query_as::<_, (i64, i64, String)>(AssertSqlSafe(sql))
             .fetch_one(&mut *conn)
             .await?;
-        out.push(Fingerprint { rows, keys, updated });
+        out.push(Fingerprint {
+            rows,
+            keys,
+            updated,
+        });
     }
     Ok(out)
 }
@@ -361,18 +398,27 @@ async fn claim_source(pool: &AnyPool, backend: Backend) -> Result<PoolConnection
             // The busy timeout is lowered first because `connect_existing` sets thirty
             // seconds: an operator who forgot to stop the server should be told now, not after
             // half a minute of silence. Nothing contends with us once the lock is ours.
-            sqlx::raw_sql(AssertSqlSafe("PRAGMA busy_timeout = 250")).execute(&mut *conn).await?;
-            sqlx::raw_sql(AssertSqlSafe("PRAGMA locking_mode = EXCLUSIVE")).execute(&mut *conn).await?;
-            if let Err(e) = sqlx::raw_sql(AssertSqlSafe("BEGIN IMMEDIATE")).execute(&mut *conn).await {
+            sqlx::raw_sql(AssertSqlSafe("PRAGMA busy_timeout = 250"))
+                .execute(&mut *conn)
+                .await?;
+            sqlx::raw_sql(AssertSqlSafe("PRAGMA locking_mode = EXCLUSIVE"))
+                .execute(&mut *conn)
+                .await?;
+            if let Err(e) = sqlx::raw_sql(AssertSqlSafe("BEGIN IMMEDIATE"))
+                .execute(&mut *conn)
+                .await
+            {
                 return Err(format!("{IN_USE} ({e})").into());
             }
-        },
+        }
         Backend::Postgres => {
             // The snapshot is taken first, so the count below is asked from inside the
             // transaction the rows will be read in.
-            sqlx::raw_sql(AssertSqlSafe("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
-                .execute(&mut *conn)
-                .await?;
+            sqlx::raw_sql(AssertSqlSafe(
+                "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            ))
+            .execute(&mut *conn)
+            .await?;
             let others: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM pg_stat_activity \
                  WHERE datname = current_database() AND pid <> pg_backend_pid()",
@@ -380,10 +426,14 @@ async fn claim_source(pool: &AnyPool, backend: Backend) -> Result<PoolConnection
             .fetch_one(&mut *conn)
             .await?;
             if others > 0 {
-                let plural = if others == 1 { "connection" } else { "connections" };
+                let plural = if others == 1 {
+                    "connection"
+                } else {
+                    "connections"
+                };
                 return Err(format!("{IN_USE} ({others} other {plural} to it)").into());
             }
-        },
+        }
     }
     Ok(conn)
 }
@@ -399,11 +449,17 @@ async fn copy_table(
     table: &str,
 ) -> Result<i64, BoxError> {
     let select = format!("SELECT * FROM {table}");
-    let rows = sqlx::query(AssertSqlSafe(select)).fetch_all(&mut *src).await?;
+    let rows = sqlx::query(AssertSqlSafe(select))
+        .fetch_all(&mut *src)
+        .await?;
     // `TABLES` puts every foreign key's target table before the table referencing it, which is
     // the whole of the ordering problem for ten of the eleven. `objects` points at itself, so
     // its rows also have to be ordered against each other -- see `parents_before_children`.
-    let rows = if table == "objects" { parents_before_children(rows)? } else { rows };
+    let rows = if table == "objects" {
+        parents_before_children(rows)?
+    } else {
+        rows
+    };
     let mut copied = 0i64;
     for row in &rows {
         let mut names = Vec::with_capacity(row.columns().len());
@@ -426,8 +482,11 @@ async fn copy_table(
             values.push((i, kind));
             placeholders.push(format!("${}", values.len()));
         }
-        let insert =
-            format!("INSERT INTO {table} ({}) VALUES ({})", names.join(", "), placeholders.join(", "));
+        let insert = format!(
+            "INSERT INTO {table} ({}) VALUES ({})",
+            names.join(", "),
+            placeholders.join(", ")
+        );
         let mut query = sqlx::query(AssertSqlSafe(insert));
         for (i, kind) in values {
             query = match kind {
@@ -464,17 +523,25 @@ async fn copy_table(
 /// path in this application can produce -- are appended in the order they were read rather than
 /// dropped, so a source in that state is still copied as faithfully as it can be and the
 /// database, not this function, decides what it thinks of it.
-fn parents_before_children(rows: Vec<sqlx::any::AnyRow>) -> Result<Vec<sqlx::any::AnyRow>, BoxError> {
+fn parents_before_children(
+    rows: Vec<sqlx::any::AnyRow>,
+) -> Result<Vec<sqlx::any::AnyRow>, BoxError> {
     use std::collections::{HashMap, VecDeque};
 
     let mut ids = Vec::with_capacity(rows.len());
     for row in &rows {
-        ids.push((whole_number(row, "id")?, optional_whole_number(row, "parent_id")?));
+        ids.push((
+            whole_number(row, "id")?,
+            optional_whole_number(row, "parent_id")?,
+        ));
     }
     // Which row holds each id, so a `parent_id` can be turned into the position that has to be
     // written first.
-    let at: HashMap<i64, usize> =
-        ids.iter().enumerate().filter_map(|(i, (id, _))| id.map(|id| (id, i))).collect();
+    let at: HashMap<i64, usize> = ids
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (id, _))| id.map(|id| (id, i)))
+        .collect();
 
     let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut queue: VecDeque<usize> = VecDeque::new();
@@ -504,7 +571,11 @@ fn parents_before_children(rows: Vec<sqlx::any::AnyRow>) -> Result<Vec<sqlx::any
     let mut rows: Vec<Option<sqlx::any::AnyRow>> = rows.into_iter().map(Some).collect();
     Ok(order
         .into_iter()
-        .map(|i| rows[i].take().expect("every position is ordered exactly once"))
+        .map(|i| {
+            rows[i]
+                .take()
+                .expect("every position is ordered exactly once")
+        })
         .collect())
 }
 
@@ -541,8 +612,11 @@ fn whole_number(row: &sqlx::any::AnyRow, name: &str) -> Result<Option<i64>, BoxE
         AnyTypeInfoKind::Integer => i64::from(row.try_get::<i32, _>(name)?),
         AnyTypeInfoKind::BigInt => row.try_get::<i64, _>(name)?,
         kind => {
-            return Err(format!("the source database's objects.{name} holds {kind:?}, not a number").into())
-        },
+            return Err(format!(
+                "the source database's objects.{name} holds {kind:?}, not a number"
+            )
+            .into())
+        }
     };
     Ok(Some(number))
 }
@@ -552,7 +626,9 @@ fn whole_number(row: &sqlx::any::AnyRow, name: &str) -> Result<Option<i64>, BoxE
 /// Which columns those are is read from the destination rather than listed here, for the same
 /// reason the column names are: a list would drift. PostgreSQL only -- SQLite's `AUTOINCREMENT`
 /// counter follows the largest rowid inserted, so it needs nothing.
-async fn resync_identity_sequences(tx: &mut sqlx::Transaction<'static, Any>) -> Result<(), BoxError> {
+async fn resync_identity_sequences(
+    tx: &mut sqlx::Transaction<'static, Any>,
+) -> Result<(), BoxError> {
     // `table_name` and `column_name` are PostgreSQL's `information_schema.sql_identifier`
     // type, which the `Any` driver cannot decode -- without the casts this query fails.
     let identity: Vec<(String, String)> = sqlx::query_as(
@@ -592,7 +668,10 @@ fn identifier(name: &str) -> Result<&str, BoxError> {
     if plain {
         Ok(name)
     } else {
-        Err(format!("the source database has a column named {name:?}, which is not a plain identifier").into())
+        Err(format!(
+            "the source database has a column named {name:?}, which is not a plain identifier"
+        )
+        .into())
     }
 }
 
@@ -629,7 +708,10 @@ mod tests {
             ("changes", "users"),
         ] {
             let at = |name: &str| TABLES.iter().position(|t| *t == name).unwrap();
-            assert!(at(target) < at(table), "{target} must be copied before {table}");
+            assert!(
+                at(target) < at(table),
+                "{target} must be copied before {table}"
+            );
         }
     }
 
@@ -640,7 +722,10 @@ mod tests {
         assert_eq!(identifier("client_uuid").unwrap(), "client_uuid");
         assert_eq!(identifier("sha256").unwrap(), "sha256");
         for bad in ["", "drop table users", "a\"b", "a;b", "a-b", "1st"] {
-            assert!(identifier(bad).is_err(), "{bad:?} should not be allowed into a statement");
+            assert!(
+                identifier(bad).is_err(),
+                "{bad:?} should not be allowed into a statement"
+            );
         }
     }
 }

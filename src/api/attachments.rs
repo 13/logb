@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, patch};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,7 +18,7 @@ use serde_json::json;
 pub fn router(max_upload_bytes: usize) -> Router<App> {
     Router::new()
         .route("/objects/{id}/attachments", get(list).post(upload))
-        .route("/attachments/{id}", axum::routing::patch(update).delete(delete))
+        .route("/attachments/{id}", patch(update).delete(delete))
         .route("/files/{id}", get(serve_original))
         .route("/files/{id}/thumb", get(serve_thumb))
         .layer(DefaultBodyLimit::max(max_upload_bytes + 1024 * 1024))

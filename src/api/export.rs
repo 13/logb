@@ -1,7 +1,9 @@
-fn default_weight_unit() -> String { "kg".into() }
+fn default_weight_unit() -> String {
+    "kg".into()
+}
+use super::activities::{ActivityInput, ActivityRow};
 use super::attachments::{self, AttachmentOut};
 use super::objects::{load_owned_object, ObjectInput, ObjectRow};
-use super::activities::{ActivityInput, ActivityRow};
 use super::reminders::{select_reminders, ReminderInput, ReminderRow};
 use super::settings;
 use crate::auth::AuthUser;
@@ -76,6 +78,18 @@ struct ActivityExport {
     charged_full: i64,
     #[serde(default)]
     weight_grams: Option<i64>,
+    #[serde(default)]
+    fuel_level_pct: Option<i64>,
+    #[serde(default)]
+    meter_reading_milli: Option<i64>,
+    #[serde(default)]
+    period_start: Option<String>,
+    #[serde(default)]
+    period_end: Option<String>,
+    #[serde(default)]
+    estimated: i64,
+    #[serde(default)]
+    meter_reset: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,6 +147,20 @@ struct ObjectExport {
     energy_price_milli: Option<i64>,
     #[serde(default = "default_weight_unit")]
     weight_unit: String,
+    #[serde(default)]
+    fuel_capacity_milli: Option<i64>,
+    #[serde(default)]
+    resource_unit: Option<String>,
+    #[serde(default)]
+    resource_kind: Option<String>,
+    #[serde(default)]
+    measurement_mode: Option<String>,
+    #[serde(default)]
+    monthly_target_milli: Option<i64>,
+    #[serde(default)]
+    low_level_pct: Option<i64>,
+    #[serde(default)]
+    private: bool,
 }
 
 /// A user's own type. Objects keep `type` as `custom:<client_uuid>`, so the uuid is what ties
@@ -161,11 +189,16 @@ struct Export {
 /// off that user's objects), so a miss here means the two tables disagree. Report it as an
 /// internal error rather than panicking on a bare `HashMap` index.
 fn sha_of(sha_by_file: &HashMap<i64, String>, file_id: i64) -> Result<String, AppError> {
-    sha_by_file.get(&file_id).cloned()
+    sha_by_file
+        .get(&file_id)
+        .cloned()
         .ok_or_else(|| AppError::Internal(format!("attachment references unknown file {file_id}")))
 }
 
-fn att_export(a: &AttachmentOut, sha_by_file: &HashMap<i64, String>) -> Result<AttachmentExport, AppError> {
+fn att_export(
+    a: &AttachmentOut,
+    sha_by_file: &HashMap<i64, String>,
+) -> Result<AttachmentExport, AppError> {
     Ok(AttachmentExport {
         sha256: sha_of(sha_by_file, a.file_id)?,
         original_name: a.original_name.clone(),
@@ -193,19 +226,31 @@ fn icon_bytes() -> Option<Vec<u8>> {
     crate::spa::Assets::get("icon.svg").map(|f| f.data.into_owned())
 }
 
-async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<ExportQuery>) -> Result<Response, AppError> {
+async fn export(
+    user: AuthUser,
+    State(state): State<App>,
+    Query(q): Query<ExportQuery>,
+) -> Result<Response, AppError> {
     let mut objects: Vec<ObjectRow> = match q.object_id {
         Some(id) => vec![load_owned_object(&state, user.id, id).await?],
         None => sqlx::query_as::<_, ObjectRow>(
             "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
              purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-             energy_price_milli, weight_unit \
+             energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private \
              FROM objects WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
             .bind(user.id).fetch_all(&state.db).await?,
     };
-    if q.exclude_body { objects.retain(|o| o.type_ != "body"); }
-    let sha_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
-        .bind(user.id).fetch_all(&state.db).await?;
+    if q.exclude_body {
+        objects.retain(|o| o.type_ != "body");
+    }
+    if q.object_id.is_none() {
+        objects.retain(|o| o.is_private == 0);
+    }
+    let sha_rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await?;
     let sha_by_file: HashMap<i64, String> = sha_rows.into_iter().collect();
 
     let mut out = Vec::new();
@@ -213,57 +258,142 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     for o in objects {
         let acts = sqlx::query_as::<_, ActivityRow>(
             "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset \
              FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
             .bind(o.id).fetch_all(&state.db).await?;
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
             "WHERE r.object_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")))
             .bind(super::reminders::reading_horizon()).bind(o.id).fetch_all(&state.db).await?;
-        for a in &atts { blobs.push(sha_of(&sha_by_file, a.file_id)?); }
-        let index_of: HashMap<i64, usize> = acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
-        let cover_sha256 = match o.cover_attachment_id.and_then(|cid| atts.iter().find(|a| a.id == cid)) {
+        for a in &atts {
+            blobs.push(sha_of(&sha_by_file, a.file_id)?);
+        }
+        let index_of: HashMap<i64, usize> =
+            acts.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
+        let cover_sha256 = match o
+            .cover_attachment_id
+            .and_then(|cid| atts.iter().find(|a| a.id == cid))
+        {
             Some(a) => Some(sha_of(&sha_by_file, a.file_id)?),
             None => None,
         };
         out.push(ObjectExport {
             tags: tags::from_json(&o.tags),
-            name: o.name, type_: Some(o.type_), category: None, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
-            purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents,
-            archived_at: o.archived_at, created_at: o.created_at, cover_sha256,
-            energy_price_milli: o.energy_price_milli, weight_unit: o.weight_unit.clone(),
-            activities: acts.iter().map(|a| Ok(ActivityExport {
-                date: a.date.clone(), category: a.category.clone(), title: a.title.clone(), notes: a.notes.clone(),
-                counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, created_at: a.created_at.clone(),
-                tags: tags::from_json(&a.tags),
-                start_counter: a.start_counter, from_place: a.from_place.clone(), to_place: a.to_place.clone(),
-                duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
-                charged_full: a.charged_full, weight_grams: a.weight_grams,
-                attachments: atts.iter().filter(|x| x.activity_id == Some(a.id)).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
-            })).collect::<Result<Vec<_>, AppError>>()?,
-            attachments: atts.iter().filter(|x| x.activity_id.is_none()).map(|x| att_export(x, &sha_by_file)).collect::<Result<_, _>>()?,
-            reminders: rems.iter().map(|r| ReminderExport {
-                title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(), due_counter: r.due_counter,
-                repeat_months: r.repeat_months, repeat_counter: r.repeat_counter, done_at: r.done_at.clone(),
-                done_activity_index: r.done_activity_id.and_then(|id| index_of.get(&id).copied()),
-                created_at: r.created_at.clone(), snoozed_until: r.snoozed_until.clone(),
-                kind: r.kind.clone(), every_n: r.every_n, every_unit: r.every_unit.clone(),
-            }).collect(),
+            name: o.name,
+            type_: Some(o.type_),
+            category: None,
+            counter_unit: o.counter_unit,
+            fuel_unit: o.fuel_unit,
+            description: o.description,
+            purchase_date: o.purchase_date,
+            purchase_price_cents: o.purchase_price_cents,
+            archived_at: o.archived_at,
+            created_at: o.created_at,
+            cover_sha256,
+            energy_price_milli: o.energy_price_milli,
+            weight_unit: o.weight_unit.clone(),
+            fuel_capacity_milli: o.fuel_capacity_milli,
+            resource_unit: o.resource_unit.clone(),
+            resource_kind: o.resource_kind.clone(),
+            measurement_mode: o.measurement_mode.clone(),
+            monthly_target_milli: o.monthly_target_milli,
+            low_level_pct: o.low_level_pct,
+            private: o.is_private != 0,
+            activities: acts
+                .iter()
+                .map(|a| {
+                    Ok(ActivityExport {
+                        date: a.date.clone(),
+                        category: a.category.clone(),
+                        title: a.title.clone(),
+                        notes: a.notes.clone(),
+                        counter_value: a.counter_value,
+                        cost_cents: a.cost_cents,
+                        quantity_milli: a.quantity_milli,
+                        created_at: a.created_at.clone(),
+                        tags: tags::from_json(&a.tags),
+                        start_counter: a.start_counter,
+                        from_place: a.from_place.clone(),
+                        to_place: a.to_place.clone(),
+                        duration_minutes: a.duration_minutes,
+                        battery_used_pct: a.battery_used_pct,
+                        charged_full: a.charged_full,
+                        weight_grams: a.weight_grams,
+                        fuel_level_pct: a.fuel_level_pct,
+                        meter_reading_milli: a.meter_reading_milli,
+                        period_start: a.period_start.clone(),
+                        period_end: a.period_end.clone(),
+                        estimated: a.estimated,
+                        meter_reset: a.meter_reset,
+                        attachments: atts
+                            .iter()
+                            .filter(|x| x.activity_id == Some(a.id))
+                            .map(|x| att_export(x, &sha_by_file))
+                            .collect::<Result<_, _>>()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, AppError>>()?,
+            attachments: atts
+                .iter()
+                .filter(|x| x.activity_id.is_none())
+                .map(|x| att_export(x, &sha_by_file))
+                .collect::<Result<_, _>>()?,
+            reminders: rems
+                .iter()
+                .map(|r| ReminderExport {
+                    title: r.title.clone(),
+                    notes: r.notes.clone(),
+                    due_date: r.due_date.clone(),
+                    due_counter: r.due_counter,
+                    repeat_months: r.repeat_months,
+                    repeat_counter: r.repeat_counter,
+                    done_at: r.done_at.clone(),
+                    done_activity_index: r
+                        .done_activity_id
+                        .and_then(|id| index_of.get(&id).copied()),
+                    created_at: r.created_at.clone(),
+                    snoozed_until: r.snoozed_until.clone(),
+                    kind: r.kind.clone(),
+                    every_n: r.every_n,
+                    every_unit: r.every_unit.clone(),
+                })
+                .collect(),
         });
     }
     let type_rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT client_uuid, name, icon, categories, counter_unit FROM object_types \
-         WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id")
-        .bind(user.id).fetch_all(&state.db).await?;
+         WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
     // A one-object export carries only the type that object uses, so importing it elsewhere does
     // not bring along every type the account has.
-    let types = type_rows.into_iter()
-        .filter(|(uuid, ..)| q.object_id.is_none() || out.iter().any(|o| o.type_.as_deref() == Some(&format!("{CUSTOM_PREFIX}{uuid}"))))
-        .map(|(client_uuid, name, icon, categories, counter_unit)| TypeExport {
-            client_uuid, name, icon, categories: serde_json::from_str(&categories).unwrap_or_default(), counter_unit,
+    let types = type_rows
+        .into_iter()
+        .filter(|(uuid, ..)| {
+            q.object_id.is_none()
+                || out
+                    .iter()
+                    .any(|o| o.type_.as_deref() == Some(&format!("{CUSTOM_PREFIX}{uuid}")))
         })
+        .map(
+            |(client_uuid, name, icon, categories, counter_unit)| TypeExport {
+                client_uuid,
+                name,
+                icon,
+                categories: serde_json::from_str(&categories).unwrap_or_default(),
+                counter_unit,
+            },
+        )
         .collect();
-    let data = Export { version: 1, exported_at: db::now(), currency: settings::currency(&state).await?, types, objects: out };
+    let data = Export {
+        version: 1,
+        exported_at: db::now(),
+        currency: settings::currency(&state).await?,
+        types,
+        objects: out,
+    };
     let json = serde_json::to_vec_pretty(&data).map_err(|e| AppError::Internal(e.to_string()))?;
 
     blobs.sort();
@@ -278,19 +408,26 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let build = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let file = std::fs::File::create(&path)?;
         let mut w = zip::ZipWriter::new(std::io::BufWriter::new(file));
-        let deflate = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        w.start_file("data.json", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
+        let deflate = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        w.start_file("data.json", deflate)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
         w.write_all(&json)?;
         if let Some(icon) = icon_bytes() {
-            w.start_file("icon.svg", deflate).map_err(|e| AppError::Internal(e.to_string()))?;
+            w.start_file("icon.svg", deflate)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
             w.write_all(&icon)?;
         }
         for sha in &blobs {
             // A blob missing from disk is storage corruption, not a reason to fail the whole
             // export; the entry is simply absent from the archive, as it was before.
-            let Ok(mut src) = std::fs::File::open(storage.blob_path(sha)) else { continue };
-            w.start_file(format!("files/{sha}"), stored).map_err(|e| AppError::Internal(e.to_string()))?;
+            let Ok(mut src) = std::fs::File::open(storage.blob_path(sha)) else {
+                continue;
+            };
+            w.start_file(format!("files/{sha}"), stored)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
             std::io::copy(&mut src, &mut w)?;
         }
         w.finish().map_err(|e| AppError::Internal(e.to_string()))?;
@@ -312,12 +449,22 @@ async fn export(user: AuthUser, State(state): State<App>, Query(q): Query<Export
     let name = format!("attachment; filename=\"logb-export-{}.zip\"", db::today());
     Ok((
         [
-            (header::CONTENT_TYPE, HeaderValue::from_static("application/zip")),
-            (header::CONTENT_DISPOSITION, HeaderValue::from_str(&name).unwrap()),
-            (header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap()),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/zip"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&name).unwrap(),
+            ),
+            (
+                header::CONTENT_LENGTH,
+                HeaderValue::from_str(&len.to_string()).unwrap(),
+            ),
         ],
         Body::from_stream(tokio_util::io::ReaderStream::new(file)),
-    ).into_response())
+    )
+        .into_response())
 }
 
 #[derive(Serialize)]
@@ -408,7 +555,11 @@ fn resolve_type(o: &ObjectExport, types: &HashMap<String, String>) -> (String, S
 /// size: that header is written by whoever built the archive, so a "zip bomb" can advertise a
 /// few kilobytes and still inflate to gigabytes. `take(limit + 1)` lets exactly one byte past
 /// the budget through, which is enough to detect the overrun without buffering it.
-fn read_capped<R: Read>(r: &mut R, out: &mut Vec<u8>, remaining: &mut usize) -> Result<(), AppError> {
+fn read_capped<R: Read>(
+    r: &mut R,
+    out: &mut Vec<u8>,
+    remaining: &mut usize,
+) -> Result<(), AppError> {
     let limit = *remaining;
     let n = r.take(limit as u64 + 1).read_to_end(out)?;
     if n > limit {
@@ -418,36 +569,63 @@ fn read_capped<R: Read>(r: &mut R, out: &mut Vec<u8>, remaining: &mut usize) -> 
     Ok(())
 }
 
-async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result<Json<ImportCounts>, AppError> {
+async fn import(
+    user: AuthUser,
+    State(state): State<App>,
+    body: Bytes,
+) -> Result<Json<ImportCounts>, AppError> {
     let budget = state.config.max_import_inflated_bytes();
-    let (data, blobs) = tokio::task::spawn_blocking(move || -> Result<(Export, HashMap<String, Vec<u8>>), AppError> {
-        let mut z = zip::ZipArchive::new(Cursor::new(body.to_vec()))
-            .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
-        let mut remaining = budget;
-        let mut json = Vec::new();
-        {
-            let mut f = z.by_name("data.json").map_err(|_| AppError::BadRequest("data.json missing".into()))?;
-            read_capped(&mut f, &mut json, &mut remaining)?;
-        }
-        let data: Export = serde_json::from_slice(&json).map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
-        if data.version != 1 { return Err(AppError::BadRequest(format!("unsupported export version {}", data.version))); }
-        let mut blobs = HashMap::new();
-        for i in 0..z.len() {
-            let mut f = z.by_index(i).map_err(|e| AppError::BadRequest(e.to_string()))?;
-            let name = f.name().to_string();
-            if let Some(sha) = name.strip_prefix("files/") {
-                let mut b = Vec::new();
-                read_capped(&mut f, &mut b, &mut remaining)?;
-                if files::sha256_hex(&b) == sha { blobs.insert(sha.to_string(), b); }
+    let (data, blobs) = tokio::task::spawn_blocking(
+        move || -> Result<(Export, HashMap<String, Vec<u8>>), AppError> {
+            let mut z = zip::ZipArchive::new(Cursor::new(body.to_vec()))
+                .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
+            let mut remaining = budget;
+            let mut json = Vec::new();
+            {
+                let mut f = z
+                    .by_name("data.json")
+                    .map_err(|_| AppError::BadRequest("data.json missing".into()))?;
+                read_capped(&mut f, &mut json, &mut remaining)?;
             }
-        }
-        Ok((data, blobs))
-    }).await.map_err(|e| AppError::Internal(e.to_string()))??;
+            let data: Export = serde_json::from_slice(&json)
+                .map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
+            if data.version != 1 {
+                return Err(AppError::BadRequest(format!(
+                    "unsupported export version {}",
+                    data.version
+                )));
+            }
+            let mut blobs = HashMap::new();
+            for i in 0..z.len() {
+                let mut f = z
+                    .by_index(i)
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let name = f.name().to_string();
+                if let Some(sha) = name.strip_prefix("files/") {
+                    let mut b = Vec::new();
+                    read_capped(&mut f, &mut b, &mut remaining)?;
+                    if files::sha256_hex(&b) == sha {
+                        blobs.insert(sha.to_string(), b);
+                    }
+                }
+            }
+            Ok((data, blobs))
+        },
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
     validate_import(&data)?;
     let archive_types = archive_types(&data)?;
 
-    let mut counts = ImportCounts { objects: 0, activities: 0, attachments: 0, reminders: 0, types_created: 0, types_merged: 0 };
+    let mut counts = ImportCounts {
+        objects: 0,
+        activities: 0,
+        attachments: 0,
+        reminders: 0,
+        types_created: 0,
+        types_merged: 0,
+    };
     // One instant for the whole import: every row it creates is "set" at the moment the
     // import ran, not at whatever `created_at` the archive says (that field is preserved on
     // the row itself, per rule 1 in `sync::record` -- this is about `changes`/`field_clock`
@@ -462,9 +640,12 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         // A type with this name already exists here (a backup restored into the account it came
         // from, or two archive types folding to one name): use it. A second type with the same
         // name is exactly what `POST /types` refuses.
-        let live: Vec<(String, String)> =
-            sqlx::query_as("SELECT client_uuid, name FROM object_types WHERE user_id = $1 AND deleted_at IS NULL")
-                .bind(user.id).fetch_all(&mut *tx).await?;
+        let live: Vec<(String, String)> = sqlx::query_as(
+            "SELECT client_uuid, name FROM object_types WHERE user_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user.id)
+        .fetch_all(&mut *tx)
+        .await?;
         let wanted = tags::fold(&input.name);
         if let Some((uuid, _)) = live.iter().find(|(_, name)| tags::fold(name) == wanted) {
             type_uuids.insert(archive_uuid, uuid.clone());
@@ -473,9 +654,16 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         }
         // The uuid is unique across every account and survives deletion, so one already taken
         // (the same archive imported by another user, or a deleted type) gets a fresh uuid.
-        let taken: Option<(i64,)> = sqlx::query_as("SELECT id FROM object_types WHERE client_uuid = $1")
-            .bind(&archive_uuid).fetch_optional(&mut *tx).await?;
-        let uuid = if taken.is_some() { uuid::Uuid::new_v4().to_string() } else { archive_uuid.clone() };
+        let taken: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM object_types WHERE client_uuid = $1")
+                .bind(&archive_uuid)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let uuid = if taken.is_some() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            archive_uuid.clone()
+        };
         let now = db::now();
         sqlx::query(
             "INSERT INTO object_types (user_id, client_uuid, name, icon, categories, counter_unit, created_at, updated_at) \
@@ -495,11 +683,14 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
         let (ty, description) = resolve_type(&o, &type_uuids);
         let (object_id,): (i64,) = sqlx::query_as(
             "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-             archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags, energy_price_milli, weight_unit) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15) RETURNING id")
+            archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags, energy_price_milli, weight_unit, fuel_capacity_milli, \
+             resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id")
             .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
             .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .bind(&object_uuid).bind(normalised_tags(&o.tags)?).bind(o.energy_price_milli).bind(&o.weight_unit)
+            .bind(&object_uuid).bind(normalised_tags(&o.tags)?).bind(o.energy_price_milli).bind(&o.weight_unit).bind(o.fuel_capacity_milli)
+            .bind(o.resource_unit.as_ref().or(o.fuel_unit.as_ref())).bind(&o.resource_kind).bind(&o.measurement_mode)
+            .bind(o.monthly_target_milli).bind(o.low_level_pct).bind(i64::from(o.private))
             .fetch_one(&mut *tx).await?;
         record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
         counts.objects += 1;
@@ -516,26 +707,60 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             let to_place = super::activities::trim_place(a.to_place.clone())?;
             let (aid,): (i64,) = sqlx::query_as(
                 "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
-                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING id")
+                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, \
+                 meter_reading_milli, period_start, period_end, estimated, meter_reset) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING id")
                 .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
                 .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
                 .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
                 .bind(a.start_counter).bind(&from_place).bind(&to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
-                .bind(a.charged_full).bind(a.weight_grams)
+                .bind(a.charged_full).bind(a.weight_grams).bind(a.fuel_level_pct).bind(a.meter_reading_milli)
+                .bind(&a.period_start).bind(&a.period_end).bind(a.estimated).bind(a.meter_reset)
                 .fetch_one(&mut *tx).await?;
-            record::record_create(&mut tx, user.id, Entity::Activity, &activity_uuid, &edited_at).await?;
+            record::record_create(
+                &mut tx,
+                user.id,
+                Entity::Activity,
+                &activity_uuid,
+                &edited_at,
+            )
+            .await?;
             activity_ids.push(aid);
             counts.activities += 1;
             for x in &a.attachments {
-                if import_attachment(&state, &mut tx, user.id, (object_id, Some(aid)), x, &blobs, &edited_at).await?.is_some() { counts.attachments += 1; }
+                if import_attachment(
+                    &state,
+                    &mut tx,
+                    user.id,
+                    (object_id, Some(aid)),
+                    x,
+                    &blobs,
+                    &edited_at,
+                )
+                .await?
+                .is_some()
+                {
+                    counts.attachments += 1;
+                }
             }
         }
         let mut cover: Option<i64> = None;
         for x in &o.attachments {
-            if let Some(att_id) = import_attachment(&state, &mut tx, user.id, (object_id, None), x, &blobs, &edited_at).await? {
+            if let Some(att_id) = import_attachment(
+                &state,
+                &mut tx,
+                user.id,
+                (object_id, None),
+                x,
+                &blobs,
+                &edited_at,
+            )
+            .await?
+            {
                 counts.attachments += 1;
-                if o.cover_sha256.as_deref() == Some(x.sha256.as_str()) { cover = Some(att_id); }
+                if o.cover_sha256.as_deref() == Some(x.sha256.as_str()) {
+                    cover = Some(att_id);
+                }
             }
         }
         if cover.is_none() {
@@ -548,18 +773,30 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
             }
         }
         if let Some(c) = cover {
-            sqlx::query("UPDATE objects SET cover_attachment_id = $1 WHERE id = $2 AND deleted_at IS NULL").bind(c).bind(object_id).execute(&mut *tx).await?;
+            sqlx::query(
+                "UPDATE objects SET cover_attachment_id = $1 WHERE id = $2 AND deleted_at IS NULL",
+            )
+            .bind(c)
+            .bind(object_id)
+            .execute(&mut *tx)
+            .await?;
             // A real change from the create above's NULL, so it gets its own `set` -- not
             // folded into `record_create`, which only ever describes the row as it was
             // when it was first written.
             record::record_update(
-                &mut tx, user.id, Entity::Object, &object_uuid, &[("cover_attachment_id", json!(c))],
+                &mut tx,
+                user.id,
+                Entity::Object,
+                &object_uuid,
+                &[("cover_attachment_id", json!(c))],
                 &edited_at,
             )
             .await?;
         }
         for r in &o.reminders {
-            let done_activity_id = r.done_activity_index.and_then(|i| activity_ids.get(i).copied());
+            let done_activity_id = r
+                .done_activity_index
+                .and_then(|i| activity_ids.get(i).copied());
             let reminder_uuid = uuid::Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit) \
@@ -570,7 +807,14 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
                 .bind(&reminder_uuid)
                 .bind(&r.kind).bind(r.every_n).bind(&r.every_unit)
                 .execute(&mut *tx).await?;
-            record::record_create(&mut tx, user.id, Entity::Reminder, &reminder_uuid, &edited_at).await?;
+            record::record_create(
+                &mut tx,
+                user.id,
+                Entity::Reminder,
+                &reminder_uuid,
+                &edited_at,
+            )
+            .await?;
             counts.reminders += 1;
         }
     }
@@ -587,7 +831,10 @@ async fn import(user: AuthUser, State(state): State<App>, body: Bytes) -> Result
 fn validate_import(data: &Export) -> Result<(), AppError> {
     // Each archive type maps to itself here. Whether a type is kept or remapped at insert time
     // changes the uuid in an object's key, never whether the key resolves.
-    let known: HashMap<String, String> = archive_types(data)?.into_iter().map(|(uuid, _)| (uuid.clone(), uuid)).collect();
+    let known: HashMap<String, String> = archive_types(data)?
+        .into_iter()
+        .map(|(uuid, _)| (uuid.clone(), uuid))
+        .collect();
     for (oi, o) in data.objects.iter().enumerate() {
         // `resolve_type` is pure, so calling it again at insert time (the loop in `import`)
         // reaches the same answer; computed once here so `obj_input` and `object_stub` below
@@ -608,50 +855,110 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             tags: Some(o.tags.clone()),
             // An archive's value is always explicit, never "absent" -- there is no stored value
             // to keep it from, exactly like the trip fields on `ActivityInput` below.
-            energy_price_milli: Some(o.energy_price_milli), weight_unit: Some(o.weight_unit.clone()),
+            energy_price_milli: Some(o.energy_price_milli),
+            weight_unit: Some(o.weight_unit.clone()),
+            fuel_capacity_milli: Some(o.fuel_capacity_milli),
+            resource_unit: Some(o.resource_unit.clone().or_else(|| o.fuel_unit.clone())),
+            resource_kind: Some(o.resource_kind.clone()),
+            measurement_mode: Some(o.measurement_mode.clone()),
+            monthly_target_milli: Some(o.monthly_target_milli),
+            low_level_pct: Some(o.low_level_pct),
+            private: Some(o.private),
         };
-        obj_input.validate().map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
+        obj_input
+            .validate()
+            .map_err(|e| tag(e, &format!("object {oi} ({})", o.name)))?;
 
         // `ActivityInput::validate` only reads `object.counter_unit`; the rest of this
         // stand-in row is never inspected, since the real object doesn't exist yet.
         let object_stub = ObjectRow {
-            id: 0, user_id: 0, name: o.name.clone(), type_: ty,
-            counter_unit: o.counter_unit.clone(), fuel_unit: o.fuel_unit.clone(), description,
-            purchase_date: o.purchase_date.clone(), purchase_price_cents: o.purchase_price_cents,
-            archived_at: o.archived_at.clone(), cover_attachment_id: None, parent_id: None,
-            created_at: o.created_at.clone(), updated_at: o.created_at.clone(),
-            client_uuid: None, tags: "[]".into(), energy_price_milli: o.energy_price_milli, weight_unit: o.weight_unit.clone(),
+            id: 0,
+            user_id: 0,
+            name: o.name.clone(),
+            type_: ty,
+            counter_unit: o.counter_unit.clone(),
+            fuel_unit: o.fuel_unit.clone(),
+            description,
+            purchase_date: o.purchase_date.clone(),
+            purchase_price_cents: o.purchase_price_cents,
+            archived_at: o.archived_at.clone(),
+            cover_attachment_id: None,
+            parent_id: None,
+            created_at: o.created_at.clone(),
+            updated_at: o.created_at.clone(),
+            client_uuid: None,
+            tags: "[]".into(),
+            energy_price_milli: o.energy_price_milli,
+            weight_unit: o.weight_unit.clone(),
+            fuel_capacity_milli: o.fuel_capacity_milli,
+            resource_unit: o.resource_unit.clone().or_else(|| o.fuel_unit.clone()),
+            resource_kind: o.resource_kind.clone(),
+            measurement_mode: o.measurement_mode.clone(),
+            monthly_target_milli: o.monthly_target_milli,
+            low_level_pct: o.low_level_pct,
+            is_private: i64::from(o.private),
         };
 
         for (ai, a) in o.activities.iter().enumerate() {
             let mut act_input = ActivityInput {
-                date: a.date.clone(), category: a.category.clone(), title: a.title.clone(),
-                notes: a.notes.clone(), counter_value: a.counter_value, cost_cents: a.cost_cents,
-                quantity_milli: a.quantity_milli, client_op_id: None, edited_at: None, client_uuid: None,
+                date: a.date.clone(),
+                category: a.category.clone(),
+                title: a.title.clone(),
+                notes: a.notes.clone(),
+                counter_value: a.counter_value,
+                cost_cents: a.cost_cents,
+                quantity_milli: a.quantity_milli,
+                client_op_id: None,
+                edited_at: None,
+                client_uuid: None,
                 tags: Some(a.tags.clone()),
                 // An archive's value is always explicit, never "absent" -- there is no stored
                 // row to keep it from, so every trip field is wrapped in `Some`, exactly as a
                 // freshly deserialized REST create's would be.
-                start_counter: Some(a.start_counter), from_place: Some(a.from_place.clone()),
-                to_place: Some(a.to_place.clone()), duration_minutes: Some(a.duration_minutes),
+                start_counter: Some(a.start_counter),
+                from_place: Some(a.from_place.clone()),
+                to_place: Some(a.to_place.clone()),
+                duration_minutes: Some(a.duration_minutes),
                 battery_used_pct: Some(a.battery_used_pct),
-                charged_full: Some(a.charged_full), weight_grams: Some(a.weight_grams),
+                charged_full: Some(a.charged_full),
+                weight_grams: Some(a.weight_grams),
+                fuel_level_pct: Some(a.fuel_level_pct),
+                meter_reading_milli: Some(a.meter_reading_milli),
+                period_start: Some(a.period_start.clone()),
+                period_end: Some(a.period_end.clone()),
+                estimated: Some(a.estimated),
+                meter_reset: Some(a.meter_reset),
             };
-            act_input.validate(&object_stub)
-                .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title)))?;
+            act_input.validate(&object_stub).map_err(|e| {
+                tag(
+                    e,
+                    &format!("object {oi} ({}) activity {ai} ({})", o.name, a.title),
+                )
+            })?;
             for x in &a.attachments {
-                validate_attachment_kind(&x.kind)
-                    .map_err(|e| tag(e, &format!("object {oi} ({}) activity {ai} attachment", o.name)))?;
+                validate_attachment_kind(&x.kind).map_err(|e| {
+                    tag(
+                        e,
+                        &format!("object {oi} ({}) activity {ai} attachment", o.name),
+                    )
+                })?;
             }
         }
         for x in &o.attachments {
-            validate_attachment_kind(&x.kind).map_err(|e| tag(e, &format!("object {oi} ({}) attachment", o.name)))?;
+            validate_attachment_kind(&x.kind)
+                .map_err(|e| tag(e, &format!("object {oi} ({}) attachment", o.name)))?;
         }
         for (ri, r) in o.reminders.iter().enumerate() {
             let mut rem_input = ReminderInput {
-                title: r.title.clone(), notes: r.notes.clone(), due_date: r.due_date.clone(),
-                due_counter: r.due_counter, repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
-                kind: r.kind.clone(), every_n: r.every_n, every_unit: r.every_unit.clone(),
+                title: r.title.clone(),
+                notes: r.notes.clone(),
+                due_date: r.due_date.clone(),
+                due_counter: r.due_counter,
+                repeat_months: r.repeat_months,
+                repeat_counter: r.repeat_counter,
+                kind: r.kind.clone(),
+                every_n: r.every_n,
+                every_unit: r.every_unit.clone(),
                 client_uuid: None,
             };
             // `validate` fills in a missing start for a reading reminder, but the insert below
@@ -662,8 +969,22 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                     &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title),
                 ));
             }
-            rem_input.validate(if rem_input.kind == crate::domain::reminder::KIND_READING && object_stub.type_ == "body" { Some("weight") } else { o.counter_unit.as_deref() })
-                .map_err(|e| tag(e, &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title)))?;
+            rem_input
+                .validate(
+                    if rem_input.kind == crate::domain::reminder::KIND_READING
+                        && object_stub.type_ == "body"
+                    {
+                        Some("weight")
+                    } else {
+                        o.counter_unit.as_deref()
+                    },
+                )
+                .map_err(|e| {
+                    tag(
+                        e,
+                        &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title),
+                    )
+                })?;
         }
     }
     Ok(())
@@ -675,33 +996,51 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
 /// types cannot share one key, and nothing says which of them the archive's objects mean.
 fn archive_types(data: &Export) -> Result<Vec<(String, TypeInput)>, AppError> {
     let mut seen: HashMap<String, usize> = HashMap::new();
-    data.types.iter().enumerate().map(|(i, t)| {
-        let location = format!("type {i} ({})", t.name);
-        let uuid = super::normalize_client_uuid(Some(t.client_uuid.clone()))
-            .map_err(|e| tag(e, &location))?
-            .ok_or_else(|| AppError::BadRequest(format!("{location}: client_uuid is required")))?
-            .to_lowercase();
-        if let Some(first) = seen.insert(uuid.clone(), i) {
-            return Err(AppError::BadRequest(format!(
-                "{location}: client_uuid is already used by type {first} ({})", data.types[first].name)));
-        }
-        let input = TypeInput { name: t.name.clone(), icon: t.icon.clone(), categories: t.categories.clone(), counter_unit: t.counter_unit.clone() };
-        let input = custom_type::normalize(input).map_err(|e| AppError::BadRequest(format!("{location}: {e}")))?;
-        Ok((uuid, input))
-    }).collect()
+    data.types
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let location = format!("type {i} ({})", t.name);
+            let uuid = super::normalize_client_uuid(Some(t.client_uuid.clone()))
+                .map_err(|e| tag(e, &location))?
+                .ok_or_else(|| {
+                    AppError::BadRequest(format!("{location}: client_uuid is required"))
+                })?
+                .to_lowercase();
+            if let Some(first) = seen.insert(uuid.clone(), i) {
+                return Err(AppError::BadRequest(format!(
+                    "{location}: client_uuid is already used by type {first} ({})",
+                    data.types[first].name
+                )));
+            }
+            let input = TypeInput {
+                name: t.name.clone(),
+                icon: t.icon.clone(),
+                categories: t.categories.clone(),
+                counter_unit: t.counter_unit.clone(),
+            };
+            let input = custom_type::normalize(input)
+                .map_err(|e| AppError::BadRequest(format!("{location}: {e}")))?;
+            Ok((uuid, input))
+        })
+        .collect()
 }
 
 /// An archive's tags as the column stores them. `validate_import` has already run the same
 /// `normalize` over every object and entry (naming where a failure is), so the error arm here
 /// is only a fallback that keeps a bad value from ever being written.
 fn normalised_tags(input: &[String]) -> Result<String, AppError> {
-    tags::normalize(input).map(|t| tags::to_json(&t)).map_err(AppError::BadRequest)
+    tags::normalize(input)
+        .map(|t| tags::to_json(&t))
+        .map_err(AppError::BadRequest)
 }
 
 /// Mirrors the `attachments` table's `CHECK (kind IN ('photo', 'document'))`.
 fn validate_attachment_kind(kind: &str) -> Result<(), AppError> {
     if kind != "photo" && kind != "document" {
-        return Err(AppError::BadRequest(format!("attachment kind must be photo or document, got '{kind}'")));
+        return Err(AppError::BadRequest(format!(
+            "attachment kind must be photo or document, got '{kind}'"
+        )));
     }
     Ok(())
 }
@@ -720,20 +1059,35 @@ fn tag(e: AppError, location: &str) -> AppError {
 /// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
 /// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
 async fn import_attachment(
-    state: &App, tx: &mut sqlx::Transaction<'_, Any>, user_id: i64, parent: (i64, Option<i64>),
-    x: &AttachmentExport, blobs: &HashMap<String, Vec<u8>>, edited_at: &str,
+    state: &App,
+    tx: &mut sqlx::Transaction<'_, Any>,
+    user_id: i64,
+    parent: (i64, Option<i64>),
+    x: &AttachmentExport,
+    blobs: &HashMap<String, Vec<u8>>,
+    edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
     let (object_id, activity_id) = parent;
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
-        .bind(user_id).bind(&x.sha256).fetch_optional(&mut **tx).await?;
+    let existing: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
+            .bind(user_id)
+            .bind(&x.sha256)
+            .fetch_optional(&mut **tx)
+            .await?;
     let file_id = match existing {
         Some((id,)) => id,
         None => {
-            let Some(bytes) = blobs.get(&x.sha256) else { return Ok(None) };
+            let Some(bytes) = blobs.get(&x.sha256) else {
+                return Ok(None);
+            };
             let image = if x.mime.starts_with("image/") {
                 let b = bytes.clone();
-                tokio::task::spawn_blocking(move || files::process_image(&b)).await.map_err(|e| AppError::Internal(e.to_string()))?
-            } else { None };
+                tokio::task::spawn_blocking(move || files::process_image(&b))
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()))?
+            } else {
+                None
+            };
             state.storage.write_blob(&x.sha256, bytes).await?;
             let file_uuid = uuid::Uuid::new_v4().to_string();
             // The insert rides its own savepoint for the same reason `apply.rs`'s `set` arm
@@ -751,7 +1105,9 @@ async fn import_attachment(
             // documents removing it as a mutation test, and an unrescued arm here would have
             // sprung back to life as a real 500 the moment that lock came off, on the one
             // failure path this function could not otherwise exercise.
-            sqlx::query("SAVEPOINT logb_import_file").execute(&mut **tx).await?;
+            sqlx::query("SAVEPOINT logb_import_file")
+                .execute(&mut **tx)
+                .await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
@@ -762,8 +1118,12 @@ async fn import_attachment(
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
                 Ok((id,)) => {
-                    sqlx::query("RELEASE SAVEPOINT logb_import_file").execute(&mut **tx).await?;
-                    if let Some(img) = &image { state.storage.write_thumb(id, &img.thumb_jpeg).await?; }
+                    sqlx::query("RELEASE SAVEPOINT logb_import_file")
+                        .execute(&mut **tx)
+                        .await?;
+                    if let Some(img) = &image {
+                        state.storage.write_thumb(id, &img.thumb_jpeg).await?;
+                    }
                     record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
                     id
                 }
@@ -771,10 +1131,19 @@ async fn import_attachment(
                 // bytes for the same user trip UNIQUE(user_id, sha256). That's a cache hit,
                 // not an error -- reuse the row the winner just created, which was (or will
                 // be) logged by whichever request actually inserted it.
-                Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
-                    sqlx::query("ROLLBACK TO SAVEPOINT logb_import_file").execute(&mut **tx).await?;
-                    let (id,): (i64,) = sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
-                        .bind(user_id).bind(&x.sha256).fetch_one(&mut **tx).await?;
+                Err(e)
+                    if e.as_database_error()
+                        .is_some_and(|d| d.is_unique_violation()) =>
+                {
+                    sqlx::query("ROLLBACK TO SAVEPOINT logb_import_file")
+                        .execute(&mut **tx)
+                        .await?;
+                    let (id,): (i64,) =
+                        sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
+                            .bind(user_id)
+                            .bind(&x.sha256)
+                            .fetch_one(&mut **tx)
+                            .await?;
                     id
                 }
                 Err(e) => return Err(e.into()),

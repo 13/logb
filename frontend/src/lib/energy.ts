@@ -4,7 +4,6 @@
  * here is unit-testable on its own, like ./trip.ts.
  */
 import { perCounter } from './format';
-import type { FuelUnit } from './types';
 
 /**
  * The i18n key stem for wording that depends on the object's fuel unit: a kWh object "charges"
@@ -12,7 +11,7 @@ import type { FuelUnit } from './types';
  * "fills" ("Log fill" / "Tanken eintragen"). `null` falls back to the fill wording too: an object
  * with no fuel unit yet still offers the generic phrasing rather than showing nothing.
  */
-export function energyLabelKey(fuelUnit: FuelUnit): 'energy.charged' | 'energy.filled' {
+export function energyLabelKey(fuelUnit: string | null): 'energy.charged' | 'energy.filled' {
   return fuelUnit === 'kwh' ? 'energy.charged' : 'energy.filled';
 }
 

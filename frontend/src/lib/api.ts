@@ -1,5 +1,5 @@
 import { readonly, writable, type Readable } from 'svelte/store';
-import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, type OutboxStore, type QueuedOp } from './outbox';
+import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, removeQueuedObject, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
 import { path as routerPath } from './router';
@@ -349,6 +349,35 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   }
 }
 
+/** Creates an object durably while offline. Objects use `client_uuid` for idempotency (activity
+ * creates use `client_op_id`), so this has its own small wrapper and replay kind. */
+export async function createObjectQueued<T>(body: Record<string, unknown>, tempId: number): Promise<T | null> {
+  const id = newOpId();
+  const userId = currentUserId ?? undefined;
+  try {
+    return await api<T>('POST', '/objects', { ...body, client_uuid: id });
+  } catch (e) {
+    if (isRejection(e) && !isUnauthenticated(e)) throw e;
+    try {
+      await enqueue(store, { id, kind: 'object.create', path: '/objects', body, tempId, attempts: 0, userId });
+    } catch {
+      throw new Error('outbox.queue-failed');
+    }
+    return null;
+  }
+}
+
+export async function createReminderQueued<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
+  const id = newOpId();
+  const userId = currentUserId ?? undefined;
+  try { return await api<T>('POST', path, { ...body, client_uuid: id }); }
+  catch (e) {
+    if (isRejection(e) && !isUnauthenticated(e)) throw e;
+    await enqueue(store, { id, kind: 'reminder.create', path, body, attempts: 0, userId });
+    return null;
+  }
+}
+
 /**
  * PATCH that survives a dead connection, for an edit to a row the server already has. Resolves
  * `true` when the server took it, `false` when it only reached the queue.
@@ -561,6 +590,14 @@ async function doFlushOutbox(): Promise<void> {
         const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
         return out ?? null;
       }
+      if (op.kind === 'object.create') {
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        return out ?? null;
+      }
+      if (op.kind === 'reminder.create') {
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        return out ?? null;
+      }
       if (op.kind === 'activity.update') {
         // Replaying it twice is harmless: the second arrives with the same `edited_at`, which
         // does not beat the clock the first one left behind, so nothing changes.
@@ -645,6 +682,19 @@ export async function pendingActivityOps(objectId: number, activityIds: number[]
 
 export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
   return (await store.all()).filter((o) => !o.dead && o.path === path && isOurs(o));
+}
+
+/** Object creates waiting for this user's next successful connection, oldest first. */
+export async function pendingObjectOps(): Promise<QueuedOp[]> {
+  return (await ourStore().all()).filter((o) => !o.dead && o.kind === 'object.create');
+}
+
+export async function updateQueuedObject(tempId: number, body: Record<string, unknown>): Promise<boolean> {
+  return outboxLock.run(() => updateQueuedObjectBody(store, tempId, body));
+}
+
+export async function cancelQueuedObject(tempId: number): Promise<boolean> {
+  return outboxLock.run(() => removeQueuedObject(store, tempId));
 }
 
 /**

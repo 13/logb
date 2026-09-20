@@ -12,13 +12,13 @@
   import { foldReadings, readingSpan } from './timeline-fold';
   import { placesLabel, spanLabel, tripDistance, formatDuration } from './trip';
   import { categoriesFor, customTypes } from './type-registry';
-  import { CATEGORIES, type Activity, type Category, type CounterUnit, type FuelUnit, type ObjectType } from './types';
+  import { CATEGORIES, type Activity, type Category, type CounterUnit, type ResourceUnit, type ObjectType } from './types';
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
   import { tagColorIndex } from './tags';
 
   let {
-    objectId, type, activities, total, weightUnit = 'kg', loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, energyRate = null,
+    objectId, type, activities, total, weightUnit = 'kg', loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, resourceKind = null, energyRate = null,
     category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
   }:
     {
@@ -35,7 +35,8 @@
       tagFilter?: string | null; titleFilter?: string | null;
       /** The object's fuel unit, for a fuel row's amount and the empty-state log button's
        *  wording (`energyLabelKey`); `null` on an object with none. */
-      fuelUnit?: FuelUnit;
+      fuelUnit?: ResourceUnit;
+      resourceKind?: string | null;
       /** The object's `cost_per_counter_milli` (see EnergyOut), loaded by ObjectDetail alongside
        *  the Info tab's Energy section rather than fetched here per row; `null` when it is not
        *  known yet, or genuinely not computable, in which case a trip row shows no cost at all. */
@@ -56,7 +57,7 @@
   // like every other category chip here (offered by the type/unit, not only once something of
   // that kind exists).
   const chipCategories = $derived(
-    [...categoriesFor(type, $customTypes, undefined, unit), ...CATEGORIES.filter((c) => present.has(c))]
+    [...categoriesFor(type, $customTypes, undefined, unit, fuelUnit, resourceKind), ...CATEGORIES.filter((c) => present.has(c))]
       .filter((c, i, all) => all.indexOf(c) === i),
   );
   /** Which folded runs of readings are open. */
@@ -117,7 +118,7 @@
       <p>{$t('timeline.empty')}</p>
       {#if onlog}<button class="primary" onclick={() => onlog()}>+ {$t('timeline.log')}</button>{/if}
       {#if ontriplog}<button class="ghost" onclick={() => ontriplog()}>+ {$t('trip.log')}</button>{/if}
-      {#if onchargelog}<button class="ghost" onclick={() => onchargelog()}>+ {$t(`${chargeStem}-log`)}</button>{/if}
+      {#if onchargelog}<button class="ghost" onclick={() => onchargelog()}>+ {resourceKind === 'water' ? $t('water.log') : $t(`${chargeStem}-log`)}</button>{/if}
     {:else}
       <p>{$t('timeline.none-in-filter')}</p>
     {/if}
@@ -194,7 +195,7 @@
                   ].filter((s) => s !== null).join(' · ')}
                 </div>
               {/if}
-            {:else if a.category === 'fuel'}
+            {:else if a.category === 'fuel' || a.category === 'usage'}
               <!-- Counter first (a charge/fill marks the odometer like any reading), then "full"
                    when it topped up, the amount, and the cost -- see the design spec's own
                    example row. -->
@@ -205,6 +206,9 @@
                 <!-- A bare number, not an invented "l"/"gal", once the object declares no fuel
                      unit at all -- `quantity` already treats a `null` unit that way. -->
                 {#if a.quantity_milli !== null} · {quantity(a.quantity_milli, fuelUnit ? fuelUnitLabel(fuelUnit) : null, $locale)}{/if}
+                {#if a.meter_reading_milli != null} · {$t('water.meter-reading')}: {quantity(a.meter_reading_milli, fuelUnit ? fuelUnitLabel(fuelUnit) : null, $locale)}{/if}
+                {#if a.estimated} · {$t('water.estimated-short')}{/if}
+                {#if a.fuel_level_pct != null} · {$t('activity.fuel-level-value', { pct: a.fuel_level_pct })}{/if}
                 {#if a.cost_cents !== null} · {money(a.cost_cents, $currency, $locale)}{/if}
               </div>
             {:else}

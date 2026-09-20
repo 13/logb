@@ -39,9 +39,14 @@ pub struct NotificationsOut {
 async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
     let (url, format): (Option<String>, String) =
         sqlx::query_as("SELECT notify_url, notify_format FROM users WHERE id = $1")
-            .bind(user_id).fetch_one(&state.db).await?;
-    let (push_devices,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM push_subscriptions WHERE user_id = $1")
-        .bind(user_id).fetch_one(&state.db).await?;
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
+    let (push_devices,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM push_subscriptions WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
     let kp = push::key_pair(state).await?;
     Ok(NotificationsOut {
         url,
@@ -53,7 +58,10 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
     })
 }
 
-async fn read(user: AuthUser, State(state): State<App>) -> Result<Json<NotificationsOut>, AppError> {
+async fn read(
+    user: AuthUser,
+    State(state): State<App>,
+) -> Result<Json<NotificationsOut>, AppError> {
     Ok(Json(out(&state, user.id).await?))
 }
 
@@ -76,7 +84,9 @@ fn text_format() -> String {
 /// answers is shown back to anyone, which is what keeps this from being a way to read internal
 /// services.
 pub(crate) fn validate_webhook(raw: Option<&str>) -> Result<Option<String>, AppError> {
-    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else { return Ok(None) };
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
     let bad = || AppError::BadRequest("url must be an http or https address".into());
     if raw.len() > 2000 {
         return Err(bad());
@@ -88,13 +98,21 @@ pub(crate) fn validate_webhook(raw: Option<&str>) -> Result<Option<String>, AppE
     Ok(Some(raw.to_string()))
 }
 
-async fn write(user: AuthUser, State(state): State<App>, Json(body): Json<NotificationsIn>) -> Result<Json<NotificationsOut>, AppError> {
+async fn write(
+    user: AuthUser,
+    State(state): State<App>,
+    Json(body): Json<NotificationsIn>,
+) -> Result<Json<NotificationsOut>, AppError> {
     let url = validate_webhook(body.url.as_deref())?;
     if !matches!(body.format.as_str(), "json" | "text") {
         return Err(AppError::BadRequest("format must be json or text".into()));
     }
     sqlx::query("UPDATE users SET notify_url = $1, notify_format = $2 WHERE id = $3")
-        .bind(&url).bind(&body.format).bind(user.id).execute(&state.db).await?;
+        .bind(&url)
+        .bind(&body.format)
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
     Ok(Json(out(&state, user.id).await?))
 }
 
@@ -111,7 +129,9 @@ pub struct TestOut {
 async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>, AppError> {
     let (url, format): (Option<String>, String) =
         sqlx::query_as("SELECT notify_url, notify_format FROM users WHERE id = $1")
-            .bind(user.id).fetch_one(&state.db).await?;
+            .bind(user.id)
+            .fetch_one(&state.db)
+            .await?;
     let digest = notify::test_digest(&user.lang);
     let webhook = match url {
         Some(url) => Some(match notify::post(&url, &format, &digest).await {
@@ -120,9 +140,19 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
         }),
         None => None,
     };
-    let (push_sent, push_failed) =
-        notify::push_to(&state, user.id, &digest.title, &digest.message, "/settings/notifications").await?;
-    Ok(Json(TestOut { webhook, push_sent, push_failed }))
+    let (push_sent, push_failed) = notify::push_to(
+        &state,
+        user.id,
+        &digest.title,
+        &digest.message,
+        "/settings/notifications",
+    )
+    .await?;
+    Ok(Json(TestOut {
+        webhook,
+        push_sent,
+        push_failed,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -137,7 +167,11 @@ pub struct SubscriptionKeys {
     pub auth: String,
 }
 
-async fn subscribe(user: AuthUser, State(state): State<App>, Json(body): Json<SubscriptionIn>) -> Result<StatusCode, AppError> {
+async fn subscribe(
+    user: AuthUser,
+    State(state): State<App>,
+    Json(body): Json<SubscriptionIn>,
+) -> Result<StatusCode, AppError> {
     let sub = Subscription {
         endpoint: body.endpoint.trim().to_string(),
         p256dh: body.keys.p256dh.trim().to_string(),
@@ -162,8 +196,15 @@ pub struct EndpointIn {
 }
 
 /// Idempotent, like `unsnooze`: an endpoint that is already gone is the state asked for.
-async fn unsubscribe(user: AuthUser, State(state): State<App>, Json(body): Json<EndpointIn>) -> Result<StatusCode, AppError> {
+async fn unsubscribe(
+    user: AuthUser,
+    State(state): State<App>,
+    Json(body): Json<EndpointIn>,
+) -> Result<StatusCode, AppError> {
     sqlx::query("DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2")
-        .bind(body.endpoint.trim()).bind(user.id).execute(&state.db).await?;
+        .bind(body.endpoint.trim())
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

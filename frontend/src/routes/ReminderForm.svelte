@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import DateInput from '../lib/DateInput.svelte';
-  import { api } from '../lib/api';
+  import { api, createReminderQueued } from '../lib/api';
   import { go, back } from '../lib/router';
   import { t } from '../i18n';
   import { emptyReminder, readingReminder, reminderBody, toReminderInput, validateReminder } from '../lib/reminder-form';
@@ -59,7 +59,7 @@
     busy = true; error = '';
     try {
       if (rid) await api('PATCH', `/reminders/${rid}`, body);
-      else await api('POST', `/objects/${oid}/reminders`, body);
+      else await createReminderQueued(`/objects/${oid}/reminders`, body as unknown as Record<string, unknown>);
       go(`/objects/${oid}?tab=reminders`, true);
     } catch (err) { error = (err as Error).message; } finally { busy = false; }
   }

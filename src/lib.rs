@@ -18,21 +18,21 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 
+use axum::http::{header, HeaderName, HeaderValue, Request};
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::Router;
 use config::Config;
+use rand::RngExt;
 use state::{App, AppState};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use axum::http::{header, HeaderName, HeaderValue, Request};
-use axum::middleware::Next;
-use axum::response::Response;
-use rand::RngExt;
-use tracing::Instrument;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
+use tracing::Instrument;
 
 /// Baseline response headers for everything LogB serves.
 ///
@@ -43,7 +43,8 @@ use tower_http::trace::TraceLayer;
 /// The page policy allows nothing off-origin: the SPA is a self-contained bundle with no CDN,
 /// no analytics and no remote fonts. `style-src` keeps `'unsafe-inline'` because Svelte emits
 /// inline `style` attributes; scripts have no such exemption.
-const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; \
+const CSP: &str =
+    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; \
 script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; \
 frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
@@ -60,7 +61,11 @@ async fn request_id(mut req: Request<axum::body::Body>, next: Next) -> Response 
         .headers()
         .get(&REQUEST_ID)
         .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty() && v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|v| {
+            !v.is_empty()
+                && v.len() <= 64
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
         .map(str::to_owned)
         .unwrap_or_else(|| {
             let mut bytes = [0u8; 8];
@@ -91,7 +96,7 @@ async fn probe(url: &str, data_dir: &Path) -> Result<(), db::BoxError> {
         Ok(conn) => {
             let _ = conn.close().await;
             Ok(())
-        },
+        }
         Err(e) => Err(refuse_unreachable(data_dir, url, &e.to_string())),
     }
 }
@@ -175,9 +180,15 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     if pointed {
         probe(&url, &config.data_dir).await?;
     }
-    let db = db::connect_with_pool_size(&url, config.db_pool_size).await.map_err(|e| {
-        if pointed { refuse_unreachable(&config.data_dir, &url, &e.to_string()) } else { e }
-    })?;
+    let db = db::connect_with_pool_size(&url, config.db_pool_size)
+        .await
+        .map_err(|e| {
+            if pointed {
+                refuse_unreachable(&config.data_dir, &url, &e.to_string())
+            } else {
+                e
+            }
+        })?;
     if pointed {
         let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
             .fetch_one(&db)
@@ -238,10 +249,22 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     };
     let router = base
         .layer(axum::middleware::from_fn(request_id))
-        .layer(SetResponseHeaderLayer::if_not_present(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP)))
-        .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
         .with_state(state.clone());
     Ok((router, state))
 }

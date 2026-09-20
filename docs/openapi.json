@@ -1835,13 +1835,24 @@
             "name": "months",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 36, "default": 12 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36,
+              "default": 12
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Household heating fuel usage",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FuelUsage" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FuelUsage"
+                }
+              }
+            }
           }
         }
       }
@@ -2501,6 +2512,37 @@
           }
         }
       }
+    },
+    "/stats/water": {
+      "get": {
+        "summary": "Household monthly water consumption",
+        "description": "Combines billing-period usage with differences between cumulative meter readings. Volumes are normalized to thousandths of a litre.",
+        "parameters": [
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 36,
+              "default": 12
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Household water usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaterUsage"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2706,6 +2748,7 @@
           "inspection",
           "modification",
           "fuel",
+          "usage",
           "other",
           "symptom",
           "treatment",
@@ -3006,6 +3049,76 @@
               "lb"
             ],
             "description": "Preferred weight display unit. Defaults to kg on create; omitted on PATCH keeps the current unit. Changing units does not alter stored grams."
+          },
+          "fuel_capacity_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "Liquid tank capacity in thousandths of fuel_unit. Only valid with l or gal."
+          },
+          "resource_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "l",
+              "gal",
+              "kwh",
+              "m3",
+              null
+            ]
+          },
+          "resource_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "electricity",
+              "heating_fuel",
+              "vehicle_fuel",
+              "water",
+              null
+            ]
+          },
+          "measurement_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "usage",
+              "meter",
+              null
+            ]
+          },
+          "monthly_target_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1
+          },
+          "low_level_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "private": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
           }
         }
       },
@@ -3165,6 +3278,72 @@
               "lb"
             ],
             "description": "Preferred weight display unit. Defaults to kg on create; omitted on PATCH keeps the current unit. Changing units does not alter stored grams."
+          },
+          "fuel_capacity_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "Liquid tank capacity in thousandths of fuel_unit. Three-state on PATCH: omit to keep, null to clear, or send a positive value. Only valid with l or gal."
+          },
+          "resource_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "l",
+              "gal",
+              "kwh",
+              "m3",
+              null
+            ]
+          },
+          "resource_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "electricity",
+              "heating_fuel",
+              "vehicle_fuel",
+              "water",
+              null
+            ]
+          },
+          "measurement_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "usage",
+              "meter",
+              null
+            ]
+          },
+          "monthly_target_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1
+          },
+          "low_level_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "private": {
+            "type": "boolean"
           }
         }
       },
@@ -3304,6 +3483,49 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "Required on weight entries and absent on other categories. A measurement, never a cumulative counter. Omitted on PATCH preserves the stored value."
+          },
+          "fuel_level_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Observed remaining tank level. Present only on fuel entries whose object uses l or gal."
+          },
+          "meter_reading_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "period_start": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period_end": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimated": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "meter_reset": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
           }
         }
       },
@@ -3426,6 +3648,49 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "Required on weight entries and absent on other categories. A measurement, never a cumulative counter. Omitted on PATCH preserves the stored value."
+          },
+          "fuel_level_pct": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Observed remaining liquid-tank level. Three-state on PATCH: omit to keep, null to clear, or send 0-100."
+          },
+          "meter_reading_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "period_start": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period_end": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimated": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "meter_reset": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
           }
         }
       },
@@ -4262,46 +4527,194 @@
       },
       "EnergyUsage": {
         "type": "object",
-        "required": ["months", "current_kwh_milli", "previous_kwh_milli"],
+        "required": [
+          "months",
+          "current_kwh_milli",
+          "previous_kwh_milli",
+          "target_kwh_milli"
+        ],
         "properties": {
           "months": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/EnergyUsageMonth" }
+            "items": {
+              "$ref": "#/components/schemas/EnergyUsageMonth"
+            }
           },
-          "current_kwh_milli": { "type": "integer", "format": "int64" },
-          "previous_kwh_milli": { "type": "integer", "format": "int64" }
+          "current_kwh_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_kwh_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "target_kwh_milli": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       },
       "EnergyUsageMonth": {
         "type": "object",
-        "required": ["month", "kwh_milli", "charges", "objects"],
+        "required": [
+          "month",
+          "kwh_milli",
+          "charges",
+          "objects"
+        ],
         "properties": {
-          "month": { "type": "string", "format": "month" },
-          "kwh_milli": { "type": "integer", "format": "int64" },
-          "charges": { "type": "integer", "format": "int64" },
-          "objects": { "type": "integer", "format": "int64" }
+          "month": {
+            "type": "string",
+            "format": "month"
+          },
+          "kwh_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "charges": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "objects": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       },
       "FuelUsage": {
         "type": "object",
-        "required": ["months", "current_liters_milli", "previous_liters_milli", "current_gallons_milli", "previous_gallons_milli"],
+        "required": [
+          "months",
+          "current_liters_milli",
+          "previous_liters_milli",
+          "current_gallons_milli",
+          "previous_gallons_milli",
+          "levels"
+        ],
         "properties": {
-          "months": { "type": "array", "items": { "$ref": "#/components/schemas/FuelUsageMonth" } },
-          "current_liters_milli": { "type": "integer", "format": "int64" },
-          "previous_liters_milli": { "type": "integer", "format": "int64" },
-          "current_gallons_milli": { "type": "integer", "format": "int64" },
-          "previous_gallons_milli": { "type": "integer", "format": "int64" }
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FuelUsageMonth"
+            }
+          },
+          "current_liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "current_gallons_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_gallons_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FuelTankLevel"
+            }
+          }
+        }
+      },
+      "FuelTankLevel": {
+        "type": "object",
+        "required": [
+          "object_id",
+          "object_name",
+          "unit",
+          "date",
+          "level_pct",
+          "capacity_milli",
+          "remaining_milli",
+          "low",
+          "estimated_days_remaining"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "l",
+              "gal"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "level_pct": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "capacity_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "remaining_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "low": {
+            "type": "boolean"
+          },
+          "estimated_days_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
         }
       },
       "FuelUsageMonth": {
         "type": "object",
-        "required": ["month", "liters_milli", "gallons_milli", "charges", "objects"],
+        "required": [
+          "month",
+          "liters_milli",
+          "gallons_milli",
+          "charges",
+          "objects"
+        ],
         "properties": {
-          "month": { "type": "string", "format": "month" },
-          "liters_milli": { "type": "integer", "format": "int64" },
-          "gallons_milli": { "type": "integer", "format": "int64" },
-          "charges": { "type": "integer", "format": "int64" },
-          "objects": { "type": "integer", "format": "int64" }
+          "month": {
+            "type": "string",
+            "format": "month"
+          },
+          "liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "gallons_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "charges": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "objects": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       },
       "Bucket": {
@@ -5116,19 +5529,156 @@
             "type": "integer"
           },
           "latest_grams": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "previous_grams": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "minimum_grams": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "maximum_grams": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "average_grams": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "WaterUsageMonth": {
+        "type": "object",
+        "required": [
+          "month",
+          "liters_milli",
+          "cost_cents",
+          "entries",
+          "estimated"
+        ],
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cost_cents": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "estimated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WaterObjectUsage": {
+        "type": "object",
+        "required": [
+          "object_id",
+          "object_name",
+          "liters_milli",
+          "target_liters_milli",
+          "unit",
+          "current_reading_milli"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "target_liters_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "l",
+              "gal",
+              "m3"
+            ]
+          },
+          "current_reading_milli": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "WaterUsage": {
+        "type": "object",
+        "required": [
+          "months",
+          "current_liters_milli",
+          "previous_liters_milli",
+          "current_cost_cents",
+          "daily_average_liters_milli",
+          "anomalies",
+          "objects"
+        ],
+        "properties": {
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaterUsageMonth"
+            }
+          },
+          "current_liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "previous_liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "current_cost_cents": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "daily_average_liters_milli": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "anomalies": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaterObjectUsage"
+            }
           }
         }
       }

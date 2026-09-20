@@ -37,7 +37,8 @@ describe('object types', () => {
     for (const t of OBJECT_TYPES) expect(typeIcon(t)).toBeTruthy();
     const specific = OBJECT_TYPES.filter((t) => t !== 'other');
     const reachable = new Set(specific.flatMap((t) => categoriesFor(t)));
-    for (const c of CATEGORIES.filter((c) => c !== 'trip')) {
+    // `usage`, like `trip`, is capability-derived: a resource kind/unit adds it.
+    for (const c of CATEGORIES.filter((c) => c !== 'trip' && c !== 'usage')) {
       expect(reachable, `no type but 'other' offers ${c}`).toContain(c);
     }
   });

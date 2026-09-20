@@ -101,20 +101,40 @@ fn binding(
 /// it, and whether a given column tolerates it is the schema's NOT NULL constraint to answer.
 fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), String> {
     let Binding::Text(text) = bound else {
-        let Binding::Integer(n) = bound else { return Ok(()) };
+        let Binding::Integer(n) = bound else {
+            return Ok(());
+        };
         // `repeat_months`/`repeat_counter` must be strictly positive -- see
         // `ReminderInput::validate` -- which is a stricter bound than "non-negative" and
         // therefore satisfies it too.
-        let must_be_positive =
-            matches!((entity, field), (Entity::Reminder, "repeat_months" | "repeat_counter" | "every_n"));
+        let must_be_positive = matches!(
+            (entity, field),
+            (
+                Entity::Reminder,
+                "repeat_months" | "repeat_counter" | "every_n"
+            )
+        );
         let non_negative = matches!(
             (entity, field),
-            (Entity::Object, "purchase_price_cents" | "energy_price_milli")
-                | (Entity::Activity, "cost_cents" | "counter_value" | "quantity_milli" | "start_counter")
-                | (Entity::Reminder, "due_counter")
+            (
+                Entity::Object,
+                "purchase_price_cents" | "energy_price_milli"
+            ) | (
+                Entity::Activity,
+                "cost_cents" | "counter_value" | "quantity_milli" | "start_counter"
+            ) | (Entity::Reminder, "due_counter")
         );
         if must_be_positive && *n <= 0 {
             return Err(format!("{field} must be > 0"));
+        }
+        if entity == Entity::Object && field == "fuel_capacity_milli" && *n <= 0 {
+            return Err("fuel_capacity_milli must be > 0".into());
+        }
+        if entity == Entity::Object && field == "monthly_target_milli" && *n <= 0 {
+            return Err("monthly_target_milli must be > 0".into());
+        }
+        if entity == Entity::Object && field == "low_level_pct" && !(0..=100).contains(n) {
+            return Err("low_level_pct must be between 0 and 100".into());
         }
         if non_negative && *n < 0 {
             return Err(format!("{field} must be >= 0"));
@@ -124,14 +144,30 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         if entity == Entity::Activity && field == "battery_used_pct" && !(0..=100).contains(n) {
             return Err("battery_used_pct must be between 0 and 100".into());
         }
+        if entity == Entity::Activity && field == "fuel_level_pct" && !(0..=100).contains(n) {
+            return Err("fuel_level_pct must be between 0 and 100".into());
+        }
         if entity == Entity::Activity && field == "duration_minutes" && !(1..=10080).contains(n) {
             return Err("duration_minutes must be between 1 and 10080".into());
         }
         // `charged_full` is a flag, not a free integer -- the same 0/1 bound
         // `ActivityInput::validate` enforces on the REST door.
-        if entity == Entity::Activity && field == "weight_grams" && !(1..=1_000_000_000).contains(n) { return Err("weight_grams must be between 1 and 1000000000".into()); }
+        if entity == Entity::Activity && field == "weight_grams" && !(1..=1_000_000_000).contains(n)
+        {
+            return Err("weight_grams must be between 1 and 1000000000".into());
+        }
         if entity == Entity::Activity && field == "charged_full" && !(0..=1).contains(n) {
             return Err("charged_full must be 0 or 1".into());
+        }
+        if matches!(
+            (entity, field),
+            (Entity::Object, "private") | (Entity::Activity, "estimated" | "meter_reset")
+        ) && !(0..=1).contains(n)
+        {
+            return Err(format!("{field} must be 0 or 1"));
+        }
+        if entity == Entity::Activity && field == "meter_reading_milli" && *n < 0 {
+            return Err("meter_reading_milli must be >= 0".into());
         }
         return Ok(());
     };
@@ -165,12 +201,33 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         // constraint" reason, not the specific one `ObjectInput::validate` gives the REST door
         // for the exact same mistake. Explicit arms here make the two doors agree word for word,
         // and stop depending on a constraint that is schema, not policy, to enforce it at all.
-        (Entity::Object, "weight_unit") if !matches!(text.as_str(), "kg" | "lb") => return Err("weight_unit must be kg or lb".into()),
+        (Entity::Object, "weight_unit") if !matches!(text.as_str(), "kg" | "lb") => {
+            return Err("weight_unit must be kg or lb".into())
+        }
         (Entity::Object, "counter_unit") if !matches!(text.as_str(), "km" | "mi" | "h") => {
             return Err("counter_unit must be km, mi, h or null".into());
         }
         (Entity::Object, "fuel_unit") if !matches!(text.as_str(), "l" | "gal" | "kwh") => {
             return Err("fuel_unit must be l, gal, kwh or null".into());
+        }
+        (Entity::Object, "resource_unit")
+            if !matches!(text.as_str(), "l" | "gal" | "kwh" | "m3") =>
+        {
+            return Err("resource_unit must be l, gal, kwh, m3 or null".into())
+        }
+        (Entity::Object, "resource_kind")
+            if !matches!(
+                text.as_str(),
+                "electricity" | "heating_fuel" | "vehicle_fuel" | "water"
+            ) =>
+        {
+            return Err("resource_kind is invalid".into())
+        }
+        (Entity::Object, "measurement_mode") if !matches!(text.as_str(), "usage" | "meter") => {
+            return Err("measurement_mode must be usage, meter or null".into())
+        }
+        (Entity::Activity, "period_start" | "period_end") => {
+            crate::api::objects::validate_date(text).map_err(|e| e.to_string())?;
         }
         _ => {}
     }
@@ -186,7 +243,10 @@ fn is_tags(entity: Entity, field: &str) -> bool {
 /// Whether `field` is a trip place, the other kind of field whose pushed text is rewritten --
 /// trimmed, blank becomes absent -- rather than only checked.
 fn is_place(entity: Entity, field: &str) -> bool {
-    matches!((entity, field), (Entity::Activity, "from_place" | "to_place"))
+    matches!(
+        (entity, field),
+        (Entity::Activity, "from_place" | "to_place")
+    )
 }
 
 /// A trip place's stored spelling: trimmed, `None` when what remains is blank -- the same rule
@@ -218,8 +278,11 @@ impl TripRow {
     /// Whether any of the five trip-only fields is stored -- the same test
     /// `ActivityInput::validate` names `has_trip_fields`, over the row instead of a REST body.
     fn has_trip_fields(&self) -> bool {
-        self.start_counter.is_some() || self.from_place.is_some() || self.to_place.is_some()
-            || self.duration_minutes.is_some() || self.battery_used_pct.is_some()
+        self.start_counter.is_some()
+            || self.from_place.is_some()
+            || self.to_place.is_some()
+            || self.duration_minutes.is_some()
+            || self.battery_used_pct.is_some()
     }
 }
 
@@ -243,9 +306,9 @@ pub fn canonical_value(
     value: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
     match (field, value) {
-        (Some(field), Some(serde_json::Value::String(text))) if is_tags(entity, field) => {
-            Some(serde_json::Value::String(canonical_tags(&text).unwrap_or(text)))
-        }
+        (Some(field), Some(serde_json::Value::String(text))) if is_tags(entity, field) => Some(
+            serde_json::Value::String(canonical_tags(&text).unwrap_or(text)),
+        ),
         (Some(field), Some(serde_json::Value::String(text))) if is_place(entity, field) => {
             Some(canonical_place(&text).map_or(serde_json::Value::Null, serde_json::Value::String))
         }
@@ -255,8 +318,12 @@ pub fn canonical_value(
         (Some("name"), Some(serde_json::Value::String(text))) if entity == Entity::ObjectType => {
             Some(serde_json::Value::String(text.trim().to_string()))
         }
-        (Some("categories"), Some(serde_json::Value::String(text))) if entity == Entity::ObjectType => {
-            Some(serde_json::Value::String(canonical_categories(&text).unwrap_or(text)))
+        (Some("categories"), Some(serde_json::Value::String(text)))
+            if entity == Entity::ObjectType =>
+        {
+            Some(serde_json::Value::String(
+                canonical_categories(&text).unwrap_or(text),
+            ))
         }
         (_, value) => value,
     }
@@ -266,7 +333,8 @@ const CATEGORIES_SHAPE: &str = "categories must be JSON text holding an array of
 
 /// The stored spelling of a pushed object type `categories` value. `Err` is the rejection reason.
 fn canonical_categories(text: &str) -> Result<String, String> {
-    let parsed: Vec<String> = serde_json::from_str(text).map_err(|_| CATEGORIES_SHAPE.to_string())?;
+    let parsed: Vec<String> =
+        serde_json::from_str(text).map_err(|_| CATEGORIES_SHAPE.to_string())?;
     custom_type::normalize_categories(parsed)
         .map(|c| serde_json::to_string(&c).unwrap_or_else(|_| "[]".into()))
         .map_err(String::from)
@@ -289,16 +357,24 @@ struct TypeValue {
 ///
 /// Applied in push order inside the push's one transaction, so a later op in the same batch
 /// (`set object.type = custom:<uuid>`) already sees the row through `is_valid_for_user`.
-async fn create_type(tx: &mut sqlx::AnyConnection, user_id: i64, op: &Op) -> Result<Outcome, AppError> {
+async fn create_type(
+    tx: &mut sqlx::AnyConnection,
+    user_id: i64,
+    op: &Op,
+) -> Result<Outcome, AppError> {
     fn rejected(reason: impl Into<String>) -> Result<Outcome, AppError> {
-        Ok(Outcome::Rejected { reason: reason.into() })
+        Ok(Outcome::Rejected {
+            reason: reason.into(),
+        })
     }
     // Lower case only: the uuid becomes part of an object's `type`, which REST lower-cases, so
     // a mixed-case uuid would name a type no object could ever use.
     let shape_ok = crate::api::normalize_client_uuid(Some(op.entity_uuid.clone()))
         .is_ok_and(|u| u.as_deref() == Some(op.entity_uuid.as_str()));
     if !shape_ok || op.entity_uuid != op.entity_uuid.to_lowercase() {
-        return rejected("an object type's entity_uuid must be 8-64 lower-case characters with no whitespace");
+        return rejected(
+            "an object type's entity_uuid must be 8-64 lower-case characters with no whitespace",
+        );
     }
     let existing: Option<(i64, Option<String>)> =
         sqlx::query_as("SELECT user_id, deleted_at FROM object_types WHERE client_uuid = $1")
@@ -313,12 +389,21 @@ async fn create_type(tx: &mut sqlx::AnyConnection, user_id: i64, op: &Op) -> Res
         None => {}
     }
     let Some(value) = op.value.clone() else {
-        return rejected("an object type create carries name, icon, categories and counter_unit in value");
+        return rejected(
+            "an object type create carries name, icon, categories and counter_unit in value",
+        );
     };
     let Ok(value) = serde_json::from_value::<TypeValue>(value) else {
-        return rejected("an object type create carries name, icon, categories and counter_unit in value");
+        return rejected(
+            "an object type create carries name, icon, categories and counter_unit in value",
+        );
     };
-    let input = TypeInput { name: value.name, icon: value.icon, categories: value.categories, counter_unit: value.counter_unit };
+    let input = TypeInput {
+        name: value.name,
+        icon: value.icon,
+        categories: value.categories,
+        counter_unit: value.counter_unit,
+    };
     let input = match custom_type::normalize(input) {
         Ok(input) => input,
         Err(reason) => return rejected(reason),
@@ -337,7 +422,15 @@ async fn create_type(tx: &mut sqlx::AnyConnection, user_id: i64, op: &Op) -> Res
     // Every field was set by this create, at the op's own clock, for the reason
     // `record::record_create` gives: an unstamped field loses to nothing.
     for (field, _) in super::whitelist(Entity::ObjectType) {
-        record::stamp_field_clock(tx, Entity::ObjectType, &op.entity_uuid, field, &op.edited_at, &op.device_id).await?;
+        record::stamp_field_clock(
+            tx,
+            Entity::ObjectType,
+            &op.entity_uuid,
+            field,
+            &op.edited_at,
+            &op.device_id,
+        )
+        .await?;
     }
     Ok(Outcome::Accepted)
 }
@@ -358,7 +451,12 @@ async fn type_field(
         .bind(uuid)
         .fetch_one(&mut *tx)
         .await?;
-    let mut input = TypeInput { name, icon, categories: serde_json::from_str(&categories).unwrap_or_default(), counter_unit };
+    let mut input = TypeInput {
+        name,
+        icon,
+        categories: serde_json::from_str(&categories).unwrap_or_default(),
+        counter_unit,
+    };
     let text = match bound {
         Binding::Text(text) => Some(text),
         Binding::Null => None,
@@ -386,7 +484,9 @@ async fn type_field(
     Ok(Ok(match field {
         "name" => Binding::Text(input.name),
         "icon" => Binding::Text(input.icon),
-        "categories" => Binding::Text(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into())),
+        "categories" => {
+            Binding::Text(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into()))
+        }
         _ => input.counter_unit.map_or(Binding::Null, Binding::Text),
     }))
 }
@@ -402,9 +502,10 @@ async fn type_field(
 /// timestamp is parsed and re-emitted as UTC with fixed millisecond precision before it is
 /// compared with, or stored beside, any other.
 pub fn canonical_edited_at(raw: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+    chrono::DateTime::parse_from_rfc3339(raw).ok().map(|t| {
+        t.with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    })
 }
 
 /// Whether a database error is a constraint violation, i.e. the statement was refused for what
@@ -435,7 +536,8 @@ fn is_constraint_violation(err: &sqlx::Error) -> bool {
     if code.len() == PG_SQLSTATE_LEN {
         return code.starts_with(PG_INTEGRITY_CONSTRAINT_CLASS);
     }
-    code.parse::<i32>().is_ok_and(|code| code & 0xff == SQLITE_CONSTRAINT)
+    code.parse::<i32>()
+        .is_ok_and(|code| code & 0xff == SQLITE_CONSTRAINT)
 }
 
 /// SQLite's primary result code for a constraint violation.
@@ -458,7 +560,9 @@ pub async fn apply_op(
     op: &Op,
 ) -> Result<Outcome, AppError> {
     if op.entity_uuid.is_empty() || op.device_id.is_empty() {
-        return Ok(Outcome::Rejected { reason: "entity_uuid and device_id are required".into() });
+        return Ok(Outcome::Rejected {
+            reason: "entity_uuid and device_id are required".into(),
+        });
     }
 
     // The one create that inserts, and so the one op whose row need not exist yet.
@@ -468,32 +572,62 @@ pub async fn apply_op(
 
     // Does this uuid exist, and does it belong to the caller?
     let owner: Option<i64> = match op.entity {
-        Entity::Object => sqlx::query_scalar(
-            "SELECT user_id FROM objects WHERE client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
-        Entity::Activity => sqlx::query_scalar(
-            "SELECT o.user_id FROM activities a JOIN objects o ON o.id = a.object_id \
-             WHERE a.client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
-        Entity::Reminder => sqlx::query_scalar(
-            "SELECT o.user_id FROM reminders r JOIN objects o ON o.id = r.object_id \
-             WHERE r.client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
-        Entity::Attachment => sqlx::query_scalar(
-            "SELECT o.user_id FROM attachments t JOIN objects o ON o.id = t.object_id \
-             WHERE t.client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
-        Entity::File => sqlx::query_scalar(
-            "SELECT user_id FROM files WHERE client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
-        Entity::ObjectType => sqlx::query_scalar(
-            "SELECT user_id FROM object_types WHERE client_uuid = $1")
-            .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?,
+        Entity::Object => {
+            sqlx::query_scalar("SELECT user_id FROM objects WHERE client_uuid = $1")
+                .bind(&op.entity_uuid)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+        Entity::Activity => {
+            sqlx::query_scalar(
+                "SELECT o.user_id FROM activities a JOIN objects o ON o.id = a.object_id \
+             WHERE a.client_uuid = $1",
+            )
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        Entity::Reminder => {
+            sqlx::query_scalar(
+                "SELECT o.user_id FROM reminders r JOIN objects o ON o.id = r.object_id \
+             WHERE r.client_uuid = $1",
+            )
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        Entity::Attachment => {
+            sqlx::query_scalar(
+                "SELECT o.user_id FROM attachments t JOIN objects o ON o.id = t.object_id \
+             WHERE t.client_uuid = $1",
+            )
+            .bind(&op.entity_uuid)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        Entity::File => {
+            sqlx::query_scalar("SELECT user_id FROM files WHERE client_uuid = $1")
+                .bind(&op.entity_uuid)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+        Entity::ObjectType => {
+            sqlx::query_scalar("SELECT user_id FROM object_types WHERE client_uuid = $1")
+                .bind(&op.entity_uuid)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
     };
     match owner {
-        None => return Ok(Outcome::Rejected { reason: "unknown entity_uuid".into() }),
+        None => {
+            return Ok(Outcome::Rejected {
+                reason: "unknown entity_uuid".into(),
+            })
+        }
         Some(owner) if owner != user_id => {
-            return Ok(Outcome::Rejected { reason: "unknown entity_uuid".into() })
+            return Ok(Outcome::Rejected {
+                reason: "unknown entity_uuid".into(),
+            })
         }
         Some(_) => {}
     }
@@ -545,7 +679,9 @@ pub async fn apply_op(
                     .bind(user_id).bind(format!("{CUSTOM_PREFIX}{}", op.entity_uuid))
                     .fetch_one(&mut *tx).await?;
                 if in_use > 0 {
-                    return Ok(Outcome::Rejected { reason: format!("in use by {in_use} object(s)") });
+                    return Ok(Outcome::Rejected {
+                        reason: format!("in use by {in_use} object(s)"),
+                    });
                 }
             }
 
@@ -554,7 +690,10 @@ pub async fn apply_op(
             // `reminders`, `attachments` and `files` do not. The REST delete handlers stamp it
             // alongside `deleted_at` wherever the column exists, so this has to too, or a row
             // tombstoned over sync keeps whatever `updated_at` it had before the delete.
-            let has_updated_at = matches!(op.entity, Entity::Object | Entity::Activity | Entity::ObjectType);
+            let has_updated_at = matches!(
+                op.entity,
+                Entity::Object | Entity::Activity | Entity::ObjectType
+            );
             let sql = if has_updated_at {
                 format!(
                     "UPDATE {} SET deleted_at = $1, updated_at = $2 \
@@ -568,17 +707,31 @@ pub async fn apply_op(
                 )
             };
             let query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&now);
-            let query = if has_updated_at { query.bind(&now) } else { query };
+            let query = if has_updated_at {
+                query.bind(&now)
+            } else {
+                query
+            };
             query.bind(&op.entity_uuid).execute(&mut *tx).await?;
 
             let cascaded = match op.entity {
                 Entity::Object => record::cascade_object(&mut *tx, &op.entity_uuid, &now).await?,
-                Entity::Activity => record::cascade_activity(&mut *tx, user_id, &op.entity_uuid, &now, &op.edited_at).await?,
+                Entity::Activity => {
+                    record::cascade_activity(
+                        &mut *tx,
+                        user_id,
+                        &op.entity_uuid,
+                        &now,
+                        &op.edited_at,
+                    )
+                    .await?
+                }
                 // An attachment has no children to tombstone, but it is not a leaf reference-wise:
                 // it can be an object's cover, and `cover_attachment_id` is a plain INTEGER with
                 // no FK to enforce that by itself -- see `record::clear_cover_of`.
                 Entity::Attachment => {
-                    record::clear_cover_of(&mut *tx, user_id, &op.entity_uuid, &op.edited_at).await?;
+                    record::clear_cover_of(&mut *tx, user_id, &op.entity_uuid, &op.edited_at)
+                        .await?;
                     Vec::new()
                 }
                 // A reminder has no children of its own, and nothing else keeps a stray
@@ -586,7 +739,9 @@ pub async fn apply_op(
                 Entity::Reminder => Vec::new(),
                 // Nothing points at a type by id; objects that use it were refused above.
                 Entity::ObjectType => Vec::new(),
-                Entity::File => unreachable!("a file delete is refused above, before reaching this match"),
+                Entity::File => {
+                    unreachable!("a file delete is refused above, before reaching this match")
+                }
             };
             record::log_cascade(&mut *tx, user_id, &op.edited_at, &op.device_id, &cascaded).await?;
             Ok(Outcome::Accepted)
@@ -606,22 +761,29 @@ pub async fn apply_op(
             // deleted row is not a race last-write-wins decides, so it does not need
             // `field_clock`'s serialisation and a rejected op must not advance the clock or add
             // a `changes` row regardless.
-            let deleted_at: Option<(Option<String>,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT deleted_at FROM {} WHERE client_uuid = $1",
-                op.entity.table()
-            )))
-            .bind(&op.entity_uuid)
-            .fetch_optional(&mut *tx)
-            .await?;
+            let deleted_at: Option<(Option<String>,)> =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                    "SELECT deleted_at FROM {} WHERE client_uuid = $1",
+                    op.entity.table()
+                )))
+                .bind(&op.entity_uuid)
+                .fetch_optional(&mut *tx)
+                .await?;
             if deleted_at.and_then(|(d,)| d).is_some() {
-                return Ok(Outcome::Rejected { reason: "this item was deleted".into() });
+                return Ok(Outcome::Rejected {
+                    reason: "this item was deleted".into(),
+                });
             }
 
             let Some(field) = op.field.as_deref() else {
-                return Ok(Outcome::Rejected { reason: "set requires a field".into() });
+                return Ok(Outcome::Rejected {
+                    reason: "set requires a field".into(),
+                });
             };
             let Some(field_type) = syncable_field_type(op.entity, field) else {
-                return Ok(Outcome::Rejected { reason: format!("{field} is not settable") });
+                return Ok(Outcome::Rejected {
+                    reason: format!("{field} is not settable"),
+                });
             };
 
             // The value has to match the column before anything else looks at it: see
@@ -675,11 +837,18 @@ pub async fn apply_op(
             // regardless of timing, so an old, invalid op must not reach the one comparison
             // that only ever decides who wins a race between two values that were each fine on
             // their own.
-            if op.entity == Entity::Activity && matches!(
-                field,
-                "category" | "start_counter" | "from_place" | "to_place" | "duration_minutes"
-                    | "battery_used_pct" | "counter_value"
-            ) {
+            if op.entity == Entity::Activity
+                && matches!(
+                    field,
+                    "category"
+                        | "start_counter"
+                        | "from_place"
+                        | "to_place"
+                        | "duration_minutes"
+                        | "battery_used_pct"
+                        | "counter_value"
+                )
+            {
                 let stored: TripRow = sqlx::query_as(
                     "SELECT a.category, a.counter_value, a.start_counter, a.from_place, a.to_place, \
                      a.duration_minutes, a.battery_used_pct, o.counter_unit \
@@ -689,7 +858,8 @@ pub async fn apply_op(
                 .fetch_one(&mut *tx)
                 .await?;
 
-                const ONLY_A_TRIP: &str = "only a trip has start_counter, places, duration or battery";
+                const ONLY_A_TRIP: &str =
+                    "only a trip has start_counter, places, duration or battery";
                 const NEEDS_BOTH: &str = "a trip needs start_counter and counter_value";
                 const START_RANGE: &str = "start_counter must be between 0 and counter_value";
                 const NEEDS_KM_MI: &str = "a trip needs an object that counts km or mi";
@@ -701,15 +871,27 @@ pub async fn apply_op(
                     if let Binding::Text(new_category) = &bound {
                         if new_category == "trip" {
                             if !matches!(stored.counter_unit.as_deref(), Some("km") | Some("mi")) {
-                                return Ok(Outcome::Rejected { reason: NEEDS_KM_MI.into() });
+                                return Ok(Outcome::Rejected {
+                                    reason: NEEDS_KM_MI.into(),
+                                });
                             }
                             match (stored.start_counter, stored.counter_value) {
                                 (Some(s), Some(e)) if (0..=e).contains(&s) => {}
-                                (Some(_), Some(_)) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
-                                _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                                (Some(_), Some(_)) => {
+                                    return Ok(Outcome::Rejected {
+                                        reason: START_RANGE.into(),
+                                    })
+                                }
+                                _ => {
+                                    return Ok(Outcome::Rejected {
+                                        reason: NEEDS_BOTH.into(),
+                                    })
+                                }
                             }
                         } else if new_category != "session" && stored.has_trip_fields() {
-                            return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
+                            return Ok(Outcome::Rejected {
+                                reason: ONLY_A_TRIP.into(),
+                            });
                         }
                     }
                 } else if field == "counter_value" {
@@ -719,9 +901,18 @@ pub async fn apply_op(
                     // refuses to create in the first place.
                     if stored.category == "trip" {
                         match &bound {
-                            Binding::Integer(n) if stored.start_counter.is_some_and(|s| (0..=*n).contains(&s)) => {}
-                            Binding::Integer(_) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
-                            _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                            Binding::Integer(n)
+                                if stored.start_counter.is_some_and(|s| (0..=*n).contains(&s)) => {}
+                            Binding::Integer(_) => {
+                                return Ok(Outcome::Rejected {
+                                    reason: START_RANGE.into(),
+                                })
+                            }
+                            _ => {
+                                return Ok(Outcome::Rejected {
+                                    reason: NEEDS_BOTH.into(),
+                                })
+                            }
                         }
                     }
                 } else if stored.category != "trip" && stored.category != "session" {
@@ -729,19 +920,34 @@ pub async fn apply_op(
                     // non-trip row, unless they are being cleared -- clearing stays legal
                     // regardless of category, exactly as on the REST door.
                     if !matches!(&bound, Binding::Null) {
-                        return Ok(Outcome::Rejected { reason: ONLY_A_TRIP.into() });
+                        return Ok(Outcome::Rejected {
+                            reason: ONLY_A_TRIP.into(),
+                        });
                     }
                 } else if stored.category == "session" {
-                    if matches!(field, "start_counter" | "to_place" | "battery_used_pct") && !matches!(&bound, Binding::Null) {
-                        return Ok(Outcome::Rejected { reason: "a session only has a place and duration".into() });
+                    if matches!(field, "start_counter" | "to_place" | "battery_used_pct")
+                        && !matches!(&bound, Binding::Null)
+                    {
+                        return Ok(Outcome::Rejected {
+                            reason: "a session only has a place and duration".into(),
+                        });
                     }
                 } else if field == "start_counter" {
                     // On a trip row specifically: a trip may never lose its start either,
                     // mirroring `counter_value` above.
                     match &bound {
-                        Binding::Integer(n) if stored.counter_value.is_some_and(|e| (0..=e).contains(n)) => {}
-                        Binding::Integer(_) => return Ok(Outcome::Rejected { reason: START_RANGE.into() }),
-                        _ => return Ok(Outcome::Rejected { reason: NEEDS_BOTH.into() }),
+                        Binding::Integer(n)
+                            if stored.counter_value.is_some_and(|e| (0..=e).contains(n)) => {}
+                        Binding::Integer(_) => {
+                            return Ok(Outcome::Rejected {
+                                reason: START_RANGE.into(),
+                            })
+                        }
+                        _ => {
+                            return Ok(Outcome::Rejected {
+                                reason: NEEDS_BOTH.into(),
+                            })
+                        }
                     }
                 }
                 // The three other trip-only fields need no further check here on a trip row:
@@ -757,34 +963,127 @@ pub async fn apply_op(
             // list above: `charged_full` is not one of the trip-only fields that block's
             // catch-all (`stored.category != "trip"`) exists to guard, and it needs none of
             // that block's other state.
-            if op.entity == Entity::Activity && matches!(field, "category" | "weight_grams" | "counter_value" | "quantity_milli" | "cost_cents") {
+            if op.entity == Entity::Activity
+                && matches!(
+                    field,
+                    "category" | "weight_grams" | "counter_value" | "quantity_milli" | "cost_cents"
+                )
+            {
                 let (category, weight, counter, quantity, cost): (String, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
                     "SELECT category, weight_grams, counter_value, quantity_milli, cost_cents FROM activities WHERE client_uuid = $1")
                     .bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
                 let value = op.value.as_ref().unwrap_or(&serde_json::Value::Null);
-                let category = if field == "category" { value.as_str().unwrap_or("") } else { &category };
-                let weight = if field == "weight_grams" { value.as_i64() } else { weight };
-                let counter = if field == "counter_value" { value.as_i64() } else { counter };
-                let quantity = if field == "quantity_milli" { value.as_i64() } else { quantity };
-                let cost = if field == "cost_cents" { value.as_i64() } else { cost };
-                if (category == "weight" && (weight.is_none() || counter.is_some() || quantity.is_some() || cost.is_some())) || (category != "weight" && weight.is_some()) {
+                let category = if field == "category" {
+                    value.as_str().unwrap_or("")
+                } else {
+                    &category
+                };
+                let weight = if field == "weight_grams" {
+                    value.as_i64()
+                } else {
+                    weight
+                };
+                let counter = if field == "counter_value" {
+                    value.as_i64()
+                } else {
+                    counter
+                };
+                let quantity = if field == "quantity_milli" {
+                    value.as_i64()
+                } else {
+                    quantity
+                };
+                let cost = if field == "cost_cents" {
+                    value.as_i64()
+                } else {
+                    cost
+                };
+                if (category == "weight"
+                    && (weight.is_none()
+                        || counter.is_some()
+                        || quantity.is_some()
+                        || cost.is_some()))
+                    || (category != "weight" && weight.is_some())
+                {
                     return Ok(Outcome::Rejected { reason: "weight entries require weight_grams and cannot carry counters, fuel or costs".into() });
                 }
             }
             if op.entity == Entity::Activity && matches!(field, "category" | "charged_full") {
                 let (stored_category, stored_charged_full): (String, i64) = sqlx::query_as(
-                    "SELECT category, charged_full FROM activities WHERE client_uuid = $1")
-                    .bind(&op.entity_uuid)
-                    .fetch_one(&mut *tx)
-                    .await?;
+                    "SELECT category, charged_full FROM activities WHERE client_uuid = $1",
+                )
+                .bind(&op.entity_uuid)
+                .fetch_one(&mut *tx)
+                .await?;
                 if field == "charged_full" {
-                    if matches!(&bound, Binding::Integer(1)) && stored_category != "fuel" {
-                        return Ok(Outcome::Rejected { reason: crate::api::activities::CHARGE_FULL_ONLY.into() });
+                    if matches!(&bound, Binding::Integer(1))
+                        && !matches!(stored_category.as_str(), "fuel" | "usage")
+                    {
+                        return Ok(Outcome::Rejected {
+                            reason: crate::api::activities::CHARGE_FULL_ONLY.into(),
+                        });
                     }
                 } else if let Binding::Text(new_category) = &bound {
-                    if new_category != "fuel" && stored_charged_full == 1 {
-                        return Ok(Outcome::Rejected { reason: crate::api::activities::CHARGE_FULL_ONLY.into() });
+                    if !matches!(new_category.as_str(), "fuel" | "usage")
+                        && stored_charged_full == 1
+                    {
+                        return Ok(Outcome::Rejected {
+                            reason: crate::api::activities::CHARGE_FULL_ONLY.into(),
+                        });
                     }
+                }
+            }
+            if op.entity == Entity::Activity
+                && matches!(field, "category" | "fuel_level_pct" | "quantity_milli")
+            {
+                let (stored_category, stored_level, stored_quantity, fuel_unit, counter_unit): (String, Option<i64>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
+                    "SELECT a.category, a.fuel_level_pct, a.quantity_milli, o.fuel_unit, o.counter_unit FROM activities a JOIN objects o ON o.id = a.object_id WHERE a.client_uuid = $1")
+                    .bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
+                let new_category = if field == "category" {
+                    match &bound {
+                        Binding::Text(v) => v.as_str(),
+                        _ => stored_category.as_str(),
+                    }
+                } else {
+                    stored_category.as_str()
+                };
+                let new_level = if field == "fuel_level_pct" {
+                    match &bound {
+                        Binding::Integer(v) => Some(*v),
+                        Binding::Null => None,
+                        _ => stored_level,
+                    }
+                } else {
+                    stored_level
+                };
+                let new_quantity = if field == "quantity_milli" {
+                    match &bound {
+                        Binding::Integer(v) => Some(*v),
+                        Binding::Null => None,
+                        _ => stored_quantity,
+                    }
+                } else {
+                    stored_quantity
+                };
+                if new_level.is_some() && !matches!(new_category, "fuel" | "usage") {
+                    return Ok(Outcome::Rejected {
+                        reason: "only a fuel entry has fuel_level_pct".into(),
+                    });
+                }
+                if new_level.is_some() && !matches!(fuel_unit.as_deref(), Some("l") | Some("gal")) {
+                    return Ok(Outcome::Rejected {
+                        reason: "fuel_level_pct needs a liquid fuel unit".into(),
+                    });
+                }
+                if new_quantity.is_some() && !matches!(new_category, "fuel" | "usage") {
+                    return Ok(Outcome::Rejected {
+                        reason: "only a fuel entry has quantity_milli".into(),
+                    });
+                }
+                if new_quantity.is_some() && fuel_unit.is_none() && counter_unit.is_none() {
+                    return Ok(Outcome::Rejected {
+                        reason: "quantity_milli needs an object with a fuel or counter unit".into(),
+                    });
                 }
             }
 
@@ -795,8 +1094,10 @@ pub async fn apply_op(
             // PATCH body: a synced `set` touches one field at a time, so the other half of the
             // pair has to come from storage.
             if op.entity == Entity::Object && matches!(field, "energy_price_milli" | "fuel_unit") {
-                let (stored_fuel_unit, stored_price): (Option<String>, Option<i64>) = sqlx::query_as(
-                    "SELECT fuel_unit, energy_price_milli FROM objects WHERE client_uuid = $1")
+                let (stored_fuel_unit, stored_price): (Option<String>, Option<i64>) =
+                    sqlx::query_as(
+                        "SELECT fuel_unit, energy_price_milli FROM objects WHERE client_uuid = $1",
+                    )
                     .bind(&op.entity_uuid)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -811,13 +1112,65 @@ pub async fn apply_op(
                     });
                 }
             }
+            if op.entity == Entity::Object && matches!(field, "fuel_capacity_milli" | "fuel_unit") {
+                let (stored_fuel_unit, stored_capacity): (Option<String>, Option<i64>) =
+                    sqlx::query_as(
+                        "SELECT fuel_unit, fuel_capacity_milli FROM objects WHERE client_uuid = $1",
+                    )
+                    .bind(&op.entity_uuid)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let unit = if field == "fuel_unit" {
+                    match &bound {
+                        Binding::Text(v) => Some(v.as_str()),
+                        Binding::Null => None,
+                        _ => stored_fuel_unit.as_deref(),
+                    }
+                } else {
+                    stored_fuel_unit.as_deref()
+                };
+                let capacity = if field == "fuel_capacity_milli" {
+                    !matches!(&bound, Binding::Null)
+                } else {
+                    stored_capacity.is_some()
+                };
+                if capacity && !matches!(unit, Some("l") | Some("gal")) {
+                    return Ok(Outcome::Rejected {
+                        reason: "fuel_capacity_milli needs a liquid fuel unit".into(),
+                    });
+                }
+            }
+            if op.entity == Entity::Object && field == "fuel_unit" {
+                let current: Option<String> =
+                    sqlx::query_scalar("SELECT fuel_unit FROM objects WHERE client_uuid = $1")
+                        .bind(&op.entity_uuid)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                let next = match &bound {
+                    Binding::Text(v) => Some(v.as_str()),
+                    Binding::Null => None,
+                    _ => current.as_deref(),
+                };
+                if next != current.as_deref() {
+                    let has_history: Option<(i64,)> = sqlx::query_as(
+                        "SELECT a.id FROM activities a JOIN objects o ON o.id = a.object_id WHERE o.client_uuid = $1 AND a.deleted_at IS NULL AND (a.quantity_milli IS NOT NULL OR a.fuel_level_pct IS NOT NULL) LIMIT 1")
+                        .bind(&op.entity_uuid).fetch_optional(&mut *tx).await?;
+                    if has_history.is_some() {
+                        return Ok(Outcome::Rejected {
+                            reason: crate::api::objects::FUEL_UNIT_HISTORY_REJECTION.into(),
+                        });
+                    }
+                }
+            }
 
             // A type key needs the database: a built-in key, or one of the caller's own live types
             // -- including one a create earlier in this same push inserted, on this transaction.
             if op.entity == Entity::Object && field == "type" {
                 if let Binding::Text(key) = &bound {
                     if !crate::object_type::is_valid_for_user(&mut *tx, user_id, key).await? {
-                        return Ok(Outcome::Rejected { reason: crate::api::objects::TYPE_REJECTION.into() });
+                        return Ok(Outcome::Rejected {
+                            reason: crate::api::objects::TYPE_REJECTION.into(),
+                        });
                     }
                 }
             }
@@ -864,13 +1217,16 @@ pub async fn apply_op(
                         let is_cover: Option<(i64,)> = sqlx::query_as(
                             "SELECT o.id FROM objects o \
                              JOIN attachments a ON a.id = o.cover_attachment_id \
-                             WHERE a.client_uuid = $1 AND o.deleted_at IS NULL")
-                            .bind(&op.entity_uuid)
-                            .fetch_optional(&mut *tx).await?;
+                             WHERE a.client_uuid = $1 AND o.deleted_at IS NULL",
+                        )
+                        .bind(&op.entity_uuid)
+                        .fetch_optional(&mut *tx)
+                        .await?;
                         if is_cover.is_some() {
                             return Ok(Outcome::Rejected {
                                 reason: "kind cannot change away from photo while it is an \
-                                         object's cover".into(),
+                                         object's cover"
+                                    .into(),
                             });
                         }
                     }
@@ -889,29 +1245,42 @@ pub async fn apply_op(
             // clearing the reference is how a client removes a cover.
             if let Binding::Integer(referenced) = &bound {
                 let permitted: Option<i64> = match (op.entity, field) {
-                    (Entity::Object, "cover_attachment_id") => sqlx::query_scalar(
-                        "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
-                         WHERE a.id = $1 AND o.client_uuid = $2 AND a.deleted_at IS NULL")
-                        .bind(referenced).bind(&op.entity_uuid)
-                        .fetch_optional(&mut *tx).await?,
+                    (Entity::Object, "cover_attachment_id") => {
+                        sqlx::query_scalar(
+                            "SELECT a.id FROM attachments a JOIN objects o ON o.id = a.object_id \
+                         WHERE a.id = $1 AND o.client_uuid = $2 AND a.deleted_at IS NULL",
+                        )
+                        .bind(referenced)
+                        .bind(&op.entity_uuid)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                    }
                     // A parent is not "a row on the same object" but a row on the same
                     // ACCOUNT that must also not be inside this object's own subtree, so it
                     // goes through `record::parent_is_valid` -- the single copy of that rule
                     // the REST door uses too.
                     (Entity::Object, "parent_id") => {
-                        let object_id = record::id_of(&mut *tx, Entity::Object, &op.entity_uuid).await?;
-                        if record::parent_is_valid(&mut *tx, user_id, Some(object_id), *referenced).await? {
+                        let object_id =
+                            record::id_of(&mut *tx, Entity::Object, &op.entity_uuid).await?;
+                        if record::parent_is_valid(&mut *tx, user_id, Some(object_id), *referenced)
+                            .await?
+                        {
                             Some(*referenced)
                         } else {
                             None
                         }
                     }
-                    (Entity::Reminder, "done_activity_id") => sqlx::query_scalar(
-                        "SELECT act.id FROM activities act \
+                    (Entity::Reminder, "done_activity_id") => {
+                        sqlx::query_scalar(
+                            "SELECT act.id FROM activities act \
                          JOIN reminders r ON r.object_id = act.object_id \
-                         WHERE act.id = $1 AND r.client_uuid = $2 AND act.deleted_at IS NULL")
-                        .bind(referenced).bind(&op.entity_uuid)
-                        .fetch_optional(&mut *tx).await?,
+                         WHERE act.id = $1 AND r.client_uuid = $2 AND act.deleted_at IS NULL",
+                        )
+                        .bind(referenced)
+                        .bind(&op.entity_uuid)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                    }
                     _ => Some(*referenced),
                 };
                 if permitted.is_none() {
@@ -941,9 +1310,13 @@ pub async fn apply_op(
             // already held for the whole push.
             let stored: Option<(String, String)> = sqlx::query_as(
                 "SELECT edited_at, device_id FROM field_clock \
-                 WHERE entity = $1 AND entity_uuid = $2 AND field = $3")
-                .bind(op.entity.as_str()).bind(&op.entity_uuid).bind(field)
-                .fetch_optional(&mut *tx).await?;
+                 WHERE entity = $1 AND entity_uuid = $2 AND field = $3",
+            )
+            .bind(op.entity.as_str())
+            .bind(&op.entity_uuid)
+            .bind(field)
+            .fetch_optional(&mut *tx)
+            .await?;
 
             if let Some((stored_at, stored_device)) = &stored {
                 if !wins(&op.edited_at, &op.device_id, stored_at, stored_device) {
@@ -998,24 +1371,35 @@ pub async fn apply_op(
             //
             // The name is a literal, and one `set` op is never nested inside another, so a
             // single name cannot collide with itself.
-            sqlx::query("SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+            sqlx::query("SAVEPOINT logb_set_op")
+                .execute(&mut *tx)
+                .await?;
             match query.bind(&op.entity_uuid).execute(&mut *tx).await {
                 Ok(_) => {
-                    sqlx::query("RELEASE SAVEPOINT logb_set_op").execute(&mut *tx).await?;
-                },
+                    sqlx::query("RELEASE SAVEPOINT logb_set_op")
+                        .execute(&mut *tx)
+                        .await?;
+                }
                 Err(e) if is_constraint_violation(&e) => {
-                    sqlx::query("ROLLBACK TO SAVEPOINT logb_set_op").execute(&mut *tx).await?;
+                    sqlx::query("ROLLBACK TO SAVEPOINT logb_set_op")
+                        .execute(&mut *tx)
+                        .await?;
                     return Ok(Outcome::Rejected {
                         reason: format!("{field} violates a database constraint"),
                     });
-                },
+                }
                 // Not a constraint failure: a genuine fault, and the whole batch is rolled
                 // back with it, so the savepoint needs no unwinding of its own.
                 Err(e) => return Err(e.into()),
             }
 
             record::stamp_field_clock(
-                &mut *tx, op.entity, &op.entity_uuid, field, &op.edited_at, &op.device_id,
+                &mut *tx,
+                op.entity,
+                &op.entity_uuid,
+                field,
+                &op.edited_at,
+                &op.device_id,
             )
             .await?;
 
@@ -1030,12 +1414,22 @@ mod tests {
 
     #[test]
     fn a_newer_edit_wins() {
-        assert!(wins("2026-01-02T00:00:00Z", "phone", "2026-01-01T00:00:00Z", "desktop"));
+        assert!(wins(
+            "2026-01-02T00:00:00Z",
+            "phone",
+            "2026-01-01T00:00:00Z",
+            "desktop"
+        ));
     }
 
     #[test]
     fn an_older_edit_loses() {
-        assert!(!wins("2026-01-01T00:00:00Z", "phone", "2026-01-02T00:00:00Z", "desktop"));
+        assert!(!wins(
+            "2026-01-01T00:00:00Z",
+            "phone",
+            "2026-01-02T00:00:00Z",
+            "desktop"
+        ));
     }
 
     #[test]
@@ -1050,9 +1444,18 @@ mod tests {
         use serde_json::json;
         // An integer column takes an integer or null, and nothing else -- a string is what
         // SQLite would have stored as TEXT, making every later read of the row fail to decode.
-        assert_eq!(binding("counter_value", FieldType::Integer, Some(&json!(7))), Ok(Binding::Integer(7)));
-        assert_eq!(binding("counter_value", FieldType::Integer, None), Ok(Binding::Null));
-        assert_eq!(binding("counter_value", FieldType::Integer, Some(&json!(null))), Ok(Binding::Null));
+        assert_eq!(
+            binding("counter_value", FieldType::Integer, Some(&json!(7))),
+            Ok(Binding::Integer(7))
+        );
+        assert_eq!(
+            binding("counter_value", FieldType::Integer, None),
+            Ok(Binding::Null)
+        );
+        assert_eq!(
+            binding("counter_value", FieldType::Integer, Some(&json!(null))),
+            Ok(Binding::Null)
+        );
         for bad in [json!("abc"), json!(true), json!(1.5), json!([1]), json!({})] {
             assert_eq!(
                 binding("counter_value", FieldType::Integer, Some(&bad)),
@@ -1062,8 +1465,14 @@ mod tests {
         }
 
         // And the other direction: `true` in a TEXT column would have been stored as '1'.
-        assert_eq!(binding("name", FieldType::Text, Some(&json!("Golf"))), Ok(Binding::Text("Golf".into())));
-        assert_eq!(binding("name", FieldType::Text, Some(&json!(null))), Ok(Binding::Null));
+        assert_eq!(
+            binding("name", FieldType::Text, Some(&json!("Golf"))),
+            Ok(Binding::Text("Golf".into()))
+        );
+        assert_eq!(
+            binding("name", FieldType::Text, Some(&json!(null))),
+            Ok(Binding::Null)
+        );
         for bad in [json!(true), json!(7), json!(1.5), json!([1]), json!({})] {
             assert_eq!(
                 binding("name", FieldType::Text, Some(&bad)),
@@ -1076,6 +1485,9 @@ mod tests {
     #[test]
     fn a_replay_of_the_same_op_does_not_win() {
         let t = "2026-01-01T00:00:00Z";
-        assert!(!wins(t, "phone", t, "phone"), "identical edit is not newer than itself");
+        assert!(
+            !wins(t, "phone", t, "phone"),
+            "identical edit is not newer than itself"
+        );
     }
 }

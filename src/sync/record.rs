@@ -65,8 +65,10 @@ pub(crate) async fn uuid_of(
     id: i64,
 ) -> Result<String, AppError> {
     let sql = format!("SELECT client_uuid FROM {} WHERE id = $1", entity.table());
-    let uuid: Option<String> =
-        sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(id).fetch_one(&mut *tx).await?;
+    let uuid: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
     Ok(uuid.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
 }
 
@@ -79,8 +81,10 @@ pub async fn id_of(
     uuid: &str,
 ) -> Result<i64, AppError> {
     let sql = format!("SELECT id FROM {} WHERE client_uuid = $1", entity.table());
-    let id: Option<i64> =
-        sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(uuid).fetch_one(&mut *tx).await?;
+    let id: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(uuid)
+        .fetch_one(&mut *tx)
+        .await?;
     Ok(id.expect("every row has carried a client_uuid since migration 0007_sync.sql"))
 }
 
@@ -102,13 +106,18 @@ pub async fn parent_is_valid(
     candidate_parent_id: i64,
 ) -> Result<bool, AppError> {
     let exists: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
-        .bind(candidate_parent_id).bind(user_id)
-        .fetch_optional(&mut *tx).await?;
+        "SELECT id FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(candidate_parent_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if exists.is_none() {
         return Ok(false);
     }
-    let Some(object_id) = object_id else { return Ok(true) };
+    let Some(object_id) = object_id else {
+        return Ok(true);
+    };
 
     // Walk the candidate's own ancestor chain (itself, then its parent, then its parent's
     // parent, ...). If `object_id` ever appears in it, making the candidate `object_id`'s
@@ -175,29 +184,30 @@ async fn insert_change(
         "INSERT INTO changes \
          (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
           device_id, client_op_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
-        .bind(entity.as_str())
-        .bind(entity_uuid)
-        .bind(op.as_str())
-        .bind(field)
-        .bind(value)
-        .bind(edited_at)
-        .bind(crate::db::now())
-        .bind(user_id)
-        .bind(device_id)
-        // Fresh per row, exactly as `log_cascade` already does for a cascaded child: nothing
-        // a REST write does is idempotency-checked by client_op_id the way a pushed op is (the
-        // request itself is the client's only attempt), so there is no id to reuse here.
-        //
-        // That is also why this insert, unlike the near-identical one in `api::sync::push`,
-        // carries no `ON CONFLICT (user_id, client_op_id) DO NOTHING`. There, the client picks
-        // the id and can send it twice, so the clause is how the unique index -- rather than a
-        // read that can go stale between two statements -- decides whether the op has already
-        // been applied. Here the id is minted a line above and cannot collide with anything;
-        // the same clause would only be able to swallow a bug that produced one.
-        .bind(uuid::Uuid::new_v4().to_string())
-        .execute(&mut *tx)
-        .await?;
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+    )
+    .bind(entity.as_str())
+    .bind(entity_uuid)
+    .bind(op.as_str())
+    .bind(field)
+    .bind(value)
+    .bind(edited_at)
+    .bind(crate::db::now())
+    .bind(user_id)
+    .bind(device_id)
+    // Fresh per row, exactly as `log_cascade` already does for a cascaded child: nothing
+    // a REST write does is idempotency-checked by client_op_id the way a pushed op is (the
+    // request itself is the client's only attempt), so there is no id to reuse here.
+    //
+    // That is also why this insert, unlike the near-identical one in `api::sync::push`,
+    // carries no `ON CONFLICT (user_id, client_op_id) DO NOTHING`. There, the client picks
+    // the id and can send it twice, so the clause is how the unique index -- rather than a
+    // read that can go stale between two statements -- decides whether the op has already
+    // been applied. Here the id is minted a line above and cannot collide with anything;
+    // the same clause would only be able to swallow a bug that produced one.
+    .bind(uuid::Uuid::new_v4().to_string())
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 
@@ -215,14 +225,15 @@ pub(crate) async fn stamp_field_clock(
         "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
          VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT(entity, entity_uuid, field) \
-         DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id")
-        .bind(entity.as_str())
-        .bind(entity_uuid)
-        .bind(field)
-        .bind(edited_at)
-        .bind(device_id)
-        .execute(&mut *tx)
-        .await?;
+         DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id",
+    )
+    .bind(entity.as_str())
+    .bind(entity_uuid)
+    .bind(field)
+    .bind(edited_at)
+    .bind(device_id)
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 
@@ -243,8 +254,16 @@ pub(crate) async fn record_create(
     entity_uuid: &str,
     edited_at: &str,
 ) -> Result<(), AppError> {
-    insert_change(tx, user_id, entity, entity_uuid, OpKind::Create, None, (edited_at, DEVICE_ID))
-        .await?;
+    insert_change(
+        tx,
+        user_id,
+        entity,
+        entity_uuid,
+        OpKind::Create,
+        None,
+        (edited_at, DEVICE_ID),
+    )
+    .await?;
     for (field, _) in super::whitelist(entity) {
         stamp_field_clock(tx, entity, entity_uuid, field, edited_at, DEVICE_ID).await?;
     }
@@ -270,7 +289,12 @@ pub(crate) async fn record_update(
 ) -> Result<(), AppError> {
     for (field, value) in changed_fields {
         insert_change(
-            tx, user_id, entity, entity_uuid, OpKind::Set, Some((field, value)),
+            tx,
+            user_id,
+            entity,
+            entity_uuid,
+            OpKind::Set,
+            Some((field, value)),
             (edited_at, DEVICE_ID),
         )
         .await?;
@@ -289,8 +313,16 @@ pub(crate) async fn record_delete(
     entity_uuid: &str,
     edited_at: &str,
 ) -> Result<(), AppError> {
-    insert_change(tx, user_id, entity, entity_uuid, OpKind::Delete, None, (edited_at, DEVICE_ID))
-        .await
+    insert_change(
+        tx,
+        user_id,
+        entity,
+        entity_uuid,
+        OpKind::Delete,
+        None,
+        (edited_at, DEVICE_ID),
+    )
+    .await
 }
 
 /// Tombstones an object's activities, reminders and attachments, and everything inside it --
@@ -338,35 +370,50 @@ pub(crate) async fn cascade_object(
 ) -> Result<Vec<(Entity, String)>, AppError> {
     let mut cascaded = Vec::new();
     let root_id: i64 = sqlx::query_scalar("SELECT id FROM objects WHERE client_uuid = $1")
-        .bind(object_uuid).fetch_one(&mut *tx).await?;
+        .bind(object_uuid)
+        .fetch_one(&mut *tx)
+        .await?;
     let mut queue: std::collections::VecDeque<i64> = std::collections::VecDeque::from([root_id]);
 
     while let Some(current_id) = queue.pop_front() {
         // Of the three cascaded tables, only `activities` carries `updated_at`
         // (migrations/sqlite/0001_init.sql) -- `reminders` and `attachments` don't, so there is
         // nothing to bump on those two.
-        for (entity, has_updated_at) in
-            [(Entity::Activity, true), (Entity::Reminder, false), (Entity::Attachment, false)]
-        {
+        for (entity, has_updated_at) in [
+            (Entity::Activity, true),
+            (Entity::Reminder, false),
+            (Entity::Attachment, false),
+        ] {
             // The table name comes from `Entity::table` over a closed set fixed above, never
             // from the request, and the id stays a bind parameter -- the audit `AssertSqlSafe`
             // asks the author to have made.
             let table = entity.table();
             // Read the uuids before the update, while `deleted_at IS NULL` still names exactly
             // the rows this cascade is about to claim.
-            let select =
-                format!("SELECT client_uuid FROM {table} WHERE deleted_at IS NULL AND object_id = $1");
+            let select = format!(
+                "SELECT client_uuid FROM {table} WHERE deleted_at IS NULL AND object_id = $1"
+            );
             let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
-                .bind(current_id).fetch_all(&mut *tx).await?;
+                .bind(current_id)
+                .fetch_all(&mut *tx)
+                .await?;
             let update = if has_updated_at {
-                format!("UPDATE {table} SET deleted_at = $1, updated_at = $2 \
-                         WHERE deleted_at IS NULL AND object_id = $3")
+                format!(
+                    "UPDATE {table} SET deleted_at = $1, updated_at = $2 \
+                         WHERE deleted_at IS NULL AND object_id = $3"
+                )
             } else {
-                format!("UPDATE {table} SET deleted_at = $1 \
-                         WHERE deleted_at IS NULL AND object_id = $2")
+                format!(
+                    "UPDATE {table} SET deleted_at = $1 \
+                         WHERE deleted_at IS NULL AND object_id = $2"
+                )
             };
             let query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(now);
-            let query = if has_updated_at { query.bind(now) } else { query };
+            let query = if has_updated_at {
+                query.bind(now)
+            } else {
+                query
+            };
             query.bind(current_id).execute(&mut *tx).await?;
             cascaded.extend(nameable(uuids).map(|uuid| (entity, uuid)));
         }
@@ -376,12 +423,19 @@ pub(crate) async fn cascade_object(
         // tombstoned, and its own children are still walked; only its own log entry is lost,
         // the same cost a NULL already has for the three tables above.
         let children: Vec<(i64, Option<String>)> = sqlx::query_as(
-            "SELECT id, client_uuid FROM objects WHERE deleted_at IS NULL AND parent_id = $1")
-            .bind(current_id).fetch_all(&mut *tx).await?;
+            "SELECT id, client_uuid FROM objects WHERE deleted_at IS NULL AND parent_id = $1",
+        )
+        .bind(current_id)
+        .fetch_all(&mut *tx)
+        .await?;
         sqlx::query(
             "UPDATE objects SET deleted_at = $1, updated_at = $1 \
-             WHERE deleted_at IS NULL AND parent_id = $2")
-            .bind(now).bind(current_id).execute(&mut *tx).await?;
+             WHERE deleted_at IS NULL AND parent_id = $2",
+        )
+        .bind(now)
+        .bind(current_id)
+        .execute(&mut *tx)
+        .await?;
         for (child_id, child_uuid) in children {
             if let Some(uuid) = child_uuid {
                 cascaded.push((Entity::Object, uuid));
@@ -408,15 +462,28 @@ pub(crate) async fn clear_cover_of(
     // told is gone.
     let cleared: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM objects WHERE deleted_at IS NULL \
-         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
-        .bind(attachment_uuid).fetch_all(&mut *tx).await?;
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)",
+    )
+    .bind(attachment_uuid)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL WHERE deleted_at IS NULL \
-         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)")
-        .bind(attachment_uuid).execute(&mut *tx).await?;
+         AND cover_attachment_id = (SELECT id FROM attachments WHERE client_uuid = $1)",
+    )
+    .bind(attachment_uuid)
+    .execute(&mut *tx)
+    .await?;
     for uuid in nameable(cleared) {
-        record_update(tx, user_id, Entity::Object, &uuid,
-            &[("cover_attachment_id", serde_json::Value::Null)], edited_at).await?;
+        record_update(
+            tx,
+            user_id,
+            Entity::Object,
+            &uuid,
+            &[("cover_attachment_id", serde_json::Value::Null)],
+            edited_at,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -446,42 +513,77 @@ pub(crate) async fn cascade_activity(
         "SELECT client_uuid FROM objects \
          WHERE deleted_at IS NULL AND cover_attachment_id IN (\
            SELECT id FROM attachments \
-           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
-        .bind(activity_uuid).fetch_all(&mut *tx).await?;
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))",
+    )
+    .bind(activity_uuid)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE objects SET cover_attachment_id = NULL \
          WHERE deleted_at IS NULL AND cover_attachment_id IN (\
            SELECT id FROM attachments \
-           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))")
-        .bind(activity_uuid).execute(&mut *tx).await?;
+           WHERE activity_id = (SELECT id FROM activities WHERE client_uuid = $1))",
+    )
+    .bind(activity_uuid)
+    .execute(&mut *tx)
+    .await?;
     for uuid in nameable(cover_cleared) {
-        record_update(tx, user_id, Entity::Object, &uuid,
-            &[("cover_attachment_id", serde_json::Value::Null)], edited_at).await?;
+        record_update(
+            tx,
+            user_id,
+            Entity::Object,
+            &uuid,
+            &[("cover_attachment_id", serde_json::Value::Null)],
+            edited_at,
+        )
+        .await?;
     }
     let unlinked: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM reminders \
          WHERE deleted_at IS NULL \
-         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
-        .bind(activity_uuid).fetch_all(&mut *tx).await?;
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)",
+    )
+    .bind(activity_uuid)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE reminders SET done_activity_id = NULL \
          WHERE deleted_at IS NULL \
-         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
-        .bind(activity_uuid).execute(&mut *tx).await?;
+         AND done_activity_id = (SELECT id FROM activities WHERE client_uuid = $1)",
+    )
+    .bind(activity_uuid)
+    .execute(&mut *tx)
+    .await?;
     for uuid in nameable(unlinked) {
-        record_update(tx, user_id, Entity::Reminder, &uuid,
-            &[("done_activity_id", serde_json::Value::Null)], edited_at).await?;
+        record_update(
+            tx,
+            user_id,
+            Entity::Reminder,
+            &uuid,
+            &[("done_activity_id", serde_json::Value::Null)],
+            edited_at,
+        )
+        .await?;
     }
 
     let uuids: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT client_uuid FROM attachments WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $1)")
-        .bind(activity_uuid).fetch_all(&mut *tx).await?;
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $1)",
+    )
+    .bind(activity_uuid)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE attachments SET deleted_at = $1 WHERE deleted_at IS NULL \
-         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $2)")
-        .bind(now).bind(activity_uuid).execute(&mut *tx).await?;
-    Ok(nameable(uuids).map(|uuid| (Entity::Attachment, uuid)).collect())
+         AND activity_id = (SELECT id FROM activities WHERE client_uuid = $2)",
+    )
+    .bind(now)
+    .bind(activity_uuid)
+    .execute(&mut *tx)
+    .await?;
+    Ok(nameable(uuids)
+        .map(|uuid| (Entity::Attachment, uuid))
+        .collect())
 }
 
 /// The cascaded rows the log can actually name.
@@ -517,8 +619,16 @@ pub(crate) async fn log_cascade(
     cascaded: &[(Entity, String)],
 ) -> Result<(), AppError> {
     for (entity, uuid) in cascaded {
-        insert_change(tx, user_id, *entity, uuid, OpKind::Delete, None, (edited_at, device_id))
-            .await?;
+        insert_change(
+            tx,
+            user_id,
+            *entity,
+            uuid,
+            OpKind::Delete,
+            None,
+            (edited_at, device_id),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -539,7 +649,9 @@ mod tests {
     /// 1000, so all 100 independent samples doing so at once is roughly (1/1000)^100.
     #[test]
     fn edited_at_now_carries_real_millisecond_precision() {
-        let non_floored = (0..100).filter(|_| !edited_at_now().ends_with(".000Z")).count();
+        let non_floored = (0..100)
+            .filter(|_| !edited_at_now().ends_with(".000Z"))
+            .count();
         assert!(
             non_floored > 0,
             "edited_at_now() must read the clock at millisecond precision, not just wrap a \

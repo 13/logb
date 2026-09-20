@@ -12,6 +12,7 @@
   import LastDone from '../lib/LastDone.svelte';
   import TripTotals from '../lib/TripTotals.svelte';
   import EnergyFigures from '../lib/EnergyFigures.svelte';
+  import ResourceCsvImport from '../lib/ResourceCsvImport.svelte';
   import { energyLabelKey } from '../lib/energy';
   import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
@@ -50,7 +51,9 @@
   const offersTrip = $derived(object?.counter_unit === 'km' || object?.counter_unit === 'mi');
   /** Whether a charge (or fill) can be logged here at all -- "+ Log charge" (both the FAB and
    *  the Timeline empty state), and whether the Energy section's own figures are worth loading. */
-  const offersEnergy = $derived(object?.fuel_unit != null);
+  const offersEnergy = $derived((object?.resource_unit ?? object?.fuel_unit) != null);
+  const resourceCategory = $derived(object?.resource_kind ? 'usage' : 'fuel');
+  const resourceLogLabel = $derived(object?.resource_kind === 'water' ? $t('water.log') : $t(`${energyLabelKey(object?.resource_unit ?? object?.fuel_unit ?? null)}-log`));
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
   let activityTotal = $state(0);
@@ -81,6 +84,10 @@
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
    *  401/403/404 is the server answering, and this object may simply belong to someone else. */
   async function loadObject() {
+    if (oid < 0) {
+      const pending = getCachedObject(oid);
+      if (pending) { object = pending; error = ''; return; }
+    }
     try {
       object = await api<MemObject>('GET', `/objects/${oid}`);
       setCachedObject(oid, object);
@@ -192,6 +199,12 @@
       duration_minutes: typeof b.duration_minutes === 'number' ? b.duration_minutes : null,
       battery_used_pct: typeof b.battery_used_pct === 'number' ? b.battery_used_pct : null,
       charged_full: typeof b.charged_full === 'number' ? b.charged_full : 0,
+      fuel_level_pct: typeof b.fuel_level_pct === 'number' ? b.fuel_level_pct : null,
+      meter_reading_milli: typeof b.meter_reading_milli === 'number' ? b.meter_reading_milli : null,
+      period_start: typeof b.period_start === 'string' ? b.period_start : null,
+      period_end: typeof b.period_end === 'string' ? b.period_end : null,
+      estimated: typeof b.estimated === 'number' ? b.estimated : 0,
+      meter_reset: typeof b.meter_reset === 'number' ? b.meter_reset : 0,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
       pending: true, tags: Array.isArray(b.tags) ? b.tags : [],
     };
@@ -408,8 +421,8 @@
         objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
         onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
         ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
-        onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=fuel`) : undefined}
-        unit={object.counter_unit} fuelUnit={object.fuel_unit} energyRate={energyData?.cost_per_counter_milli ?? null}
+        onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
+        unit={object.counter_unit} fuelUnit={object.resource_unit ?? object.fuel_unit} resourceKind={object.resource_kind} energyRate={energyData?.cost_per_counter_milli ?? null}
         bind:category bind:tagFilter bind:titleFilter
       />
       <!-- The empty timeline puts this same action in the middle of the page, where the eye
@@ -424,7 +437,7 @@
             <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
           {/if}
           {#if offersEnergy}
-            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=fuel`)}>+ {$t(`${energyLabelKey(object.fuel_unit)}-log`)}</button>
+            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=${resourceCategory}`)}>+ {resourceLogLabel}</button>
           {/if}
           <button class="primary fab-btn" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
         </div>
@@ -444,6 +457,7 @@
         <TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} energyRate={energyData?.cost_per_counter_milli ?? null} />
       {/if}
       {#if offersEnergy}<EnergyFigures energy={energyData} unit={object.counter_unit} />{/if}
+      {#if object.resource_kind}<ResourceCsvImport objectId={oid} mode={object.measurement_mode} onimported={() => loadActivities('refresh')} />{/if}
       <h3>{$t('object.contents')}</h3>
       {#if children.length === 0}
         <p class="muted">{$t('object.contents-empty')}</p>

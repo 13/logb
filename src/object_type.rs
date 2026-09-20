@@ -11,7 +11,15 @@ use crate::error::AppError;
 
 /// The nine types, in the order the picker offers them.
 pub const OBJECT_TYPES: [&str; 9] = [
-    "car", "e_bike", "bike", "motorcycle", "home", "appliance", "tool", "body", "other",
+    "car",
+    "e_bike",
+    "bike",
+    "motorcycle",
+    "home",
+    "appliance",
+    "tool",
+    "body",
+    "other",
 ];
 
 /// Whether `t` is a built-in type. Needs no database, and says nothing about custom types.
@@ -30,7 +38,9 @@ pub async fn is_valid_for_user<'e, E: sqlx::Executor<'e, Database = sqlx::Any>>(
     if is_valid(type_key) {
         return Ok(true);
     }
-    let Some(uuid) = custom_uuid(type_key) else { return Ok(false) };
+    let Some(uuid) = custom_uuid(type_key) else {
+        return Ok(false);
+    };
     let found: Option<(i64,)> = sqlx::query_as(
         "SELECT id FROM object_types WHERE client_uuid = $1 AND user_id = $2 AND deleted_at IS NULL")
         .bind(uuid.to_string())
@@ -59,15 +69,37 @@ pub enum Legacy {
 /// `tests/migration_object_types.rs` runs every word here through the real migration, so the
 /// two cannot drift.
 pub const LEGACY: [(&str, &str); 32] = [
-    ("car", "car"), ("auto", "car"), ("pkw", "car"), ("wagen", "car"),
-    ("e-bike", "e_bike"), ("ebike", "e_bike"), ("e bike", "e_bike"), ("pedelec", "e_bike"),
-    ("bike", "bike"), ("fahrrad", "bike"), ("velo", "bike"), ("rad", "bike"),
-    ("motorcycle", "motorcycle"), ("motorrad", "motorcycle"), ("motorbike", "motorcycle"),
-    ("home", "home"), ("haus", "home"), ("wohnung", "home"), ("flat", "home"), ("apartment", "home"),
-    ("appliance", "appliance"), ("gerät", "appliance"), ("geraet", "appliance"),
+    ("car", "car"),
+    ("auto", "car"),
+    ("pkw", "car"),
+    ("wagen", "car"),
+    ("e-bike", "e_bike"),
+    ("ebike", "e_bike"),
+    ("e bike", "e_bike"),
+    ("pedelec", "e_bike"),
+    ("bike", "bike"),
+    ("fahrrad", "bike"),
+    ("velo", "bike"),
+    ("rad", "bike"),
+    ("motorcycle", "motorcycle"),
+    ("motorrad", "motorcycle"),
+    ("motorbike", "motorcycle"),
+    ("home", "home"),
+    ("haus", "home"),
+    ("wohnung", "home"),
+    ("flat", "home"),
+    ("apartment", "home"),
+    ("appliance", "appliance"),
+    ("gerät", "appliance"),
+    ("geraet", "appliance"),
     ("haushaltsgerät", "appliance"),
-    ("tool", "tool"), ("werkzeug", "tool"), ("maschine", "tool"),
-    ("body", "body"), ("körper", "body"), ("koerper", "body"), ("health", "body"),
+    ("tool", "tool"),
+    ("werkzeug", "tool"),
+    ("maschine", "tool"),
+    ("body", "body"),
+    ("körper", "body"),
+    ("koerper", "body"),
+    ("health", "body"),
     ("gesundheit", "body"),
 ];
 
@@ -121,7 +153,12 @@ mod tests {
     #[test]
     fn every_mapped_target_is_a_real_type() {
         for word in LEGACY.iter() {
-            assert!(is_valid(word.1), "{} maps to unknown type {}", word.0, word.1);
+            assert!(
+                is_valid(word.1),
+                "{} maps to unknown type {}",
+                word.0,
+                word.1
+            );
         }
         assert!(is_valid("other"));
         assert!(!is_valid("vehicle"));

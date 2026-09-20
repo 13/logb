@@ -83,6 +83,9 @@ async fn fuel_unit_round_trips_and_is_validated() {
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     let bike: serde_json::Value = res.json().await.unwrap();
     assert_eq!(bike["fuel_unit"], "kwh");
+    assert_eq!(bike["resource_unit"], "kwh");
+    assert_eq!(bike["resource_kind"], serde_json::Value::Null);
+    assert_eq!(bike["measurement_mode"], serde_json::Value::Null);
 
     let res = app.client.post(app.url("/objects")).json(&json!({
         "name": "Car", "type": "car", "fuel_unit": "barrels"

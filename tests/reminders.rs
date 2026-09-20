@@ -1,7 +1,12 @@
 mod common;
 use serde_json::json;
 
-async fn add_activity(app: &common::TestApp, object_id: i64, date: &str, counter: Option<i64>) -> serde_json::Value {
+async fn add_activity(
+    app: &common::TestApp,
+    object_id: i64,
+    date: &str,
+    counter: Option<i64>,
+) -> serde_json::Value {
     let res = app.client.post(app.url(&format!("/objects/{object_id}/activities")))
         .json(&json!({ "date": date, "category": "maintenance", "title": "service", "counter_value": counter }))
         .send().await.unwrap();
@@ -21,22 +26,56 @@ async fn due_by_date_and_counter_and_repeat() {
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     let oil: serde_json::Value = res.json().await.unwrap();
     assert_eq!(oil["due"], true, "date in the past");
-    let res = app.client.post(&base).json(&json!({ "title": "Tyres", "due_counter": 105_000 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(&base)
+        .json(&json!({ "title": "Tyres", "due_counter": 105_000 }))
+        .send()
+        .await
+        .unwrap();
     let tyres: serde_json::Value = res.json().await.unwrap();
     assert_eq!(tyres["due"], false, "no counter reading yet");
-    let res = app.client.post(&base).json(&json!({ "title": "TÜV", "due_date": "2999-01-01" })).send().await.unwrap();
+    let res = app
+        .client
+        .post(&base)
+        .json(&json!({ "title": "TÜV", "due_date": "2999-01-01" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 201);
 
     add_activity(&app, id, "2026-01-01", Some(106_000)).await;
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due")).send().await.unwrap().json().await.unwrap();
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let titles: Vec<&str> = due.iter().map(|r| r["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["Oil", "Tyres"]);
     assert_eq!(due[0]["object_name"], "Golf");
-    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
+    let obj: serde_json::Value = app
+        .client
+        .get(app.url(&format!("/objects/{id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(obj["stats"]["due_reminder_count"], 2);
 
     let service = add_activity(&app, id, "2026-02-01", Some(107_000)).await;
-    let res = app.client.post(app.url(&format!("/reminders/{}/done", oil["id"]))).json(&json!({ "activity_id": service["id"] })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{}/done", oil["id"])))
+        .json(&json!({ "activity_id": service["id"] }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let done: serde_json::Value = res.json().await.unwrap();
     assert!(done["done"]["done_at"].is_string());
@@ -45,13 +84,35 @@ async fn due_by_date_and_counter_and_repeat() {
     assert_eq!(done["next"]["due_counter"], 122_000);
     assert_eq!(done["next"]["repeat_months"], 12);
 
-    let res = app.client.post(app.url(&format!("/reminders/{}/done", tyres["id"]))).json(&json!({})).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{}/done", tyres["id"])))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
     let done: serde_json::Value = res.json().await.unwrap();
     assert!(done["next"].is_null(), "no repeat");
 
-    let all: Vec<serde_json::Value> = app.client.get(&base).send().await.unwrap().json().await.unwrap();
+    let all: Vec<serde_json::Value> = app
+        .client
+        .get(&base)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(all.len(), 4);
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due")).send().await.unwrap().json().await.unwrap();
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(due.is_empty());
 }
 
@@ -71,21 +132,76 @@ async fn crud_validation_and_isolation() {
         json!({ "title": "x", "due_counter": 5 }),
         json!({ "title": "x", "due_date": "2030-01-01", "repeat_months": 0 }),
     ] {
-        assert_eq!(app.client.post(&base).json(&body).send().await.unwrap().status(), 400, "{body}");
+        assert_eq!(
+            app.client
+                .post(&base)
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            400,
+            "{body}"
+        );
     }
 
-    let r: serde_json::Value = app.client.post(&base).json(&json!({ "title": "Chimney", "due_date": "2030-01-01" })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(&base)
+        .json(&json!({ "title": "Chimney", "due_date": "2030-01-01" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
-    let res = app.client.patch(app.url(&format!("/reminders/{rid}"))).json(&json!({ "title": "Chimney sweep", "notes": "call", "due_date": "2030-02-01" })).send().await.unwrap();
+    let res = app
+        .client
+        .patch(app.url(&format!("/reminders/{rid}")))
+        .json(&json!({ "title": "Chimney sweep", "notes": "call", "due_date": "2030-02-01" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     let r: serde_json::Value = res.json().await.unwrap();
     assert_eq!(r["title"], "Chimney sweep");
 
     assert_eq!(anna.get(&base).send().await.unwrap().status(), 404);
-    assert_eq!(anna.get(app.url(&format!("/reminders/{rid}"))).send().await.unwrap().status(), 404);
-    assert_eq!(anna.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({})).send().await.unwrap().status(), 404);
-    assert_eq!(anna.delete(app.url(&format!("/reminders/{rid}"))).send().await.unwrap().status(), 404);
-    assert_eq!(app.client.delete(app.url(&format!("/reminders/{rid}"))).send().await.unwrap().status(), 204);
+    assert_eq!(
+        anna.get(app.url(&format!("/reminders/{rid}")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        anna.post(app.url(&format!("/reminders/{rid}/done")))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        anna.delete(app.url(&format!("/reminders/{rid}")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        app.client
+            .delete(app.url(&format!("/reminders/{rid}")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
 }
 
 /// Completing a reminder twice is a conflict, not a second completion.
@@ -95,13 +211,35 @@ async fn a_reminder_cannot_be_completed_twice() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
         .json(&json!({ "title": "Oil", "due_date": "2020-01-01" }))
-        .send().await.unwrap().json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let done_url = app.url(&format!("/reminders/{}/done", r["id"]));
 
-    assert_eq!(app.client.post(&done_url).json(&json!({})).send().await.unwrap().status(), 200);
-    let res = app.client.post(&done_url).json(&json!({})).send().await.unwrap();
+    assert_eq!(
+        app.client
+            .post(&done_url)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let res = app
+        .client
+        .post(&done_url)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 409, "{}", res.text().await.unwrap());
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "conflict");
@@ -117,18 +255,41 @@ async fn due_list_can_look_ahead() {
     let far = (chrono::Utc::now().date_naive() + chrono::Duration::days(90)).to_string();
 
     for (title, date) in [("Soon", &soon), ("Far", &far)] {
-        let res = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-            "title": title, "notes": "", "due_date": date
-        })).send().await.unwrap();
+        let res = app
+            .client
+            .post(app.url(&format!("/objects/{id}/reminders")))
+            .json(&json!({
+                "title": title, "notes": "", "due_date": date
+            }))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     }
 
-    let now: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(now.is_empty(), "nothing is due yet, and the default must not change");
+    let now: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        now.is_empty(),
+        "nothing is due yet, and the default must not change"
+    );
 
-    let ahead: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
+    let ahead: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(ahead.len(), 1, "only the reminder inside the window");
     assert_eq!(ahead[0]["title"], "Soon");
     assert_eq!(ahead[0]["due"], false);
@@ -141,27 +302,49 @@ async fn snooze_suppresses_an_overdue_reminder_without_rewriting_its_due_date() 
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let res = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap();
     let r: serde_json::Value = res.json().await.unwrap();
     let rid = r["id"].as_i64().unwrap();
     assert_eq!(r["due"], true);
 
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
     assert_eq!(out["due"], false, "a snoozed reminder is no longer due");
     let expected = (chrono::Utc::now().date_naive() + chrono::Duration::days(7)).to_string();
     // Snooze suppresses; it does not rewrite the real due date.
-    assert_eq!(out["due_date"], "2020-01-01", "snooze must not touch the real due_date");
+    assert_eq!(
+        out["due_date"], "2020-01-01",
+        "snooze must not touch the real due_date"
+    );
     assert_eq!(out["snoozed_until"], expected);
-    assert!(out["days_until"].as_i64().unwrap() < 0, "days_until stays truthful about the real due date");
+    assert!(
+        out["days_until"].as_i64().unwrap() < 0,
+        "days_until stays truthful about the real due date"
+    );
 
     for bad in [json!({ "days": 0 }), json!({ "days": 400 })] {
-        let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-            .json(&bad).send().await.unwrap();
+        let res = app
+            .client
+            .post(app.url(&format!("/reminders/{rid}/snooze")))
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), 400, "{bad}");
     }
 }
@@ -177,26 +360,54 @@ async fn snooze_suppresses_a_counter_due_reminder_and_lapses() {
     let id = car["id"].as_i64().unwrap();
     add_activity(&app, id, "2026-01-01", Some(60_000)).await;
 
-    let res = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
         .json(&json!({ "title": "Service", "due_counter": 60_000 }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     let r: serde_json::Value = res.json().await.unwrap();
     let rid = r["id"].as_i64().unwrap();
     assert_eq!(r["due"], true, "the counter has already been reached");
     assert!(r["due_date"].is_null());
 
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(out["due"], false, "snoozing must actually suppress a counter-due reminder");
-    assert!(out["due_date"].is_null(), "snooze does not invent a due_date");
-    assert_eq!(out["due_counter"], 60_000, "snooze does not touch due_counter either");
+    assert_eq!(
+        out["due"], false,
+        "snoozing must actually suppress a counter-due reminder"
+    );
+    assert!(
+        out["due_date"].is_null(),
+        "snooze does not invent a due_date"
+    );
+    assert_eq!(
+        out["due_counter"], 60_000,
+        "snooze does not touch due_counter either"
+    );
 
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(due.iter().all(|x| x["id"] != rid), "a snoozed reminder must not appear in the lookahead either");
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        due.iter().all(|x| x["id"] != rid),
+        "a snoozed reminder must not appear in the lookahead either"
+    );
 
     // Lapse the snooze by writing an already-past date directly through the pool, the way
     // the domain-level tests cover "on or before today resumes normal rules" -- there is no
@@ -207,7 +418,12 @@ async fn snooze_suppresses_a_counter_due_reminder_and_lapses() {
         .await
         .unwrap();
 
-    let res = app.client.get(app.url(&format!("/reminders/{rid}"))).send().await.unwrap();
+    let res = app
+        .client
+        .get(app.url(&format!("/reminders/{rid}")))
+        .send()
+        .await
+        .unwrap();
     let out: serde_json::Value = res.json().await.unwrap();
     assert_eq!(out["due"], true, "a lapsed snooze suppresses nothing");
 }
@@ -220,18 +436,42 @@ async fn a_snoozed_reminder_is_absent_from_the_lookahead() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 30 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 30 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(due.iter().all(|x| x["id"] != rid), "a snoozed reminder must not appear, even in the lookahead");
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        due.iter().all(|x| x["id"] != rid),
+        "a snoozed reminder must not appear, even in the lookahead"
+    );
 }
 
 /// Un-snoozing makes a suppressed reminder due again immediately, without touching the real
@@ -242,27 +482,68 @@ async fn unsnoozing_makes_a_suppressed_reminder_due_again() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let snoozed: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(snoozed["due"], false, "snooze must have suppressed it first");
+    assert_eq!(
+        snoozed["due"], false,
+        "snooze must have suppressed it first"
+    );
 
-    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    let res = app
+        .client
+        .delete(app.url(&format!("/reminders/{rid}/snooze")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
-    assert!(out["snoozed_until"].is_null(), "un-snoozing clears snoozed_until");
-    assert_eq!(out["due"], true, "clearing the snooze must make it due again immediately");
-    assert_eq!(out["due_date"], "2020-01-01", "un-snoozing must not touch the real due_date");
+    assert!(
+        out["snoozed_until"].is_null(),
+        "un-snoozing clears snoozed_until"
+    );
+    assert_eq!(
+        out["due"], true,
+        "clearing the snooze must make it due again immediately"
+    );
+    assert_eq!(
+        out["due_date"], "2020-01-01",
+        "un-snoozing must not touch the real due_date"
+    );
 
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(due.iter().any(|x| x["id"] == rid), "the reminder must be counted as due again");
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        due.iter().any(|x| x["id"] == rid),
+        "the reminder must be counted as due again"
+    );
 }
 
 /// Un-snoozing a reminder that was never snoozed is a no-op success: the caller asked for
@@ -273,13 +554,27 @@ async fn unsnoozing_a_never_snoozed_reminder_changes_nothing() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
     assert!(r["snoozed_until"].is_null());
 
-    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    let res = app
+        .client
+        .delete(app.url(&format!("/reminders/{rid}/snooze")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
     assert!(out["snoozed_until"].is_null());
@@ -295,12 +590,25 @@ async fn unsnoozing_another_users_reminder_is_not_found() {
     let anna = app.create_user_client("anna", "password123").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
-    let res = anna.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    let res = anna
+        .delete(app.url(&format!("/reminders/{rid}/snooze")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 404);
 }
 
@@ -313,23 +621,74 @@ async fn unsnoozing_makes_the_object_count_it_as_due_again() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
-    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
-    assert_eq!(obj["stats"]["due_reminder_count"], 1, "a past due_date counts as due");
+    let obj: serde_json::Value = app
+        .client
+        .get(app.url(&format!("/objects/{id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        obj["stats"]["due_reminder_count"], 1,
+        "a past due_date counts as due"
+    );
 
-    app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
-    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
-    assert_eq!(obj["stats"]["due_reminder_count"], 0, "a snoozed reminder must not count as due");
+    app.client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
+    let obj: serde_json::Value = app
+        .client
+        .get(app.url(&format!("/objects/{id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        obj["stats"]["due_reminder_count"], 0,
+        "a snoozed reminder must not count as due"
+    );
 
-    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
+    let res = app
+        .client
+        .delete(app.url(&format!("/reminders/{rid}/snooze")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
-    let obj: serde_json::Value = app.client.get(app.url(&format!("/objects/{id}"))).send().await.unwrap().json().await.unwrap();
-    assert_eq!(obj["stats"]["due_reminder_count"], 1, "un-snoozing must make it count as due again");
+    let obj: serde_json::Value = app
+        .client
+        .get(app.url(&format!("/objects/{id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        obj["stats"]["due_reminder_count"], 1,
+        "un-snoozing must make it count as due again"
+    );
 }
 
 /// `unsnooze`'s handler comment argues that clearing `snoozed_until` on an already-done
@@ -344,25 +703,61 @@ async fn unsnoozing_a_done_reminder_succeeds_and_it_stays_not_due() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
     // Snooze it, then mark it done while still snoozed -- `done` does not check `snoozed_until`
     // -- so the row unsnooze sees below carries both `done_at` and a live `snoozed_until`.
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({})).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/done")))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
-    let res = app.client.delete(app.url(&format!("/reminders/{rid}/snooze"))).send().await.unwrap();
-    assert_eq!(res.status(), 200, "unsnoozing a done reminder must succeed, not 409 like snooze does: {}", res.text().await.unwrap());
+    let res = app
+        .client
+        .delete(app.url(&format!("/reminders/{rid}/snooze")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        200,
+        "unsnoozing a done reminder must succeed, not 409 like snooze does: {}",
+        res.text().await.unwrap()
+    );
     let out: serde_json::Value = res.json().await.unwrap();
-    assert!(out["snoozed_until"].is_null(), "snoozed_until is still cleared for a done reminder");
+    assert!(
+        out["snoozed_until"].is_null(),
+        "snoozed_until is still cleared for a done reminder"
+    );
     assert!(out["done_at"].is_string());
-    assert_eq!(out["due"], false, "a done reminder must stay not-due even after unsnoozing it");
+    assert_eq!(
+        out["due"], false,
+        "a done reminder must stay not-due even after unsnoozing it"
+    );
 }
 
 #[tokio::test]
@@ -371,14 +766,36 @@ async fn a_done_reminder_cannot_be_snoozed() {
     app.setup("ben", "correct horse").await;
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Oil change", "notes": "", "due_date": "2020-01-01"
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Oil change", "notes": "", "due_date": "2020-01-01"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
-    assert_eq!(app.client.post(app.url(&format!("/reminders/{rid}/done"))).json(&json!({}))
-        .send().await.unwrap().status(), 200);
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    assert_eq!(
+        app.client
+            .post(app.url(&format!("/reminders/{rid}/done")))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 409);
 }
 
@@ -394,24 +811,58 @@ async fn snoozing_a_future_reminder_takes_it_out_of_the_lookahead_too() {
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let id = car["id"].as_i64().unwrap();
     let due = chrono::Utc::now().date_naive() + chrono::Duration::days(5);
-    let r: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/reminders"))).json(&json!({
-        "title": "Inspection", "notes": "", "due_date": due.to_string()
-    })).send().await.unwrap().json().await.unwrap();
+    let r: serde_json::Value = app
+        .client
+        .post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({
+            "title": "Inspection", "notes": "", "due_date": due.to_string()
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let rid = r["id"].as_i64().unwrap();
 
-    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(listed.iter().any(|x| x["id"] == rid), "it must be in the lookahead before the snooze");
+    let listed: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        listed.iter().any(|x| x["id"] == rid),
+        "it must be in the lookahead before the snooze"
+    );
 
-    let res = app.client.post(app.url(&format!("/reminders/{rid}/snooze")))
-        .json(&json!({ "days": 7 })).send().await.unwrap();
+    let res = app
+        .client
+        .post(app.url(&format!("/reminders/{rid}/snooze")))
+        .json(&json!({ "days": 7 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let out: serde_json::Value = res.json().await.unwrap();
     assert_eq!(out["due"], false);
-    assert!(out["days_until"].as_i64().unwrap() > 0, "the real due date is still ahead");
+    assert!(
+        out["days_until"].as_i64().unwrap() > 0,
+        "the real due date is still ahead"
+    );
 
-    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
+    let listed: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(
         listed.iter().all(|x| x["id"] != rid),
         "a snoozed reminder must leave the lookahead, not just the due list",
@@ -419,10 +870,23 @@ async fn snoozing_a_future_reminder_takes_it_out_of_the_lookahead_too() {
 
     // ...and come back once the snooze lapses, so this suppresses rather than deletes.
     sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
-        .bind(rid).execute(&app.state.db).await.unwrap();
-    let listed: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due?within_days=30"))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(listed.iter().any(|x| x["id"] == rid), "a lapsed snooze suppresses nothing");
+        .bind(rid)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let listed: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due?within_days=30"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        listed.iter().any(|x| x["id"] == rid),
+        "a lapsed snooze suppresses nothing"
+    );
 }
 
 #[tokio::test]
@@ -432,7 +896,16 @@ async fn a_reminder_create_honours_and_replays_on_client_uuid() {
     let car = app.create_object(&app.client, "Golf", Some("km")).await;
     let url = app.url(&format!("/objects/{}/reminders", car["id"]));
     let body = json!({ "title": "Oil", "due_date": "2027-01-01", "client_uuid": "phone-0003-oil" });
-    let first: serde_json::Value = app.client.post(&url).json(&body).send().await.unwrap().json().await.unwrap();
+    let first: serde_json::Value = app
+        .client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(first["client_uuid"], "phone-0003-oil");
     let res = app.client.post(&url).json(&body).send().await.unwrap();
     assert_eq!(res.status(), 200);
@@ -446,26 +919,61 @@ async fn reminder_rows_carry_their_objects_tags() {
     app.setup("ben", "correct horse").await;
     let bike = app.create_object(&app.client, "Tagged bike", None).await;
     let bid = bike["id"].as_i64().unwrap();
-    let res = app.client.patch(app.url(&format!("/objects/{bid}")))
+    let res = app
+        .client
+        .patch(app.url(&format!("/objects/{bid}")))
         .json(&json!({ "name": "Tagged bike", "type": "other", "tags": ["Bremse", "E-Bike"] }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     let plain = app.create_object(&app.client, "Plain shed", None).await;
     let pid = plain["id"].as_i64().unwrap();
     for id in [bid, pid] {
-        let res = app.client.post(app.url(&format!("/objects/{id}/reminders")))
-            .json(&json!({ "title": "Check", "due_date": "2000-01-01" })).send().await.unwrap();
+        let res = app
+            .client
+            .post(app.url(&format!("/objects/{id}/reminders")))
+            .json(&json!({ "title": "Check", "due_date": "2000-01-01" }))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
     }
 
-    let due: Vec<serde_json::Value> = app.client.get(app.url("/reminders/due")).send().await.unwrap().json().await.unwrap();
-    let tags_of = |object_id: i64| due.iter().find(|r| r["object_id"] == object_id).unwrap()["object_tags"].clone();
+    let due: Vec<serde_json::Value> = app
+        .client
+        .get(app.url("/reminders/due"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let tags_of = |object_id: i64| {
+        due.iter().find(|r| r["object_id"] == object_id).unwrap()["object_tags"].clone()
+    };
     assert_eq!(tags_of(bid), json!(["Bremse", "E-Bike"]));
     assert_eq!(tags_of(pid), json!([]));
 
-    let listed: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{bid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    let listed: Vec<serde_json::Value> = app
+        .client
+        .get(app.url(&format!("/objects/{bid}/reminders")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["object_tags"], json!(["Bremse", "E-Bike"]));
-    let listed: Vec<serde_json::Value> = app.client.get(app.url(&format!("/objects/{pid}/reminders"))).send().await.unwrap().json().await.unwrap();
+    let listed: Vec<serde_json::Value> = app
+        .client
+        .get(app.url(&format!("/objects/{pid}/reminders")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed[0]["object_tags"], json!([]));
 }

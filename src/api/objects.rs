@@ -49,6 +49,16 @@ pub struct ObjectRow {
     /// `ObjectInput::validate`. `>= 0` when present.
     pub energy_price_milli: Option<i64>,
     pub weight_unit: String,
+    pub fuel_capacity_milli: Option<i64>,
+    /// Neutral successor to `fuel_unit`. Both are returned during the compatibility window.
+    pub resource_unit: Option<String>,
+    pub resource_kind: Option<String>,
+    pub measurement_mode: Option<String>,
+    pub monthly_target_milli: Option<i64>,
+    pub low_level_pct: Option<i64>,
+    #[serde(rename = "private")]
+    #[sqlx(rename = "private")]
+    pub is_private: i64,
 }
 
 #[derive(Serialize, sqlx::FromRow, Clone, Debug)]
@@ -131,6 +141,20 @@ pub struct ObjectInput {
     pub energy_price_milli: Option<Option<i64>>,
     #[serde(default)]
     pub weight_unit: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub fuel_capacity_milli: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub resource_unit: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub resource_kind: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub measurement_mode: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub monthly_target_milli: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub low_level_pct: Option<Option<i64>>,
+    #[serde(default)]
+    pub private: Option<bool>,
 }
 
 /// The one sentence both doors answer a bad parent with -- `objects::update` as a 400 and
@@ -148,7 +172,8 @@ pub const TYPE_REJECTION: &str = "type is not one of the known object types";
 /// counter is `km` or `mi` (`ActivityInput::validate`), so an object that already has one may
 /// never move its counter away from that pair. `km` and `mi` remain freely interchangeable:
 /// only a change that leaves the pair (to `h`, or to no counter at all) is refused.
-pub const COUNTER_UNIT_TRIP_REJECTION: &str = "this object has trips; its counter must stay km or mi";
+pub const COUNTER_UNIT_TRIP_REJECTION: &str =
+    "this object has trips; its counter must stay km or mi";
 
 /// The 400 (and sync rejection) for a stored or incoming `energy_price_milli` with no
 /// `fuel_unit` to price -- whether the price is what just changed, or `fuel_unit` was cleared
@@ -156,10 +181,16 @@ pub const COUNTER_UNIT_TRIP_REJECTION: &str = "this object has trips; its counte
 /// `update` below that checks a price kept from `existing` against a `fuel_unit` the same PATCH
 /// clears; `sync::apply` answers the same two directions with the same sentence.
 pub const ENERGY_PRICE_NEEDS_FUEL_UNIT: &str = "energy_price_milli needs a fuel unit";
+pub const FUEL_UNIT_HISTORY_REJECTION: &str =
+    "this object has fuel entries; its fuel unit cannot change";
 
 /// Refuses a type the caller may not use. On the write transaction's connection, so a type
 /// deleted concurrently cannot slip in between this check and the write (see `types::delete`).
-async fn check_type(conn: &mut sqlx::AnyConnection, user_id: i64, type_key: &str) -> Result<(), AppError> {
+async fn check_type(
+    conn: &mut sqlx::AnyConnection,
+    user_id: i64,
+    type_key: &str,
+) -> Result<(), AppError> {
     if crate::object_type::is_valid_for_user(&mut *conn, user_id, type_key).await? {
         Ok(())
     } else {
@@ -190,27 +221,90 @@ pub fn validate_date(s: &str) -> Result<(), AppError> {
 
 impl ObjectInput {
     pub(crate) fn validate(&mut self) -> Result<(), AppError> {
-        if self.weight_unit.as_deref().is_some_and(|u| !matches!(u, "kg" | "lb")) {
+        if self
+            .weight_unit
+            .as_deref()
+            .is_some_and(|u| !matches!(u, "kg" | "lb"))
+        {
             return Err(AppError::BadRequest("weight_unit must be kg or lb".into()));
         }
+        if self.fuel_capacity_milli.flatten().is_some_and(|v| v <= 0) {
+            return Err(AppError::BadRequest(
+                "fuel_capacity_milli must be > 0".into(),
+            ));
+        }
+        if self.monthly_target_milli.flatten().is_some_and(|v| v <= 0) {
+            return Err(AppError::BadRequest(
+                "monthly_target_milli must be > 0".into(),
+            ));
+        }
+        if self
+            .low_level_pct
+            .flatten()
+            .is_some_and(|v| !(0..=100).contains(&v))
+        {
+            return Err(AppError::BadRequest(
+                "low_level_pct must be between 0 and 100".into(),
+            ));
+        }
+        if self
+            .resource_unit
+            .as_ref()
+            .and_then(|v| v.as_deref())
+            .is_some_and(|u| !matches!(u, "l" | "gal" | "kwh" | "m3"))
+        {
+            return Err(AppError::BadRequest(
+                "resource_unit must be l, gal, kwh, m3 or null".into(),
+            ));
+        }
+        if self
+            .resource_kind
+            .as_ref()
+            .and_then(|v| v.as_deref())
+            .is_some_and(|k| {
+                !matches!(k, "electricity" | "heating_fuel" | "vehicle_fuel" | "water")
+            })
+        {
+            return Err(AppError::BadRequest("resource_kind is invalid".into()));
+        }
+        if self
+            .measurement_mode
+            .as_ref()
+            .and_then(|v| v.as_deref())
+            .is_some_and(|m| !matches!(m, "usage" | "meter"))
+        {
+            return Err(AppError::BadRequest(
+                "measurement_mode must be usage, meter or null".into(),
+            ));
+        }
         self.name = self.name.trim().to_string();
-        if self.name.is_empty() { return Err(AppError::BadRequest("name is required".into())); }
+        if self.name.is_empty() {
+            return Err(AppError::BadRequest("name is required".into()));
+        }
         // Only normalised here: whether the type exists depends on the caller's own types, which
         // takes the database, so `create` and `update` check it inside their write transaction.
         self.type_ = self.type_.trim().to_lowercase();
         if let Some(u) = &self.counter_unit {
             if !matches!(u.as_str(), "km" | "mi" | "h") {
-                return Err(AppError::BadRequest("counter_unit must be km, mi, h or null".into()));
+                return Err(AppError::BadRequest(
+                    "counter_unit must be km, mi, h or null".into(),
+                ));
             }
         }
         if let Some(u) = &self.fuel_unit {
             if !matches!(u.as_str(), "l" | "gal" | "kwh") {
-                return Err(AppError::BadRequest("fuel_unit must be l, gal, kwh or null".into()));
+                return Err(AppError::BadRequest(
+                    "fuel_unit must be l, gal, kwh or null".into(),
+                ));
             }
         }
-        if let Some(d) = &self.purchase_date { validate_date(d)?; }
+        if let Some(d) = &self.purchase_date {
+            validate_date(d)?;
+        }
         if matches!(self.purchase_price_cents, Some(p) if p < 0) {
-            return Err(AppError::BadRequest("purchase_price_cents must be >= 0".into()));
+            return Err(AppError::BadRequest(
+                "purchase_price_cents must be >= 0".into(),
+            ));
         }
         if let Some(t) = &self.tags {
             self.tags = Some(tags::normalize(t).map_err(AppError::BadRequest)?);
@@ -223,9 +317,11 @@ impl ObjectInput {
         // and is checked in `create`/`update` once the stored value is known.
         if let Some(Some(p)) = self.energy_price_milli {
             if p < 0 {
-                return Err(AppError::BadRequest("energy_price_milli must be >= 0".into()));
+                return Err(AppError::BadRequest(
+                    "energy_price_milli must be >= 0".into(),
+                ));
             }
-            if self.fuel_unit.is_none() {
+            if self.fuel_unit.is_none() && self.resource_unit.as_ref().is_none_or(|v| v.is_none()) {
                 return Err(AppError::BadRequest(ENERGY_PRICE_NEEDS_FUEL_UNIT.into()));
             }
         }
@@ -239,7 +335,7 @@ impl ObjectInput {
 const OWNED_OBJECT: &str =
     "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
      purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-     energy_price_milli, weight_unit \
+     energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private \
      FROM objects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL";
 
 /// The object with `id` if it belongs to `user_id`; otherwise 404. Reads from the pool, for the
@@ -249,8 +345,10 @@ const OWNED_OBJECT: &str =
 /// see the comment in `update` for what a read taken before the write lock is worth.
 pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<ObjectRow, AppError> {
     sqlx::query_as::<_, ObjectRow>(OWNED_OBJECT)
-        .bind(id).bind(user_id)
-        .fetch_optional(&state.db).await?
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
         .ok_or(AppError::NotFound)
 }
 
@@ -265,8 +363,10 @@ pub async fn load_owned_object_on(
     id: i64,
 ) -> Result<ObjectRow, AppError> {
     sqlx::query_as::<_, ObjectRow>(OWNED_OBJECT)
-        .bind(id).bind(user_id)
-        .fetch_optional(&mut *conn).await?
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&mut *conn)
+        .await?
         .ok_or(AppError::NotFound)
 }
 
@@ -294,7 +394,11 @@ struct DerivedRow {
 ///
 /// The list endpoint used to call `stats` and then a cover lookup once per object, so showing
 /// N objects cost 2N + 1 queries.
-async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result<HashMap<i64, DerivedRow>, AppError> {
+async fn derived(
+    state: &App,
+    user_id: Option<i64>,
+    only: Option<i64>,
+) -> Result<HashMap<i64, DerivedRow>, AppError> {
     // INVARIANT: this due_reminder_count subquery is a second, hand-written encoding of
     // `domain::reminder::is_due` -- it exists only so N objects' counts can be computed in one
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
@@ -347,9 +451,20 @@ async fn derived(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result
 
 /// How many reading reminders are due per object, for the same scope `derived` answers.
 /// Decided by `domain::reminder::reading_status`, the rule each reminder's own `due` uses.
-async fn due_readings(state: &App, user_id: Option<i64>, only: Option<i64>) -> Result<HashMap<i64, i64>, AppError> {
+async fn due_readings(
+    state: &App,
+    user_id: Option<i64>,
+    only: Option<i64>,
+) -> Result<HashMap<i64, i64>, AppError> {
     use crate::domain::reminder::{reading_status, Every};
-    type ReadingRow = (i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>);
+    type ReadingRow = (
+        i64,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
     let today_str = db::today();
     let rows: Vec<ReadingRow> = sqlx::query_as(
         "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, \
@@ -361,8 +476,13 @@ async fn due_readings(state: &App, user_id: Option<i64>, only: Option<i64>) -> R
     )
     .bind(user_id).bind(super::reminders::reading_horizon()).bind(only)
     .fetch_all(&state.db).await?;
-    let parse = |s: &Option<String>| s.as_deref().and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let Some(today) = parse(&Some(today_str.clone())) else { return Ok(HashMap::new()) };
+    let parse = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    };
+    let Some(today) = parse(&Some(today_str.clone())) else {
+        return Ok(HashMap::new());
+    };
     let mut counts = HashMap::new();
     for (object_id, start, every_n, every_unit, snoozed, last) in rows {
         let every = Every::from_parts(every_n, every_unit.as_deref());
@@ -390,14 +510,20 @@ impl DerivedRow {
 
     fn into_out(self, object: ObjectRow) -> ObjectOut {
         let stats = self.stats();
-        ObjectOut { object, stats, cover_file_id: self.cover_file_id, ancestors: Vec::new() }
+        ObjectOut {
+            object,
+            stats,
+            cover_file_id: self.cover_file_id,
+            ancestors: Vec::new(),
+        }
     }
 }
 
 /// The stats block for one object, for callers outside this module. Ownership is not checked
 /// here: every caller has already loaded the object through `load_owned_object`.
 pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError> {
-    derived(state, None, Some(object_id)).await?
+    derived(state, None, Some(object_id))
+        .await?
         .get(&object_id)
         .map(DerivedRow::stats)
         .ok_or(AppError::NotFound)
@@ -432,26 +558,34 @@ pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError>
 /// consumed cannot be walked to twice, so no residual data anomaly can spin the Rust loop
 /// either, whatever the database returned.
 async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>, AppError> {
-    let Some(parent_id) = object.parent_id else { return Ok(Vec::new()) };
+    let Some(parent_id) = object.parent_id else {
+        return Ok(Vec::new());
+    };
     let rows: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
         "WITH RECURSIVE chain(id, name, parent_id) AS ( \
            SELECT id, name, parent_id FROM objects WHERE id = $1 \
            UNION \
            SELECT o.id, o.name, o.parent_id FROM objects o \
              JOIN chain c ON o.id = c.parent_id \
-         ) SELECT id, name, parent_id FROM chain WHERE id != $1")
-        .bind(object.id)
-        .fetch_all(&state.db).await?;
+         ) SELECT id, name, parent_id FROM chain WHERE id != $1",
+    )
+    .bind(object.id)
+    .fetch_all(&state.db)
+    .await?;
 
     // The query above is unordered -- a set, not a path -- so the chain is rebuilt by following
     // `parent_id` from the object outwards, which yields nearest ancestor first, then reversed
     // for the root-first order the breadcrumb wants.
-    let mut by_id: HashMap<i64, (String, Option<i64>)> =
-        rows.into_iter().map(|(id, name, parent_id)| (id, (name, parent_id))).collect();
+    let mut by_id: HashMap<i64, (String, Option<i64>)> = rows
+        .into_iter()
+        .map(|(id, name, parent_id)| (id, (name, parent_id)))
+        .collect();
     let mut chain = Vec::with_capacity(by_id.len());
     let mut next = Some(parent_id);
     while let Some(id) = next {
-        let Some((name, parent_id)) = by_id.remove(&id) else { break };
+        let Some((name, parent_id)) = by_id.remove(&id) else {
+            break;
+        };
         next = parent_id;
         chain.push((id, name));
     }
@@ -462,11 +596,15 @@ async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>
 async fn with_stats(state: &App, object: ObjectRow) -> Result<ObjectOut, AppError> {
     let id = object.id;
     let chain = ancestors(state, &object).await?;
-    let mut out = derived(state, Some(object.user_id), Some(id)).await?
+    let mut out = derived(state, Some(object.user_id), Some(id))
+        .await?
         .remove(&id)
         .map(|d| d.into_out(object))
         .ok_or(AppError::NotFound)?;
-    out.ancestors = chain.into_iter().map(|(id, name)| Ancestor { id, name }).collect();
+    out.ancestors = chain
+        .into_iter()
+        .map(|(id, name)| Ancestor { id, name })
+        .collect();
     Ok(out)
 }
 
@@ -483,7 +621,11 @@ pub struct ListQuery {
     pub all: bool,
 }
 
-async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuery>) -> Result<Json<Vec<ObjectOut>>, AppError> {
+async fn list(
+    user: AuthUser,
+    State(state): State<App>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Vec<ObjectOut>>, AppError> {
     // `COLLATE NOCASE` is SQLite's spelling; PostgreSQL sorts by `lower(name)`. Without it a
     // list reads as "Banana, apple, cherry", which looks like a bug to the person who typed
     // the names. See `dialect::Backend::name_order`.
@@ -492,13 +634,15 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli, weight_unit \
+         energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private \
          FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
            AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
          ORDER BY {order}")))
         .bind(user.id).bind(q.parent_id).bind(q.all).fetch_all(&state.db).await?;
     // Empty archived/child lists need no aggregates across the entire account.
-    if rows.is_empty() { return Ok(Json(Vec::new())); }
+    if rows.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let mut derived = derived(&state, Some(user.id), None).await?;
     let out = rows
         .into_iter()
@@ -507,7 +651,11 @@ async fn list(user: AuthUser, State(state): State<App>, Query(q): Query<ListQuer
     Ok(Json(out))
 }
 
-async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<ObjectInput>) -> Result<(StatusCode, Json<ObjectOut>), AppError> {
+async fn create(
+    user: AuthUser,
+    State(state): State<App>,
+    Json(mut body): Json<ObjectInput>,
+) -> Result<(StatusCode, Json<ObjectOut>), AppError> {
     body.validate()?;
     let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
     if let Some(uuid) = client_uuid.as_deref() {
@@ -531,7 +679,11 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
         }
     }
     let now = db::now();
-    let archived_at = if body.archived == Some(true) { Some(now.clone()) } else { None };
+    let archived_at = if body.archived == Some(true) {
+        Some(now.clone())
+    } else {
+        None
+    };
     let object_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
@@ -550,25 +702,65 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     }
     // Omitted and `null` both mean "no price" on create, same as `parent_id` above.
     let energy_price_milli = body.energy_price_milli.flatten();
+    let fuel_capacity_milli = body.fuel_capacity_milli.flatten();
+    // The presence of the neutral fields distinguishes a new resource-aware client from a
+    // legacy client that only knows `fuel_unit`. Keep legacy vehicle charging on the `fuel`
+    // category; silently inferring a resource kind would change its existing UI and sync shape.
+    let uses_resource_model = body.resource_unit.is_some()
+        || body.resource_kind.is_some()
+        || body.measurement_mode.is_some();
+    let resource_unit = body
+        .resource_unit
+        .clone()
+        .flatten()
+        .or_else(|| body.fuel_unit.clone());
+    let resource_kind = body.resource_kind.clone().flatten().or_else(|| {
+        uses_resource_model.then(|| match resource_unit.as_deref() {
+                Some("kwh") => Some("electricity".into()),
+                Some("l" | "gal") if body.type_ == "home" => Some("heating_fuel".into()),
+                Some("l" | "gal") => Some("vehicle_fuel".into()),
+                _ => None,
+            }).flatten()
+    });
+    let measurement_mode = body
+        .measurement_mode
+        .clone()
+        .flatten()
+        .or_else(|| uses_resource_model.then(|| resource_unit.as_ref().map(|_| "usage".into())).flatten());
+    if fuel_capacity_milli.is_some() && !matches!(resource_unit.as_deref(), Some("l") | Some("gal"))
+    {
+        return Err(AppError::BadRequest(
+            "fuel_capacity_milli needs a liquid fuel unit".into(),
+        ));
+    }
+    let legacy_fuel_unit = resource_unit
+        .as_ref()
+        .filter(|u| u.as_str() != "m3")
+        .cloned();
     let row = sqlx::query_as::<_, ObjectRow>(
         "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli, weight_unit) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16) \
+         energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) \
          RETURNING id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
-         energy_price_milli, weight_unit",
+         energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private",
     )
-    .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
+    .bind(user.id).bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&legacy_fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(archived_at).bind(parent_id).bind(&now).bind(&now)
     .bind(&object_uuid).bind(tags::to_json(body.tags.as_deref().unwrap_or_default()))
-    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or("kg"))
+    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or("kg")).bind(fuel_capacity_milli)
+    .bind(&resource_unit).bind(&resource_kind).bind(&measurement_mode).bind(body.monthly_target_milli.flatten())
+    .bind(body.low_level_pct.flatten()).bind(i64::from(body.private.unwrap_or(false)))
     .fetch_one(&mut *tx).await;
     let row = match row {
         Ok(row) => row,
         // Two replays of one client_uuid racing past the pre-check above: the loser trips the
         // unique index on `client_uuid`. The id is spoken for, so that is the same conflict.
-        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+        Err(e)
+            if e.as_database_error()
+                .is_some_and(|d| d.is_unique_violation()) =>
+        {
             tx.rollback().await?;
             return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into()));
         }
@@ -579,12 +771,21 @@ async fn create(user: AuthUser, State(state): State<App>, Json(mut body): Json<O
     Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
 }
 
-async fn read(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<Json<ObjectOut>, AppError> {
+async fn read(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(id): Path<i64>,
+) -> Result<Json<ObjectOut>, AppError> {
     let row = load_owned_object(&state, user.id, id).await?;
     Ok(Json(with_stats(&state, row).await?))
 }
 
-async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(mut body): Json<ObjectInput>) -> Result<Json<ObjectOut>, AppError> {
+async fn update(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(id): Path<i64>,
+    Json(mut body): Json<ObjectInput>,
+) -> Result<Json<ObjectOut>, AppError> {
     // Request-shape validation first, and it is the only thing that happens before the write
     // lock: it reads no database state at all, so a malformed body can be answered 400 without
     // stalling every other writer in the instance for the length of a transaction.
@@ -635,6 +836,21 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
             return Err(AppError::BadRequest(COUNTER_UNIT_TRIP_REJECTION.into()));
         }
     }
+    let resource_unit = match body.resource_unit.clone() {
+        Some(value) => value,
+        // A legacy client has no `resource_unit` key and resends `fuel_unit` in full, including
+        // null when clearing it. Honour that shape; new clients always send `resource_unit`.
+        None => body.fuel_unit.clone(),
+    };
+    if resource_unit != existing.resource_unit {
+        let has_fuel_history: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM activities WHERE object_id = $1 AND deleted_at IS NULL AND (quantity_milli IS NOT NULL OR fuel_level_pct IS NOT NULL) LIMIT 1",
+        )
+        .bind(id).fetch_optional(&mut *tx).await?;
+        if has_fuel_history.is_some() {
+            return Err(AppError::BadRequest(FUEL_UNIT_HISTORY_REJECTION.into()));
+        }
+    }
     let archived_at = match body.archived {
         Some(true) => existing.archived_at.clone().or_else(|| Some(db::now())),
         Some(false) => None,
@@ -647,7 +863,9 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
             let ok: Option<(i64,)> = sqlx::query_as("SELECT id FROM attachments WHERE id = $1 AND object_id = $2 AND kind = 'photo' AND deleted_at IS NULL")
                 .bind(cover).bind(id).fetch_optional(&mut *tx).await?;
             if ok.is_none() {
-                return Err(AppError::BadRequest("cover_attachment_id must be a photo of this object".into()));
+                return Err(AppError::BadRequest(
+                    "cover_attachment_id must be a photo of this object".into(),
+                ));
             }
             Some(cover)
         }
@@ -676,52 +894,136 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
         None => existing.energy_price_milli,
         Some(v) => v,
     };
-    if energy_price_milli.is_some() && body.fuel_unit.is_none() {
+    if energy_price_milli.is_some() && resource_unit.is_none() {
         return Err(AppError::BadRequest(ENERGY_PRICE_NEEDS_FUEL_UNIT.into()));
     }
+    let fuel_capacity_milli = match body.fuel_capacity_milli {
+        None => existing.fuel_capacity_milli,
+        Some(v) => v,
+    };
+    if fuel_capacity_milli.is_some() && !matches!(resource_unit.as_deref(), Some("l") | Some("gal"))
+    {
+        return Err(AppError::BadRequest(
+            "fuel_capacity_milli needs a liquid fuel unit".into(),
+        ));
+    }
+    let resource_kind = body
+        .resource_kind
+        .clone()
+        .unwrap_or(existing.resource_kind.clone());
+    let measurement_mode = body
+        .measurement_mode
+        .clone()
+        .unwrap_or(existing.measurement_mode.clone());
+    let monthly_target_milli = body
+        .monthly_target_milli
+        .unwrap_or(existing.monthly_target_milli);
+    let low_level_pct = body.low_level_pct.unwrap_or(existing.low_level_pct);
+    let private = body.private.map(i64::from).unwrap_or(existing.is_private);
+    let legacy_fuel_unit = resource_unit
+        .as_ref()
+        .filter(|u| u.as_str() != "m3")
+        .cloned();
 
     // Only fields whose value actually differs are logged -- see `record::record_update` --
     // so a PATCH that rewrites a field with its existing value produces no `changes` row.
     // Every value is settled before this point, `parent_id` included, so the diff and the
     // single `UPDATE` below always agree about what is being written.
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
-    if let Some(unit) = &body.weight_unit { if unit != &existing.weight_unit { changed.push(("weight_unit", json!(unit))); } }
-    if body.name != existing.name { changed.push(("name", json!(body.name))); }
-    if body.type_ != existing.type_ { changed.push(("type", json!(body.type_))); }
-    if body.counter_unit != existing.counter_unit { changed.push(("counter_unit", json!(body.counter_unit))); }
-    if body.fuel_unit != existing.fuel_unit { changed.push(("fuel_unit", json!(body.fuel_unit))); }
-    if body.description != existing.description { changed.push(("description", json!(body.description))); }
-    if body.purchase_date != existing.purchase_date { changed.push(("purchase_date", json!(body.purchase_date))); }
+    if let Some(unit) = &body.weight_unit {
+        if unit != &existing.weight_unit {
+            changed.push(("weight_unit", json!(unit)));
+        }
+    }
+    if body.name != existing.name {
+        changed.push(("name", json!(body.name)));
+    }
+    if body.type_ != existing.type_ {
+        changed.push(("type", json!(body.type_)));
+    }
+    if body.counter_unit != existing.counter_unit {
+        changed.push(("counter_unit", json!(body.counter_unit)));
+    }
+    if legacy_fuel_unit != existing.fuel_unit {
+        changed.push(("fuel_unit", json!(legacy_fuel_unit)));
+    }
+    if resource_unit != existing.resource_unit {
+        changed.push(("resource_unit", json!(resource_unit)));
+    }
+    if resource_kind != existing.resource_kind {
+        changed.push(("resource_kind", json!(resource_kind)));
+    }
+    if measurement_mode != existing.measurement_mode {
+        changed.push(("measurement_mode", json!(measurement_mode)));
+    }
+    if monthly_target_milli != existing.monthly_target_milli {
+        changed.push(("monthly_target_milli", json!(monthly_target_milli)));
+    }
+    if low_level_pct != existing.low_level_pct {
+        changed.push(("low_level_pct", json!(low_level_pct)));
+    }
+    if private != existing.is_private {
+        changed.push(("private", json!(private)));
+    }
+    if body.description != existing.description {
+        changed.push(("description", json!(body.description)));
+    }
+    if body.purchase_date != existing.purchase_date {
+        changed.push(("purchase_date", json!(body.purchase_date)));
+    }
     if body.purchase_price_cents != existing.purchase_price_cents {
         changed.push(("purchase_price_cents", json!(body.purchase_price_cents)));
     }
-    if archived_at != existing.archived_at { changed.push(("archived_at", json!(archived_at))); }
+    if archived_at != existing.archived_at {
+        changed.push(("archived_at", json!(archived_at)));
+    }
     if cover_attachment_id != existing.cover_attachment_id {
         changed.push(("cover_attachment_id", json!(cover_attachment_id)));
     }
-    if parent_id != existing.parent_id { changed.push(("parent_id", json!(parent_id))); }
+    if parent_id != existing.parent_id {
+        changed.push(("parent_id", json!(parent_id)));
+    }
     // Absent keeps the stored tags. The change is logged as the JSON text the column holds, the
     // same shape a sync `set` op carries for any other text field.
-    let tags = body.tags.as_deref().map(tags::to_json).unwrap_or_else(|| existing.tags.clone());
-    if tags != existing.tags { changed.push(("tags", json!(tags))); }
+    let tags = body
+        .tags
+        .as_deref()
+        .map(tags::to_json)
+        .unwrap_or_else(|| existing.tags.clone());
+    if tags != existing.tags {
+        changed.push(("tags", json!(tags)));
+    }
     if energy_price_milli != existing.energy_price_milli {
         changed.push(("energy_price_milli", json!(energy_price_milli)));
+    }
+    if fuel_capacity_milli != existing.fuel_capacity_milli {
+        changed.push(("fuel_capacity_milli", json!(fuel_capacity_milli)));
     }
 
     sqlx::query(
         "UPDATE objects SET name = $1, type = $2, counter_unit = $3, fuel_unit = $4, description = $5, purchase_date = $6, \
          purchase_price_cents = $7, archived_at = $8, cover_attachment_id = $9, parent_id = $10, updated_at = $11, tags = $12, \
-         energy_price_milli = $13, weight_unit = $14 \
-         WHERE id = $15 AND deleted_at IS NULL",
+         energy_price_milli = $13, weight_unit = $14, fuel_capacity_milli = $15, resource_unit = $16, resource_kind = $17, \
+         measurement_mode = $18, monthly_target_milli = $19, low_level_pct = $20, private = $21 \
+         WHERE id = $22 AND deleted_at IS NULL",
     )
-    .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&body.fuel_unit).bind(&body.description)
+    .bind(&body.name).bind(&body.type_).bind(&body.counter_unit).bind(&legacy_fuel_unit).bind(&body.description)
     .bind(&body.purchase_date).bind(body.purchase_price_cents).bind(&archived_at)
     .bind(cover_attachment_id).bind(parent_id).bind(db::now()).bind(&tags)
-    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or(&existing.weight_unit)).bind(id)
+    .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or(&existing.weight_unit)).bind(fuel_capacity_milli)
+    .bind(&resource_unit).bind(&resource_kind).bind(&measurement_mode).bind(monthly_target_milli).bind(low_level_pct).bind(private).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;
-        record::record_update(&mut tx, user.id, Entity::Object, &uuid, &changed, &record::edited_at_now()).await?;
+        record::record_update(
+            &mut tx,
+            user.id,
+            Entity::Object,
+            &uuid,
+            &changed,
+            &record::edited_at_now(),
+        )
+        .await?;
     }
     tx.commit().await?;
 
@@ -741,15 +1043,25 @@ async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, J
 /// content-addressed and shared, `attachments.file_id` is `ON DELETE RESTRICT`, and the
 /// attachment rows pointing at it still exist. They are freed when the retention purge
 /// finally removes those tombstoned attachments.
-async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -> Result<StatusCode, AppError> {
+async fn delete(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, AppError> {
     let now = db::now();
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let affected = sqlx::query(
         "UPDATE objects SET deleted_at = $1, updated_at = $2 \
-         WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL")
-        .bind(&now).bind(&now).bind(id).bind(user.id)
-        .execute(&mut *tx).await?.rows_affected();
+         WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(id)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     if affected == 0 {
         return Err(AppError::NotFound);
     }

@@ -35,12 +35,13 @@ pub async fn pull(
            WHEN 'file'       THEN (SELECT id FROM files       WHERE client_uuid = c.entity_uuid) \
            WHEN 'object_type' THEN (SELECT id FROM object_types WHERE client_uuid = c.entity_uuid) \
          END AS entity_id \
-         FROM changes c WHERE c.user_id = $1 AND c.seq > $2 ORDER BY c.seq LIMIT $3")
-        .bind(user_id)
-        .bind(since)
-        .bind(limit)
-        .fetch_all(db)
-        .await?)
+         FROM changes c WHERE c.user_id = $1 AND c.seq > $2 ORDER BY c.seq LIMIT $3",
+    )
+    .bind(user_id)
+    .bind(since)
+    .bind(limit)
+    .fetch_all(db)
+    .await?)
 }
 
 /// The oldest `seq` still retained for this user, or 0 when this user's own log is empty.
@@ -89,34 +90,65 @@ pub async fn snapshot(
     db: &sqlx::AnyPool,
     user_id: i64,
 ) -> Result<(i64, serde_json::Value), AppError> {
-    let seq: i64 = sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_one(db)
-        .await?;
+    let seq: i64 =
+        sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(db)
+            .await?;
 
-    let objects = rows(db, "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
-    let activities = rows(db,
+    let objects = rows(
+        db,
+        "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
+    let activities = rows(
+        db,
         "SELECT a.* FROM activities a JOIN objects o ON o.id = a.object_id \
-         WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
-    let reminders = rows(db,
+         WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
+    let reminders = rows(
+        db,
         "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
-    let attachments = rows(db,
+         WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
+    let attachments = rows(
+        db,
         "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
-         WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL", user_id).await?;
-    let files = rows(db, "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
+         WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
+    let files = rows(
+        db,
+        "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
     // Added with own types. A client must ignore snapshot keys it does not know, so an older
     // client reads this snapshot as before.
-    let object_types = rows(db, "SELECT * FROM object_types WHERE user_id = $1 AND deleted_at IS NULL", user_id).await?;
+    let object_types = rows(
+        db,
+        "SELECT * FROM object_types WHERE user_id = $1 AND deleted_at IS NULL",
+        user_id,
+    )
+    .await?;
 
-    Ok((seq, serde_json::json!({
-        "objects": objects,
-        "activities": activities,
-        "reminders": reminders,
-        "attachments": attachments,
-        "files": files,
-        "object_types": object_types,
-    })))
+    Ok((
+        seq,
+        serde_json::json!({
+            "objects": objects,
+            "activities": activities,
+            "reminders": reminders,
+            "attachments": attachments,
+            "files": files,
+            "object_types": object_types,
+        }),
+    ))
 }
 
 /// Reads a whole table as JSON objects, column names taken from the result set.
@@ -143,7 +175,9 @@ async fn rows(
                 // spellings are listed so this reads the same rows it always did, and the
                 // names PostgreSQL will produce are listed alongside them.
                 match raw.type_info().name() {
-                    "BIGINT" | "INTEGER" | "SMALLINT" => serde_json::json!(row.try_get::<i64, _>(i)?),
+                    "BIGINT" | "INTEGER" | "SMALLINT" => {
+                        serde_json::json!(row.try_get::<i64, _>(i)?)
+                    }
                     "DOUBLE" | "REAL" => serde_json::json!(row.try_get::<f64, _>(i)?),
                     "BOOLEAN" => serde_json::json!(row.try_get::<bool, _>(i)?),
                     _ => serde_json::json!(row.try_get::<String, _>(i)?),
@@ -166,10 +200,7 @@ async fn rows(
 /// That promise is only kept if no row can be removed through a parent's `ON DELETE CASCADE`
 /// ahead of its own expiry, so a parent whose children have not all aged out is skipped and
 /// tried again next run. See the guards on the delete loop below.
-pub async fn purge(
-    state: &crate::state::App,
-    retention_days: i64,
-) -> Result<u64, AppError> {
+pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64, AppError> {
     let db = &state.db;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -240,12 +271,18 @@ pub async fn purge(
     // run, for a state no write path can reach. The `warn!` is the trade: an operator can see it.
     let guards = [
         ("attachments", ""),
-        ("activities", "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)"),
+        (
+            "activities",
+            "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)",
+        ),
         ("reminders", ""),
-        ("objects", "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
+        (
+            "objects",
+            "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id) \
-                     AND NOT EXISTS (SELECT 1 FROM objects c WHERE c.parent_id = objects.id)"),
+                     AND NOT EXISTS (SELECT 1 FROM objects c WHERE c.parent_id = objects.id)",
+        ),
         // Nothing references a type by foreign key (objects name it by uuid in `type`), and a
         // type is only tombstoned while no live object uses it, so it needs no guard.
         ("object_types", ""),
@@ -281,10 +318,11 @@ pub async fn purge(
     // attachment is deleted the link is gone, and with it any way to find the blob to reclaim.
     let pinned: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT file_id FROM attachments \
-         WHERE deleted_at IS NOT NULL AND deleted_at < $1")
-        .bind(&cutoff)
-        .fetch_all(&mut *tx)
-        .await?;
+         WHERE deleted_at IS NOT NULL AND deleted_at < $1",
+    )
+    .bind(&cutoff)
+    .fetch_all(&mut *tx)
+    .await?;
 
     for (table, guard) in guards {
         // `table` and `guard` only ever come from the fixed list above, never from user input
@@ -292,7 +330,10 @@ pub async fn purge(
         // accept it.
         let sql =
             format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
-        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&cutoff).execute(&mut *tx).await?;
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(&cutoff)
+            .execute(&mut *tx)
+            .await?;
     }
 
     // The one case of "held back forever" this run can name out loud. An aged-out object that is
@@ -340,9 +381,10 @@ pub async fn purge(
            AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
            AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM object_types WHERE client_uuid = field_clock.entity_uuid)")
-        .execute(&mut *tx)
-        .await?;
+           AND NOT EXISTS (SELECT 1 FROM object_types WHERE client_uuid = field_clock.entity_uuid)",
+    )
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 

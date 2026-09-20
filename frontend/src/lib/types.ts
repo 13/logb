@@ -2,7 +2,7 @@ import type { IconName } from './icon-names.js';
 
 export type WeightUnit = 'kg' | 'lb';
 export type CounterUnit = 'km' | 'mi' | 'h' | null;
-export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'other',
+export const CATEGORIES = ['maintenance', 'repair', 'purchase', 'inspection', 'modification', 'fuel', 'usage', 'other',
   'symptom', 'treatment', 'appointment', 'medication', 'reading', 'trip', 'weight', 'session'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const OBJECT_TYPES = ['car', 'e_bike', 'bike', 'motorcycle', 'home', 'appliance', 'tool', 'body', 'other'] as const;
@@ -37,6 +37,9 @@ export interface ObjectStats {
   counter_per_day_milli: number | null;
 }
 export type FuelUnit = 'l' | 'gal' | 'kwh' | null;
+export type ResourceUnit = 'l' | 'gal' | 'kwh' | 'm3' | null;
+export type ResourceKind = 'electricity' | 'heating_fuel' | 'vehicle_fuel' | 'water' | null;
+export type MeasurementMode = 'usage' | 'meter' | null;
 export interface MemObject {
   weight_unit?: WeightUnit;
   id: number; user_id: number; name: string; type: ObjectType; counter_unit: CounterUnit; fuel_unit: FuelUnit; description: string;
@@ -49,6 +52,12 @@ export interface MemObject {
   /** Cents per fuel_unit x1000 (0.30 EUR/kWh -> 30000); null unless set. Only meaningful
    *  alongside a fuel_unit -- see ObjectInput's doc comment. */
   energy_price_milli: number | null;
+  /** Liquid tank capacity ×1000 in fuel_unit; null for non-tank objects. */
+  fuel_capacity_milli?: number | null;
+  resource_unit?: ResourceUnit; resource_kind?: ResourceKind; measurement_mode?: MeasurementMode;
+  monthly_target_milli?: number | null; low_level_pct?: number | null; private?: number;
+  /** Client-side only: this object is durable in the offline outbox and has no server id yet. */
+  pending?: boolean;
 }
 export interface ObjectInput {
   weight_unit?: WeightUnit;
@@ -58,6 +67,9 @@ export interface ObjectInput {
   /** Three-state on PATCH like cover_attachment_id: omit to keep the current price, null to
    *  clear it, a number to set it. >= 0, and only alongside a fuel_unit (400 otherwise). */
   energy_price_milli?: number | null;
+  fuel_capacity_milli?: number | null;
+  resource_unit?: ResourceUnit; resource_kind?: ResourceKind; measurement_mode?: MeasurementMode;
+  monthly_target_milli?: number | null; low_level_pct?: number | null; private?: boolean;
 }
 
 export interface Attachment {
@@ -90,6 +102,10 @@ export interface Activity {
   /** Whether this charge (or fill) topped the battery/tank up: 1 only on a fuel entry, 0
    *  otherwise -- never null. Absent on PATCH keeps the stored value. */
   charged_full: number;
+  /** Observed remaining liquid-tank level, 0..100; null on other entries. */
+  fuel_level_pct?: number | null;
+  meter_reading_milli?: number | null; period_start?: string | null; period_end?: string | null;
+  estimated?: number; meter_reset?: number;
 }
 export interface ActivityInput {
   weight_grams?: number | null;
@@ -98,6 +114,9 @@ export interface ActivityInput {
   start_counter?: number | null; from_place?: string | null; to_place?: string | null;
   duration_minutes?: number | null; battery_used_pct?: number | null;
   charged_full?: number;
+  fuel_level_pct?: number | null;
+  meter_reading_milli?: number | null; period_start?: string | null; period_end?: string | null;
+  estimated?: number; meter_reset?: number;
 }
 
 /** `GET /tags`: every distinct tag in use, with how many objects and entries carry it. */
@@ -252,12 +271,28 @@ export interface EnergyUsage {
   months: EnergyUsageMonth[];
   current_kwh_milli: number;
   previous_kwh_milli: number;
+  target_kwh_milli: number;
 }
 export interface FuelUsageMonth { month: string; liters_milli: number; gallons_milli: number; charges: number; objects: number }
 export interface FuelUsage {
   months: FuelUsageMonth[];
   current_liters_milli: number; previous_liters_milli: number;
   current_gallons_milli: number; previous_gallons_milli: number;
+  levels: FuelTankLevel[];
+}
+export interface FuelTankLevel {
+  object_id: number; object_name: string; unit: 'l' | 'gal'; date: string;
+  level_pct: number; capacity_milli: number | null; remaining_milli: number | null;
+  low: boolean; estimated_days_remaining: number | null;
+}
+export interface WaterUsageMonth { month: string; liters_milli: number; cost_cents: number; entries: number; estimated: boolean }
+export interface WaterObjectUsage {
+  object_id: number; object_name: string; liters_milli: number; target_liters_milli: number | null;
+  unit: Exclude<ResourceUnit, null>; current_reading_milli: number | null;
+}
+export interface WaterUsage {
+  months: WaterUsageMonth[]; current_liters_milli: number; previous_liters_milli: number;
+  current_cost_cents: number; daily_average_liters_milli: number; anomalies: number; objects: WaterObjectUsage[];
 }
 
 /** An API token as it is listed: never the token itself, which the server returns exactly once

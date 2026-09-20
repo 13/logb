@@ -33,6 +33,7 @@
       <div class="row">
         <b>{object.name}</b>
         {#if object.archived_at}<span class="chip">{$t('dash.archived')}</span>{/if}
+        {#if object.pending}<span class="chip">{$t('timeline.pending')}</span>{/if}
         {#if object.stats.due_reminder_count > 0}
           <span class="chip due">{object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}</span>
         {/if}

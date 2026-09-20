@@ -20,15 +20,17 @@ describe('activity form', () => {
     // ActivityForm is what actually keeps them null for a non-trip save.
     expect(emptyActivity()).toMatchObject({
       start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+      meter_reading_milli: null, period_start: null, period_end: null, estimated: 0, meter_reset: 0,
     });
   });
 
   it('maps an activity to input, trip fields included', () => {
     const src = { ...a(1, '2024-01-01'), cost_cents: 500, counter_value: 12, quantity_milli: 41_300, tags: ['Winter'] };
     expect(toActivityInput(src)).toEqual({
-      weight_grams: null,
+      weight_grams: null, fuel_level_pct: null,
       date: '2024-01-01', category: 'repair', title: 't1', notes: '', counter_value: 12, cost_cents: 500, quantity_milli: 41_300, tags: ['Winter'],
       start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+      meter_reading_milli: null, period_start: null, period_end: null, estimated: 0, meter_reset: 0,
     });
   });
 
@@ -153,5 +155,10 @@ describe('categoriesFor offering trip', () => {
 
   it('does not offer trip on a non-distance counter', () => {
     expect(categoriesFor('e_bike', [], undefined, 'h')).not.toContain('trip');
+  });
+
+  it('offers fuel by resource capability, independent of object type', () => {
+    expect(categoriesFor('home', [], undefined, 'h', 'l')).toContain('fuel');
+    expect(categoriesFor('appliance', [], undefined, 'h', 'kwh')).toContain('fuel');
   });
 });

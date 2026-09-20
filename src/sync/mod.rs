@@ -49,7 +49,11 @@ impl Entity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum OpKind { Create, Set, Delete }
+pub enum OpKind {
+    Create,
+    Set,
+    Delete,
+}
 
 impl OpKind {
     pub fn as_str(&self) -> &'static str {
@@ -107,7 +111,10 @@ pub enum FieldType {
 ///
 /// The types mirror `migrations/`: everything not named INTEGER there is a TEXT column.
 pub fn syncable_field_type(entity: Entity, field: &str) -> Option<FieldType> {
-    whitelist(entity).iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
+    whitelist(entity)
+        .iter()
+        .find(|(name, _)| *name == field)
+        .map(|(_, ty)| *ty)
 }
 
 /// The whitelist itself. Private, so no caller can ask a question about a field other than
@@ -116,39 +123,75 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
     use FieldType::{Integer, Text};
     match entity {
         Entity::Object => &[
-            ("name", Text), ("type", Text), ("counter_unit", Text), ("fuel_unit", Text),
-            ("description", Text), ("purchase_date", Text),
-            ("purchase_price_cents", Integer), ("archived_at", Text),
-            ("cover_attachment_id", Integer), ("parent_id", Integer),
+            ("name", Text),
+            ("type", Text),
+            ("counter_unit", Text),
+            ("fuel_unit", Text),
+            ("description", Text),
+            ("purchase_date", Text),
+            ("purchase_price_cents", Integer),
+            ("archived_at", Text),
+            ("cover_attachment_id", Integer),
+            ("parent_id", Integer),
             // JSON text; `apply::canonical_tags` normalises it before it is logged or stored.
             ("tags", Text),
             // Cents per fuel_unit x1000; only meaningful alongside a stored `fuel_unit`, a
             // cross-field rule `apply_op`'s `Set` handling enforces against the stored row, the
             // same as it does for the trip fields below.
-            ("energy_price_milli", Integer), ("weight_unit", Text),
+            ("energy_price_milli", Integer),
+            ("weight_unit", Text),
+            ("fuel_capacity_milli", Integer),
+            ("resource_unit", Text),
+            ("resource_kind", Text),
+            ("measurement_mode", Text),
+            ("monthly_target_milli", Integer),
+            ("low_level_pct", Integer),
+            ("private", Integer),
         ],
         Entity::Activity => &[
-            ("date", Text), ("category", Text), ("title", Text), ("notes", Text),
-            ("counter_value", Integer), ("cost_cents", Integer), ("quantity_milli", Integer),
+            ("date", Text),
+            ("category", Text),
+            ("title", Text),
+            ("notes", Text),
+            ("counter_value", Integer),
+            ("cost_cents", Integer),
+            ("quantity_milli", Integer),
             ("tags", Text),
             // A trip's fields. Settable on any activity the same way `quantity_milli` already
             // is on a non-fuel one: the whitelist has no notion of "only on this category",
             // that cross-field rule is `apply::apply_op`'s `Set` handling to enforce, exactly as
             // `ActivityInput::validate` enforces it on the REST door.
-            ("start_counter", Integer), ("from_place", Text), ("to_place", Text),
-            ("duration_minutes", Integer), ("battery_used_pct", Integer),
+            ("start_counter", Integer),
+            ("from_place", Text),
+            ("to_place", Text),
+            ("duration_minutes", Integer),
+            ("battery_used_pct", Integer),
             // Whether this charge (or fill) topped the battery/tank up; the cross-field rule
             // that only a `fuel` row may carry 1 is enforced in `apply_op`'s `Set` handling,
             // exactly as `ActivityInput::validate` enforces it on the REST door.
-            ("charged_full", Integer), ("weight_grams", Integer),
+            ("charged_full", Integer),
+            ("weight_grams", Integer),
+            ("fuel_level_pct", Integer),
+            ("meter_reading_milli", Integer),
+            ("period_start", Text),
+            ("period_end", Text),
+            ("estimated", Integer),
+            ("meter_reset", Integer),
         ],
         Entity::Reminder => &[
-            ("title", Text), ("notes", Text), ("due_date", Text), ("due_counter", Integer),
-            ("repeat_months", Integer), ("repeat_counter", Integer), ("done_at", Text),
-            ("done_activity_id", Integer), ("snoozed_until", Text),
+            ("title", Text),
+            ("notes", Text),
+            ("due_date", Text),
+            ("due_counter", Integer),
+            ("repeat_months", Integer),
+            ("repeat_counter", Integer),
+            ("done_at", Text),
+            ("done_activity_id", Integer),
+            ("snoozed_until", Text),
             // `kind` is absent on purpose: a reminder never changes kind (see
             // `api::reminders::update`), so it is fixed at create like `object_id`.
-            ("every_n", Integer), ("every_unit", Text),
+            ("every_n", Integer),
+            ("every_unit", Text),
         ],
         Entity::Attachment => &[("kind", Text), ("caption", Text)],
         // Content-addressed and written once. A file changes by being replaced, never edited.
@@ -156,7 +199,10 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
         // The four fields `api::types` edits. `categories` is JSON text, normalised by
         // `apply::canonical_value` like `tags`; `client_uuid` is fixed because objects refer to it.
         Entity::ObjectType => &[
-            ("name", Text), ("icon", Text), ("categories", Text), ("counter_unit", Text),
+            ("name", Text),
+            ("icon", Text),
+            ("categories", Text),
+            ("counter_unit", Text),
         ],
     }
 }
@@ -171,7 +217,10 @@ mod tests {
         assert_eq!(Entity::Activity.table(), "activities");
         assert_eq!(Entity::ObjectType.as_str(), "object_type");
         assert_eq!(Entity::ObjectType.table(), "object_types");
-        assert_eq!(serde_json::to_value(Entity::ObjectType).unwrap(), "object_type");
+        assert_eq!(
+            serde_json::to_value(Entity::ObjectType).unwrap(),
+            "object_type"
+        );
     }
 
     #[test]
@@ -180,13 +229,26 @@ mod tests {
         assert!(syncable_field_type(Entity::Activity, "quantity_milli").is_some());
         assert!(syncable_field_type(Entity::Reminder, "snoozed_until").is_some());
         assert!(syncable_field_type(Entity::Attachment, "caption").is_some());
-        assert_eq!(syncable_field_type(Entity::Object, "tags"), Some(FieldType::Text));
-        assert_eq!(syncable_field_type(Entity::Activity, "tags"), Some(FieldType::Text));
+        assert_eq!(
+            syncable_field_type(Entity::Object, "tags"),
+            Some(FieldType::Text)
+        );
+        assert_eq!(
+            syncable_field_type(Entity::Activity, "tags"),
+            Some(FieldType::Text)
+        );
     }
 
     #[test]
     fn the_whitelist_refuses_identity_and_ownership() {
-        for field in ["id", "user_id", "object_id", "client_uuid", "created_at", "deleted_at"] {
+        for field in [
+            "id",
+            "user_id",
+            "object_id",
+            "client_uuid",
+            "created_at",
+            "deleted_at",
+        ] {
             assert!(
                 syncable_field_type(Entity::Object, field).is_none(),
                 "{field} must not be settable"
@@ -206,6 +268,10 @@ mod tests {
         (Entity::Object, "cover_attachment_id"),
         (Entity::Object, "parent_id"),
         (Entity::Object, "energy_price_milli"),
+        (Entity::Object, "fuel_capacity_milli"),
+        (Entity::Object, "monthly_target_milli"),
+        (Entity::Object, "low_level_pct"),
+        (Entity::Object, "private"),
         (Entity::Activity, "counter_value"),
         (Entity::Activity, "cost_cents"),
         (Entity::Activity, "quantity_milli"),
@@ -214,6 +280,10 @@ mod tests {
         (Entity::Activity, "battery_used_pct"),
         (Entity::Activity, "charged_full"),
         (Entity::Activity, "weight_grams"),
+        (Entity::Activity, "fuel_level_pct"),
+        (Entity::Activity, "meter_reading_milli"),
+        (Entity::Activity, "estimated"),
+        (Entity::Activity, "meter_reset"),
         (Entity::Reminder, "due_counter"),
         (Entity::Reminder, "repeat_months"),
         (Entity::Reminder, "repeat_counter"),
@@ -224,13 +294,21 @@ mod tests {
     #[test]
     fn every_whitelisted_field_carries_its_schema_type() {
         let entities = [
-            Entity::Object, Entity::Activity, Entity::Reminder, Entity::Attachment, Entity::File,
+            Entity::Object,
+            Entity::Activity,
+            Entity::Reminder,
+            Entity::Attachment,
+            Entity::File,
             Entity::ObjectType,
         ];
         for entity in entities {
             for (field, ty) in whitelist(entity) {
                 let integer_in_schema = INTEGER_COLUMNS.contains(&(entity, field));
-                let expected = if integer_in_schema { FieldType::Integer } else { FieldType::Text };
+                let expected = if integer_in_schema {
+                    FieldType::Integer
+                } else {
+                    FieldType::Text
+                };
                 assert_eq!(
                     *ty,
                     expected,

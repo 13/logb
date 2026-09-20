@@ -45,7 +45,11 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -65,14 +69,25 @@ pub fn verify_dummy_password(password: &str) {
 
 pub fn validate_username(u: &str) -> Result<(), AppError> {
     let ok = (3..=32).contains(&u.len())
-        && u.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
-    if ok { Ok(()) } else {
-        Err(AppError::BadRequest("username must be 3-32 chars of letters, digits, _ . -".into()))
+        && u.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "username must be 3-32 chars of letters, digits, _ . -".into(),
+        ))
     }
 }
 
 pub fn validate_password(p: &str) -> Result<(), AppError> {
-    if p.len() >= 8 { Ok(()) } else { Err(AppError::BadRequest("password must be at least 8 characters".into())) }
+    if p.len() >= 8 {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "password must be at least 8 characters".into(),
+        ))
+    }
 }
 
 pub fn new_token() -> String {
@@ -85,10 +100,16 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
     let token = new_token();
     let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1").bind(db::now()).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1")
+        .bind(db::now())
+        .execute(&state.db)
+        .await?;
     sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token).bind(user_id).bind(expires)
-        .execute(&state.db).await?;
+        .bind(&token)
+        .bind(user_id)
+        .bind(expires)
+        .execute(&state.db)
+        .await?;
     Ok(token)
 }
 
@@ -107,10 +128,16 @@ pub async fn create_session_in(
     let token = new_token();
     let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1").bind(db::now()).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1")
+        .bind(db::now())
+        .execute(&mut **tx)
+        .await?;
     sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token).bind(user_id).bind(expires)
-        .execute(&mut **tx).await?;
+        .bind(&token)
+        .bind(user_id)
+        .bind(expires)
+        .execute(&mut **tx)
+        .await?;
     Ok(token)
 }
 
@@ -125,13 +152,22 @@ pub async fn create_session_in(
 /// attacker actually took. The cost is that a password change signs the phone out of the API
 /// too, which is why the README says so and the Settings screen says so next to the button.
 pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
-    sqlx::query("DELETE FROM api_tokens WHERE user_id = $1").bind(user_id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
     Ok(())
 }
 
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM sessions WHERE token = $1").bind(token).execute(&state.db).await?;
+    sqlx::query("DELETE FROM sessions WHERE token = $1")
+        .bind(token)
+        .execute(&state.db)
+        .await?;
     Ok(())
 }
 
@@ -196,17 +232,25 @@ pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
 pub fn check_login_rate(state: &App, ip: IpAddr) -> Result<(), AppError> {
     let mut map = state.login_attempts.lock().unwrap();
     let now = Instant::now();
-    map.retain(|&addr, &mut (_, started)| addr == ip || now.duration_since(started) <= LOGIN_WINDOW);
+    map.retain(|&addr, &mut (_, started)| {
+        addr == ip || now.duration_since(started) <= LOGIN_WINDOW
+    });
     let entry = map.entry(ip).or_insert((0, now));
     if now.duration_since(entry.1) > LOGIN_WINDOW {
         *entry = (0, now);
     }
     entry.0 += 1;
-    if entry.0 > state.config.login_max_attempts { Err(AppError::TooManyRequests) } else { Ok(()) }
+    if entry.0 > state.config.login_max_attempts {
+        Err(AppError::TooManyRequests)
+    } else {
+        Ok(())
+    }
 }
 
 pub fn token_from_parts(parts: &Parts) -> Option<String> {
-    CookieJar::from_headers(&parts.headers).get(COOKIE).map(|c| c.value().to_string())
+    CookieJar::from_headers(&parts.headers)
+        .get(COOKIE)
+        .map(|c| c.value().to_string())
 }
 
 /// The prefix every API token carries, so one is recognisable on sight -- in a log, a config
@@ -235,13 +279,21 @@ pub fn token_prefix(token: &str) -> String {
 
 /// A `Bearer` credential from the `Authorization` header, if there is one.
 fn bearer_from_parts(parts: &Parts) -> Option<String> {
-    let raw = parts.headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let raw = parts
+        .headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let (scheme, value) = raw.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("bearer") {
         return None;
     }
     let value = value.trim();
-    if value.is_empty() { None } else { Some(value.to_string()) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 /// Resolves a bearer token to its owner, and records that it was used.
@@ -267,8 +319,11 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
             "UPDATE api_tokens SET last_used_at = $1 \
              WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
         )
-        .bind(db::now()).bind(&hash).bind(&today)
-        .execute(&state.db).await?;
+        .bind(db::now())
+        .bind(&hash)
+        .bind(&today)
+        .execute(&state.db)
+        .await?;
     }
     Ok(row)
 }
@@ -330,7 +385,11 @@ impl FromRequestParts<App> for AdminUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
         let user = AuthUser::from_request_parts(parts, state).await?;
-        if user.is_admin.0 { Ok(AdminUser(user)) } else { Err(AppError::Forbidden) }
+        if user.is_admin.0 {
+            Ok(AdminUser(user))
+        } else {
+            Err(AppError::Forbidden)
+        }
     }
 }
 
@@ -345,8 +404,14 @@ mod tests {
 
     #[test]
     fn dummy_password_hash_parses_and_rejects_wrong_password() {
-        assert!(PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok(), "DUMMY_PASSWORD_HASH must be a valid PHC string");
-        assert!(!verify_password("definitely-not-the-password", DUMMY_PASSWORD_HASH));
+        assert!(
+            PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok(),
+            "DUMMY_PASSWORD_HASH must be a valid PHC string"
+        );
+        assert!(!verify_password(
+            "definitely-not-the-password",
+            DUMMY_PASSWORD_HASH
+        ));
     }
 
     async fn test_state(trust_proxy: bool) -> App {
@@ -359,18 +424,18 @@ mod tests {
             bind: "127.0.0.1".into(),
             port: 0,
             max_upload_mb: 2,
-        max_import_mb: 4,
-        notify_url: None,
-        notify_hour: 8,
-        notify_format: "json".into(),
-        public_url: None,
-        timezone: None,
-        backup: None,
-        backup_dir: None,
-        backup_hour: 3,
-        restore: None,
-        copy_to: None,
-        healthcheck: false,
+            max_import_mb: 4,
+            notify_url: None,
+            notify_hour: 8,
+            notify_format: "json".into(),
+            public_url: None,
+            timezone: None,
+            backup: None,
+            backup_dir: None,
+            backup_hour: 3,
+            restore: None,
+            copy_to: None,
+            healthcheck: false,
             secure_cookie: "false".into(),
             log: "warn".into(),
             trust_proxy,
@@ -410,7 +475,10 @@ mod tests {
     async fn client_ip_uses_first_hop_when_trust_proxy_is_on() {
         let state = test_state(true).await;
         let headers = headers_with_xff("198.51.100.7, 10.0.0.1");
-        assert_eq!(client_ip(&state, &headers, peer()), "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(&state, &headers, peer()),
+            "198.51.100.7".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[tokio::test]

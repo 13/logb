@@ -2,9 +2,9 @@ use crate::auth::{self, AuthUser, SessionUser};
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
+use axum::extract::Path;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
-use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
@@ -43,7 +43,10 @@ pub struct NewToken {
 /// The caller's own tokens, newest first. A token is never listed to anyone but its owner, and
 /// an admin has no view of anyone else's: an admin can already reset a password, which revokes
 /// them, and that is a visible act rather than a silent read.
-async fn list_tokens(user: AuthUser, State(state): State<App>) -> Result<Json<Vec<ApiTokenRow>>, AppError> {
+async fn list_tokens(
+    user: AuthUser,
+    State(state): State<App>,
+) -> Result<Json<Vec<ApiTokenRow>>, AppError> {
     Ok(Json(
         sqlx::query_as::<_, ApiTokenRow>(
             "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens              WHERE user_id = $1 ORDER BY id DESC",
@@ -66,7 +69,9 @@ async fn create_token(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > 64 {
-        return Err(AppError::BadRequest("name must be 1 to 64 characters".into()));
+        return Err(AppError::BadRequest(
+            "name must be 1 to 64 characters".into(),
+        ));
     }
     let token = auth::new_api_token();
     let id: (i64,) = sqlx::query_as(
@@ -79,14 +84,17 @@ async fn create_token(
     .bind(db::now())
     .fetch_one(&state.db)
     .await?;
-    Ok((StatusCode::CREATED, Json(json!({
-        "id": id.0,
-        "name": name,
-        "prefix": auth::token_prefix(&token),
-        "created_at": db::now(),
-        // The only time this is ever readable.
-        "token": token,
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id.0,
+            "name": name,
+            "prefix": auth::token_prefix(&token),
+            "created_at": db::now(),
+            // The only time this is ever readable.
+            "token": token,
+        })),
+    ))
 }
 
 /// Revoking takes effect on the next request: nothing caches the lookup.
@@ -113,11 +121,17 @@ async fn revoke_token(
         return Err(AppError::Unauthorized);
     }
     let done = sqlx::query("DELETE FROM api_tokens WHERE id = $1 AND user_id = $2")
-        .bind(id).bind(user.id)
-        .execute(&state.db).await?;
+        .bind(id)
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
     // Someone else's token is reported as absent rather than forbidden: whether an id exists is
     // not this caller's business either way.
-    if done.rows_affected() == 0 { Err(AppError::NotFound) } else { Ok(StatusCode::NO_CONTENT) }
+    if done.rows_affected() == 0 {
+        Err(AppError::NotFound)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
 }
 
 /// `Clear-Site-Data` header name. The `http` crate only special-cases the ~70 headers RFC-listed
@@ -138,7 +152,10 @@ const CLEAR_SITE_DATA_CACHE: &str = "\"cache\"";
 /// The one-element header array added to every successful setup/login/logout/logout-all
 /// response.
 fn clear_site_data() -> [(HeaderName, HeaderValue); 1] {
-    [(CLEAR_SITE_DATA, HeaderValue::from_static(CLEAR_SITE_DATA_CACHE))]
+    [(
+        CLEAR_SITE_DATA,
+        HeaderValue::from_static(CLEAR_SITE_DATA_CACHE),
+    )]
 }
 
 #[derive(Deserialize)]
@@ -152,12 +169,16 @@ pub struct Credentials {
 }
 
 async fn user_count(state: &App) -> Result<i64, AppError> {
-    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&state.db).await?;
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await?;
     Ok(n)
 }
 
 async fn status(State(state): State<App>) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(json!({ "setup_required": user_count(&state).await? == 0 })))
+    Ok(Json(
+        json!({ "setup_required": user_count(&state).await? == 0 }),
+    ))
 }
 
 async fn setup(
@@ -165,7 +186,15 @@ async fn setup(
     headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<Credentials>,
-) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], CookieJar, Json<AuthUser>), AppError> {
+) -> Result<
+    (
+        StatusCode,
+        [(HeaderName, HeaderValue); 1],
+        CookieJar,
+        Json<AuthUser>,
+    ),
+    AppError,
+> {
     // Cheap pre-check: rejects the common "setup already done" call before spending an
     // Argon2 hash on it. The authoritative guard is the transaction below.
     if user_count(&state).await? > 0 {
@@ -190,8 +219,11 @@ async fn setup(
          SELECT $1, $2, 1, 'en', $3 WHERE NOT EXISTS (SELECT 1 FROM users) \
          RETURNING id, username, is_admin, lang",
     )
-    .bind(&body.username).bind(hash).bind(db::now())
-    .fetch_optional(&mut *tx).await?
+    .bind(&body.username)
+    .bind(hash)
+    .bind(db::now())
+    .fetch_optional(&mut *tx)
+    .await?
     .ok_or_else(|| AppError::Conflict("setup already completed".into()))?;
     let token = auth::create_session_in(&mut tx, user.id).await?;
     tx.commit().await?;
@@ -200,11 +232,18 @@ async fn setup(
     // midnight for most of the world. A value that does not parse is dropped rather than
     // refused: a first run must not fail over a timezone the browser spelled oddly.
     if state.config.timezone.is_none() {
-        if let Some(tz) = body.timezone.as_deref().and_then(|s| super::settings::parse_timezone(s).ok()) {
+        if let Some(tz) = body
+            .timezone
+            .as_deref()
+            .and_then(|s| super::settings::parse_timezone(s).ok())
+        {
             super::settings::store_timezone(&state, tz).await?;
         }
     }
-    let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
+    let jar = jar.add(auth::session_cookie(
+        token,
+        auth::wants_secure(&state, &headers),
+    ));
     Ok((StatusCode::CREATED, clear_site_data(), jar, Json(user)))
 }
 
@@ -219,9 +258,11 @@ async fn login(
     // Case-insensitive by `lower(...)` on both sides rather than by the column's collation:
     // SQLite declares `UNIQUE COLLATE NOCASE`, PostgreSQL carries a unique index on
     // `lower(username)`, and only this spelling signs "bEn" in as "Ben" on both.
-    let row: Option<(i64, String)> = sqlx::query_as("SELECT id, password_hash FROM users WHERE lower(username) = lower($1)")
-        .bind(&body.username)
-        .fetch_optional(&state.db).await?;
+    let row: Option<(i64, String)> =
+        sqlx::query_as("SELECT id, password_hash FROM users WHERE lower(username) = lower($1)")
+            .bind(&body.username)
+            .fetch_optional(&state.db)
+            .await?;
     let Some((id, hash)) = row else {
         // No such user: still do a full Argon2 verification so this path takes about as long
         // as the "wrong password" path below, and the two can't be told apart by timing.
@@ -231,10 +272,17 @@ async fn login(
     if !auth::verify_password(&body.password, &hash) {
         return Err(AppError::Unauthorized);
     }
-    let user = sqlx::query_as::<_, AuthUser>("SELECT id, username, is_admin, lang FROM users WHERE id = $1")
-        .bind(id).fetch_one(&state.db).await?;
+    let user = sqlx::query_as::<_, AuthUser>(
+        "SELECT id, username, is_admin, lang FROM users WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     let token = auth::create_session(&state, user.id).await?;
-    let jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
+    let jar = jar.add(auth::session_cookie(
+        token,
+        auth::wants_secure(&state, &headers),
+    ));
     Ok((clear_site_data(), jar, Json(user)))
 }
 
@@ -247,7 +295,11 @@ async fn logout(
         auth::delete_session(&state, c.value()).await?;
     }
     let secure = auth::wants_secure(&state, &headers);
-    Ok((StatusCode::NO_CONTENT, clear_site_data(), jar.remove(auth::removal_cookie(secure))))
+    Ok((
+        StatusCode::NO_CONTENT,
+        clear_site_data(),
+        jar.remove(auth::removal_cookie(secure)),
+    ))
 }
 
 /// Ends every session of the caller, this browser's included -- the "signed in somewhere I
@@ -260,7 +312,11 @@ async fn logout_all(
 ) -> Result<(StatusCode, [(HeaderName, HeaderValue); 1], CookieJar), AppError> {
     auth::delete_sessions_for_user(&state, user.id).await?;
     let secure = auth::wants_secure(&state, &headers);
-    Ok((StatusCode::NO_CONTENT, clear_site_data(), jar.remove(auth::removal_cookie(secure))))
+    Ok((
+        StatusCode::NO_CONTENT,
+        clear_site_data(),
+        jar.remove(auth::removal_cookie(secure)),
+    ))
 }
 
 async fn me(user: AuthUser) -> Json<AuthUser> {

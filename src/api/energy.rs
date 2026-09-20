@@ -24,7 +24,11 @@ pub struct EnergyOut {
 /// Distance and cost per charge, and when to charge next -- see `domain::energy::energy` for
 /// the maths. This handler only loads the rows it needs and maps them into the domain's own
 /// types; no aggregation happens in SQL.
-async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i64>) -> Result<Json<EnergyOut>, AppError> {
+async fn read(
+    user: AuthUser,
+    State(state): State<App>,
+    Path(object_id): Path<i64>,
+) -> Result<Json<EnergyOut>, AppError> {
     let object = load_owned_object(&state, user.id, object_id).await?;
 
     // Oldest first, as the brief asks; `energy` re-sorts by date itself for windowing, so this
@@ -32,7 +36,7 @@ async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     #[allow(clippy::type_complexity)]
     let charge_rows: Vec<(String, i64, Option<i64>, Option<i64>, i64)> = sqlx::query_as(
         "SELECT date, counter_value, quantity_milli, cost_cents, charged_full FROM activities \
-         WHERE object_id = $1 AND category = 'fuel' AND deleted_at IS NULL AND counter_value IS NOT NULL \
+         WHERE object_id = $1 AND category IN ('fuel','usage') AND deleted_at IS NULL AND counter_value IS NOT NULL \
          ORDER BY date ASC, id ASC",
     )
     .bind(object_id)
@@ -40,13 +44,15 @@ async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
     .await?;
     let charges: Vec<Charge> = charge_rows
         .into_iter()
-        .map(|(date, counter, quantity_milli, cost_cents, charged_full)| Charge {
-            date,
-            counter,
-            quantity_milli,
-            cost_cents,
-            full: charged_full != 0,
-        })
+        .map(
+            |(date, counter, quantity_milli, cost_cents, charged_full)| Charge {
+                date,
+                counter,
+                quantity_milli,
+                cost_cents,
+                full: charged_full != 0,
+            },
+        )
         .collect();
 
     // `start_counter`/`counter_value` are required on any stored trip (`ActivityInput::validate`),
@@ -71,5 +77,9 @@ async fn read(user: AuthUser, State(state): State<App>, Path(object_id): Path<i6
         .collect();
 
     let figures = energy(&charges, &trips, object.energy_price_milli);
-    Ok(Json(EnergyOut { unit: object.fuel_unit, price_milli: object.energy_price_milli, figures }))
+    Ok(Json(EnergyOut {
+        unit: object.fuel_unit,
+        price_milli: object.energy_price_milli,
+        figures,
+    }))
 }

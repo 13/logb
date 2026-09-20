@@ -4,10 +4,11 @@
   import TagInput from '../lib/TagInput.svelte';
   import DateInput from '../lib/DateInput.svelte';
   import { parseWeight } from '../lib/weight';
-  import { api, createQueued } from '../lib/api';
+  import { api, cancelQueuedObject, createObjectQueued, createQueued, updateQueuedObject } from '../lib/api';
+  import { newOpId } from '../lib/outbox';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
-  import { centsToInput, counter, parseMoney } from '../lib/format';
+  import { centsToInput, counter, parseMoney, parseQuantity } from '../lib/format';
   import { fuelUnitLabel } from '../lib/energy';
   import { clearsPriceOn, emptyInput, toInput, validate } from '../lib/object-form';
   import { excludingDescendants } from '../lib/object-tree';
@@ -16,9 +17,11 @@
   import { readingActivity } from '../lib/reading';
   import { counterStep, templateInput, templatesFor, type ReminderTemplate } from '../lib/reminder-templates';
   import { todayIso } from '../lib/format';
-  import { OBJECT_TYPES, type FuelUnit, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
+  import { OBJECT_TYPES, type ResourceUnit, type MemObject, type ObjectInput, type ObjectType, type TagCount } from '../lib/types';
   import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
   import { saveObjectDraft, takeObjectDraft } from '../lib/object-draft';
+  import { getCachedObject, setCachedObject } from '../lib/object-cache';
+  import { loadObjectTemplates, removeObjectTemplate, saveObjectTemplate, type SavedObjectTemplate } from '../lib/object-templates';
 
   let { id }: { id?: string } = $props();
   const editing = $derived(id !== undefined);
@@ -36,6 +39,9 @@
   /** The "Price per {unit}" field, next to the fuel unit -- kept as its own text state like
    *  `priceText`, parsed at submit time. */
   let energyPriceText = $state('');
+  let capacityText = $state('');
+  let targetText = $state('');
+  let savedTemplates = $state<SavedObjectTemplate[]>([]);
   /** Ticked template ids. Opt-in, never automatic: a reminder nobody asked for is the kind that
    *  gets muted. */
   let chosen = $state<string[]>([]);
@@ -57,6 +63,13 @@
   let error = $state('');
   let busy = $state(false);
 
+  function mintTempId(): number {
+    const value = newOpId();
+    let hash = 0;
+    for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) | 0;
+    return -(Math.abs(hash) || 1);
+  }
+
   /** The type select's own last option: picking it does not choose a type at all, it detours to
    *  Types to make one, keeping this form's input for when it comes back. Not a legal
    *  `ObjectType` -- kept out of that type on purpose, so nothing downstream can mistake it for
@@ -72,17 +85,28 @@
       return;
     }
     input.type = ty as ObjectType;
-    if (ty === 'body' && !editing) { input.counter_unit = null; input.fuel_unit = null; input.energy_price_milli = null; input.purchase_date = null; priceText = ''; energyPriceText = ''; chosen = []; }
+    if (ty === 'body' && !editing) { input.counter_unit = null; input.fuel_unit = null; input.resource_unit = null; input.resource_kind = null; input.measurement_mode = null; input.energy_price_milli = null; input.fuel_capacity_milli = null; input.monthly_target_milli = null; input.purchase_date = null; priceText = ''; energyPriceText = ''; capacityText = ''; targetText = ''; chosen = []; }
     if (input.counter_unit === null) input.counter_unit = defaultUnit(ty, $customTypes);
+  }
+
+  function applyObjectTemplate(kind: 'football' | 'electricity' | 'heating-oil' | 'water') {
+    const base = emptyInput();
+    if (kind === 'football') input = { ...base, name: $t('template.object-football'), type: 'other' };
+    if (kind === 'electricity') input = { ...base, name: $t('template.object-electricity'), type: 'appliance', resource_kind: 'electricity', resource_unit: 'kwh', fuel_unit: 'kwh', measurement_mode: 'usage' };
+    if (kind === 'heating-oil') input = { ...base, name: $t('template.object-heating-oil'), type: 'home', resource_kind: 'heating_fuel', resource_unit: 'l', fuel_unit: 'l', measurement_mode: 'usage' };
+    if (kind === 'water') input = { ...base, name: $t('template.object-water'), type: 'home', resource_kind: 'water', resource_unit: 'm3', fuel_unit: null, measurement_mode: 'meter' };
+    priceText = ''; energyPriceText = ''; capacityText = ''; targetText = ''; chosen = []; readingText = '';
   }
 
   /** A price kept from the previous fuel unit would misread as the new one (a €/kWh figure
    *  surviving a switch to litres) -- `clearsPriceOn` (../lib/object-form.ts) says so on any
    *  actual change, and this is a UI-side clear only: the server still allows the stale
    *  combination. */
-  function setFuelUnit(next: FuelUnit) {
-    if (clearsPriceOn(input.fuel_unit, next)) energyPriceText = '';
-    input.fuel_unit = next;
+  function setResourceUnit(next: ResourceUnit) {
+    if (clearsPriceOn(input.fuel_unit, next === 'm3' ? null : next)) energyPriceText = '';
+    if (next !== 'l' && next !== 'gal') capacityText = '';
+    input.resource_unit = next;
+    input.fuel_unit = next === 'm3' ? null : next;
   }
   /** An object whose own type is gone (deleted elsewhere, not synced here yet) still has to show
    *  something selected, or the select would sit on a blank and look like it lost the type. */
@@ -106,6 +130,7 @@
   }
 
   onMount(async () => {
+    savedTemplates = loadObjectTemplates();
     // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
     // wait for them or lose its object load over them.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
@@ -128,11 +153,16 @@
       input = draft;
       priceText = centsToInput(draft.purchase_price_cents);
       energyPriceText = centsToInput(draft.energy_price_milli == null ? null : Math.round(draft.energy_price_milli / 1000));
+      capacityText = draft.fuel_capacity_milli == null ? '' : String(draft.fuel_capacity_milli / 1000);
+      targetText = draft.monthly_target_milli == null ? '' : String(draft.monthly_target_milli / 1000);
     } else if (id) {
-      const o = await api<MemObject>('GET', `/objects/${id}`);
+      const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
+      const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
       input = toInput(o);
       priceText = centsToInput(o.purchase_price_cents);
       energyPriceText = centsToInput(o.energy_price_milli === null ? null : Math.round(o.energy_price_milli / 1000));
+      capacityText = o.fuel_capacity_milli == null ? '' : String(o.fuel_capacity_milli / 1000);
+      targetText = o.monthly_target_milli == null ? '' : String(o.monthly_target_milli / 1000);
     }
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
@@ -173,6 +203,13 @@
       .filter((o) => o.archived_at === null || o.id === alreadyInside);
   });
 
+  function applySavedTemplate(template: SavedObjectTemplate) {
+    input = structuredClone(template.input); input.name = template.name;
+    priceText = centsToInput(input.purchase_price_cents); energyPriceText = centsToInput(input.energy_price_milli == null ? null : Math.round(input.energy_price_milli / 1000));
+    capacityText = input.fuel_capacity_milli == null ? '' : String(input.fuel_capacity_milli / 1000);
+    targetText = input.monthly_target_milli == null ? '' : String(input.monthly_target_milli / 1000);
+  }
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     input.purchase_price_cents = parseMoney(priceText);
@@ -180,7 +217,9 @@
     // which hides the field) means no price. `Number.isNaN(cents) * 1000` stays `NaN`, so an
     // unparseable price still reaches `validate` below rather than being silently swallowed.
     const energyPriceCents = parseMoney(energyPriceText);
-    input.energy_price_milli = input.fuel_unit === null || energyPriceCents === null ? null : energyPriceCents * 1000;
+    input.energy_price_milli = input.resource_unit === null || input.resource_unit === undefined || energyPriceCents === null ? null : energyPriceCents * 1000;
+    input.fuel_capacity_milli = input.resource_kind === 'heating_fuel' && (input.resource_unit === 'l' || input.resource_unit === 'gal') ? parseQuantity(capacityText) : null;
+    input.monthly_target_milli = input.resource_kind ? parseQuantity(targetText) : null;
     const bad = validate(input);
     if (bad) { error = fieldError(bad, $t); return; }
     const grams = !editing && input.type === 'body' && startingWeight.trim() ? parseWeight(startingWeight, input.weight_unit ?? 'kg') : null;
@@ -188,9 +227,30 @@
     busy = true; error = '';
     try {
       if (!input.purchase_date) input.purchase_date = null;
+      if (editing && Number(id) < 0) {
+        const body = $state.snapshot(input) as unknown as Record<string, unknown>;
+        if (!await updateQueuedObject(Number(id), body)) throw new Error('object.pending-lost');
+        const cached = getCachedObject(Number(id));
+        if (cached) setCachedObject(Number(id), { ...cached, ...input, private: input.private ? 1 : 0, pending: true } as MemObject);
+        go('/', true);
+        return;
+      }
+      const tempId = mintTempId();
       const saved = createdId !== null ? await api<MemObject>('PATCH', `/objects/${createdId}`, input) : editing
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
-        : await api<MemObject>('POST', '/objects', input);
+        : await createObjectQueued<MemObject>($state.snapshot(input) as unknown as Record<string, unknown>, tempId);
+      if (!saved) {
+        const now = new Date().toISOString();
+        setCachedObject(tempId, {
+          id: tempId, user_id: 0, ...$state.snapshot(input), fuel_unit: input.fuel_unit,
+          archived_at: null, cover_attachment_id: null, cover_file_id: null, created_at: now, updated_at: now,
+          ancestors: [], tags: [...(input.tags ?? [])], private: input.private ? 1 : 0,
+          stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, latest_weight_grams: null, latest_weight_date: null,
+            due_reminder_count: 0, last_reading_date: null, last_activity_date: null, counter_per_day_milli: null }, pending: true,
+        } as MemObject);
+        go(`/objects/${tempId}`, true);
+        return;
+      }
       if (!editing) createdId = saved.id;
       if (grams !== null) {
         await createQueued(`/objects/${saved.id}/activities`, {date: weightDate, category: 'weight', title: $t('cat.weight'), notes: '', weight_grams: grams, counter_value: null, cost_cents: null, quantity_milli: null});
@@ -218,6 +278,7 @@
 
   async function remove() {
     if (!confirm($t('nav.confirm-delete'))) return;
+    if (Number(id) < 0) { await cancelQueuedObject(Number(id)); go('/', true); return; }
     await api('DELETE', `/objects/${id}`);
     go('/', true);
   }
@@ -225,6 +286,18 @@
 
 <main>
   <TopBar title={editing ? $t('object.edit') : $t('object.new')} backTo={editing ? `/objects/${id}` : '/'} />
+  {#if !editing}
+    <div class="chips" aria-label={$t('object.quick-templates')}>
+      <button type="button" class="chip" onclick={() => applyObjectTemplate('football')}>{$t('template.object-football')}</button>
+      <button type="button" class="chip" onclick={() => applyObjectTemplate('electricity')}>{$t('template.object-electricity')}</button>
+      <button type="button" class="chip" onclick={() => applyObjectTemplate('heating-oil')}>{$t('template.object-heating-oil')}</button>
+      <button type="button" class="chip" onclick={() => applyObjectTemplate('water')}>{$t('template.object-water')}</button>
+      {#each savedTemplates as template (template.id)}
+        <button type="button" class="chip" onclick={() => applySavedTemplate(template)}>{template.name}</button>
+        <button type="button" class="chip" aria-label={$t('template.remove', { name: template.name })} onclick={() => (savedTemplates = removeObjectTemplate(template.id))}>×</button>
+      {/each}
+    </div>
+  {/if}
   <form onsubmit={submit}>
     <div class="field"><label for="n">{$t('object.name')}</label><input id="n" bind:value={input.name} required /></div>
     <div class="field">
@@ -270,19 +343,43 @@
       </fieldset>
     {/if}
     <div class="field">
-      <label for="fu">{$t('object.fuel-unit')}</label>
-      <select id="fu" bind:value={() => input.fuel_unit, setFuelUnit}>
+      <label for="resource-kind">{$t('object.resource-kind')}</label>
+      <select id="resource-kind" bind:value={input.resource_kind}>
+        <option value={null}>{$t('object.counter-none')}</option>
+        <option value="electricity">{$t('resource.electricity')}</option>
+        <option value="heating_fuel">{$t('resource.heating-fuel')}</option>
+        <option value="vehicle_fuel">{$t('resource.vehicle-fuel')}</option>
+        <option value="water">{$t('resource.water')}</option>
+      </select>
+    </div>
+    {#if input.resource_kind}
+    <div class="field">
+      <label for="fu">{$t('object.resource-unit')}</label>
+      <select id="fu" bind:value={() => input.resource_unit ?? null, setResourceUnit}>
         <option value={null}>{$t('object.counter-none')}</option>
         <option value="l">l</option>
         <option value="gal">gal</option>
         <option value="kwh">{fuelUnitLabel('kwh')}</option>
+        <option value="m3">m³</option>
       </select>
     </div>
-    {#if input.fuel_unit}
+    {#if input.resource_unit}
       <div class="field">
-        <label for="ep">{$t('object.energy-price', { unit: fuelUnitLabel(input.fuel_unit) })}</label>
+        <label for="ep">{$t('object.energy-price', { unit: fuelUnitLabel(input.resource_unit) })}</label>
         <input id="ep" type="text" inputmode="decimal" bind:value={energyPriceText} />
       </div>
+    {/if}
+    {#if input.resource_kind === 'water'}
+      <div class="field"><label for="measurement-mode">{$t('object.measurement-mode')}</label><select id="measurement-mode" bind:value={input.measurement_mode}><option value="meter">{$t('water.mode-meter')}</option><option value="usage">{$t('water.mode-usage')}</option></select></div>
+    {/if}
+    <div class="field"><label for="monthly-target">{$t('object.monthly-target', { unit: fuelUnitLabel(input.resource_unit ?? null) })}</label><input id="monthly-target" type="text" inputmode="decimal" bind:value={targetText} /></div>
+    {#if input.resource_kind === 'heating_fuel' && (input.resource_unit === 'l' || input.resource_unit === 'gal')}
+      <div class="field">
+        <label for="capacity">{$t('object.fuel-capacity', { unit: fuelUnitLabel(input.resource_unit) })}</label>
+        <input id="capacity" type="text" inputmode="decimal" bind:value={capacityText} />
+      </div>
+      <div class="field"><label for="low-level">{$t('object.low-level')}</label><input id="low-level" type="number" min="0" max="100" bind:value={input.low_level_pct} /></div>
+    {/if}
     {/if}
     {/if}
     {#if input.type === 'body'}
@@ -311,8 +408,11 @@
       <label class="row toggle"><input type="checkbox" bind:checked={input.archived} /> {$t('object.archive')}</label>
       <p class="hint">{$t('object.archived-hint')}</p>
     {/if}
+    <label class="row toggle"><input type="checkbox" bind:checked={input.private} /> {$t('object.private')}</label>
+    <p class="hint">{$t('object.private-hint')}</p>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="row actions">
+      {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate($state.snapshot(input)))}>{$t('template.save')}</button>{/if}
       <button type="button" class="ghost" onclick={() => back(editing ? `/objects/${id}` : '/')}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>

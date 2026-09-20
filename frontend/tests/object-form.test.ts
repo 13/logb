@@ -17,6 +17,8 @@ describe('object form', () => {
       name: 'Golf', type: 'car', counter_unit: 'km', fuel_unit: 'l', description: 'grey',
       purchase_date: '2020-03-01', purchase_price_cents: 1500000, archived: false, parent_id: null, tags: ['Lease', 'Winter'],
       energy_price_milli: 30_000,
+      fuel_capacity_milli: undefined, resource_unit: 'l', resource_kind: null, measurement_mode: null,
+      monthly_target_milli: null, low_level_pct: null, private: false,
     });
     expect(toInput({ ...obj, archived_at: '2024-01-01T00:00:00Z' }).archived).toBe(true);
   });
@@ -25,7 +27,8 @@ describe('object form', () => {
     expect(emptyInput()).toEqual({
       weight_unit: 'kg',
       name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null,
-      archived: false, parent_id: null, tags: [], energy_price_milli: null,
+      archived: false, parent_id: null, tags: [], energy_price_milli: null, fuel_capacity_milli: null,
+      resource_unit: null, resource_kind: null, measurement_mode: null, monthly_target_milli: null, low_level_pct: null, private: false,
     });
   });
 

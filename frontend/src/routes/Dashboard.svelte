@@ -2,14 +2,14 @@
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import ObjectCard from '../lib/ObjectCard.svelte';
-  import { api } from '../lib/api';
+  import { api, onOutboxFlushed, pendingObjectOps } from '../lib/api';
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
   import { fmtDate } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
-  import type { MemObject, ObjectType, Reminder } from '../lib/types';
+  import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
   import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
   import Icon from '../lib/Icon.svelte';
@@ -21,6 +21,28 @@
   let soon = $state<Reminder[]>([]);
   let loading = $state(true);
   let error = $state('');
+
+  async function pendingObjects(): Promise<MemObject[]> {
+    return (await pendingObjectOps()).map((op) => {
+      const body = op.body as unknown as ObjectInput;
+      const now = new Date().toISOString();
+      return {
+        id: op.tempId ?? -1, user_id: op.userId ?? 0, name: body.name, type: body.type,
+        counter_unit: body.counter_unit, fuel_unit: body.fuel_unit, description: body.description,
+        purchase_date: body.purchase_date, purchase_price_cents: body.purchase_price_cents,
+        archived_at: body.archived ? now : null, cover_attachment_id: null, cover_file_id: null,
+        parent_id: body.parent_id ?? null, created_at: now, updated_at: now, ancestors: [],
+        tags: [...(body.tags ?? [])], energy_price_milli: body.energy_price_milli ?? null,
+        fuel_capacity_milli: body.fuel_capacity_milli ?? null, weight_unit: body.weight_unit ?? 'kg',
+        resource_unit: body.resource_unit ?? body.fuel_unit, resource_kind: body.resource_kind ?? null,
+        measurement_mode: body.measurement_mode ?? null, monthly_target_milli: body.monthly_target_milli ?? null,
+        low_level_pct: body.low_level_pct ?? null, private: body.private ? 1 : 0,
+        stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0,
+          last_reading_date: null, last_activity_date: null, counter_per_day_milli: null },
+        pending: true,
+      };
+    });
+  }
 
   /** Per device, like the other view preferences; the address wins when it names a sort. */
   const rememberedSort = persisted<string>('logb.objects.sort', 'name');
@@ -34,6 +56,9 @@
 
   async function load() {
     loading = true; error = '';
+    active = active.filter((o) => !o.pending);
+    let queued: MemObject[] = [];
+    try { queued = await pendingObjects(); } catch { /* a blocked/full IndexedDB must not strand the dashboard loading */ }
     try {
       // Both tabs at every depth, once: switching tabs, searching and sorting then need no
       // request, and a search can find an object inside another. A household has tens of objects.
@@ -44,9 +69,16 @@
       const all = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
       due = all.filter((r) => r.due);
       soon = all.filter((r) => !r.due);
-    } catch (e) { error = (e as Error).message; } finally { loading = false; }
+    } catch (e) { error = (e as Error).message; }
+    finally {
+      active = [...queued, ...active];
+      loading = false;
+    }
   }
-  onMount(load);
+  onMount(() => {
+    void load();
+    return onOutboxFlushed((_resolved, changed) => { if (changed) void load(); });
+  });
 
   function setSort(next: SortKey) { sort = next; rememberedSort.set(next); }
 

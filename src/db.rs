@@ -39,7 +39,9 @@ pub fn sqlite_url(data_dir: &Path) -> Result<String, BoxError> {
 /// than make one. `pub(crate)` so `restore::run` can locate the live database file from the
 /// URL it is handed, instead of re-deriving a URL from a data directory of its own.
 pub(crate) fn sqlite_file(url: &str) -> Option<PathBuf> {
-    let rest = url.strip_prefix("sqlite://").or_else(|| url.strip_prefix("sqlite:"))?;
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))?;
     let path = rest.split(['?', '#']).next().unwrap_or("");
     (!path.is_empty() && path != ":memory:").then(|| PathBuf::from(path))
 }
@@ -114,15 +116,17 @@ fn after_connect(url: &str, busy_timeout_ms: u32) -> Option<String> {
 /// Builds a pool for `url`, applying the SQLite pragmas to every connection it opens.
 fn pool_options(url: &str, max_connections: u32, busy_timeout_ms: u32) -> AnyPoolOptions {
     let pragmas = after_connect(url, busy_timeout_ms);
-    AnyPoolOptions::new().max_connections(max_connections).after_connect(move |conn, _meta| {
-        let pragmas = pragmas.clone();
-        Box::pin(async move {
-            if let Some(sql) = pragmas {
-                conn.execute(sqlx::AssertSqlSafe(sql)).await?;
-            }
-            Ok(())
+    AnyPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(move |conn, _meta| {
+            let pragmas = pragmas.clone();
+            Box::pin(async move {
+                if let Some(sql) = pragmas {
+                    conn.execute(sqlx::AssertSqlSafe(sql)).await?;
+                }
+                Ok(())
+            })
         })
-    })
 }
 
 /// Connects using the default pool size for the backend: 4 for SQLite, 16 otherwise. Most
@@ -134,7 +138,10 @@ pub async fn connect(url: &str) -> Result<AnyPool, BoxError> {
 }
 
 /// As `connect`, but `pool_size` overrides the backend's default max connections when set.
-pub async fn connect_with_pool_size(url: &str, pool_size: Option<u32>) -> Result<AnyPool, BoxError> {
+pub async fn connect_with_pool_size(
+    url: &str,
+    pool_size: Option<u32>,
+) -> Result<AnyPool, BoxError> {
     sqlx::any::install_default_drivers();
     // SQLite will create the database file, but not the directory holding it.
     if let Some(file) = sqlite_file(url) {
@@ -145,7 +152,9 @@ pub async fn connect_with_pool_size(url: &str, pool_size: Option<u32>) -> Result
         }
     }
     let default_size = if url.starts_with("sqlite:") { 4 } else { 16 };
-    let pool = pool_options(url, pool_size.unwrap_or(default_size), 5_000).connect(url).await?;
+    let pool = pool_options(url, pool_size.unwrap_or(default_size), 5_000)
+        .connect(url)
+        .await?;
     migrator(url).run(&pool).await?;
     seed_settings(&pool).await?;
     Ok(pool)
@@ -182,12 +191,17 @@ pub async fn begin_write(
 /// every start, and, more importantly, what stops it overwriting an epoch that already exists.
 /// Minting a new one on each boot would silently send every device on a full re-bootstrap.
 async fn seed_settings(pool: &AnyPool) -> Result<(), BoxError> {
-    for (key, value) in [("sync_epoch", crate::sync::epoch::fresh()), ("currency", "EUR".to_string())] {
-        sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING")
-            .bind(key)
-            .bind(value)
-            .execute(pool)
-            .await?;
+    for (key, value) in [
+        ("sync_epoch", crate::sync::epoch::fresh()),
+        ("currency", "EUR".to_string()),
+    ] {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
@@ -204,7 +218,7 @@ pub async fn connect_existing(url: &str) -> Result<AnyPool, BoxError> {
                 return Err(format!("no database at {}", file.display()).into());
             }
             url.replace("mode=rwc", "mode=rw")
-        },
+        }
         None => url.to_string(),
     };
     Ok(pool_options(&url, 1, 30_000).connect(&url).await?)
@@ -220,7 +234,10 @@ pub async fn backup_to(pool: &AnyPool, dest: &Path) -> Result<(), BoxError> {
         return Err(format!("{} already exists", dest.display()).into());
     }
     let dest = dest.to_str().ok_or("backup path must be valid UTF-8")?;
-    sqlx::query("VACUUM INTO $1").bind(dest).execute(pool).await?;
+    sqlx::query("VACUUM INTO $1")
+        .bind(dest)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -293,7 +310,10 @@ pub fn set_timezone(tz: Tz) {
 }
 
 pub fn timezone() -> Tz {
-    TIMEZONE.read().unwrap_or_else(|e| e.into_inner()).unwrap_or(Tz::UTC)
+    TIMEZONE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or(Tz::UTC)
 }
 
 /// Decides the timezone at startup: `LOGB_TIMEZONE` when it is set, otherwise the one stored in
@@ -306,10 +326,14 @@ pub async fn load_timezone(configured: Option<Tz>, pool: &AnyPool) -> Result<(),
         return Ok(());
     }
     let stored: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = $1")
-        .bind(TIMEZONE_KEY).fetch_optional(pool).await?;
+        .bind(TIMEZONE_KEY)
+        .fetch_optional(pool)
+        .await?;
     match stored.as_deref().map(str::parse::<Tz>) {
         Some(Ok(tz)) => set_timezone(tz),
-        Some(Err(_)) => tracing::warn!(value = ?stored, "the stored timezone is not an IANA name; using UTC"),
+        Some(Err(_)) => {
+            tracing::warn!(value = ?stored, "the stored timezone is not an IANA name; using UTC")
+        }
         None => {}
     }
     Ok(())
@@ -329,7 +353,10 @@ pub fn now() -> String {
 /// today, not the server's: on UTC a household in UTC+13 would see a reminder come due most
 /// of a day late, and one in UTC-8 would see it a day early.
 pub fn today() -> String {
-    Utc::now().with_timezone(&timezone()).date_naive().to_string()
+    Utc::now()
+        .with_timezone(&timezone())
+        .date_naive()
+        .to_string()
 }
 
 /// The current hour (0-23) in the configured timezone.
@@ -372,13 +399,22 @@ mod tests {
     #[test]
     fn a_redacted_url_keeps_the_database_and_loses_the_credentials() {
         for (url, expected) in [
-            ("postgres://user:pass@host:5432/logb", "postgres://…@host:5432/logb"),
-            ("postgres://user:pass@host/logb?sslmode=require", "postgres://…@host/logb"),
+            (
+                "postgres://user:pass@host:5432/logb",
+                "postgres://…@host:5432/logb",
+            ),
+            (
+                "postgres://user:pass@host/logb?sslmode=require",
+                "postgres://…@host/logb",
+            ),
             // A password is not required for there to be a userinfo to hide.
             ("postgres://user@host/logb", "postgres://…@host/logb"),
             // No credentials at all: nothing to take out, and the host still says which.
             ("postgres://host/logb", "postgres://host/logb"),
-            ("sqlite:///var/lib/logb/logb.db?mode=rwc", "sqlite:///var/lib/logb/logb.db"),
+            (
+                "sqlite:///var/lib/logb/logb.db?mode=rwc",
+                "sqlite:///var/lib/logb/logb.db",
+            ),
             // Not a URL LogB can take apart -- say only the scheme rather than guess.
             ("sqlite:logb.db", "sqlite:…"),
             ("nonsense", "…"),
@@ -398,7 +434,10 @@ mod tests {
             "the password hunter2 was rejected".to_string(),
         ] {
             let scrubbed = scrub(&quoted, url);
-            assert!(!scrubbed.contains("hunter2"), "the password survived scrubbing: {scrubbed}");
+            assert!(
+                !scrubbed.contains("hunter2"),
+                "the password survived scrubbing: {scrubbed}"
+            );
         }
     }
 
@@ -420,7 +459,9 @@ mod tests {
     fn timezones_far_enough_apart_disagree_about_the_date() {
         let instant = Utc::now();
         let auckland = instant.with_timezone(&Tz::Pacific__Auckland).date_naive();
-        let los_angeles = instant.with_timezone(&Tz::America__Los_Angeles).date_naive();
+        let los_angeles = instant
+            .with_timezone(&Tz::America__Los_Angeles)
+            .date_naive();
         assert!(
             (auckland - los_angeles).num_days() >= 0 && (auckland - los_angeles).num_days() <= 1,
             "Auckland is ahead of Los Angeles by at most a day: {auckland} vs {los_angeles}"
@@ -455,14 +496,23 @@ mod url_tests {
         // below for the concrete case that motivated adding it here.
         for bad in ["/data/we?rd", "/data/we#rd", "/data/we%rd"] {
             let err = sqlite_url(Path::new(bad)).unwrap_err().to_string();
-            assert!(err.contains(bad), "the message must name the directory: {err}");
-            assert!(err.contains("LOGB_DATABASE_URL"), "and say what to do about it: {err}");
+            assert!(
+                err.contains(bad),
+                "the message must name the directory: {err}"
+            );
+            assert!(
+                err.contains("LOGB_DATABASE_URL"),
+                "and say what to do about it: {err}"
+            );
         }
     }
 
     #[test]
     fn an_ordinary_data_directory_still_produces_the_url_it_always_did() {
-        assert_eq!(sqlite_url(Path::new("/data")).unwrap(), "sqlite:///data/logb.db?mode=rwc");
+        assert_eq!(
+            sqlite_url(Path::new("/data")).unwrap(),
+            "sqlite:///data/logb.db?mode=rwc"
+        );
     }
 
     /// The character check above proves `%` is refused; this proves *why* that matters.

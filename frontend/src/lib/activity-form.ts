@@ -1,18 +1,21 @@
 import { todayIso } from './format';
 import { energyLabelKey } from './energy';
-import type { Activity, ActivityInput, Category, FuelUnit, TitleSuggestion } from './types';
+import type { Activity, ActivityInput, Category, ResourceUnit, TitleSuggestion } from './types';
 
 export function emptyActivity(): ActivityInput {
   return {
     date: todayIso(), category: 'maintenance', title: '', notes: '', counter_value: null, cost_cents: null, quantity_milli: null, tags: [],
-    start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null,
+    start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null, fuel_level_pct: null,
+    meter_reading_milli: null, period_start: null, period_end: null, estimated: 0, meter_reset: 0,
   };
 }
 
 export function toActivityInput(a: Activity): ActivityInput {
   return {
-    weight_grams: a.weight_grams ?? null, date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags],
+    weight_grams: a.weight_grams ?? null, fuel_level_pct: a.fuel_level_pct ?? null, date: a.date, category: a.category, title: a.title, notes: a.notes, counter_value: a.counter_value, cost_cents: a.cost_cents, quantity_milli: a.quantity_milli, tags: [...a.tags],
     start_counter: a.start_counter, from_place: a.from_place, to_place: a.to_place, duration_minutes: a.duration_minutes, battery_used_pct: a.battery_used_pct,
+    meter_reading_milli: a.meter_reading_milli ?? null, period_start: a.period_start ?? null, period_end: a.period_end ?? null,
+    estimated: a.estimated ?? 0, meter_reset: a.meter_reset ?? 0,
   };
 }
 
@@ -23,7 +26,7 @@ export function validateActivity(input: ActivityInput): string | null {
   // A trip defaults its own title to `cat.trip` when left blank (see ActivityForm), and a charge
   // (`fuel`) likewise defaults to "Charged"/"Geladen" or the petrol wording -- see
   // `activityTitle`. Every other category still needs one typed in.
-  const titleOptional = isTrip || input.category === 'fuel' || input.category === 'weight';
+  const titleOptional = isTrip || input.category === 'fuel' || input.category === 'usage' || input.category === 'weight';
   if (input.category === 'weight' && (!Number.isSafeInteger(input.weight_grams) || (input.weight_grams ?? 0) <= 0 || (input.weight_grams ?? 0) > 1_000_000_000)) return 'weight.invalid';
   if (!titleOptional && !input.title.trim()) return 'activity.title';
   if (input.cost_cents !== null && Number.isNaN(input.cost_cents)) return 'activity.cost';
@@ -40,6 +43,9 @@ export function validateActivity(input: ActivityInput): string | null {
     return 'activity.counter';
   }
   if (input.quantity_milli !== null && Number.isNaN(input.quantity_milli)) return 'activity.quantity';
+  if (input.fuel_level_pct !== null && input.fuel_level_pct !== undefined && (!Number.isFinite(input.fuel_level_pct) || input.fuel_level_pct < 0 || input.fuel_level_pct > 100)) return 'activity.fuel-level-error';
+  if (input.meter_reading_milli !== null && input.meter_reading_milli !== undefined && (!Number.isFinite(input.meter_reading_milli) || input.meter_reading_milli < 0)) return 'activity.meter-reading';
+  if (input.period_start && input.period_end && input.period_start > input.period_end) return 'activity.period-start';
   return null;
 }
 
@@ -77,11 +83,12 @@ export function exifDate(a: { taken_at: string | null }): string | null {
  * repeating the same three-way pick at each call site (a `LastDone` row, an `ActivityHit`, the
  * "link to activity" dropdown, the timeline itself, ...).
  */
-export function activityTitle(title: string, category: Category | undefined, t: (key: string) => string, fuelUnit?: FuelUnit): string {
+export function activityTitle(title: string, category: Category | undefined, t: (key: string) => string, fuelUnit?: ResourceUnit): string {
   if (title) return title;
   if (category === 'weight') return t('cat.weight');
   if (category === 'trip') return t('cat.trip');
   if (category === 'fuel') return t(energyLabelKey(fuelUnit ?? null) === 'energy.charged' ? 'energy.charged-total' : 'insights.fuel-total');
+  if (category === 'usage') return t('cat.usage');
   return title;
 }
 

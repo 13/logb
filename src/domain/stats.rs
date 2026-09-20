@@ -73,7 +73,12 @@ pub fn purchase_spend(objects: &[ObjectRow], purchased: &HashSet<i64>) -> Vec<Sp
         .filter_map(|o| {
             let cents = o.purchase_price_cents.filter(|c| *c > 0)?;
             let date = o.purchase_date.as_deref().unwrap_or(&o.created_at);
-            Some(Spend { object_id: o.id, month: date.get(..7)?.to_string(), category: PURCHASE_PRICE.into(), cost_cents: cents })
+            Some(Spend {
+                object_id: o.id,
+                month: date.get(..7)?.to_string(),
+                category: PURCHASE_PRICE.into(),
+                cost_cents: cents,
+            })
         })
         .collect()
 }
@@ -85,7 +90,10 @@ pub fn purchase_spend(objects: &[ObjectRow], purchased: &HashSet<i64>) -> Vec<Sp
 /// like `0202` are fine and pass through) or a mangled bucket like `202-0`.
 fn valid_month(month: &str) -> bool {
     let b = month.as_bytes();
-    b.len() == 7 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-' && b[5..7].iter().all(u8::is_ascii_digit)
+    b.len() == 7
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5..7].iter().all(u8::is_ascii_digit)
 }
 
 /// The whole statistics response for `spend`, restricted to `year` when one is given.
@@ -113,10 +121,13 @@ pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> S
         .collect();
 
     let over_time = match year {
-        Some(y) => fill(
-            (1..=12).map(|m| format!("{y:04}-{m:02}")).collect(),
-            |b| selected.iter().filter(|s| s.month == b).map(|s| s.cost_cents).sum(),
-        ),
+        Some(y) => fill((1..=12).map(|m| format!("{y:04}-{m:02}")).collect(), |b| {
+            selected
+                .iter()
+                .filter(|s| s.month == b)
+                .map(|s| s.cost_cents)
+                .sum()
+        }),
         None => {
             let mut per_year: BTreeMap<String, i64> = BTreeMap::new();
             for s in &selected {
@@ -124,7 +135,10 @@ pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> S
                     *per_year.entry(y.to_string()).or_default() += s.cost_cents;
                 }
             }
-            per_year.into_iter().map(|(bucket, cost_cents)| Amount { bucket, cost_cents }).collect()
+            per_year
+                .into_iter()
+                .map(|(bucket, cost_cents)| Amount { bucket, cost_cents })
+                .collect()
         }
     };
 
@@ -159,7 +173,11 @@ fn sorted(map: HashMap<String, i64>) -> Vec<Amount> {
         .filter(|(_, c)| *c > 0)
         .map(|(bucket, cost_cents)| Amount { bucket, cost_cents })
         .collect();
-    list.sort_by(|a, b| b.cost_cents.cmp(&a.cost_cents).then_with(|| a.bucket.cmp(&b.bucket)));
+    list.sort_by(|a, b| {
+        b.cost_cents
+            .cmp(&a.cost_cents)
+            .then_with(|| a.bucket.cmp(&b.bucket))
+    });
     list
 }
 
@@ -177,19 +195,35 @@ fn roll_up(objects: &[ObjectRow], own: &HashMap<i64, i64>) -> Vec<ObjectNode> {
         children.entry(parent).or_default().push(o);
     }
 
-    fn build(parent: Option<i64>, children: &HashMap<Option<i64>, Vec<&ObjectRow>>, own: &HashMap<i64, i64>) -> Vec<ObjectNode> {
+    fn build(
+        parent: Option<i64>,
+        children: &HashMap<Option<i64>, Vec<&ObjectRow>>,
+        own: &HashMap<i64, i64>,
+    ) -> Vec<ObjectNode> {
         let mut nodes: Vec<ObjectNode> = children
             .get(&parent)
             .into_iter()
             .flatten()
             .map(|o| {
                 let kids = build(Some(o.id), children, own);
-                let cost_cents = own.get(&o.id).copied().unwrap_or(0) + kids.iter().map(|k| k.cost_cents).sum::<i64>();
-                ObjectNode { id: o.id, name: o.name.clone(), kind: o.kind.clone(), archived: o.archived, cost_cents, children: kids }
+                let cost_cents = own.get(&o.id).copied().unwrap_or(0)
+                    + kids.iter().map(|k| k.cost_cents).sum::<i64>();
+                ObjectNode {
+                    id: o.id,
+                    name: o.name.clone(),
+                    kind: o.kind.clone(),
+                    archived: o.archived,
+                    cost_cents,
+                    children: kids,
+                }
             })
             .filter(|n| n.cost_cents > 0)
             .collect();
-        nodes.sort_by(|a, b| b.cost_cents.cmp(&a.cost_cents).then_with(|| a.name.cmp(&b.name)));
+        nodes.sort_by(|a, b| {
+            b.cost_cents
+                .cmp(&a.cost_cents)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         nodes
     }
 
@@ -219,23 +253,37 @@ pub fn day_of(s: &str) -> Option<NaiveDate> {
 
 /// Ownership from `since` up to `until` -- the archive date for an object no longer in use, today
 /// otherwise. Integer arithmetic: cents × 365 ÷ days.
-pub fn ownership(running_cents: i64, purchase_cents: i64, since: NaiveDate, until: NaiveDate) -> Ownership {
+pub fn ownership(
+    running_cents: i64,
+    purchase_cents: i64,
+    since: NaiveDate,
+    until: NaiveDate,
+) -> Ownership {
     let total_cents = running_cents + purchase_cents;
     let days = (until - since).num_days();
     let per_year_cents = (days >= MIN_DAYS_FOR_PER_YEAR).then(|| total_cents * 365 / days);
-    Ownership { total_cents, purchase_cents, since: since.to_string(), per_year_cents }
+    Ownership {
+        total_cents,
+        purchase_cents,
+        since: since.to_string(),
+        per_year_cents,
+    }
 }
 
 /// `months` calendar months ending with today's, oldest first, each with the sum of `totals`
 /// for that `YYYY-MM` -- 0 for a month without spend, since no cost entry does mean nothing spent.
 pub fn months_ending(today: NaiveDate, months: u32, totals: &[(String, i64)]) -> Vec<Amount> {
-    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else { return Vec::new() };
+    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else {
+        return Vec::new();
+    };
     let buckets = (0..months)
         .rev()
         .filter_map(|back| this_month.checked_sub_months(Months::new(back)))
         .map(|d| d.format("%Y-%m").to_string())
         .collect();
-    fill(buckets, |b| totals.iter().filter(|(m, _)| m == b).map(|(_, c)| c).sum())
+    fill(buckets, |b| {
+        totals.iter().filter(|(m, _)| m == b).map(|(_, c)| c).sum()
+    })
 }
 
 /// One `Amount` per bucket, in the order given, zeros included.
@@ -255,44 +303,90 @@ mod tests {
 
     fn obj(id: i64, parent_id: Option<i64>, name: &str, kind: &str) -> ObjectRow {
         ObjectRow {
-            id, parent_id, name: name.into(), kind: kind.into(), archived: false,
-            purchase_date: None, purchase_price_cents: None, created_at: "2024-01-01T10:00:00Z".into(),
+            id,
+            parent_id,
+            name: name.into(),
+            kind: kind.into(),
+            archived: false,
+            purchase_date: None,
+            purchase_price_cents: None,
+            created_at: "2024-01-01T10:00:00Z".into(),
         }
     }
 
     fn spend(object_id: i64, month: &str, category: &str, cost_cents: i64) -> Spend {
-        Spend { object_id, month: month.into(), category: category.into(), cost_cents }
+        Spend {
+            object_id,
+            month: month.into(),
+            category: category.into(),
+            cost_cents,
+        }
     }
 
     fn amounts(list: &[Amount]) -> Vec<(&str, i64)> {
-        list.iter().map(|a| (a.bucket.as_str(), a.cost_cents)).collect()
+        list.iter()
+            .map(|a| (a.bucket.as_str(), a.cost_cents))
+            .collect()
     }
 
     /// House (1) > Garage (2) > Bulb (3), plus a car (4).
     fn tree() -> Vec<ObjectRow> {
-        vec![obj(1, None, "House", "home"), obj(2, Some(1), "Garage", "other"),
-             obj(3, Some(2), "Bulb", "appliance"), obj(4, None, "Car", "car")]
+        vec![
+            obj(1, None, "House", "home"),
+            obj(2, Some(1), "Garage", "other"),
+            obj(3, Some(2), "Bulb", "appliance"),
+            obj(4, None, "Car", "car"),
+        ]
     }
 
     #[test]
     fn a_parent_carries_every_descendants_spend() {
-        let rows = [spend(1, "2026-01", "repair", 1_000), spend(2, "2026-02", "maintenance", 200),
-                    spend(3, "2026-03", "repair", 30), spend(4, "2026-01", "fuel", 500)];
+        let rows = [
+            spend(1, "2026-01", "repair", 1_000),
+            spend(2, "2026-02", "maintenance", 200),
+            spend(3, "2026-03", "repair", 30),
+            spend(4, "2026-01", "fuel", 500),
+        ];
         let s = summarize(&tree(), &rows, None);
         assert_eq!(s.total_cents, 1_730);
         assert_eq!(s.by_object.len(), 2, "two roots");
         let house = &s.by_object[0];
-        assert_eq!((house.name.as_str(), house.cost_cents), ("House", 1_230), "largest first");
-        assert_eq!((house.children[0].name.as_str(), house.children[0].cost_cents), ("Garage", 230));
-        assert_eq!((house.children[0].children[0].name.as_str(), house.children[0].children[0].cost_cents), ("Bulb", 30));
-        assert_eq!((s.by_object[1].name.as_str(), s.by_object[1].cost_cents), ("Car", 500));
+        assert_eq!(
+            (house.name.as_str(), house.cost_cents),
+            ("House", 1_230),
+            "largest first"
+        );
+        assert_eq!(
+            (
+                house.children[0].name.as_str(),
+                house.children[0].cost_cents
+            ),
+            ("Garage", 230)
+        );
+        assert_eq!(
+            (
+                house.children[0].children[0].name.as_str(),
+                house.children[0].children[0].cost_cents
+            ),
+            ("Bulb", 30)
+        );
+        assert_eq!(
+            (s.by_object[1].name.as_str(), s.by_object[1].cost_cents),
+            ("Car", 500)
+        );
     }
 
     #[test]
     fn a_subtree_that_spent_nothing_is_left_out() {
         let rows = [spend(4, "2026-01", "fuel", 500)];
         let s = summarize(&tree(), &rows, None);
-        assert_eq!(s.by_object.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["Car"]);
+        assert_eq!(
+            s.by_object
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Car"]
+        );
     }
 
     #[test]
@@ -304,35 +398,71 @@ mod tests {
 
     #[test]
     fn type_is_each_objects_own_not_its_roots() {
-        let rows = [spend(1, "2026-01", "repair", 1_000), spend(3, "2026-01", "repair", 30)];
+        let rows = [
+            spend(1, "2026-01", "repair", 1_000),
+            spend(3, "2026-01", "repair", 30),
+        ];
         let s = summarize(&tree(), &rows, None);
         assert_eq!(amounts(&s.by_type), [("home", 1_000), ("appliance", 30)]);
     }
 
     #[test]
     fn all_years_draws_one_bar_per_year_oldest_first_and_lists_years_newest_first() {
-        let rows = [spend(4, "2024-05", "fuel", 10), spend(4, "2026-01", "fuel", 20), spend(4, "2026-09", "fuel", 5)];
+        let rows = [
+            spend(4, "2024-05", "fuel", 10),
+            spend(4, "2026-01", "fuel", 20),
+            spend(4, "2026-09", "fuel", 5),
+        ];
         let s = summarize(&tree(), &rows, None);
-        assert_eq!(amounts(&s.over_time), [("2024", 10), ("2026", 25)], "no bar for a year with no spend");
+        assert_eq!(
+            amounts(&s.over_time),
+            [("2024", 10), ("2026", 25)],
+            "no bar for a year with no spend"
+        );
         assert_eq!(s.years, ["2026", "2024"]);
     }
 
     #[test]
     fn one_year_draws_all_twelve_months_and_filters_every_block() {
-        let rows = [spend(4, "2025-12", "fuel", 999), spend(4, "2026-01", "fuel", 20), spend(1, "2026-03", "repair", 7)];
+        let rows = [
+            spend(4, "2025-12", "fuel", 999),
+            spend(4, "2026-01", "fuel", 20),
+            spend(1, "2026-03", "repair", 7),
+        ];
         let s = summarize(&tree(), &rows, Some(2026));
         assert_eq!(s.over_time.len(), 12);
-        assert_eq!(s.over_time[0], Amount { bucket: "2026-01".into(), cost_cents: 20 });
-        assert_eq!(s.over_time[1], Amount { bucket: "2026-02".into(), cost_cents: 0 }, "known zero, not missing");
+        assert_eq!(
+            s.over_time[0],
+            Amount {
+                bucket: "2026-01".into(),
+                cost_cents: 20
+            }
+        );
+        assert_eq!(
+            s.over_time[1],
+            Amount {
+                bucket: "2026-02".into(),
+                cost_cents: 0
+            },
+            "known zero, not missing"
+        );
         assert_eq!(s.over_time[11].bucket, "2026-12");
         assert_eq!(s.total_cents, 27);
         assert_eq!(amounts(&s.by_category), [("fuel", 20), ("repair", 7)]);
-        assert_eq!(s.years, ["2026", "2025"], "the year list ignores the filter");
+        assert_eq!(
+            s.years,
+            ["2026", "2025"],
+            "the year list ignores the filter"
+        );
     }
 
     #[test]
     fn categories_are_sorted_largest_first_and_zero_rows_dropped() {
-        let rows = [spend(4, "2026-01", "fuel", 5), spend(4, "2026-01", "repair", 50), spend(4, "2026-01", "other", 0)];
+        let rows = [
+            spend(4, "2026-01", "fuel", 5),
+            spend(4, "2026-01", "repair", 50),
+            spend(4, "2026-01", "other", 0),
+        ];
         let s = summarize(&tree(), &rows, None);
         assert_eq!(amounts(&s.by_category), [("repair", 50), ("fuel", 5)]);
     }
@@ -349,7 +479,12 @@ mod tests {
     fn nothing_spent_is_an_empty_but_complete_answer() {
         let s = summarize(&tree(), &[], Some(2026));
         assert_eq!(s.total_cents, 0);
-        assert!(s.years.is_empty() && s.by_object.is_empty() && s.by_type.is_empty() && s.by_category.is_empty());
+        assert!(
+            s.years.is_empty()
+                && s.by_object.is_empty()
+                && s.by_type.is_empty()
+                && s.by_category.is_empty()
+        );
         assert_eq!(s.over_time.len(), 12);
     }
 
@@ -358,7 +493,10 @@ mod tests {
         let mut house = obj(1, None, "House", "home");
         house.purchase_date = Some("2019-06-30".into());
         house.purchase_price_cents = Some(30_000_000);
-        assert_eq!(purchase_spend(&[house], &HashSet::new()), [spend(1, "2019-06", PURCHASE_PRICE, 30_000_000)]);
+        assert_eq!(
+            purchase_spend(&[house], &HashSet::new()),
+            [spend(1, "2019-06", PURCHASE_PRICE, 30_000_000)]
+        );
     }
 
     #[test]
@@ -366,7 +504,10 @@ mod tests {
         let mut car = obj(4, None, "Car", "car");
         car.purchase_price_cents = Some(1_500_000);
         car.created_at = "2023-11-02T08:00:00Z".into();
-        assert_eq!(purchase_spend(&[car], &HashSet::new()), [spend(4, "2023-11", PURCHASE_PRICE, 1_500_000)]);
+        assert_eq!(
+            purchase_spend(&[car], &HashSet::new()),
+            [spend(4, "2023-11", PURCHASE_PRICE, 1_500_000)]
+        );
     }
 
     #[test]
@@ -390,41 +531,79 @@ mod tests {
         assert_eq!(s.years, ["0202"]);
         let s = summarize(&tree(), &rows, Some(202));
         assert_eq!(s.over_time.len(), 12);
-        assert_eq!(s.over_time[4], Amount { bucket: "0202-05".into(), cost_cents: 40 });
+        assert_eq!(
+            s.over_time[4],
+            Amount {
+                bucket: "0202-05".into(),
+                cost_cents: 40
+            }
+        );
         assert_eq!(s.total_cents, 40);
     }
 
     #[test]
     fn a_malformed_month_is_ignored_everywhere() {
-        let rows = [spend(4, "202-0", "fuel", 10), spend(4, "2026-5", "fuel", 20)];
+        let rows = [
+            spend(4, "202-0", "fuel", 10),
+            spend(4, "2026-5", "fuel", 20),
+        ];
         let s = summarize(&tree(), &rows, None);
         assert!(s.years.is_empty(), "not counted towards years");
         assert_eq!(s.total_cents, 0);
         assert!(s.by_object.is_empty() && s.by_category.is_empty() && s.by_type.is_empty());
     }
 
-    fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
 
     #[test]
     fn the_month_window_ends_with_this_month_and_crosses_a_year() {
-        let totals = vec![("2025-11".to_string(), 500), ("2026-02".to_string(), 70), ("2026-02".to_string(), 30), ("2025-10".to_string(), 999)];
+        let totals = vec![
+            ("2025-11".to_string(), 500),
+            ("2026-02".to_string(), 70),
+            ("2026-02".to_string(), 30),
+            ("2025-10".to_string(), 999),
+        ];
         let w = months_ending(day("2026-02-14"), 4, &totals);
-        assert_eq!(amounts(&w), [("2025-11", 500), ("2025-12", 0), ("2026-01", 0), ("2026-02", 100)]);
+        assert_eq!(
+            amounts(&w),
+            [
+                ("2025-11", 500),
+                ("2025-12", 0),
+                ("2026-01", 0),
+                ("2026-02", 100)
+            ]
+        );
     }
 
     #[test]
     fn ownership_adds_the_purchase_price_and_measures_up_to_until() {
         let o = ownership(100_000, 300_000, day("2024-05-01"), day("2026-05-01"));
-        assert_eq!((o.total_cents, o.purchase_cents, o.since.as_str()), (400_000, 300_000, "2024-05-01"));
+        assert_eq!(
+            (o.total_cents, o.purchase_cents, o.since.as_str()),
+            (400_000, 300_000, "2024-05-01")
+        );
         // 2024-05-01 to 2026-05-01 is 730 days.
         assert_eq!(o.per_year_cents, Some(400_000 * 365 / 730));
     }
 
     #[test]
     fn no_per_year_figure_under_ninety_days_owned() {
-        assert_eq!(ownership(5_000, 0, day("2026-01-01"), day("2026-03-31")).per_year_cents, None, "89 days");
-        assert_eq!(ownership(5_000, 0, day("2026-01-01"), day("2026-04-01")).per_year_cents, Some(5_000 * 365 / 90));
-        assert_eq!(ownership(5_000, 0, day("2026-05-01"), day("2026-04-01")).per_year_cents, None, "since after until");
+        assert_eq!(
+            ownership(5_000, 0, day("2026-01-01"), day("2026-03-31")).per_year_cents,
+            None,
+            "89 days"
+        );
+        assert_eq!(
+            ownership(5_000, 0, day("2026-01-01"), day("2026-04-01")).per_year_cents,
+            Some(5_000 * 365 / 90)
+        );
+        assert_eq!(
+            ownership(5_000, 0, day("2026-05-01"), day("2026-04-01")).per_year_cents,
+            None,
+            "since after until"
+        );
     }
 
     #[test]

@@ -48,7 +48,9 @@ static CAPTURED: OnceLock<LogBuffer> = OnceLock::new();
 /// `LOGB_TEST_LOG` overrides it for a run that wants something quieter or noisier.
 fn capture_logs() {
     static INSTALLED: AtomicBool = AtomicBool::new(false);
-    let buffer = CAPTURED.get_or_init(|| LogBuffer(Arc::new(Mutex::new(Vec::new())))).clone();
+    let buffer = CAPTURED
+        .get_or_init(|| LogBuffer(Arc::new(Mutex::new(Vec::new()))))
+        .clone();
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -68,9 +70,14 @@ fn capture_logs() {
 /// Process-wide on purpose: the question asked of it is whether a secret appears anywhere, and
 /// a test that only saw its own lines would miss a leak from a background task.
 pub fn captured_logs() -> String {
-    let buffer = CAPTURED.get().expect("no app has been spawned, so nothing has been captured");
+    let buffer = CAPTURED
+        .get()
+        .expect("no app has been spawned, so nothing has been captured");
     let bytes = buffer.0.lock().unwrap();
-    assert!(!bytes.is_empty(), "nothing was captured at all: the subscriber is not recording");
+    assert!(
+        !bytes.is_empty(),
+        "nothing was captured at all: the subscriber is not recording"
+    );
     String::from_utf8_lossy(&bytes).to_string()
 }
 
@@ -92,7 +99,9 @@ pub struct TestApp {
 /// not a database an instance serves. A blank value counts as unset, so an exported-but-empty
 /// variable does not silently turn the whole suite into a PostgreSQL run that cannot connect.
 pub fn test_server_url() -> Option<String> {
-    std::env::var("LOGB_TEST_DATABASE_URL").ok().filter(|url| !url.trim().is_empty())
+    std::env::var("LOGB_TEST_DATABASE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
 }
 
 /// Which backend the suite is running against.
@@ -128,7 +137,11 @@ pub fn skipped_on_postgres(test: &str, why: &str) -> bool {
 /// would be a dependency the app itself does not have.
 pub(crate) fn unique_suffix() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!("{}_{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Swaps the database name in a server URL, keeping user, password, host, port and query.
@@ -167,7 +180,10 @@ async fn admin_pool(server_url: &str) -> Result<sqlx::AnyPool, sqlx::Error> {
     use std::str::FromStr;
     sqlx::any::install_default_drivers();
     let options = sqlx::any::AnyConnectOptions::from_str(server_url)?.disable_statement_logging();
-    sqlx::any::AnyPoolOptions::new().max_connections(1).connect_with(options).await
+    sqlx::any::AnyPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
 }
 
 /// Every scratch database this harness has ever made shares this prefix, so leftovers from a
@@ -235,14 +251,29 @@ pub async fn scratch_database_with_its_own_password(server_url: &str) -> Scratch
         format!("CREATE ROLE {role} LOGIN PASSWORD '{SCRATCH_PASSWORD}'"),
         format!("CREATE DATABASE {name} OWNER {role}"),
     ] {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone())).execute(&admin).await.unwrap_or_else(|e| {
-            panic!("could not set up a scratch login ({sql}): {e} -- this test needs a server \
-                    whose LOGB_TEST_DATABASE_URL login may CREATE ROLE and CREATE DATABASE")
-        });
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone()))
+            .execute(&admin)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "could not set up a scratch login ({sql}): {e} -- this test needs a server \
+                    whose LOGB_TEST_DATABASE_URL login may CREATE ROLE and CREATE DATABASE"
+                )
+            });
     }
     admin.close().await;
-    let url = with_credentials(&replace_database_in_url(server_url, &name), &role, SCRATCH_PASSWORD);
-    ScratchLogin { server_url: server_url.to_string(), role, name, url, password: SCRATCH_PASSWORD }
+    let url = with_credentials(
+        &replace_database_in_url(server_url, &name),
+        &role,
+        SCRATCH_PASSWORD,
+    );
+    ScratchLogin {
+        server_url: server_url.to_string(),
+        role,
+        name,
+        url,
+        password: SCRATCH_PASSWORD,
+    }
 }
 
 impl Drop for ScratchLogin {
@@ -250,16 +281,25 @@ impl Drop for ScratchLogin {
     /// anything it owns is still there. Same thread-with-its-own-runtime shape as
     /// `ScratchDatabase`, and for the same reason -- a `Drop` cannot await.
     fn drop(&mut self) {
-        let (server_url, name, role) = (self.server_url.clone(), self.name.clone(), self.role.clone());
+        let (server_url, name, role) = (
+            self.server_url.clone(),
+            self.name.clone(),
+            self.role.clone(),
+        );
         let dropped = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let admin = admin_pool(&server_url).await?;
                 for sql in [
                     format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
                     format!("DROP ROLE IF EXISTS {role}"),
                 ] {
-                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&admin).await?;
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                        .execute(&admin)
+                        .await?;
                 }
                 admin.close().await;
                 Ok::<_, sqlx::Error>(())
@@ -279,7 +319,9 @@ fn with_credentials(url: &str, user: &str, password: &str) -> String {
     };
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(authority_end);
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     format!("{scheme}://{user}:{password}@{host}{tail}")
 }
 
@@ -292,13 +334,21 @@ pub async fn scratch_database() -> Scratch {
     match test_server_url() {
         Some(server_url) => {
             let (database, url) = ScratchDatabase::create(&server_url).await;
-            Scratch { url, _dir: None, _database: Some(database) }
-        },
+            Scratch {
+                url,
+                _dir: None,
+                _database: Some(database),
+            }
+        }
         None => {
             let dir = tempfile::tempdir().unwrap();
             let url = logb::db::sqlite_url(dir.path()).unwrap();
-            Scratch { url, _dir: Some(dir), _database: None }
-        },
+            Scratch {
+                url,
+                _dir: Some(dir),
+                _database: None,
+            }
+        }
     }
 }
 
@@ -341,7 +391,10 @@ impl Scratch {
     /// How many rows `users` holds, read through a connection of its own.
     pub async fn user_count(&self) -> i64 {
         let pool = logb::db::connect_existing(&self.url).await.unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         pool.close().await;
         count
     }
@@ -353,7 +406,10 @@ impl Scratch {
     /// untouched. `user_count` would panic on the database that test is about.
     pub async fn user_count_or_no_schema(&self) -> Option<i64> {
         let pool = logb::db::connect_existing(&self.url).await.ok()?;
-        let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users").fetch_one(&pool).await.ok();
+        let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .ok();
         pool.close().await;
         count
     }
@@ -364,11 +420,12 @@ impl Scratch {
     /// break a destination that is otherwise a faithful copy.
     pub async fn delete_one_activity(&self) {
         let pool = logb::db::connect_existing(&self.url).await.unwrap();
-        let deleted = sqlx::query("DELETE FROM activities WHERE id = (SELECT min(id) FROM activities)")
-            .execute(&pool)
-            .await
-            .unwrap()
-            .rows_affected();
+        let deleted =
+            sqlx::query("DELETE FROM activities WHERE id = (SELECT min(id) FROM activities)")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected();
         pool.close().await;
         assert_eq!(deleted, 1, "there was no activity to delete");
     }
@@ -401,7 +458,13 @@ impl ScratchDatabase {
             .unwrap_or_else(|e| panic!("could not create the scratch database {name}: {e}"));
         admin.close().await;
         let url = replace_database_in_url(server_url, &name);
-        (Self { server_url: server_url.to_string(), name }, url)
+        (
+            Self {
+                server_url: server_url.to_string(),
+                name,
+            },
+            url,
+        )
     }
 
     /// Waits until nothing is connected to this database any more.
@@ -416,14 +479,15 @@ impl ScratchDatabase {
             Err(e) => {
                 eprintln!("could not check whether {} is still in use: {e}", self.name);
                 return;
-            },
+            }
         };
         for _ in 0..200 {
-            let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = $1")
-                .bind(&self.name)
-                .fetch_one(&admin)
-                .await
-                .unwrap_or(0);
+            let busy: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = $1")
+                    .bind(&self.name)
+                    .fetch_one(&admin)
+                    .await
+                    .unwrap_or(0);
             if busy == 0 {
                 break;
             }
@@ -443,11 +507,16 @@ impl Drop for ScratchDatabase {
     fn drop(&mut self) {
         let (server_url, name) = (self.server_url.clone(), self.name.clone());
         let dropped = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let admin = admin_pool(&server_url).await?;
                 let sql = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
-                let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&admin).await;
+                let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                    .execute(&admin)
+                    .await;
                 admin.close().await;
                 result.map(|_| ())
             })
@@ -484,7 +553,11 @@ pub(crate) fn process_is_alive(pid: u32) -> bool {
 /// `None` for a name that does not have one, which is not a name this harness writes -- and an
 /// unrecognised database is left alone rather than dropped on a guess.
 pub(crate) fn pid_of(name: &str) -> Option<u32> {
-    name.strip_prefix(SCRATCH_PREFIX)?.split('_').next()?.parse().ok()
+    name.strip_prefix(SCRATCH_PREFIX)?
+        .split('_')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// Drops scratch databases left behind by runs that were killed before their teardown ran.
@@ -518,7 +591,7 @@ async fn sweep_leftovers(admin: &sqlx::AnyPool) {
         Err(e) => {
             eprintln!("could not sweep leftover scratch databases: {e}");
             return;
-        },
+        }
     };
     for name in names {
         // Its maker is still running, or the name carries no pid to ask about: either way it
@@ -551,13 +624,15 @@ async fn sweep_leftover_roles(admin: &sqlx::AnyPool, mine: &str) {
         Err(e) => {
             eprintln!("could not sweep leftover scratch roles: {e}");
             return;
-        },
+        }
     };
     for role in roles {
         if pid_of(&role).is_none_or(process_is_alive) {
             continue;
         }
-        let _ = sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP ROLE {role}"))).execute(admin).await;
+        let _ = sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP ROLE {role}")))
+            .execute(admin)
+            .await;
     }
 }
 
@@ -608,7 +683,7 @@ pub async fn spawn_with(tweak: impl FnOnce(&mut logb::config::Config)) -> TestAp
             let (database, url) = ScratchDatabase::create(&server_url).await;
             config.database_url = Some(url);
             Some(database)
-        },
+        }
         None => None,
     };
     // The tweak runs last so a test can still override anything, including the database URL.
@@ -645,9 +720,12 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
     TestApp {
         base: format!("http://{addr}/api"),
@@ -664,7 +742,9 @@ fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -673,7 +753,10 @@ fn percent_encode(value: &str) -> String {
 
 /// A fresh client with its own cookie jar (a second "browser").
 pub fn new_client() -> reqwest::Client {
-    reqwest::Client::builder().cookie_store(true).build().unwrap()
+    reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap()
 }
 
 impl TestApp {
@@ -731,7 +814,12 @@ impl TestApp {
     /// POSTs JSON as `self.client` and hands back the response, whatever it is -- for the
     /// tests whose subject is the refusal.
     pub async fn post_raw(&self, path: &str, body: &serde_json::Value) -> reqwest::Response {
-        self.client.post(self.url(path)).json(body).send().await.unwrap()
+        self.client
+            .post(self.url(path))
+            .json(body)
+            .send()
+            .await
+            .unwrap()
     }
 
     /// POST /auth/setup with the given credentials using `self.client` (first user = admin).
@@ -743,12 +831,22 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 201, "setup failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            201,
+            "setup failed: {}",
+            res.text().await.unwrap()
+        );
         res.json().await.unwrap()
     }
 
     /// POST /auth/login with an arbitrary client.
-    pub async fn login(&self, client: &reqwest::Client, username: &str, password: &str) -> reqwest::Response {
+    pub async fn login(
+        &self,
+        client: &reqwest::Client,
+        username: &str,
+        password: &str,
+    ) -> reqwest::Response {
         client
             .post(self.url("/auth/login"))
             .json(&serde_json::json!({ "username": username, "password": password }))
@@ -766,7 +864,12 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 201, "create user failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            201,
+            "create user failed: {}",
+            res.text().await.unwrap()
+        );
         let c = new_client();
         let res = self.login(&c, username, password).await;
         assert_eq!(res.status(), 200);
@@ -774,7 +877,12 @@ impl TestApp {
     }
 
     /// Create an object with self.client; returns its JSON.
-    pub async fn create_object(&self, client: &reqwest::Client, name: &str, unit: Option<&str>) -> serde_json::Value {
+    pub async fn create_object(
+        &self,
+        client: &reqwest::Client,
+        name: &str,
+        unit: Option<&str>,
+    ) -> serde_json::Value {
         let res = client
             .post(self.url("/objects"))
             .json(&serde_json::json!({
@@ -784,7 +892,12 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 201, "create object failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            201,
+            "create object failed: {}",
+            res.text().await.unwrap()
+        );
         res.json().await.unwrap()
     }
 
@@ -805,7 +918,11 @@ impl TestApp {
     }
 
     /// Adds an activity to an object, taking the id straight out of `create_object`'s JSON.
-    pub async fn create_activity(&self, object_id: &serde_json::Value, title: &str) -> serde_json::Value {
+    pub async fn create_activity(
+        &self,
+        object_id: &serde_json::Value,
+        title: &str,
+    ) -> serde_json::Value {
         let id = object_id.as_i64().expect("an object id");
         let res = self
             .client
@@ -816,7 +933,12 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 201, "create activity failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            201,
+            "create activity failed: {}",
+            res.text().await.unwrap()
+        );
         res.json().await.unwrap()
     }
 
@@ -833,7 +955,12 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 200, "pull failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            200,
+            "pull failed: {}",
+            res.text().await.unwrap()
+        );
         res.json().await.unwrap()
     }
 
@@ -877,7 +1004,8 @@ impl TestApp {
     ) -> serde_json::Value {
         let edited_at = (chrono::Utc::now() + chrono::Duration::hours(1))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        self.one_set_op_at(object, name, client_op_id, &edited_at).await
+        self.one_set_op_at(object, name, client_op_id, &edited_at)
+            .await
     }
 
     /// `one_set_op`, but with the caller's own `edited_at` rather than "now plus an hour" --
@@ -905,7 +1033,12 @@ impl TestApp {
     /// POST /sync/push with a body the caller prepared, answering the raw response so a test
     /// can assert on a status the harness would otherwise have unwrapped away.
     pub async fn push_raw(&self, body: &serde_json::Value) -> reqwest::Response {
-        self.client.post(self.url("/sync/push")).json(body).send().await.unwrap()
+        self.client
+            .post(self.url("/sync/push"))
+            .json(body)
+            .send()
+            .await
+            .unwrap()
     }
 
     /// GET /search, with the term encoded by the client rather than pasted into the URL --
@@ -917,7 +1050,12 @@ impl TestApp {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 200, "search failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            200,
+            "search failed: {}",
+            res.text().await.unwrap()
+        );
         res.json().await.unwrap()
     }
 
@@ -925,8 +1063,18 @@ impl TestApp {
     /// tombstones over the object's children, exactly as a user pressing delete produces it.
     pub async fn delete_object(&self, object: &serde_json::Value) {
         let id = object["id"].as_i64().expect("an object id");
-        let res = self.client.delete(self.url(&format!("/objects/{id}"))).send().await.unwrap();
-        assert_eq!(res.status(), 204, "delete object failed: {}", res.text().await.unwrap());
+        let res = self
+            .client
+            .delete(self.url(&format!("/objects/{id}")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            204,
+            "delete object failed: {}",
+            res.text().await.unwrap()
+        );
     }
 
     /// Backdates every tombstone in the database well past any retention window.
@@ -980,7 +1128,12 @@ impl TestApp {
     /// The caller's unarchived object names, in the order the API returns them.
     pub async fn object_names(&self) -> Vec<String> {
         let res = self.client.get(self.url("/objects")).send().await.unwrap();
-        assert_eq!(res.status(), 200, "list objects failed: {}", res.text().await.unwrap());
+        assert_eq!(
+            res.status(),
+            200,
+            "list objects failed: {}",
+            res.text().await.unwrap()
+        );
         let rows: serde_json::Value = res.json().await.unwrap();
         rows.as_array()
             .unwrap()

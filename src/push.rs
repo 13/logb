@@ -58,15 +58,23 @@ pub async fn key_pair(state: &App) -> Result<SigningKey, AppError> {
     }
     let fresh = encode_key(&generate_key());
     sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING")
-        .bind(VAPID_KEY).bind(&fresh).execute(&state.db).await?;
-    stored_key_pair(state).await?
+        .bind(VAPID_KEY)
+        .bind(&fresh)
+        .execute(&state.db)
+        .await?;
+    stored_key_pair(state)
+        .await?
         .ok_or_else(|| AppError::Internal("the VAPID key was not stored".into()))
 }
 
 async fn stored_key_pair(state: &App) -> Result<Option<SigningKey>, AppError> {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
-        .bind(VAPID_KEY).fetch_optional(&state.db).await?;
-    let Some((encoded,)) = row else { return Ok(None) };
+        .bind(VAPID_KEY)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some((encoded,)) = row else {
+        return Ok(None);
+    };
     decode_key(&encoded).map(Some).map_err(AppError::Internal)
 }
 
@@ -106,7 +114,10 @@ pub fn public_key(kp: &SigningKey) -> String {
 /// Who push services should contact about this sender. VAPID asks for a `mailto:` or `https:`
 /// URI; the instance's public address is the one it has.
 pub fn contact(state: &App) -> String {
-    state.config.public_url.as_deref()
+    state
+        .config
+        .public_url
+        .as_deref()
         .filter(|u| u.starts_with("https://"))
         .map(|u| u.trim_end_matches('/').to_string())
         .unwrap_or_else(|| "mailto:logb@localhost".to_string())
@@ -126,9 +137,12 @@ pub fn validate(sub: &Subscription) -> Result<(), AppError> {
     if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
         return Err(bad("endpoint must be an https URL"));
     }
-    let p256dh = Base64UrlUnpadded::decode_vec(&sub.p256dh).map_err(|_| bad("keys.p256dh must be base64url"))?;
-    PublicKey::from_sec1_bytes(&p256dh).map_err(|_| bad("keys.p256dh is not a P-256 public key"))?;
-    let auth = Base64UrlUnpadded::decode_vec(&sub.auth).map_err(|_| bad("keys.auth must be base64url"))?;
+    let p256dh = Base64UrlUnpadded::decode_vec(&sub.p256dh)
+        .map_err(|_| bad("keys.p256dh must be base64url"))?;
+    PublicKey::from_sec1_bytes(&p256dh)
+        .map_err(|_| bad("keys.p256dh is not a P-256 public key"))?;
+    let auth =
+        Base64UrlUnpadded::decode_vec(&sub.auth).map_err(|_| bad("keys.auth must be base64url"))?;
     if auth.len() != 16 {
         return Err(bad("keys.auth must be 16 bytes"));
     }
@@ -143,19 +157,29 @@ pub async fn send(kp: &SigningKey, contact: &str, sub: &Subscription, payload: &
     }
 }
 
-fn request(kp: &SigningKey, contact: &str, sub: &Subscription, payload: &[u8]) -> Result<axum::http::Request<Vec<u8>>, String> {
+fn request(
+    kp: &SigningKey,
+    contact: &str,
+    sub: &Subscription,
+    payload: &[u8],
+) -> Result<axum::http::Request<Vec<u8>>, String> {
     let endpoint: axum::http::Uri = sub.endpoint.parse().map_err(|e| format!("endpoint: {e}"))?;
     let p256dh = Base64UrlUnpadded::decode_vec(&sub.p256dh).map_err(|e| format!("p256dh: {e}"))?;
     let auth = Base64UrlUnpadded::decode_vec(&sub.auth).map_err(|e| format!("auth: {e}"))?;
-    let auth: [u8; 16] = auth.as_slice().try_into().map_err(|_| "auth must be 16 bytes".to_string())?;
+    let auth: [u8; 16] = auth
+        .as_slice()
+        .try_into()
+        .map_err(|_| "auth must be 16 bytes".to_string())?;
     let key = PublicKey::from_sec1_bytes(&p256dh).map_err(|e| format!("p256dh: {e}"))?;
     let authorization = vapid_authorization(kp, contact, &endpoint)?;
     let mut req = WebPushBuilder::new(endpoint, key, Auth::from(auth))
         .with_valid_duration(TTL)
         .build(payload.to_vec())
         .map_err(|e| format!("encrypt: {e}"))?;
-    let authorization = axum::http::HeaderValue::try_from(authorization).map_err(|e| format!("authorization: {e}"))?;
-    req.headers_mut().insert(axum::http::header::AUTHORIZATION, authorization);
+    let authorization = axum::http::HeaderValue::try_from(authorization)
+        .map_err(|e| format!("authorization: {e}"))?;
+    req.headers_mut()
+        .insert(axum::http::header::AUTHORIZATION, authorization);
     Ok(req)
 }
 
@@ -164,12 +188,18 @@ fn request(kp: &SigningKey, contact: &str, sub: &Subscription, payload: &[u8]) -
 /// Built here rather than by `web-push-native`, whose VAPID support comes through `jwt-simple`
 /// and with it an RSA implementation this instance never uses and `cargo audit` flags. The token
 /// is only ever ES256, so it is a fixed header, three claims and one P-256 signature.
-fn vapid_authorization(kp: &SigningKey, contact: &str, endpoint: &axum::http::Uri) -> Result<String, String> {
+fn vapid_authorization(
+    kp: &SigningKey,
+    contact: &str,
+    endpoint: &axum::http::Uri,
+) -> Result<String, String> {
     // Scheme and host only, as the audience has always been sent from here: every push service's
     // endpoint uses the default port, so this is the origin they check it against.
     let scheme = endpoint.scheme_str().ok_or("endpoint has no scheme")?;
     let host = endpoint.host().ok_or("endpoint has no host")?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| format!("clock: {e}"))?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("clock: {e}"))?;
     let claims = serde_json::json!({
         "aud": format!("{scheme}://{host}"),
         "sub": contact,
@@ -181,7 +211,10 @@ fn vapid_authorization(kp: &SigningKey, contact: &str, endpoint: &axum::http::Ur
     // ECDSA over SHA-256; JWS wants the signature as the fixed 64-byte `r || s`, not DER.
     let signature: Signature = kp.sign(signing_input.as_bytes());
     let signature = Base64UrlUnpadded::encode_string(&signature.to_bytes());
-    Ok(format!("vapid t={signing_input}.{signature}, k={}", public_key(kp)))
+    Ok(format!(
+        "vapid t={signing_input}.{signature}, k={}",
+        public_key(kp)
+    ))
 }
 
 async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
@@ -190,7 +223,12 @@ async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
         Err(e) => return Delivery::Failed(format!("client: {e}")),
     };
     let (parts, body) = req.into_parts();
-    let sent = client.request(parts.method, parts.uri.to_string()).headers(parts.headers).body(body).send().await;
+    let sent = client
+        .request(parts.method, parts.uri.to_string())
+        .headers(parts.headers)
+        .body(body)
+        .send()
+        .await;
     match sent {
         Ok(res) if res.status().is_success() => Delivery::Sent,
         Ok(res) if matches!(res.status().as_u16(), 404 | 410) => Delivery::Gone,
@@ -204,32 +242,54 @@ async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
 mod tests {
     use super::*;
 
-    const P256DH: &str = "BLn9b-VR0ca83knDNZ32dCHGyjJp-1riX9ZTN40MqV8K_LpQmLqxC_DoHvqvFXO_nGdAB4W9dogZb_sM-uV4JbY";
+    const P256DH: &str =
+        "BLn9b-VR0ca83knDNZ32dCHGyjJp-1riX9ZTN40MqV8K_LpQmLqxC_DoHvqvFXO_nGdAB4W9dogZb_sM-uV4JbY";
     const AUTH: &str = "_ordMnz7uTCmrpBTeUV4Bw";
 
     fn sub(endpoint: &str) -> Subscription {
-        Subscription { endpoint: endpoint.into(), p256dh: P256DH.into(), auth: AUTH.into() }
+        Subscription {
+            endpoint: endpoint.into(),
+            p256dh: P256DH.into(),
+            auth: AUTH.into(),
+        }
     }
 
     #[test]
     fn a_real_push_endpoint_is_accepted() {
         assert!(validate(&sub("https://fcm.googleapis.com/fcm/send/abc")).is_ok());
-        assert!(validate(&sub("http://127.0.0.1:9999/push")).is_ok(), "loopback, for tests");
+        assert!(
+            validate(&sub("http://127.0.0.1:9999/push")).is_ok(),
+            "loopback, for tests"
+        );
     }
 
     #[test]
     fn anything_a_browser_would_never_hand_out_is_refused() {
-        for endpoint in ["http://192.168.1.1/admin", "http://router.local/", "ftp://example.com/", "not a url"] {
+        for endpoint in [
+            "http://192.168.1.1/admin",
+            "http://router.local/",
+            "ftp://example.com/",
+            "not a url",
+        ] {
             assert!(validate(&sub(endpoint)).is_err(), "{endpoint}");
         }
-        assert!(validate(&Subscription { auth: "AAAA".into(), ..sub("https://push.example/") }).is_err());
-        assert!(validate(&Subscription { p256dh: "AAAA".into(), ..sub("https://push.example/") }).is_err());
+        assert!(validate(&Subscription {
+            auth: "AAAA".into(),
+            ..sub("https://push.example/")
+        })
+        .is_err());
+        assert!(validate(&Subscription {
+            p256dh: "AAAA".into(),
+            ..sub("https://push.example/")
+        })
+        .is_err());
     }
 
     /// A secret as the database holds it (bytes 0x01..=0x20) and the public key the previous,
     /// jwt-simple based code derived from it. Browsers already subscribed to this instance's key.
     const STORED_SECRET: &str = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
-    const STORED_PUBLIC: &str = "BFFcPW6545a5BNP-yn9U_c0MwemXvzddylFa0KbDtANfRTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q";
+    const STORED_PUBLIC: &str =
+        "BFFcPW6545a5BNP-yn9U_c0MwemXvzddylFa0KbDtANfRTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q";
 
     #[test]
     fn the_stored_key_format_is_unchanged() {
@@ -240,7 +300,10 @@ mod tests {
         let fresh = generate_key();
         let stored = encode_key(&fresh);
         assert_eq!(Base64UrlUnpadded::decode_vec(&stored).unwrap().len(), 32);
-        assert_eq!(public_key(&decode_key(&stored).unwrap()), public_key(&fresh));
+        assert_eq!(
+            public_key(&decode_key(&stored).unwrap()),
+            public_key(&fresh)
+        );
     }
 
     #[test]
@@ -249,7 +312,13 @@ mod tests {
         use p256::ecdsa::{Signature, VerifyingKey};
 
         let kp = generate_key();
-        let req = request(&kp, "mailto:a@b.c", &sub("https://push.example:8443/x"), b"hello").unwrap();
+        let req = request(
+            &kp,
+            "mailto:a@b.c",
+            &sub("https://push.example:8443/x"),
+            b"hello",
+        )
+        .unwrap();
         let header = req.headers()["authorization"].to_str().unwrap();
         let rest = header.strip_prefix("vapid t=").expect(header);
         let (jwt, k) = rest.split_once(", k=").expect(header);
@@ -260,26 +329,48 @@ mod tests {
         let json = |part: &str| -> serde_json::Value {
             serde_json::from_slice(&Base64UrlUnpadded::decode_vec(part).unwrap()).unwrap()
         };
-        assert_eq!(json(parts[0]), serde_json::json!({"typ": "JWT", "alg": "ES256"}));
+        assert_eq!(
+            json(parts[0]),
+            serde_json::json!({"typ": "JWT", "alg": "ES256"})
+        );
         let claims = json(parts[1]);
         assert_eq!(claims["aud"], "https://push.example");
         assert_eq!(claims["sub"], "mailto:a@b.c");
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let exp = claims["exp"].as_u64().expect("exp is an integer");
         let expected = now + 12 * 60 * 60;
-        assert!((expected - 60..=expected + 60).contains(&exp), "exp {exp}, expected about {expected}");
+        assert!(
+            (expected - 60..=expected + 60).contains(&exp),
+            "exp {exp}, expected about {expected}"
+        );
 
-        let verifying = VerifyingKey::from_sec1_bytes(&Base64UrlUnpadded::decode_vec(k).unwrap()).unwrap();
-        let signature = Signature::from_slice(&Base64UrlUnpadded::decode_vec(parts[2]).unwrap()).unwrap();
-        verifying.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature).unwrap();
+        let verifying =
+            VerifyingKey::from_sec1_bytes(&Base64UrlUnpadded::decode_vec(k).unwrap()).unwrap();
+        let signature =
+            Signature::from_slice(&Base64UrlUnpadded::decode_vec(parts[2]).unwrap()).unwrap();
+        verifying
+            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
+            .unwrap();
     }
 
     #[test]
     fn a_request_is_encrypted_and_signed() {
         let kp = generate_key();
-        let req = request(&kp, "mailto:a@b.c", &sub("https://push.example/x"), b"hello").unwrap();
+        let req = request(
+            &kp,
+            "mailto:a@b.c",
+            &sub("https://push.example/x"),
+            b"hello",
+        )
+        .unwrap();
         assert_eq!(req.headers()["content-encoding"], "aes128gcm");
-        assert!(req.headers()["authorization"].to_str().unwrap().starts_with("vapid t="));
+        assert!(req.headers()["authorization"]
+            .to_str()
+            .unwrap()
+            .starts_with("vapid t="));
         assert_ne!(req.body().as_slice(), b"hello");
     }
 }

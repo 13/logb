@@ -35,6 +35,7 @@
   let costText = $state('');
   let counterText = $state('');
   let quantityText = $state('');
+  let meterReadingText = $state('');
   /** The "Charged full" checkbox, fuel-only. Ticked by default on a new entry -- most charges
    *  (or fill-ups) do top up -- and read back from the loaded row's own `charged_full` on an
    *  edit, same as every other fuel-only field below. */
@@ -64,7 +65,8 @@
   // The object's vocabulary, plus whatever this entry already says. An entry logged before its
   // object was re-typed must keep its own category in the list, or saving an untouched form
   // would quietly re-file it.
-  const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category, object?.counter_unit));
+  const resourceUnit = $derived(object?.resource_unit ?? object?.fuel_unit ?? null);
+  const offered = $derived(categoriesFor(object?.type ?? 'other', $customTypes, input.category, object?.counter_unit, resourceUnit, object?.resource_kind));
   /** Set once the user picks a category (the select, or a repeat chip). Until then a new entry's
    *  category is only a default, and may be re-chosen when the object's own type loads late. */
   let categoryTouched = false;
@@ -120,7 +122,8 @@
     // `offered` below re-derives the very same list reactively for the select itself, so the
     // two can never disagree about what a stale/forged query value is allowed to pick.
     if (!aid && object) {
-      const list = categoriesFor(object.type, $customTypes, undefined, object.counter_unit);
+      const unit = object.resource_unit ?? object.fuel_unit ?? null;
+      const list = categoriesFor(object.type, $customTypes, undefined, object.counter_unit, unit, object.resource_kind);
       const wanted = categoryParam();
       if (wanted && list.includes(wanted)) {
         input.category = wanted;
@@ -148,6 +151,7 @@
         costText = centsToInput(a.cost_cents);
         counterText = a.counter_value === null ? '' : String(a.counter_value);
         quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
+        meterReadingText = a.meter_reading_milli == null ? '' : String(a.meter_reading_milli / 1000);
         chargedFull = a.charged_full === 1;
         fromText = a.from_place ?? '';
         toText = a.to_place ?? '';
@@ -166,15 +170,21 @@
     }
   });
 
-  // On a cold load the own types can arrive after `onMount` picked the default above: until then
-  // an own type offers every category, so `maintenance` looked fine. Re-check when they land, as
-  // long as the entry is new and its category untouched. Built-in types never depend on the
-  // list, so they keep exactly the `onMount` behaviour.
+  // Re-check whenever the object context arrives. Svelte derived values update on the next
+  // reactive pass, so reading `resourceUnit` immediately after assigning `object` in onMount can
+  // still see null. This also handles own types that load after the form itself.
   $effect(() => {
     const list = $customTypes;
-    if (aid || !object || categoryTouched || !object.type.startsWith('custom:')) return;
-    const own = categoriesFor(object.type, list, undefined, object.counter_unit);
-    if (!own.includes(untrack(() => input.category))) input.category = own[0];
+    if (aid || !object || categoryTouched) return;
+    const unit = object.resource_unit ?? object.fuel_unit ?? null;
+    const own = categoriesFor(object.type, list, undefined, object.counter_unit, unit, object.resource_kind);
+    const wanted = categoryParam();
+    if (wanted && own.includes(wanted)) {
+      input.category = wanted;
+      categoryTouched = true;
+    } else if (!own.includes(untrack(() => input.category))) {
+      input.category = own[0];
+    }
   });
 
   // A new trip's start defaults to the object's current counter -- "from where the odometer
@@ -287,6 +297,9 @@
       start_counter: body.start_counter ?? null, from_place: body.from_place ?? null,
       to_place: body.to_place ?? null, duration_minutes: body.duration_minutes ?? null,
       battery_used_pct: body.battery_used_pct ?? null, charged_full: body.charged_full ?? 0, weight_grams: body.weight_grams ?? null,
+      fuel_level_pct: body.fuel_level_pct ?? null,
+      meter_reading_milli: body.meter_reading_milli ?? null, period_start: body.period_start ?? null, period_end: body.period_end ?? null,
+      estimated: body.estimated ?? 0, meter_reset: body.meter_reset ?? 0,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       attachments: [], pending: true,
     };
@@ -323,12 +336,18 @@
       // below) -- send it only then, so switching category away from fuel after typing an
       // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
       // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
-      quantity_milli: input.category === 'fuel' ? parseQuantity(quantityText) : null,
+      quantity_milli: input.category === 'fuel' || (input.category === 'usage' && object?.measurement_mode !== 'meter') ? parseQuantity(quantityText) : null,
       // Same pattern as `quantity_milli` just above: 1 only while this IS a fuel entry and the
       // box is ticked, 0 otherwise -- so switching category away from fuel after ticking it
       // can't leave the flag stuck set on a repair/maintenance/... row (the backend rejects it
       // there outright: "only a charge can be marked full").
-      charged_full: input.category === 'fuel' && chargedFull ? 1 : 0,
+      charged_full: (input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')) && chargedFull ? 1 : 0,
+      fuel_level_pct: (input.category === 'fuel' || input.category === 'usage') && (resourceUnit === 'l' || resourceUnit === 'gal') && object?.resource_kind !== 'water' ? (input.fuel_level_pct ?? null) : null,
+      meter_reading_milli: input.category === 'usage' && object?.resource_kind === 'water' && object?.measurement_mode === 'meter' ? parseQuantity(meterReadingText) : null,
+      period_start: input.category === 'usage' && object?.measurement_mode === 'usage' ? (input.period_start || null) : null,
+      period_end: input.category === 'usage' && object?.measurement_mode === 'usage' ? (input.period_end || null) : null,
+      estimated: input.category === 'usage' ? (input.estimated ?? 0) : 0,
+      meter_reset: input.category === 'usage' && object?.measurement_mode === 'meter' ? (input.meter_reset ?? 0) : 0,
       // The five trip fields exist in the form only for the trip category (see the template
       // below) -- sent as null otherwise, mirroring `quantity_milli` above, so switching away
       // from trip after filling any of them in can't leave them stuck on a repair/maintenance/...
@@ -485,14 +504,29 @@
            rather than pre-filled, so it stays plainly a hint and not text the user has to notice
            and delete. `activityTitle` (also what Timeline.svelte falls back to for an
            untitled row) is reused here so the two can never disagree about the fallback word. -->
-      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip' && input.category !== 'fuel'}
+      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip' && input.category !== 'fuel' && input.category !== 'usage'}
              placeholder={activityTitle('', input.category, $t, object?.fuel_unit ?? undefined) || undefined} />
       <datalist id="titles">
         {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
       </datalist>
     </div>
     {/if}
-    {#if input.category === 'fuel'}
+    {#if input.category === 'usage' && object?.resource_kind === 'water'}
+      {#if object.measurement_mode === 'meter'}
+        <div class="field">
+          <label for="meter-reading">{$t('water.meter-reading')} ({fuelUnitLabel(resourceUnit)})</label>
+          <input id="meter-reading" type="text" inputmode="decimal" bind:value={meterReadingText} required />
+        </div>
+        <label class="row toggle"><input type="checkbox" bind:checked={() => input.meter_reset === 1, (v) => (input.meter_reset = v ? 1 : 0)} /> {$t('water.meter-reset')}</label>
+      {:else}
+        <div class="row">
+          <div class="field"><label for="period-start">{$t('water.period-start')}</label><DateInput id="period-start" bind:value={() => input.period_start ?? '', (v) => (input.period_start = v || null)} /></div>
+          <div class="field"><label for="period-end">{$t('water.period-end')}</label><DateInput id="period-end" bind:value={() => input.period_end ?? '', (v) => (input.period_end = v || null)} /></div>
+        </div>
+      {/if}
+      <label class="row toggle"><input type="checkbox" bind:checked={() => input.estimated === 1, (v) => (input.estimated = v ? 1 : 0)} /> {$t('water.estimated')}</label>
+    {/if}
+    {#if input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')}
       <!-- "Charged full" for a kWh object, "Filled up" for petrol/diesel -- topping up a tank
            is not "charging" it. Picked the same way every other charge/fill string is
            (energyLabelKey), so this checkbox and the "+ Log charge"/"+ Log fill" button that
@@ -500,8 +534,15 @@
            timeline's own short "full"/"voll" stays unit-agnostic -- it reads fine either way. -->
       <label class="row toggle">
         <input type="checkbox" bind:checked={chargedFull} />
-        {$t(energyLabelKey(object?.fuel_unit ?? null) === 'energy.charged' ? 'activity.charged-full' : 'activity.filled-full')}
+        {$t(energyLabelKey(resourceUnit) === 'energy.charged' ? 'activity.charged-full' : 'activity.filled-full')}
       </label>
+      {#if resourceUnit === 'l' || resourceUnit === 'gal'}
+        <div class="field">
+          <label for="fuel-level">{$t('activity.fuel-level')}</label>
+          <input id="fuel-level" type="number" inputmode="numeric" min="0" max="100" bind:value={input.fuel_level_pct} />
+          <span class="hint">{$t('activity.fuel-level-hint')}</span>
+        </div>
+      {/if}
     {/if}
     {#if input.category === 'trip'}
       <!-- `object?.counter_unit` (not a plain `object.counter_unit`): an existing trip must
@@ -575,11 +616,11 @@
       <div class="field"><label for="co">{$t('activity.cost')}</label><input id="co" type="text" inputmode="decimal" bind:value={costText} /></div>
     </div>
     {/if}
-    {#if input.category === 'fuel' && object?.counter_unit}
+    {#if (input.category === 'fuel' || (input.category === 'usage' && object?.measurement_mode !== 'meter')) && resourceUnit}
       <div class="field">
         <!-- A bare label, not an invented "l"/"gal", once the object declares no fuel unit at
              all -- matches the bare number Timeline.svelte now shows for the same case. -->
-        <label for="qt">{$t('activity.quantity')}{object.fuel_unit ? ` (${fuelUnitLabel(object.fuel_unit)})` : ''}</label>
+        <label for="qt">{$t('activity.quantity')} ({fuelUnitLabel(resourceUnit)})</label>
         <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
       </div>
     {/if}

@@ -58,18 +58,22 @@ pub async fn verify(path: &Path) -> Result<(), BoxError> {
         .filename(path)
         .create_if_missing(false)
         .read_only(true);
-    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
 
     // Capture result to avoid early return with `?` that skips pool.close(). Close pool
     // unconditionally, then match and return or continue.
-    let has_schema: Result<Option<(String,)>, _> =
-        sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'")
-            .fetch_optional(&pool)
-            .await;
+    let has_schema: Result<Option<(String,)>, _> = sqlx::query_as(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(&pool)
+    .await;
     pool.close().await;
 
     match has_schema {
-        Ok(Some(_)) => {},  // schema found, continue to integrity check
+        Ok(Some(_)) => {} // schema found, continue to integrity check
         Ok(None) => return Err("the file is a valid SQLite database but has no LogB schema".into()),
         Err(e) => return Err(Box::new(e)),
     }
@@ -79,9 +83,14 @@ pub async fn verify(path: &Path) -> Result<(), BoxError> {
         .filename(path)
         .create_if_missing(false)
         .read_only(true);
-    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
 
-    let result: Result<(String,), _> = sqlx::query_as("PRAGMA integrity_check").fetch_one(&pool).await;
+    let result: Result<(String,), _> = sqlx::query_as("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await;
     pool.close().await;
     match result {
         Ok((r,)) if r == "ok" => Ok(()),
@@ -99,7 +108,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
     if state.backend != Backend::Sqlite {
         return Ok(None);
     }
-    let Some(dir) = state.config.backup_dir.clone() else { return Ok(None) };
+    let Some(dir) = state.config.backup_dir.clone() else {
+        return Ok(None);
+    };
     if hour_now < state.config.backup_hour {
         return Ok(None);
     }
@@ -127,7 +138,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
         // Leave no unrestorable file behind, and leave every earlier snapshot alone: a failure
         // today must not cost yesterday's good copy.
         let _ = std::fs::remove_file(&dest);
-        return Err(AppError::Internal(format!("snapshot failed verification: {e}")));
+        return Err(AppError::Internal(format!(
+            "snapshot failed verification: {e}"
+        )));
     }
 
     // A prune problem must never be reported as a backup failure: the snapshot above is already
@@ -185,7 +198,10 @@ mod tests {
         let path = dir.path().join("empty.db");
         std::fs::write(&path, b"").unwrap();
         let err = verify(&path).await.unwrap_err();
-        assert!(err.to_string().to_lowercase().contains("empty"), "reason should name the file as empty: {err}");
+        assert!(
+            err.to_string().to_lowercase().contains("empty"),
+            "reason should name the file as empty: {err}"
+        );
     }
 
     /// A file can be a perfectly sound SQLite database and still not be a LogB backup --
@@ -196,14 +212,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("unrelated.db");
         {
-            let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+            let opts = sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true);
             let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
-            sqlx::query("CREATE TABLE not_logb (id INTEGER)").execute(&pool).await.unwrap();
+            sqlx::query("CREATE TABLE not_logb (id INTEGER)")
+                .execute(&pool)
+                .await
+                .unwrap();
             pool.close().await;
         }
         let err = verify(&path).await.unwrap_err();
         assert!(
-            err.to_string().to_lowercase().contains("migration") || err.to_string().to_lowercase().contains("schema"),
+            err.to_string().to_lowercase().contains("migration")
+                || err.to_string().to_lowercase().contains("schema"),
             "reason should name the missing LogB schema, distinct from an integrity failure: {err}"
         );
     }

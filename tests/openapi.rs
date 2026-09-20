@@ -29,7 +29,9 @@ fn declared_routes() -> BTreeMap<String, BTreeSet<String>> {
             // `.route("/objects/{id}", get(read).patch(update))` -- the literal, then the
             // method calls up to the closing paren of the `route(` call itself.
             let quote = rest.find('"').expect("a route literal");
-            let end = rest[quote + 1..].find('"').expect("an unterminated route literal");
+            let end = rest[quote + 1..]
+                .find('"')
+                .expect("an unterminated route literal");
             let route = &rest[quote + 1..quote + 1 + end];
             let tail = &rest[quote + 1 + end..];
             let close = tail.find("))").map(|n| n + 2).unwrap_or(tail.len());
@@ -56,7 +58,10 @@ fn documented_routes() -> BTreeMap<String, BTreeSet<String>> {
         .expect("the spec should have a `paths` object")
         .iter()
         .map(|(path, ops)| {
-            let methods = ops.as_object().unwrap().keys()
+            let methods = ops
+                .as_object()
+                .unwrap()
+                .keys()
                 .filter(|k| !k.starts_with('x') && *k != "parameters")
                 .cloned()
                 .collect();
@@ -70,15 +75,24 @@ fn the_spec_describes_exactly_the_routes_the_api_serves() {
     let declared = declared_routes();
     let documented = documented_routes();
 
-    assert!(!declared.is_empty(), "no routes were found; the scan above has stopped working");
+    assert!(
+        !declared.is_empty(),
+        "no routes were found; the scan above has stopped working"
+    );
 
-    let undocumented: Vec<_> = declared.keys().filter(|p| !documented.contains_key(*p)).collect();
+    let undocumented: Vec<_> = declared
+        .keys()
+        .filter(|p| !documented.contains_key(*p))
+        .collect();
     assert!(
         undocumented.is_empty(),
         "these routes exist but are not in docs/openapi.json: {undocumented:?}",
     );
 
-    let imaginary: Vec<_> = documented.keys().filter(|p| !declared.contains_key(*p)).collect();
+    let imaginary: Vec<_> = documented
+        .keys()
+        .filter(|p| !declared.contains_key(*p))
+        .collect();
     assert!(
         imaginary.is_empty(),
         "docs/openapi.json describes routes that no longer exist: {imaginary:?}",
@@ -106,18 +120,30 @@ fn the_spec_states_how_to_authenticate() {
     // Issuing and listing tokens refuse bearer credentials on purpose, and the spec has to say
     // so or an app will be built around a call that always 401s.
     for (method, op) in spec["paths"]["/auth/tokens"].as_object().unwrap() {
-        let security = op["security"].as_array()
+        let security = op["security"]
+            .as_array()
             .unwrap_or_else(|| panic!("{method} /auth/tokens should state its own security"));
-        let names: Vec<_> = security.iter().flat_map(|s| s.as_object().unwrap().keys()).collect();
-        assert_eq!(names, vec!["sessionCookie"], "{method} /auth/tokens should be cookie-only");
+        let names: Vec<_> = security
+            .iter()
+            .flat_map(|s| s.as_object().unwrap().keys())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["sessionCookie"],
+            "{method} /auth/tokens should be cookie-only"
+        );
     }
 
     // Revoking is the one exception: a bearer token may revoke itself (see `revoke_token`), so
     // the spec documents both credentials for it, unlike its siblings above.
     let delete = &spec["paths"]["/auth/tokens/{id}"]["delete"];
-    let security = delete["security"].as_array()
+    let security = delete["security"]
+        .as_array()
         .expect("delete /auth/tokens/{id} should state its own security");
-    let names: Vec<_> = security.iter().flat_map(|s| s.as_object().unwrap().keys()).collect();
+    let names: Vec<_> = security
+        .iter()
+        .flat_map(|s| s.as_object().unwrap().keys())
+        .collect();
     assert_eq!(
         names,
         vec!["sessionCookie", "bearerToken"],
@@ -127,8 +153,17 @@ fn the_spec_states_how_to_authenticate() {
     // And the routes that need nothing must say so, or a client will try to log in before it
     // can ask whether the instance even has a user yet.
     for path in ["/health", "/auth/status", "/auth/login", "/auth/setup"] {
-        let op = spec["paths"][path].as_object().unwrap().values().next().unwrap();
-        assert_eq!(op["security"], serde_json::json!([]), "{path} should be documented as public");
+        let op = spec["paths"][path]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(
+            op["security"],
+            serde_json::json!([]),
+            "{path} should be documented as public"
+        );
     }
 }
 
@@ -141,13 +176,20 @@ fn the_spec_states_how_to_authenticate() {
 #[test]
 fn the_documented_activity_categories_are_the_real_ones() {
     let doc: Value = serde_json::from_str(
-        &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
+        &std::fs::read_to_string("docs/openapi.json")
+            .expect("docs/openapi.json should be readable"),
     )
     .expect("docs/openapi.json should be valid JSON");
     let documented = find_enum_containing(&doc, "maintenance")
         .expect("the document should describe activity categories");
-    let real: Vec<String> = logb::api::activities::CATEGORIES.iter().map(|c| c.to_string()).collect();
-    assert_eq!(documented, real, "docs/openapi.json disagrees with api::activities::CATEGORIES");
+    let real: Vec<String> = logb::api::activities::CATEGORIES
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    assert_eq!(
+        documented, real,
+        "docs/openapi.json disagrees with api::activities::CATEGORIES"
+    );
 }
 
 /// The object types the document lists must be the ones the API accepts.
@@ -162,7 +204,8 @@ fn the_documented_activity_categories_are_the_real_ones() {
 #[test]
 fn the_documented_object_types_are_the_real_ones() {
     let doc: Value = serde_json::from_str(
-        &std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should be readable"),
+        &std::fs::read_to_string("docs/openapi.json")
+            .expect("docs/openapi.json should be readable"),
     )
     .expect("docs/openapi.json should be valid JSON");
     let documented: Vec<String> = doc["components"]["schemas"]["ObjectType"]["examples"]
@@ -171,8 +214,14 @@ fn the_documented_object_types_are_the_real_ones() {
         .iter()
         .filter_map(|v| v.as_str().map(str::to_string))
         .collect();
-    let real: Vec<String> = logb::object_type::OBJECT_TYPES.iter().map(|t| t.to_string()).collect();
-    assert_eq!(documented, real, "docs/openapi.json disagrees with object_type::OBJECT_TYPES");
+    let real: Vec<String> = logb::object_type::OBJECT_TYPES
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+    assert_eq!(
+        documented, real,
+        "docs/openapi.json disagrees with object_type::OBJECT_TYPES"
+    );
 }
 
 /// The first `enum` whose members include `marker` -- how a list is found without hard-coding
@@ -181,8 +230,10 @@ fn find_enum_containing(node: &Value, marker: &str) -> Option<Vec<String>> {
     match node {
         Value::Object(map) => {
             if let Some(Value::Array(values)) = map.get("enum") {
-                let members: Vec<String> =
-                    values.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                let members: Vec<String> = values
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
                 if members.iter().any(|m| m == marker) {
                     return Some(members);
                 }
@@ -201,7 +252,8 @@ fn find_enum_containing(node: &Value, marker: &str) -> Option<Vec<String>> {
 fn the_spec_offers_exactly_the_icons_an_own_type_may_have() {
     let raw = std::fs::read_to_string("docs/openapi.json").unwrap();
     let spec: Value = serde_json::from_str(&raw).unwrap();
-    let documented: Vec<&str> = spec["components"]["schemas"]["CustomTypeInput"]["properties"]["icon"]["enum"]
+    let documented: Vec<&str> = spec["components"]["schemas"]["CustomTypeInput"]["properties"]
+        ["icon"]["enum"]
         .as_array()
         .expect("CustomTypeInput.icon should be an enum")
         .iter()

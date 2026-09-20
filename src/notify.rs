@@ -106,12 +106,14 @@ async fn recipients(state: &App) -> Result<Vec<Recipient>, AppError> {
     Ok(sqlx::query_as::<_, Recipient>(
         "SELECT id, username, lang, notify_url, notify_format FROM users ORDER BY username",
     )
-    .fetch_all(&state.db).await?)
+    .fetch_all(&state.db)
+    .await?)
 }
 
 async fn items_for(state: &App, r: &Recipient) -> Result<Vec<DueItem>, AppError> {
     let public_url = state.config.public_url.as_deref();
-    Ok(due_for_user(state, r.id, 0).await?
+    Ok(due_for_user(state, r.id, 0)
+        .await?
         .into_iter()
         .map(|d| DueItem {
             username: r.username.clone(),
@@ -165,24 +167,37 @@ pub fn digest(items: Vec<DueItem>, lang: &str) -> Option<Digest> {
         message.push('\n');
         message.push_str(&readings.join("\n"));
     }
-    Some(Digest { title, message, reminders: items })
+    Some(Digest {
+        title,
+        message,
+        reminders: items,
+    })
 }
 
 /// A digest with nothing due in it, for "send a test notification".
 pub fn test_digest(lang: &str) -> Digest {
     let w = words(lang);
-    Digest { title: w.test_title.to_string(), message: w.test_body.to_string(), reminders: Vec::new() }
+    Digest {
+        title: w.test_title.to_string(),
+        message: w.test_body.to_string(),
+        reminders: Vec::new(),
+    }
 }
 
 /// The instance webhook's digest: every user without a webhook of their own, in the language of
 /// the first administrator -- the person who set `LOGB_NOTIFY_URL` up.
-async fn instance_digest(state: &App, recipients: &[Recipient]) -> Result<Option<Digest>, AppError> {
+async fn instance_digest(
+    state: &App,
+    recipients: &[Recipient],
+) -> Result<Option<Digest>, AppError> {
     let mut items = Vec::new();
     for r in recipients.iter().filter(|r| r.notify_url.is_none()) {
         items.extend(items_for(state, r).await?);
     }
-    let lang: Option<(String,)> = sqlx::query_as("SELECT lang FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1")
-        .fetch_optional(&state.db).await?;
+    let lang: Option<(String,)> =
+        sqlx::query_as("SELECT lang FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1")
+            .fetch_optional(&state.db)
+            .await?;
     Ok(digest(items, lang.map(|l| l.0).as_deref().unwrap_or("en")))
 }
 
@@ -207,7 +222,10 @@ pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppErr
         .build()
         .map_err(|e| AppError::Internal(format!("notify client: {e}")))?;
     let request = if format == "text" {
-        let request = client.post(url).header("Title", &digest.title).body(digest.message.clone());
+        let request = client
+            .post(url)
+            .header("Title", &digest.title)
+            .body(digest.message.clone());
         match digest.reminders.as_slice() {
             [only] => match &only.link {
                 Some(link) => request.header("Click", link),
@@ -220,26 +238,42 @@ pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppErr
     };
     // `without_url`: a user's webhook is often an unguessable ntfy topic, which is to say a
     // secret, and this error reaches the log.
-    let res = request.send().await
+    let res = request
+        .send()
+        .await
         .map_err(|e| AppError::Internal(format!("notify post: {}", e.without_url())))?;
     if !res.status().is_success() {
-        return Err(AppError::Internal(format!("notify endpoint returned {}", res.status())));
+        return Err(AppError::Internal(format!(
+            "notify endpoint returned {}",
+            res.status()
+        )));
     }
     Ok(())
 }
 
 /// POSTs the instance digest to `LOGB_NOTIFY_URL`, when it is set.
 pub async fn send(state: &App, digest: &Digest) -> Result<(), AppError> {
-    let Some(url) = state.config.notify_url.as_deref() else { return Ok(()) };
+    let Some(url) = state.config.notify_url.as_deref() else {
+        return Ok(());
+    };
     post(url, &state.config.notify_format, digest).await
 }
 
 /// Pushes one message to every browser `user_id` subscribed, answering how many took it and how
 /// many failed. A subscription the push service says is gone is deleted on the way.
-pub(crate) async fn push_to(state: &App, user_id: i64, title: &str, body: &str, open: &str) -> Result<(usize, usize), AppError> {
-    let subs: Vec<(i64, String, String, String)> =
-        sqlx::query_as("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1 ORDER BY id")
-            .bind(user_id).fetch_all(&state.db).await?;
+pub(crate) async fn push_to(
+    state: &App,
+    user_id: i64,
+    title: &str,
+    body: &str,
+    open: &str,
+) -> Result<(usize, usize), AppError> {
+    let subs: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1 ORDER BY id",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
     if subs.is_empty() {
         return Ok((0, 0));
     }
@@ -248,11 +282,18 @@ pub(crate) async fn push_to(state: &App, user_id: i64, title: &str, body: &str, 
     let payload = serde_json::json!({ "title": title, "body": body, "url": open }).to_string();
     let (mut sent, mut failed) = (0, 0);
     for (id, endpoint, p256dh, auth) in subs {
-        let sub = Subscription { endpoint, p256dh, auth };
+        let sub = Subscription {
+            endpoint,
+            p256dh,
+            auth,
+        };
         match push::send(&kp, &contact, &sub, payload.as_bytes()).await {
             Delivery::Sent => sent += 1,
             Delivery::Gone => {
-                sqlx::query("DELETE FROM push_subscriptions WHERE id = $1").bind(id).execute(&state.db).await?;
+                sqlx::query("DELETE FROM push_subscriptions WHERE id = $1")
+                    .bind(id)
+                    .execute(&state.db)
+                    .await?;
             }
             Delivery::Failed(reason) => {
                 failed += 1;
@@ -271,14 +312,18 @@ async fn push_digest(state: &App, user_id: i64, d: &Digest) -> Result<(), AppErr
     };
     let (_, failed) = push_to(state, user_id, &d.title, &d.message, &open).await?;
     if failed > 0 {
-        return Err(AppError::Internal(format!("{failed} push notification(s) failed")));
+        return Err(AppError::Internal(format!(
+            "{failed} push notification(s) failed"
+        )));
     }
     Ok(())
 }
 
 async fn last_sent(state: &App) -> Result<Option<String>, AppError> {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
-        .bind(LAST_SENT_KEY).fetch_optional(&state.db).await?;
+        .bind(LAST_SENT_KEY)
+        .fetch_optional(&state.db)
+        .await?;
     Ok(row.map(|r| r.0))
 }
 
@@ -313,7 +358,8 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
         None => None,
     };
     let pushing: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT user_id FROM push_subscriptions")
-        .fetch_all(&state.db).await?;
+        .fetch_all(&state.db)
+        .await?;
     let mut personal = Vec::new();
     let mut pushes = Vec::new();
     for r in &recipients {
@@ -321,7 +367,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
         if r.notify_url.is_none() && !wants_push {
             continue;
         }
-        let Some(d) = digest(items_for(state, r).await?, &r.lang) else { continue };
+        let Some(d) = digest(items_for(state, r).await?, &r.lang) else {
+            continue;
+        };
         if let Some(url) = &r.notify_url {
             personal.push((url.clone(), r.notify_format.clone(), d.clone()));
         }
@@ -359,8 +407,16 @@ mod tests {
 
     fn item(kind: &str) -> DueItem {
         DueItem {
-            username: "ben".into(), object_id: 1, object_name: "Golf".into(), reminder_id: 1,
-            title: "Oil".into(), due_date: None, due_counter: None, kind: kind.into(), object_type: "car".into(), link: None,
+            username: "ben".into(),
+            object_id: 1,
+            object_name: "Golf".into(),
+            reminder_id: 1,
+            title: "Oil".into(),
+            due_date: None,
+            due_counter: None,
+            kind: kind.into(),
+            object_type: "car".into(),
+            link: None,
         }
     }
 
@@ -369,12 +425,18 @@ mod tests {
         let d = digest(vec![item("service"), item("reading")], "de").unwrap();
         assert_eq!(d.title, "LogB: 2 Erinnerungen fällig");
         assert_eq!(d.message, "Golf: Oil\n\nZählerstände erfassen:\nGolf: Oil");
-        assert_eq!(digest(vec![item("service")], "de").unwrap().title, "LogB: 1 Erinnerung fällig");
+        assert_eq!(
+            digest(vec![item("service")], "de").unwrap().title,
+            "LogB: 1 Erinnerung fällig"
+        );
     }
 
     #[test]
     fn an_unknown_language_reads_english() {
-        assert_eq!(digest(vec![item("service")], "fr").unwrap().title, "LogB: 1 reminder due");
+        assert_eq!(
+            digest(vec![item("service")], "fr").unwrap().title,
+            "LogB: 1 reminder due"
+        );
         assert!(digest(Vec::new(), "en").is_none());
     }
 }

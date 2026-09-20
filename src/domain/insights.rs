@@ -35,11 +35,15 @@ pub fn daily_rate_milli(readings: &[Reading]) -> Option<i64> {
         (span >= RATE_MIN_SPAN_DAYS && delta > 0).then(|| delta * 1000 / span)
     };
     let window_start = last.date - chrono::Duration::days(RATE_WINDOW_DAYS);
-    let in_window = readings.iter().copied()
+    let in_window = readings
+        .iter()
+        .copied()
         .filter(|r| r.date >= window_start && r.date < last.date)
         .min_by_key(|r| (r.date, r.counter));
     let earliest = readings.iter().copied().min_by_key(|r| (r.date, r.counter));
-    in_window.and_then(rate_from).or_else(|| earliest.and_then(rate_from))
+    in_window
+        .and_then(rate_from)
+        .or_else(|| earliest.and_then(rate_from))
 }
 
 /// The date the counter is expected to reach `target`, projected from the latest reading at
@@ -75,8 +79,16 @@ pub struct MonthUsage {
 /// does not have, and charging it all to the next month would draw a spike that never happened.
 /// A counter that went down (a replaced odometer) is unknown too, not negative.
 pub fn monthly_usage(readings: &[Reading], today: NaiveDate, months: u32) -> Vec<MonthUsage> {
-    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else { return Vec::new() };
-    let highest_before = |date: NaiveDate| readings.iter().filter(|r| r.date < date).map(|r| r.counter).max();
+    let Some(this_month) = NaiveDate::from_ymd_opt(today.year(), today.month(), 1) else {
+        return Vec::new();
+    };
+    let highest_before = |date: NaiveDate| {
+        readings
+            .iter()
+            .filter(|r| r.date < date)
+            .map(|r| r.counter)
+            .max()
+    };
     (0..months)
         .rev()
         .filter_map(|back| {
@@ -85,12 +97,19 @@ pub fn monthly_usage(readings: &[Reading], today: NaiveDate, months: u32) -> Vec
             // Measured to the month's own highest reading, not to the highest up to its end: the
             // latter can never be below the start, so a replaced odometer would read as a quiet
             // month of zero rather than the unknown it is.
-            let highest_in_month = readings.iter().filter(|r| r.date >= first && r.date < next).map(|r| r.counter).max();
+            let highest_in_month = readings
+                .iter()
+                .filter(|r| r.date >= first && r.date < next)
+                .map(|r| r.counter)
+                .max();
             let amount = match (highest_in_month, highest_before(first)) {
                 (Some(end), Some(start)) if end >= start => Some(end - start),
                 _ => None,
             };
-            Some(MonthUsage { month: first.format("%Y-%m").to_string(), amount })
+            Some(MonthUsage {
+                month: first.format("%Y-%m").to_string(),
+                amount,
+            })
         })
         .collect()
 }
@@ -109,11 +128,15 @@ pub struct Fill {
 /// was burned before it -- so every later fill's quantity is divided by the distance from the
 /// first fill to the last.
 pub fn consumption_per_100_milli(fills: &[Fill]) -> Option<i64> {
-    if fills.len() < 2 { return None; }
+    if fills.len() < 2 {
+        return None;
+    }
     let mut sorted = fills.to_vec();
     sorted.sort_by_key(|f| f.counter);
     let span = sorted.last()?.counter - sorted.first()?.counter;
-    if span <= 0 { return None; }
+    if span <= 0 {
+        return None;
+    }
     let burned: i64 = sorted[1..].iter().map(|f| f.quantity_milli).sum();
     Some(burned * 100 / span)
 }
@@ -127,18 +150,24 @@ pub fn consumption_per_100_milli(fills: &[Fill]) -> Option<i64> {
 /// and counter span. A fill with no recorded cost contributes 0 but still counts as a fill, and
 /// still pushes the earliest-fill-exclusion and span math the same way consumption does.
 pub fn fuel_cost_per_counter_milli(fills: &[Fill]) -> Option<i64> {
-    if fills.len() < 2 { return None; }
+    if fills.len() < 2 {
+        return None;
+    }
     let mut sorted = fills.to_vec();
     sorted.sort_by_key(|f| f.counter);
     let span = sorted.last()?.counter - sorted.first()?.counter;
-    if span <= 0 { return None; }
+    if span <= 0 {
+        return None;
+    }
     let cost: i64 = sorted[1..].iter().map(|f| f.cost_cents.unwrap_or(0)).sum();
     Some(cost * 1000 / span)
 }
 
 /// Cents per counter unit, scaled by 1000, or None when the object has not moved.
 pub fn cost_per_counter_milli(total_cost_cents: i64, span: i64) -> Option<i64> {
-    if span <= 0 { return None; }
+    if span <= 0 {
+        return None;
+    }
     Some(total_cost_cents * 1000 / span)
 }
 
@@ -183,7 +212,10 @@ pub fn consumption_per_fill(fills: &[DatedFill]) -> Vec<FillRate> {
         .windows(2)
         .filter_map(|w| {
             let distance = w[1].counter - w[0].counter;
-            (distance > 0).then(|| FillRate { date: w[1].date.clone(), per_100_milli: w[1].quantity_milli * 100 / distance })
+            (distance > 0).then(|| FillRate {
+                date: w[1].date.clone(),
+                per_100_milli: w[1].quantity_milli * 100 / distance,
+            })
         })
         .collect();
     let skip = rates.len().saturating_sub(FILL_BARS);
@@ -196,15 +228,31 @@ mod tests {
     use super::*;
 
     fn f(counter: i64, quantity_milli: i64, cost_cents: Option<i64>) -> Fill {
-        Fill { counter, quantity_milli, cost_cents }
+        Fill {
+            counter,
+            quantity_milli,
+            cost_cents,
+        }
     }
 
-    fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
-    fn r(date: &str, counter: i64) -> Reading { Reading { date: day(date), counter } }
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+    fn r(date: &str, counter: i64) -> Reading {
+        Reading {
+            date: day(date),
+            counter,
+        }
+    }
 
     #[test]
     fn monthly_usage_measures_each_month_that_has_a_reading() {
-        let readings = [r("2026-06-15", 10_000), r("2026-07-10", 10_800), r("2026-07-30", 11_000), r("2026-09-05", 12_500)];
+        let readings = [
+            r("2026-06-15", 10_000),
+            r("2026-07-10", 10_800),
+            r("2026-07-30", 11_000),
+            r("2026-09-05", 12_500),
+        ];
         let usage = monthly_usage(&readings, day("2026-09-13"), 4);
         let months: Vec<&str> = usage.iter().map(|u| u.month.as_str()).collect();
         assert_eq!(months, ["2026-06", "2026-07", "2026-08", "2026-09"]);
@@ -218,20 +266,37 @@ mod tests {
     fn monthly_usage_does_not_invent_negative_months() {
         let readings = [r("2026-07-10", 90_000), r("2026-08-10", 100)];
         let usage = monthly_usage(&readings, day("2026-08-20"), 1);
-        assert_eq!(usage, [MonthUsage { month: "2026-08".into(), amount: None }], "a replaced odometer");
+        assert_eq!(
+            usage,
+            [MonthUsage {
+                month: "2026-08".into(),
+                amount: None
+            }],
+            "a replaced odometer"
+        );
     }
 
     #[test]
     fn monthly_usage_crosses_a_year() {
         let readings = [r("2025-12-31", 5_000), r("2026-01-02", 5_040)];
-        assert_eq!(monthly_usage(&readings, day("2026-01-05"), 1)[0], MonthUsage { month: "2026-01".into(), amount: Some(40) });
+        assert_eq!(
+            monthly_usage(&readings, day("2026-01-05"), 1)[0],
+            MonthUsage {
+                month: "2026-01".into(),
+                amount: Some(40)
+            }
+        );
     }
 
     #[test]
     fn the_rate_runs_from_the_earliest_reading_in_the_window_to_the_latest() {
         // 3_000 km over 100 days: 30 km a day. The 2024 reading is outside the window and must
         // not dilute the recent rate.
-        let readings = [r("2024-01-01", 0), r("2026-06-01", 50_000), r("2026-09-09", 52_970)];
+        let readings = [
+            r("2024-01-01", 0),
+            r("2026-06-01", 50_000),
+            r("2026-09-09", 52_970),
+        ];
         assert_eq!(daily_rate_milli(&readings), Some(2_970 * 1000 / 100));
     }
 
@@ -239,7 +304,11 @@ mod tests {
     fn a_short_window_falls_back_to_the_earliest_reading() {
         // The only reading inside the window is five days old: too short, so the rate is taken
         // from the start of the history instead.
-        let readings = [r("2025-09-09", 40_000), r("2026-09-04", 49_950), r("2026-09-09", 50_000)];
+        let readings = [
+            r("2025-09-09", 40_000),
+            r("2026-09-04", 49_950),
+            r("2026-09-09", 50_000),
+        ];
         assert_eq!(daily_rate_milli(&readings), Some(10_000 * 1000 / 365));
     }
 
@@ -247,21 +316,38 @@ mod tests {
     fn no_rate_without_a_real_span_or_a_rising_counter() {
         assert_eq!(daily_rate_milli(&[]), None);
         assert_eq!(daily_rate_milli(&[r("2026-09-01", 1_000)]), None);
-        assert_eq!(daily_rate_milli(&[r("2026-09-01", 1_000), r("2026-09-10", 1_500)]), None, "under 14 days");
-        assert_eq!(daily_rate_milli(&[r("2026-01-01", 90_000), r("2026-09-01", 1_000)]), None, "odometer replaced");
+        assert_eq!(
+            daily_rate_milli(&[r("2026-09-01", 1_000), r("2026-09-10", 1_500)]),
+            None,
+            "under 14 days"
+        );
+        assert_eq!(
+            daily_rate_milli(&[r("2026-01-01", 90_000), r("2026-09-01", 1_000)]),
+            None,
+            "odometer replaced"
+        );
     }
 
     #[test]
     fn the_estimate_projects_from_the_latest_reading() {
         // 1_000 km to go at 25 km a day: 40 days after the reading, not after today.
-        assert_eq!(estimated_date(r("2026-09-01", 59_000), 25_000, 60_000), Some(day("2026-10-11")));
+        assert_eq!(
+            estimated_date(r("2026-09-01", 59_000), 25_000, 60_000),
+            Some(day("2026-10-11"))
+        );
         // A remainder that does not divide evenly rounds up: the target is reached on day 41.
-        assert_eq!(estimated_date(r("2026-09-01", 59_000), 24_900, 60_000), Some(day("2026-10-12")));
+        assert_eq!(
+            estimated_date(r("2026-09-01", 59_000), 24_900, 60_000),
+            Some(day("2026-10-12"))
+        );
     }
 
     #[test]
     fn no_estimate_once_reached_or_without_a_rate_or_absurdly_far() {
-        assert_eq!(estimated_date(r("2026-09-01", 60_000), 25_000, 60_000), None);
+        assert_eq!(
+            estimated_date(r("2026-09-01", 60_000), 25_000, 60_000),
+            None
+        );
         assert_eq!(estimated_date(r("2026-09-01", 59_000), 0, 60_000), None);
         assert_eq!(estimated_date(r("2026-09-01", 0), 1, 1_000_000), None);
     }
@@ -270,24 +356,41 @@ mod tests {
     fn consumption_excludes_the_first_fill() {
         // 40 L burned over 800 km -> 5 L/100 km. The first fill's fuel was burned before
         // the window opened, so only its odometer reading counts, not its litres.
-        let fills = [f(10_000, 45_000, Some(5_000)), f(10_400, 20_000, Some(4_000)), f(10_800, 20_000, Some(4_000))];
+        let fills = [
+            f(10_000, 45_000, Some(5_000)),
+            f(10_400, 20_000, Some(4_000)),
+            f(10_800, 20_000, Some(4_000)),
+        ];
         assert_eq!(consumption_per_100_milli(&fills), Some(5_000));
     }
 
     #[test]
     fn a_single_fill_cannot_produce_consumption() {
-        assert_eq!(consumption_per_100_milli(&[f(10_000, 45_000, Some(5_000))]), None);
+        assert_eq!(
+            consumption_per_100_milli(&[f(10_000, 45_000, Some(5_000))]),
+            None
+        );
         assert_eq!(consumption_per_100_milli(&[]), None);
     }
 
     #[test]
     fn a_zero_span_produces_nothing_rather_than_dividing_by_zero() {
-        assert_eq!(consumption_per_100_milli(&[f(10_000, 45_000, Some(5_000)), f(10_000, 20_000, Some(4_000))]), None);
+        assert_eq!(
+            consumption_per_100_milli(&[
+                f(10_000, 45_000, Some(5_000)),
+                f(10_000, 20_000, Some(4_000))
+            ]),
+            None
+        );
     }
 
     #[test]
     fn fills_out_of_order_are_sorted_before_measuring() {
-        let fills = [f(10_800, 20_000, Some(4_000)), f(10_000, 45_000, Some(5_000)), f(10_400, 20_000, Some(4_000))];
+        let fills = [
+            f(10_800, 20_000, Some(4_000)),
+            f(10_000, 45_000, Some(5_000)),
+            f(10_400, 20_000, Some(4_000)),
+        ];
         assert_eq!(consumption_per_100_milli(&fills), Some(5_000));
     }
 
@@ -304,32 +407,56 @@ mod tests {
         // cents mark where the window opens but are not this object's to spend against it,
         // so only the later two fills' 4_000 + 4_000 = 8_000 cents count, over the 800 km
         // fuel span (not the object's overall span).
-        let fills = [f(10_000, 45_000, Some(5_000)), f(10_400, 20_000, Some(4_000)), f(10_800, 20_000, Some(4_000))];
-        assert_eq!(fuel_cost_per_counter_milli(&fills), Some(8_000 * 1000 / 800));
+        let fills = [
+            f(10_000, 45_000, Some(5_000)),
+            f(10_400, 20_000, Some(4_000)),
+            f(10_800, 20_000, Some(4_000)),
+        ];
+        assert_eq!(
+            fuel_cost_per_counter_milli(&fills),
+            Some(8_000 * 1000 / 800)
+        );
     }
 
     #[test]
     fn the_first_fills_cost_is_excluded_like_its_quantity() {
         // If the earliest fill's cost were folded in, this would be (9_000+4_000+4_000)*1000/800
         // = 21_250 instead of the correct (4_000+4_000)*1000/800 = 10_000.
-        let fills = [f(10_000, 45_000, Some(9_000)), f(10_400, 20_000, Some(4_000)), f(10_800, 20_000, Some(4_000))];
+        let fills = [
+            f(10_000, 45_000, Some(9_000)),
+            f(10_400, 20_000, Some(4_000)),
+            f(10_800, 20_000, Some(4_000)),
+        ];
         assert_eq!(fuel_cost_per_counter_milli(&fills), Some(10_000));
         assert_ne!(fuel_cost_per_counter_milli(&fills), Some(21_250));
     }
 
     #[test]
     fn a_fill_with_no_recorded_cost_contributes_zero_but_still_counts() {
-        let fills = [f(10_000, 45_000, Some(5_000)), f(10_400, 20_000, None), f(10_800, 20_000, Some(4_000))];
+        let fills = [
+            f(10_000, 45_000, Some(5_000)),
+            f(10_400, 20_000, None),
+            f(10_800, 20_000, Some(4_000)),
+        ];
         // Only the second and third fills count (first excluded): 0 + 4_000 over 800.
-        assert_eq!(fuel_cost_per_counter_milli(&fills), Some(4_000 * 1000 / 800));
+        assert_eq!(
+            fuel_cost_per_counter_milli(&fills),
+            Some(4_000 * 1000 / 800)
+        );
     }
 
     #[test]
     fn unmeasurable_consumption_means_unmeasurable_cost_too() {
-        assert_eq!(fuel_cost_per_counter_milli(&[f(10_000, 45_000, Some(5_000))]), None);
+        assert_eq!(
+            fuel_cost_per_counter_milli(&[f(10_000, 45_000, Some(5_000))]),
+            None
+        );
         assert_eq!(fuel_cost_per_counter_milli(&[]), None);
         assert_eq!(
-            fuel_cost_per_counter_milli(&[f(10_000, 45_000, Some(5_000)), f(10_000, 20_000, Some(4_000))]),
+            fuel_cost_per_counter_milli(&[
+                f(10_000, 45_000, Some(5_000)),
+                f(10_000, 20_000, Some(4_000))
+            ]),
             None
         );
     }
@@ -342,37 +469,64 @@ mod tests {
     }
 
     fn df(date: &str, counter: i64, quantity_milli: i64) -> DatedFill {
-        DatedFill { date: date.into(), counter, quantity_milli }
+        DatedFill {
+            date: date.into(),
+            counter,
+            quantity_milli,
+        }
     }
 
     fn rate(date: &str, per_100_milli: i64) -> FillRate {
-        FillRate { date: date.into(), per_100_milli }
+        FillRate {
+            date: date.into(),
+            per_100_milli,
+        }
     }
 
     #[test]
     fn each_fill_is_measured_from_the_one_before_it() {
         // 30 L over 500 km, then 25 L over 500 km. The first fill only opens the window.
-        let fills = [df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_500, 30_000), df("2026-03-01", 11_000, 25_000)];
-        assert_eq!(consumption_per_fill(&fills), [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]);
+        let fills = [
+            df("2026-01-01", 10_000, 40_000),
+            df("2026-02-01", 10_500, 30_000),
+            df("2026-03-01", 11_000, 25_000),
+        ];
+        assert_eq!(
+            consumption_per_fill(&fills),
+            [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]
+        );
     }
 
     #[test]
     fn fills_are_put_in_date_order_first() {
-        let fills = [df("2026-03-01", 11_000, 25_000), df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_500, 30_000)];
-        assert_eq!(consumption_per_fill(&fills), [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]);
+        let fills = [
+            df("2026-03-01", 11_000, 25_000),
+            df("2026-01-01", 10_000, 40_000),
+            df("2026-02-01", 10_500, 30_000),
+        ];
+        assert_eq!(
+            consumption_per_fill(&fills),
+            [rate("2026-02-01", 6_000), rate("2026-03-01", 5_000)]
+        );
     }
 
     #[test]
     fn a_distance_that_is_not_positive_gives_no_bar_but_starts_the_next_interval() {
         // February repeats the counter; March is after an odometer replacement; April is 500 km on.
-        let fills = [df("2026-01-01", 10_000, 40_000), df("2026-02-01", 10_000, 30_000),
-                     df("2026-03-01", 500, 20_000), df("2026-04-01", 1_000, 25_000)];
+        let fills = [
+            df("2026-01-01", 10_000, 40_000),
+            df("2026-02-01", 10_000, 30_000),
+            df("2026-03-01", 500, 20_000),
+            df("2026-04-01", 1_000, 25_000),
+        ];
         assert_eq!(consumption_per_fill(&fills), [rate("2026-04-01", 5_000)]);
     }
 
     #[test]
     fn only_the_newest_twelve_are_kept() {
-        let fills: Vec<DatedFill> = (0..20).map(|i| df(&format!("2026-01-{:02}", i + 1), 10_000 + i * 100, 5_000)).collect();
+        let fills: Vec<DatedFill> = (0..20)
+            .map(|i| df(&format!("2026-01-{:02}", i + 1), 10_000 + i * 100, 5_000))
+            .collect();
         let rates = consumption_per_fill(&fills);
         assert_eq!(rates.len(), FILL_BARS);
         assert_eq!(rates[0].date, "2026-01-09");

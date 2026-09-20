@@ -109,7 +109,11 @@ fn like_pattern(q: &str) -> String {
 /// e-bike. Name and description are the words the user chose, and the migration preserved
 /// unmapped legacy text into the description, so those objects stay findable by the words
 /// their owner actually used. Finding an object by its type is a filter, not a search term.
-async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<SearchQuery>) -> Result<Json<SearchResults>, AppError> {
+async fn search(
+    user: AuthUser,
+    State(state): State<App>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Json<SearchResults>, AppError> {
     let term = q.q.trim();
     if term.is_empty() {
         return Err(AppError::BadRequest("q is required".into()));
@@ -126,8 +130,16 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     // of a tag the user means, so the tags match is left out of the statement for it. Only
     // these fixed fragments are spliced in; the term itself stays a bind parameter.
     let match_tags = !term.contains(['[', ']', '"', ',', '\\']);
-    let object_tags = if match_tags { format!(" OR o.tags {like} $2 ESCAPE '\\'") } else { String::new() };
-    let activity_tags = if match_tags { format!(" OR a.tags {like} $2 ESCAPE '\\'") } else { String::new() };
+    let object_tags = if match_tags {
+        format!(" OR o.tags {like} $2 ESCAPE '\\'")
+    } else {
+        String::new()
+    };
+    let activity_tags = if match_tags {
+        format!(" OR a.tags {like} $2 ESCAPE '\\'")
+    } else {
+        String::new()
+    };
 
     let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
         "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
@@ -136,9 +148,13 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
          WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
            o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\'{object_tags}) \
-         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3")))
-    .bind(user.id).bind(&pattern).bind(limit)
-    .fetch_all(&state.db).await?;
+         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3"
+    )))
+    .bind(user.id)
+    .bind(&pattern)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
 
     let activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
@@ -151,7 +167,10 @@ async fn search(user: AuthUser, State(state): State<App>, Query(q): Query<Search
     .bind(user.id).bind(&pattern).bind(limit)
     .fetch_all(&state.db).await?;
 
-    Ok(Json(SearchResults { objects, activities }))
+    Ok(Json(SearchResults {
+        objects,
+        activities,
+    }))
 }
 
 #[cfg(test)]

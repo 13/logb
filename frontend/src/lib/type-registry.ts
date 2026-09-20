@@ -1,6 +1,6 @@
 import { writable, type Writable } from 'svelte/store';
 import { api } from './api';
-import { CATEGORIES, OBJECT_TYPES, type BuiltinType, type Category, type CounterUnit, type CustomType } from './types';
+import { CATEGORIES, OBJECT_TYPES, type BuiltinType, type Category, type CounterUnit, type CustomType, type ResourceUnit } from './types';
 import type { IconName } from './Icon.svelte';
 
 /** What each built-in type is, in one place: the icon a row shows, and what its entries can be. */
@@ -153,14 +153,20 @@ export function typeIcon(key: string, custom: CustomType[]): IconName {
  * hold one (`km`/`mi`), or when `current` already is one (re-typing away from km/mi must not
  * hide an existing trip's own category, the same reason `current` is always kept below).
  */
-export function categoriesFor(key: string, custom: CustomType[], current?: Category, counterUnit?: CounterUnit): Category[] {
+export function categoriesFor(key: string, custom: CustomType[], current?: Category, counterUnit?: CounterUnit, resourceUnit?: ResourceUnit, resourceKind?: string | null): Category[] {
   const list = isBuiltin(key) ? TABLE[key].categories : find(key, custom)?.categories ?? [...CATEGORIES];
   const offersTrip = counterUnit === 'km' || counterUnit === 'mi' || current === 'trip';
   // Annotated explicitly: with no contextual type here, a bare `'trip'` in `[...list, 'trip']`
   // widens to plain `string`, and the `Category[] | string[]` that leaves `withTrip` with then
   // fails `.includes(current)` below (a `Category`) on the `string[]` branch.
   const withTrip: Category[] = offersTrip && !list.includes('trip') ? [...list, 'trip'] : list;
-  return current && !withTrip.includes(current) ? [...withTrip, current] : withTrip;
+  // Fuel is a capability of the configured resource unit, just as trips are a capability of a
+  // distance counter. This is what lets a Home oil tank or Appliance electricity meter log
+  // consumption without pretending either one is a car-shaped type.
+  const resourceCategory: Category = resourceKind ? 'usage' : 'fuel';
+  const withResource: Category[] = resourceUnit !== null && resourceUnit !== undefined && !withTrip.includes(resourceCategory)
+    ? [...withTrip, resourceCategory] : withTrip;
+  return current && !withResource.includes(current) ? [...withResource, current] : withResource;
 }
 
 /** The unit a new object of this type starts with. Built-in types leave it to the user. */

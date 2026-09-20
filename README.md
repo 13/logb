@@ -144,6 +144,27 @@ Weight and unit preferences are included in sync and export/import. Older archiv
 remain importable and default to kg. The SQLite upgrade rebuilds the activities table
 while preserving its data and references; take a database backup before upgrading.
 
+## Household resources and recurring activities
+
+Electricity meters, heating-oil tanks and water meters are ordinary objects, so they keep the same timeline,
+documents, reminders, tags, export and sync behavior as a car or appliance. The new-object form
+offers shortcuts for an electricity meter, heating-oil tank, water meter and football training.
+Electricity entries use kWh; liquid fuel entries use litres or gallons. A tank can also store its
+capacity, and each fuel entry can record the observed remaining percentage. Water supports
+cumulative meter readings or billed-period usage in m³, litres or gallons. Household statistics
+show monthly use, costs, targets, unusual meter changes and the newest tank level, including a
+consumption-based estimate of how long the remaining fuel will last. Resource histories can also
+be imported from CSV on the object's Info tab.
+
+Use the **Session** activity for recurring activities such as football training. It records when
+the session happened, its location and duration without inventing a separate object model.
+
+New objects, activity entries and reminders are durable offline. Pending objects appear on the
+dashboard until their server id is assigned; dependent entries follow the object when replay gives
+it a server id. Settings → Data can exclude Body objects from an export when sharing household
+records. Any object can also be marked private, which omits it from full-account exports while its
+explicit single-object export remains available.
+
 ## Backup
 
 ```bash

@@ -19,10 +19,10 @@ export function orderWeights(points: WeightPoint[]): WeightPoint[] {
   return [...points].sort((a,b) => b.date.localeCompare(a.date) || (Date.parse(b.created_at) - Date.parse(a.created_at)) || b.id-a.id);
 }
 /** Capabilities determine which single action is useful on an object's dashboard card. */
-export function quickLogPath(object: Pick<MemObject, 'id' | 'type' | 'counter_unit' | 'fuel_unit'>): string {
+export function quickLogPath(object: Pick<MemObject, 'id' | 'type' | 'counter_unit' | 'fuel_unit' | 'resource_unit' | 'resource_kind'>): string {
   const root = `/objects/${object.id}`;
   if (object.type === 'body') return `${root}/activities/new?category=weight`;
-  if (object.fuel_unit) return `${root}/activities/new?category=fuel`;
+  if (object.resource_unit || object.fuel_unit) return `${root}/activities/new?category=${object.resource_kind ? 'usage' : 'fuel'}`;
   if (object.counter_unit) return `${root}/reading`;
   return `${root}/activities/new`;
 }

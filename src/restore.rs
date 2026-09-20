@@ -53,34 +53,41 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
     // 1. Prove the source before risking anything.
     crate::backup::verify(snapshot)
         .await
-        .map_err(|e| -> BoxError { format!("{} is not a usable snapshot: {e}", snapshot.display()).into() })?;
+        .map_err(|e| -> BoxError {
+            format!("{} is not a usable snapshot: {e}", snapshot.display()).into()
+        })?;
     {
         let opts = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(snapshot)
             .create_if_missing(false)
             .read_only(true);
-        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
         // A row count, not just a successful query: the table existing but empty would answer
         // `fetch_one` fine, yet is not "migration history" -- every real LogB database has run
         // at least one migration, so an empty table is exactly as suspect as a missing one.
-        let count: Result<(i64,), _> =
-            sqlx::query_as("SELECT count(*) FROM _sqlx_migrations").fetch_one(&pool).await;
+        let count: Result<(i64,), _> = sqlx::query_as("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await;
         pool.close().await;
         match count {
-            Ok((n,)) if n > 0 => {},
+            Ok((n,)) if n > 0 => {}
             Ok(_) => {
-                return Err(
-                    format!("{} is not a usable snapshot: no migration history (table is empty)", snapshot.display())
-                        .into(),
+                return Err(format!(
+                    "{} is not a usable snapshot: no migration history (table is empty)",
+                    snapshot.display()
                 )
-            },
+                .into())
+            }
             Err(e) => {
                 return Err(format!(
                     "{} is not a usable snapshot: no migration history ({e})",
                     snapshot.display()
                 )
                 .into())
-            },
+            }
         }
     }
 
@@ -94,11 +101,14 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
     // caller actually configured (`LOGB_DATABASE_URL` included, were it ever pointed somewhere
     // other than the default `logb.db`), so the file this replaces is the one `db::connect`
     // below will actually open.
-    let live = db::sqlite_file(url)
-        .ok_or_else(|| -> BoxError { format!("{url} does not name a SQLite database file").into() })?;
+    let live = db::sqlite_file(url).ok_or_else(|| -> BoxError {
+        format!("{url} does not name a SQLite database file").into()
+    })?;
     let data_dir = live
         .parent()
-        .ok_or_else(|| -> BoxError { format!("{} has no parent directory", live.display()).into() })?
+        .ok_or_else(|| -> BoxError {
+            format!("{} has no parent directory", live.display()).into()
+        })?
         .to_path_buf();
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let replaced_to = if live.exists() {
@@ -111,7 +121,10 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
     for suffix in ["-wal", "-shm"] {
         let from = data_dir.join(format!("logb.db{suffix}"));
         if from.exists() {
-            std::fs::rename(&from, data_dir.join(format!("logb.db.replaced-{stamp}{suffix}")))?;
+            std::fs::rename(
+                &from,
+                data_dir.join(format!("logb.db.replaced-{stamp}{suffix}")),
+            )?;
         }
     }
 
@@ -123,7 +136,9 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
     // already happened, where the previous copy is kept, which step failed, and what to do.
     let recovery = match &replaced_to {
         Some(p) => format!("the database it replaced is kept at {}", p.display()),
-        None => "there was no previous database to keep -- this data directory had none".to_string(),
+        None => {
+            "there was no previous database to keep -- this data directory had none".to_string()
+        }
     };
 
     // 3. Put the snapshot in place, then let `connect` migrate it -- a snapshot may predate the
@@ -165,7 +180,7 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
                     )
                     .into()
                 })?
-            },
+            }
             // Every other migration error (a dirty migration, a checksum mismatch, an
             // execution failure) keeps aborting -- this catch stays narrow on purpose.
             None => {
@@ -177,21 +192,27 @@ pub async fn run(url: &str, snapshot: &Path) -> Result<Report, BoxError> {
                     live.display()
                 )
                 .into())
-            },
+            }
         },
     };
 
     // 4. Give it a new identity, so no device resumes on a cursor whose meaning has changed.
-    let epoch = crate::sync::epoch::rotate(&pool).await.map_err(|e| -> BoxError {
-        format!(
+    let epoch = crate::sync::epoch::rotate(&pool)
+        .await
+        .map_err(|e| -> BoxError {
+            format!(
             "restore failed while rotating the sync epoch ({e}). the live database has already \
              been replaced with the migrated snapshot, but it is STILL ADVERTISING THE OLD sync \
              epoch. {recovery}. do not start the server until the epoch is rotated -- rerun \
              --restore, or rotate the epoch by hand, before starting the server."
         )
-        .into()
-    })?;
+            .into()
+        })?;
     pool.close().await;
 
-    Ok(Report { data_dir, replaced_to, epoch })
+    Ok(Report {
+        data_dir,
+        replaced_to,
+        epoch,
+    })
 }

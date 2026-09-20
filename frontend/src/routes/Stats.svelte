@@ -8,7 +8,7 @@
   import { persisted } from '../stores/persisted';
   import { locale, t } from '../i18n';
   import { PURCHASE_PRICE, flattenTree, periodLabel, sharePct, statsPath } from '../lib/stats';
-  import type { Amount, EnergyUsage, FuelUsage, Stats } from '../lib/types';
+  import type { Amount, EnergyUsage, FuelUsage, WaterUsage, Stats } from '../lib/types';
   import { customTypes, typeLabel, typesLoaded } from '../lib/type-registry';
 
   /** Per device and not synced: whether to count purchase prices is a way of looking, not data. */
@@ -31,6 +31,7 @@
   let data = $state<Stats | null>(null);
   let energy = $state<EnergyUsage | null>(null);
   let fuel = $state<FuelUsage | null>(null);
+  let water = $state<WaterUsage | null>(null);
   /** The last year list seen. Kept apart from `data`, which is cleared on every fetch, so the
    *  picker does not empty and reset itself while the next selection loads. */
   let years = $state<string[]>([]);
@@ -43,11 +44,15 @@
     data = null;
     energy = null;
     fuel = null;
+    water = null;
     error = '';
     let current = true;
-    Promise.all([api<Stats>('GET', path), api<EnergyUsage>('GET', '/stats/energy'), api<FuelUsage>('GET', '/stats/fuel')])
-      .then(([d, e, f]) => { if (current) { data = d; energy = e; fuel = f; years = d.years; } })
+    api<Stats>('GET', path)
+      .then((d) => { if (current) { data = d; years = d.years; } })
       .catch((e) => { if (current) error = (e as Error).message; });
+    api<EnergyUsage>('GET', '/stats/energy').then((e) => { if (current) energy = e; }, () => {});
+    api<FuelUsage>('GET', '/stats/fuel').then((f) => { if (current) fuel = f; }, () => {});
+    api<WaterUsage>('GET', '/stats/water').then((w) => { if (current) water = w; }, () => {});
     return () => { current = false; };
   });
 
@@ -65,6 +70,7 @@
   const fmtKwh = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
   const fmtLiters = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
   const fmtGallons = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
+  const fmtWater = (litersMilli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 2 }).format(litersMilli / 1_000_000)} m³`;
   const share = (cents: number) => `${fmt(cents)} · ${sharePct(cents, data?.total_cents ?? 0)}%`;
   const bars = (list: Amount[], label: (bucket: string) => string): Bar[] =>
     list.map((a) => ({ key: a.bucket, label: label(a.bucket), value: a.cost_cents, display: share(a.cost_cents) }));
@@ -85,6 +91,11 @@
         }))
       : [],
   );
+  const hasKwh = $derived(energy?.months.some((m) => m.kwh_milli > 0) ?? false);
+  const hasLiters = $derived(fuel?.months.some((m) => m.liters_milli > 0) ?? false);
+  const hasGallons = $derived(fuel?.months.some((m) => m.gallons_milli > 0) ?? false);
+  const hasFuel = $derived(hasLiters || hasGallons || (fuel?.levels.length ?? 0) > 0);
+  const hasWater = $derived(water?.months.some((m) => m.entries > 0 || m.cost_cents > 0) ?? false);
 </script>
 
 <main>
@@ -99,23 +110,50 @@
   </div>
   <label class="row toggle"><input type="checkbox" bind:checked={$includePurchases} /> {$t('stats.purchases')}</label>
 
-  {#if energy}
+  {#if energy && hasKwh}
     <section data-testid="stats-energy">
       <h2>{$t('stats.energy-title')}</h2>
       <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtKwh(energy.current_kwh_milli)}</b></p>
       <p class="muted">{$t('stats.energy-previous')}: {fmtKwh(energy.previous_kwh_milli)}</p>
+      {#if energy.target_kwh_milli > 0}<p class="muted">{$t('stats.target')}: {fmtKwh(energy.target_kwh_milli)}</p>{/if}
       <BarList items={energy.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.kwh_milli, display: fmtKwh(m.kwh_milli) }))} />
     </section>
   {/if}
-  {#if fuel}
+  {#if fuel && hasFuel}
     <section data-testid="stats-fuel">
       <h2>{$t('stats.fuel-title')}</h2>
-      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtLiters(fuel.current_liters_milli)} · {fmtGallons(fuel.current_gallons_milli)}</b></p>
-      <p class="muted">{$t('stats.energy-previous')}: {fmtLiters(fuel.previous_liters_milli)} · {fmtGallons(fuel.previous_gallons_milli)}</p>
-      <h3>{$t('stats.fuel-liters')}</h3>
-      <BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: fmtLiters(m.liters_milli) }))} />
-      <h3>{$t('stats.fuel-gallons')}</h3>
-      <BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.gallons_milli, display: fmtGallons(m.gallons_milli) }))} />
+      {#if hasLiters || hasGallons}
+        <p class="total">{$t('stats.energy-current')}: <b class="tnum">{[hasLiters ? fmtLiters(fuel.current_liters_milli) : '', hasGallons ? fmtGallons(fuel.current_gallons_milli) : ''].filter(Boolean).join(' · ')}</b></p>
+        <p class="muted">{$t('stats.energy-previous')}: {[hasLiters ? fmtLiters(fuel.previous_liters_milli) : '', hasGallons ? fmtGallons(fuel.previous_gallons_milli) : ''].filter(Boolean).join(' · ')}</p>
+      {/if}
+      {#if fuel.levels.length > 0}
+        <h3>{$t('stats.fuel-levels')}</h3>
+        <div class="levels">
+          {#each fuel.levels as level (level.object_id)}
+            <button class="level-card" onclick={() => go(`/objects/${level.object_id}`)}>
+              <span>{level.object_name}</span>
+              <b>{level.level_pct}%{#if level.remaining_milli !== null} · {level.unit === 'l' ? fmtLiters(level.remaining_milli) : fmtGallons(level.remaining_milli)}{/if}</b>
+              <small>{periodLabel(level.date, $locale)}{#if level.estimated_days_remaining !== null} · {$t('stats.fuel-days', { n: level.estimated_days_remaining })}{/if}{#if level.low} · {$t('stats.fuel-low')}{/if}</small>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      {#if hasLiters}<h3>{$t('stats.fuel-liters')}</h3><BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: fmtLiters(m.liters_milli) }))} />{/if}
+      {#if hasGallons}<h3>{$t('stats.fuel-gallons')}</h3><BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.gallons_milli, display: fmtGallons(m.gallons_milli) }))} />{/if}
+    </section>
+  {/if}
+  {#if water && hasWater}
+    <section data-testid="stats-water">
+      <h2>{$t('stats.water-title')}</h2>
+      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtWater(water.current_liters_milli)}</b></p>
+      <p class="muted">{$t('stats.energy-previous')}: {fmtWater(water.previous_liters_milli)} · {$t('water.daily-average')}: {fmtWater(water.daily_average_liters_milli)}</p>
+      {#if water.current_cost_cents > 0}<p class="muted">{$t('activity.cost')}: {fmt(water.current_cost_cents)}</p>{/if}
+      {#if water.anomalies > 0}<p class="hint warning">{$t('water.anomalies', { n: water.anomalies })}</p>{/if}
+      <BarList items={water.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: `${fmtWater(m.liters_milli)}${m.estimated ? ` · ${$t('water.estimated-short')}` : ''}` }))} />
+      {#if water.objects.length > 1}
+        <h3>{$t('stats.by-object')}</h3>
+        <BarList items={water.objects.map((o) => ({ key: o.object_id, label: o.object_name, value: o.liters_milli, display: o.target_liters_milli ? `${fmtWater(o.liters_milli)} / ${fmtWater(o.target_liters_milli)}` : fmtWater(o.liters_milli) }))} />
+      {/if}
     </section>
   {/if}
 
@@ -157,4 +195,7 @@
   .total { font-size: var(--text-lg); margin: var(--space-3) 0; }
   /* BarList's default 90px label column fits "Fuel" but clips an object name or "Maintenance". */
   section :global(.label) { width: 140px; }
+  .levels { display: grid; gap: var(--space-2); }
+  .level-card { display: grid; grid-template-columns: 1fr auto; gap: var(--space-1); text-align: left; padding: var(--space-3); border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-md); }
+  .level-card small { grid-column: 1 / -1; color: var(--muted); }
 </style>

@@ -3,7 +3,8 @@ import type { FuelUnit, MemObject, ObjectInput } from './types';
 export function emptyInput(): ObjectInput {
   return {
     name: '', type: 'other', counter_unit: null, fuel_unit: null, description: '', purchase_date: null, purchase_price_cents: null,
-    weight_unit: 'kg', archived: false, parent_id: null, tags: [], energy_price_milli: null,
+    weight_unit: 'kg', archived: false, parent_id: null, tags: [], energy_price_milli: null, fuel_capacity_milli: null,
+    resource_unit: null, resource_kind: null, measurement_mode: null, monthly_target_milli: null, low_level_pct: null, private: false,
   };
 }
 
@@ -11,7 +12,9 @@ export function toInput(o: MemObject): ObjectInput {
   return {
     weight_unit: o.weight_unit ?? 'kg', name: o.name, type: o.type, counter_unit: o.counter_unit, fuel_unit: o.fuel_unit, description: o.description,
     purchase_date: o.purchase_date, purchase_price_cents: o.purchase_price_cents, archived: o.archived_at !== null,
-    parent_id: o.parent_id, tags: [...o.tags], energy_price_milli: o.energy_price_milli,
+    parent_id: o.parent_id, tags: [...o.tags], energy_price_milli: o.energy_price_milli, fuel_capacity_milli: o.fuel_capacity_milli,
+    resource_unit: o.resource_unit ?? o.fuel_unit, resource_kind: o.resource_kind ?? null, measurement_mode: o.measurement_mode ?? null,
+    monthly_target_milli: o.monthly_target_milli ?? null, low_level_pct: o.low_level_pct ?? null, private: o.private === 1,
   };
 }
 
@@ -28,6 +31,7 @@ export function validate(input: ObjectInput): string | null {
   // used with `{unit}` interpolated at the template) would leave the literal text "{unit}" in
   // that sentence with none supplied.
   if (input.energy_price_milli !== null && input.energy_price_milli !== undefined && Number.isNaN(input.energy_price_milli)) return 'object.energy-price-error';
+  if (input.fuel_capacity_milli !== null && input.fuel_capacity_milli !== undefined && (!Number.isFinite(input.fuel_capacity_milli) || input.fuel_capacity_milli <= 0)) return 'object.fuel-capacity-error';
   return null;
 }
 

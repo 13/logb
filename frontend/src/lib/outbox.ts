@@ -9,7 +9,7 @@ import { isRejection, isUnauthenticated } from './api-error';
  * last-write-wins rule sync already applies per field). Deletes stay online-only: a delete that
  * lands after someone else's edit would destroy that edit with no field to compare.
  */
-export type OpKind = 'activity.create' | 'activity.update' | 'attachment.upload' | 'reminder.done';
+export type OpKind = 'object.create' | 'activity.create' | 'activity.update' | 'attachment.upload' | 'reminder.create' | 'reminder.done';
 
 export interface QueuedOp {
   /** Also the `client_op_id` sent to the server, which is what makes a replay idempotent. */
@@ -253,10 +253,14 @@ export async function replay(
   for (const op of await store.all()) {
     if (op.dead) continue;
     const body = { ...op.body };
+    let path = op.path;
+    for (const [temporary, real] of resolved) {
+      path = path.replace(`/objects/${temporary}/`, `/objects/${real}/`);
+    }
     const ref = body.activity_id;
     if (typeof ref === 'number' && resolved.has(ref)) body.activity_id = resolved.get(ref);
     try {
-      const out = await send({ ...op, body });
+      const out = await send({ ...op, path, body });
       if (op.tempId !== undefined && out) {
         resolved.set(op.tempId, out.id);
         await persistResolvedId(store, op.tempId, out.id);
@@ -311,9 +315,32 @@ export async function replay(
  */
 async function persistResolvedId(store: OutboxStore, tempId: number, realId: number): Promise<void> {
   for (const other of await store.all()) {
-    if (other.dead || other.body.activity_id !== tempId) continue;
-    await store.put({ ...other, body: { ...other.body, activity_id: realId } });
+    if (other.dead) continue;
+    const path = other.path.replace(`/objects/${tempId}/`, `/objects/${realId}/`);
+    const body = { ...other.body };
+    let changed = path !== other.path;
+    for (const field of ['activity_id', 'object_id', 'parent_id']) {
+      if (body[field] === tempId) { body[field] = realId; changed = true; }
+    }
+    if (changed) await store.put({ ...other, path, body });
   }
+}
+
+export async function updateQueuedObjectBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
+  const op = (await store.all()).find((o) => !o.dead && o.kind === 'object.create' && o.tempId === tempId);
+  if (!op) return false;
+  await store.put({ ...op, body });
+  return true;
+}
+
+export async function removeQueuedObject(store: OutboxStore, tempId: number): Promise<boolean> {
+  let removed = false;
+  for (const op of await store.all()) {
+    if (op.tempId === tempId || op.path.includes(`/objects/${tempId}/`) || op.body.object_id === tempId || op.body.parent_id === tempId) {
+      await store.remove(op.id); removed = true;
+    }
+  }
+  return removed;
 }
 
 /**

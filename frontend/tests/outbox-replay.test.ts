@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, retryDead, setOutboxStoreForTesting, setOutboxUser, setUnauthorizedHandler, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { cancelQueuedActivity, createObjectQueued, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, setOutboxUser, setUnauthorizedHandler, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 // Every flush in this file stands in for one made by a signed-in user: `flushOutbox` sends
@@ -65,6 +65,47 @@ describe('createQueued + flushOutbox', () => {
     expect(calls).toHaveLength(2);
     const replayedOpId = calls[1].client_op_id;
     expect(replayedOpId).toBe(firstOpId);
+  });
+});
+
+describe('offline object creation', () => {
+  beforeEach(() => setOutboxStoreForTesting(memoryStore()));
+
+  it('keeps the object visible and replays with one stable client_uuid', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    let offline = true;
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init?.body as string));
+      if (offline) throw new TypeError('offline');
+      return jsonResponse(201, { id: 44 });
+    }) as unknown as typeof fetch;
+
+    expect(await createObjectQueued({ name: 'Oil tank', type: 'home' }, -9)).toBeNull();
+    const queued = await pendingObjectOps();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].tempId).toBe(-9);
+
+    offline = false;
+    await flushOutbox();
+    expect(bodies[1].client_uuid).toBe(bodies[0].client_uuid);
+    expect(await pendingObjectOps()).toHaveLength(0);
+  });
+
+  it('rewrites activities queued against a pending object to its real id', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'object-op', kind: 'object.create', path: '/objects', body: { name: 'Water meter', type: 'home' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'activity-op', kind: 'activity.create', path: '/objects/-9/activities', body: { date: '2026-09-20', category: 'usage' }, attempts: 0, userId: 1 });
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return jsonResponse(201, { id: urls.length === 1 ? 44 : 55 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(urls.some((url) => url.endsWith('/objects/44/activities'))).toBe(true);
+    expect(await store.all()).toEqual([]);
   });
 });
 
