@@ -12,6 +12,11 @@ export function weightValue(grams: number, unit: WeightUnit): number { return gr
 export function weightInput(grams: number | null | undefined, unit: WeightUnit): string {
   return grams == null ? '' : String(Number(weightValue(grams, unit).toFixed(3)));
 }
+/** Convert an in-progress weight field when its display unit changes. */
+export function changeWeightUnitValue(value: string, from: WeightUnit, to: WeightUnit): string {
+  const grams = parseWeight(value, from);
+  return Number.isFinite(grams) ? weightInput(grams, to) : value;
+}
 export function formatWeight(grams: number, unit: WeightUnit, locale: string): string {
   return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(weightValue(grams, unit))} ${unit}`;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseWeight, weightInput, formatWeight, orderWeights, quickLogPath } from '../src/lib/weight';
+import { parseWeight, weightInput, formatWeight, changeWeightUnitValue, orderWeights, quickLogPath } from '../src/lib/weight';
 import { validateActivity, emptyActivity } from '../src/lib/activity-form';
 
 describe('weight measurements', () => {
@@ -14,6 +14,10 @@ describe('weight measurements', () => {
     expect(formatWeight(72350, 'kg', 'de')).toBe('72,35 kg');
     expect(formatWeight(-1500, 'kg', 'en')).toBe('-1.5 kg');
     expect(parseWeight(weightInput(72350, 'lb'), 'lb')).toBe(72350);
+  });
+  it('converts an in-progress form value through the shared helper', () => {
+    expect(changeWeightUnitValue('72,35', 'kg', 'lb')).toBe('159.504');
+    expect(changeWeightUnitValue('not-a-number', 'kg', 'lb')).toBe('not-a-number');
   });
   it('orders by measurement date, creation date and ID, never by largest value', () => {
     const points = [

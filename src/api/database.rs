@@ -352,7 +352,8 @@ async fn restart(AdminUser(_): AdminUser) -> (StatusCode, Json<serde_json::Value
 /// Whether LogB is taking automatic backups of the database it is serving, and where.
 #[derive(Serialize)]
 struct BackupStatus {
-    /// `scheduled` on SQLite with a directory configured, `off` on SQLite without one,
+    /// `scheduled` on SQLite with a recent directory snapshot, `stale` when the configured
+    /// backup has not produced a snapshot recently, `off` on SQLite without one,
     /// `not_ours` on PostgreSQL -- where `crate::backup` never runs at all (see `backup::tick`
     /// and `NOT_ON_POSTGRES`), regardless of whether `LOGB_BACKUP_DIR` happens to be set.
     state: &'static str,
@@ -369,6 +370,7 @@ struct BackupStatus {
 const NOT_OURS: &str = "not_ours";
 const OFF: &str = "off";
 const SCHEDULED: &str = "scheduled";
+const STALE: &str = "stale";
 
 /// The modified time of the newest file `crate::backup::tick` would have written
 /// (`logb-*.db`), converted to the instance's configured timezone -- the same one `tick` used
@@ -402,9 +404,13 @@ async fn backup_status(AdminUser(_): AdminUser, State(state): State<App>) -> Jso
     let Some(dir) = state.config.backup_dir.clone() else {
         return Json(BackupStatus { state: OFF, directory: None, last_at: None, hour: None });
     };
+    let last_at = newest_snapshot(&dir);
+    let stale = last_at.as_deref().and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+        .map(|at| chrono::Utc::now().signed_duration_since(at.with_timezone(&chrono::Utc)) > chrono::Duration::hours(36))
+        .unwrap_or(false);
     Json(BackupStatus {
-        state: SCHEDULED,
-        last_at: newest_snapshot(&dir),
+        state: if stale { STALE } else { SCHEDULED },
+        last_at,
         directory: Some(dir.display().to_string()),
         hour: Some(state.config.backup_hour),
     })

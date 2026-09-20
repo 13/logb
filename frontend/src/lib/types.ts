@@ -328,10 +328,10 @@ export interface DbProbe {
 /** `GET /database/backup`: who is responsible for backing this database up. `scheduled` is
  *  SQLite with a directory configured, `off` is SQLite without one, and `not_ours` is
  *  PostgreSQL -- where LogB's nightly snapshot (`VACUUM INTO`) never runs, whatever
- *  `LOGB_BACKUP_DIR` is set to. `directory`, `hour` and `last_at` are filled in for
- *  `scheduled` only, and `last_at` is null until the first snapshot has been written. */
+ *  `LOGB_BACKUP_DIR` is set to. `stale` means a configured snapshot is older than the
+ *  health threshold. `directory`, `hour` and `last_at` are filled in for scheduled states. */
 export interface BackupStatus {
-  state: 'scheduled' | 'off' | 'not_ours';
+  state: 'scheduled' | 'stale' | 'off' | 'not_ours';
   directory: string | null; last_at: string | null; hour: number | null;
 }
 /** `POST /database/switch`: the copy report, returned only once the copy has been verified. */

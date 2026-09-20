@@ -102,6 +102,7 @@
           <span>
             <b>{String(op.body.title || op.kind)}</b>
             <span class="muted">{op.path}</span>
+            {#if op.lastError}<span class="error small">{op.lastError}</span>{/if}
           </span>
           <button class="ghost danger-text" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</button>
         </div>

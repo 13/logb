@@ -178,7 +178,7 @@
        is said plainly enough that nobody reads this screen and still believes otherwise. -->
   {#if backup}
     <div class="card stack" class:elsewhere={backup.state === 'not_ours'}>
-      {#if backup.state === 'scheduled'}
+      {#if backup.state === 'scheduled' || backup.state === 'stale'}
         <b>{$t('backup.scheduled-title')}</b>
         <span class="break">{$t('backup.scheduled', { directory: backup.directory ?? '', hour: hourText(backup.hour) })}</span>
         <span class="muted">
@@ -186,6 +186,7 @@
             ? $t('backup.last', { date: fmtDate(backup.last_at, $dateFormat) })
             : $t('backup.last-none', { hour: hourText(backup.hour) })}
         </span>
+        {#if backup.state === 'stale'}<span class="error">{$t('backup.stale')}</span>{/if}
       {:else if backup.state === 'off'}
         <b>{$t('backup.off-title')}</b>
         <span>{$t('backup.off')}</span>

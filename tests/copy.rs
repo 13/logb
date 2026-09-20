@@ -423,7 +423,12 @@ async fn the_awkward_shapes_are_really_in_the_source(source: &str) {
     ] {
         let rows = dump(source, table, "1").await;
         assert!(
-            rows.iter().any(|row| row.contains(shape)),
+            rows.iter().any(|row| {
+                // Columns are sorted by name in `dump`, but a schema change may insert another
+                // column between the fields being checked. Match the required cells rather than
+                // relying on them remaining adjacent in the rendered row.
+                shape.split_whitespace().all(|part| row.split_whitespace().any(|cell| cell == part))
+            }),
             "the seeding was meant to put {shape} in {table}, and did not: {rows:?}"
         );
     }

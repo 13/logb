@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseWeight, weightInput, formatWeight } from '../lib/weight';
+  import { parseWeight, weightInput, formatWeight, changeWeightUnitValue } from '../lib/weight';
   import type { WeightUnit } from '../lib/types';
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
@@ -311,7 +311,7 @@
     const grams = originalWeight !== null && weightText === originalWeightText && weightUnit === originalWeightUnit
       ? originalWeight : parseWeight(weightText, weightUnit);
     if (Number.isFinite(grams)) {
-      weightText = weightInput(grams, next);
+      weightText = changeWeightUnitValue(weightText, weightUnit, next);
       originalWeight = grams; originalWeightText = weightText; originalWeightUnit = next;
     }
     weightUnit = next;

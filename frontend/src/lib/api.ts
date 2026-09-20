@@ -761,7 +761,7 @@ export async function retryDead(): Promise<void> {
   // nothing this could usefully do anyway.
   if (currentUserId === null) return;
   for (const op of await ourStore().all()) {
-    if (op.dead) await store.put({ ...op, dead: false, attempts: 0 });
+    if (op.dead) await store.put({ ...op, dead: false, attempts: 0, lastError: undefined });
   }
   await flushOutbox();
   await flushOutbox();

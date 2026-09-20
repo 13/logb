@@ -95,7 +95,9 @@
   const hasLiters = $derived(fuel?.months.some((m) => m.liters_milli > 0) ?? false);
   const hasGallons = $derived(fuel?.months.some((m) => m.gallons_milli > 0) ?? false);
   const hasFuel = $derived(hasLiters || hasGallons || (fuel?.levels.length ?? 0) > 0);
-  const hasWater = $derived(water?.months.some((m) => m.entries > 0 || m.cost_cents > 0) ?? false);
+  // Meter deltas are the useful signal for water. Keep the section visible whenever a month
+  // has measured volume, even if a backend/client version reports zero entry metadata.
+  const hasWater = $derived(water?.months.some((m) => m.liters_milli > 0 || m.entries > 0 || m.cost_cents > 0) ?? false);
 </script>
 
 <main>

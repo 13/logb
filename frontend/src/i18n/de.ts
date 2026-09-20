@@ -484,6 +484,7 @@ export default {
   'backup.scheduled': 'Jede Nacht um {hour} wird eine Momentaufnahme der Datenbank nach {directory} geschrieben. Ältere Momentaufnahmen werden gelöscht, sobald neue dazukommen.',
   'backup.last': 'Neueste Momentaufnahme: {date}.',
   'backup.last-none': 'Es wurde noch keine Momentaufnahme geschrieben — die erste entsteht binnen einer Minute, nachdem die Uhr {hour} erreicht hat.',
+  'backup.stale': 'Die neueste Momentaufnahme ist über 36 Stunden alt. Prüfe die Serverprotokolle und das Sicherungsverzeichnis.',
   'backup.off-title': 'Es werden keine Sicherungen angelegt',
   'backup.off': 'LogB sichert diese Datenbank nicht. Setze LOGB_BACKUP_DIR auf ein Verzeichnis, dann schreibt LogB dort jede Nacht eine Momentaufnahme der Datenbank, zu der Stunde, die LOGB_BACKUP_HOUR nennt.',
   'backup.not-ours-title': 'Um PostgreSQL kümmert sich PostgreSQL',

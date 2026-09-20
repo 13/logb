@@ -21,20 +21,28 @@
   let searched = $state('');
   let loading = $state(false);
   let error = $state('');
+  let requestGeneration = 0;
 
   // One request per pause in typing, and the query stays in the URL so a result list
   // survives a reload or a share.
   $effect(() => {
     const term = q.trim();
+    const generation = ++requestGeneration;
     const url = new URL(location.href);
     if (term) url.searchParams.set('q', term); else url.searchParams.delete('q');
     history.replaceState(null, '', url.pathname + url.search);
-    if (!term) { results = null; searched = ''; error = ''; return; }
+    if (!term) { results = null; searched = ''; error = ''; loading = false; return; }
     const timer = setTimeout(async () => {
       loading = true; error = '';
-      try { results = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}`); searched = term; }
-      catch (e) { error = (e as Error).message; }
-      finally { loading = false; }
+      try {
+        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}`);
+        if (generation !== requestGeneration) return;
+        results = next; searched = term;
+      } catch (e) {
+        if (generation === requestGeneration) error = (e as Error).message;
+      } finally {
+        if (generation === requestGeneration) loading = false;
+      }
     }, 200);
     return () => clearTimeout(timer);
   });

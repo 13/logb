@@ -28,6 +28,8 @@ export interface QueuedOp {
   tempId?: number;
   attempts: number;
   dead?: boolean;
+  /** Last server or local reason recorded when the op could not be sent. */
+  lastError?: string;
   /** IndexedDB insertion order marker. The memory store does not need this because arrays
    *  already keep insertion order; the IndexedDB store stamps it itself on `put`. */
   queued_at?: number;
@@ -286,11 +288,12 @@ export async function replay(
         return resolved;
       }
       if (isRejection(e)) {
-        await store.put({ ...op, body, dead: true });
+        await store.put({ ...op, body, dead: true, lastError: e instanceof Error ? e.message : String(e) });
         continue;
       }
       const attempts = op.attempts + 1;
-      await store.put({ ...op, body, attempts, dead: attempts >= MAX_ATTEMPTS });
+      await store.put({ ...op, body, attempts, dead: attempts >= MAX_ATTEMPTS,
+        lastError: e instanceof Error ? e.message : String(e) });
       return resolved;
     }
   }

@@ -484,6 +484,7 @@ export default {
   'backup.scheduled': 'A snapshot of the database is written to {directory} every night at {hour}. Older snapshots are deleted as new ones arrive.',
   'backup.last': 'Newest snapshot: {date}.',
   'backup.last-none': 'No snapshot has been written yet — the first one lands within a minute of the clock reaching {hour}.',
+  'backup.stale': 'The newest snapshot is more than 36 hours old. Check the server logs and the backup directory.',
   'backup.off-title': 'No backups are being taken',
   'backup.off': 'LogB is not backing this database up. Set LOGB_BACKUP_DIR to a directory and LogB writes a snapshot of the database there every night, at the hour LOGB_BACKUP_HOUR names.',
   'backup.not-ours-title': 'PostgreSQL is backed up by PostgreSQL',
