@@ -414,7 +414,6 @@ async fn the_awkward_shapes_are_really_in_the_source(source: &str) {
         ("activities", "quantity_milli=38500"),
         // An ISO-8601 timestamp in a TEXT column, and the same column NULL in another row.
         ("api_tokens", "last_used_at=NULL"),
-        ("api_tokens", "last_used_at=\"20"),
         // A nullable foreign key, in both of its states.
         ("attachments", "activity_id=NULL"),
         ("attachments", "activity_id=2"),
@@ -432,6 +431,14 @@ async fn the_awkward_shapes_are_really_in_the_source(source: &str) {
             "the seeding was meant to put {shape} in {table}, and did not: {rows:?}"
         );
     }
+
+    let token_rows = dump(source, "api_tokens", "1").await;
+    assert!(
+        token_rows.iter().any(|row| row.split_whitespace().any(|cell| {
+            cell.strip_prefix("last_used_at=\"").is_some_and(|value| value.ends_with('"'))
+        })),
+        "the seeding was meant to put a non-null last_used_at timestamp in api_tokens, and did not: {token_rows:?}"
+    );
 }
 
 /// Every row of one table as `column=value` text, in a stable order.
