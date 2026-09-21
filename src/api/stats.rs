@@ -295,8 +295,10 @@ async fn energy_usage(
     }
     let current_kwh_milli = months.last().map(|m| m.kwh_milli).unwrap_or(0);
     let previous_kwh_milli = months.iter().rev().nth(1).map(|m| m.kwh_milli).unwrap_or(0);
+    // PostgreSQL widens SUM(BIGINT) to NUMERIC while SQLite keeps an integer. Cast the final
+    // value, as the grouped query above already does, so both backends decode into i64.
     let target_kwh_milli: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(monthly_target_milli), 0) FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND resource_kind = 'electricity'")
+        "SELECT CAST(COALESCE(SUM(monthly_target_milli), 0) AS BIGINT) FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND resource_kind = 'electricity'")
         .bind(user.id).fetch_one(&state.db).await?;
     Ok(Json(EnergyUsage {
         months,

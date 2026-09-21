@@ -122,7 +122,7 @@ export default {
   'notify.telegram-unconfigured': 'Telegram is not configured.',
   'notify.telegram-setup': 'Create a bot with @BotFather in Telegram, then paste its bot token here. The token is encrypted and is never shown again.',
   'notify.telegram-token': 'Bot token',
-  'notify.telegram-save': 'Save bot',
+  'notify.telegram-save': 'Configure bot',
   'notify.telegram-bot': 'Notification bot: {name}.',
   'notify.telegram-replace': 'Replace bot token',
   'notify.telegram-remove': 'Remove bot',
