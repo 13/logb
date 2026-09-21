@@ -488,6 +488,7 @@
       </div>
     {/if}
     {#if input.category === 'weight'}
+      <h2 class="section-title">{$t('activity.details')}</h2>
       <div class="row">
         <div class="field"><label for="weight">{$t('cat.weight')}</label><input id="weight" type="text" inputmode="decimal" bind:value={weightText} required /></div>
         <div class="field"><label for="weight-unit">{$t('weight.unit')}</label><select id="weight-unit" bind:value={() => weightUnit, changeWeightUnit}><option value="kg">kg</option><option value="lb">lb</option></select></div>
@@ -497,6 +498,7 @@
       {/if}
       {#if weightWarn}<p class="hint warning" role="status">{$t('weight.large-change')}</p>{/if}
     {:else}
+    <h2 class="section-title">{$t('activity.details')}</h2>
     <div class="field">
       <label for="ti">{$t('activity.title')}</label>
       <!-- Optional only for a trip or a charge (spec: "defaults to $t('cat.trip') when empty",
@@ -624,6 +626,7 @@
         <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
       </div>
     {/if}
+    <h2 class="section-title">{$t('activity.notes')}</h2>
     <div class="field"><label for="no">{$t('activity.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
     <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
 
@@ -666,6 +669,7 @@
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
   .actions { margin-top: var(--space-2); }
+  .section-title { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-lg); }
   /* A positioning context for the pending badge, not a thumbnail. It was called `thumb`, which
      collided with the global grid-image rule in app.css and inflated it to a full-width square
      around a 64px image. */

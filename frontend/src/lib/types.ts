@@ -182,7 +182,7 @@ export interface ActivityHit {
  *  `MemObject`: claiming those fields would license handing a hit to `ObjectCard`, which reads
  *  `object.stats.due_reminder_count` and would throw on the first one. */
 export type ObjectHit = Omit<MemObject, 'stats' | 'cover_file_id'> & { parent_name: string | null };
-export interface SearchResults { objects: ObjectHit[]; activities: ActivityHit[] }
+export interface SearchResults { objects: ObjectHit[]; activities: ActivityHit[]; has_more?: boolean }
 
 export interface Bucket { bucket: string; cost_cents: number; count: number }
 export interface Insights {

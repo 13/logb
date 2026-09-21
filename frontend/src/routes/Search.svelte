@@ -22,6 +22,9 @@
   let loading = $state(false);
   let error = $state('');
   let requestGeneration = 0;
+  let offset = $state(0);
+  let loadingMore = $state(false);
+  const PAGE_SIZE = 25;
 
   // One request per pause in typing, and the query stays in the URL so a result list
   // survives a reload or a share.
@@ -31,11 +34,12 @@
     const url = new URL(location.href);
     if (term) url.searchParams.set('q', term); else url.searchParams.delete('q');
     history.replaceState(null, '', url.pathname + url.search);
+    offset = 0;
     if (!term) { results = null; searched = ''; error = ''; loading = false; return; }
     const timer = setTimeout(async () => {
       loading = true; error = '';
       try {
-        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}`);
+        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}&offset=0`);
         if (generation !== requestGeneration) return;
         results = next; searched = term;
       } catch (e) {
@@ -46,6 +50,20 @@
     }, 200);
     return () => clearTimeout(timer);
   });
+
+  async function loadMore() {
+    if (!results?.has_more || loadingMore || !searched) return;
+    loadingMore = true;
+    const generation = requestGeneration;
+    const nextOffset = offset + PAGE_SIZE;
+    try {
+      const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(searched)}&offset=${nextOffset}`);
+      if (generation !== requestGeneration || !results || searched === '') return;
+      results = { objects: [...results.objects, ...next.objects], activities: [...results.activities, ...next.activities], has_more: next.has_more };
+      offset = nextOffset;
+    } catch (e) { error = (e as Error).message; }
+    finally { loadingMore = false; }
+  }
 
   const empty = $derived(results !== null && results.objects.length === 0 && results.activities.length === 0);
 </script>
@@ -115,6 +133,9 @@
         {/each}
       </div>
     {/if}
+    {#if results.has_more}
+      <button class="ghost more" disabled={loadingMore} onclick={loadMore}>{loadingMore ? $t('nav.loading') : $t('search.more')}</button>
+    {/if}
   {/if}
 </main>
 
@@ -126,4 +147,5 @@
   .small { font-size: var(--text-xs); }
   .type-row { display: flex; align-items: center; gap: var(--space-1); }
   .type-row :global(svg) { flex: none; }
+  .more { width: 100%; margin-top: var(--space-3); }
 </style>

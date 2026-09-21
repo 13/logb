@@ -121,6 +121,7 @@ export default {
   'dash.sort-cost': 'Highest cost',
   'dash.sort-counter': 'Highest counter',
   'dash.no-match': 'No objects match “{q}”.',
+  'search.more': 'Load more results',
 
   'object.new': 'New object',
   'object.edit': 'Edit object',
@@ -188,6 +189,7 @@ export default {
   'lastdone.clear': 'Clear title filter',
 
   'activity.new': 'Log activity',
+  'activity.details': 'Details',
   'activity.edit': 'Edit activity',
   'activity.date': 'Date',
   'activity.category': 'Category',
@@ -430,6 +432,12 @@ export default {
   'settings.export-not-backup': 'The export archive is not a database backup. It is portable and self-contained and imports into any LogB, but it is written only when you ask for one.',
   'settings.import': 'Import zip',
   'settings.import-done': 'Imported {objects} objects, {activities} activities, {attachments} files, {reminders} reminders, {types_created} types ({types_merged} merged with existing ones)',
+  'settings.sync-recovery': 'Offline saves',
+  'settings.sync-pending': '{n} save(s) waiting for a connection.',
+  'settings.sync-failed': '{n} save(s) need your attention.',
+  'settings.sync-clear': 'No failed saves.',
+  'settings.sync-retry': 'Retry failed saves',
+  'settings.sync-discard': 'Discard',
   'settings.version': 'Version',
   'settings.about': 'About',
   'settings.built': 'Built',

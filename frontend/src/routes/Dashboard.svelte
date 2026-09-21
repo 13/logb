@@ -110,7 +110,7 @@
     <div class="banner">
       <b>{due.length === 1 ? $t('dash.due-one') : $t('dash.due', { n: due.length })}</b>
       <ul>
-        {#each due.slice(0, 5) as r (r.id)}
+        {#each due as r (r.id)}
           <li>
             <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
             <TagChips tags={r.object_tags ?? []} />
@@ -129,7 +129,7 @@
     <div class="banner soon">
       <b>{$t('dash.upcoming')}</b>
       <ul>
-        {#each soon.slice(0, 5) as r (r.id)}
+        {#each soon as r (r.id)}
           <li>
             <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
             <TagChips tags={r.object_tags ?? []} />

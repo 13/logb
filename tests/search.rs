@@ -115,6 +115,23 @@ async fn blank_and_anonymous_queries_are_refused() {
     assert_eq!(common::new_client().get(app.url("/search?q=golf")).send().await.unwrap().status(), 401);
 }
 
+#[tokio::test]
+async fn search_paginates_without_duplicates() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Pagination object", None).await;
+    for n in 0..30 {
+        app.create_activity(&object["id"], &format!("pagination-{n}")).await;
+    }
+    let first: serde_json::Value = app.client.get(app.url("/search?q=pagination&limit=10&offset=0")).send().await.unwrap().json().await.unwrap();
+    let second: serde_json::Value = app.client.get(app.url("/search?q=pagination&limit=10&offset=10")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(first["activities"].as_array().unwrap().len(), 10);
+    assert_eq!(second["activities"].as_array().unwrap().len(), 10);
+    assert!(first["has_more"].as_bool().unwrap());
+    let ids: std::collections::HashSet<_> = first["activities"].as_array().unwrap().iter().chain(second["activities"].as_array().unwrap().iter()).map(|a| a["id"].as_i64().unwrap()).collect();
+    assert_eq!(ids.len(), 20);
+}
+
 /// An object hit says which object it sits inside, so a list of four things called "Filter"
 /// can be told apart without opening any of them.
 #[tokio::test]

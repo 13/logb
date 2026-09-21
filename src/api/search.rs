@@ -18,6 +18,8 @@ pub struct SearchQuery {
     pub q: String,
     #[serde(default)]
     pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
 }
 
 /// An activity hit carries its object's name so the result list is readable without a
@@ -72,6 +74,7 @@ pub struct ObjectHit {
 pub struct SearchResults {
     pub objects: Vec<ObjectHit>,
     pub activities: Vec<ActivityHit>,
+    pub has_more: bool,
 }
 
 /// Wraps `q` in `%...%` after neutralising the LIKE wildcards, so a query containing `%` or
@@ -119,6 +122,7 @@ async fn search(
         return Err(AppError::BadRequest("q is required".into()));
     }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let offset = q.offset.unwrap_or(0).max(0);
     let pattern = like_pattern(term);
 
     let like = state.backend.case_insensitive_like();
@@ -148,11 +152,12 @@ async fn search(
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
          WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
            o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\'{object_tags}) \
-         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3"
+         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3 OFFSET $4"
     )))
     .bind(user.id)
     .bind(&pattern)
-    .bind(limit)
+    .bind(limit + 1)
+    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
@@ -163,13 +168,18 @@ async fn search(
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
            AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\' \
              OR a.from_place {like} $2 ESCAPE '\\' OR a.to_place {like} $2 ESCAPE '\\'{activity_tags}) \
-         ORDER BY a.date DESC, a.id DESC LIMIT $3")))
-    .bind(user.id).bind(&pattern).bind(limit)
+             ORDER BY a.date DESC, a.id DESC LIMIT $3 OFFSET $4")))
+    .bind(user.id).bind(&pattern).bind(limit + 1).bind(offset)
     .fetch_all(&state.db).await?;
+
+    let has_more = objects.len() > limit as usize || activities.len() > limit as usize;
+    let objects = objects.into_iter().take(limit as usize).collect();
+    let activities = activities.into_iter().take(limit as usize).collect();
 
     Ok(Json(SearchResults {
         objects,
         activities,
+        has_more,
     }))
 }
 

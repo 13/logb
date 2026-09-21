@@ -121,6 +121,7 @@ export default {
   'dash.sort-cost': 'Höchste Kosten',
   'dash.sort-counter': 'Höchster Zählerstand',
   'dash.no-match': 'Keine Objekte passen zu „{q}“.',
+  'search.more': 'Weitere Ergebnisse laden',
 
   'object.new': 'Neues Objekt',
   'object.edit': 'Objekt bearbeiten',
@@ -188,6 +189,7 @@ export default {
   'lastdone.clear': 'Titel-Filter aufheben',
 
   'activity.new': 'Aktivität eintragen',
+  'activity.details': 'Details',
   'activity.edit': 'Aktivität bearbeiten',
   'activity.date': 'Datum',
   'activity.category': 'Kategorie',
@@ -430,6 +432,12 @@ export default {
   'settings.export-not-backup': 'Das Export-Archiv ist keine Datenbanksicherung. Es ist portabel, in sich geschlossen und lässt sich in jedes LogB importieren — aber es entsteht nur, wenn du es anstößt.',
   'settings.import': 'Zip importieren',
   'settings.import-done': '{objects} Objekte, {activities} Aktivitäten, {attachments} Dateien, {reminders} Erinnerungen, {types_created} Typen ({types_merged} mit vorhandenen zusammengeführt) importiert',
+  'settings.sync-recovery': 'Offline-Speicherungen',
+  'settings.sync-pending': '{n} Speicherung(en) warten auf eine Verbindung.',
+  'settings.sync-failed': '{n} Speicherung(en) benötigen deine Aufmerksamkeit.',
+  'settings.sync-clear': 'Keine fehlgeschlagenen Speicherungen.',
+  'settings.sync-retry': 'Fehlgeschlagene erneut versuchen',
+  'settings.sync-discard': 'Verwerfen',
   'settings.version': 'Version',
   'settings.about': 'Über LogB',
   'settings.built': 'Erstellt',
