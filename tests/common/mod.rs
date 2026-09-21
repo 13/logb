@@ -644,6 +644,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         max_upload_mb: 2,
         max_import_mb: 4,
         notify_url: None,
+        telegram_bot_token: None,
         notify_hour: 8,
         notify_format: "json".into(),
         public_url: None,

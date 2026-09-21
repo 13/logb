@@ -110,6 +110,14 @@ async fn a_webhook_must_be_an_http_address_and_blank_means_none() {
     assert!(out["vapid_public_key"].as_str().unwrap().len() > 80, "an uncompressed P-256 point, base64url");
 }
 
+#[tokio::test]
+async fn telegram_link_requires_instance_configuration() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let response = app.client.post(app.url("/me/notifications/telegram/link")).send().await.unwrap();
+    assert_eq!(response.status(), 503);
+}
+
 /// A browser's side of a subscription, with keys this test holds so it can read what arrives.
 struct Browser {
     secret: SecretKey,

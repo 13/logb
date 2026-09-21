@@ -1958,6 +1958,23 @@
         }
       }
     },
+    "/me/notifications/telegram/link": {
+      "post": {
+        "summary": "Create a short-lived Telegram linking URL for the caller.",
+        "responses": {
+          "200": {
+            "description": "Link URL",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TelegramLink" } } }
+          }
+        }
+      }
+    },
+    "/me/notifications/telegram/unlink": {
+      "post": {
+        "summary": "Disconnect the caller's Telegram chat.",
+        "responses": { "204": { "description": "Disconnected" } }
+      }
+    },
     "/push/subscriptions": {
       "post": {
         "summary": "Subscribe a browser to push notifications. An endpoint already known moves to the caller.",
@@ -5426,7 +5443,11 @@
           "hour": {
             "type": "integer",
             "description": "The hour, in the instance timezone, the digest goes out"
-          }
+          },
+          "telegram_configured": { "type": "boolean" },
+          "telegram_connected": { "type": "boolean" },
+          "telegram_display_name": { "type": ["string", "null"] },
+          "telegram_last_error": { "type": ["string", "null"] }
         }
       },
       "NotificationSettingsInput": {
@@ -5464,7 +5485,19 @@
           },
           "push_failed": {
             "type": "integer"
+          },
+          "telegram": {
+            "type": ["string", "null"],
+            "description": "`sent`, why it failed, or null without a Telegram connection"
           }
+        }
+      },
+      "TelegramLink": {
+        "type": "object",
+        "required": ["url", "expires_minutes"],
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "expires_minutes": { "type": "integer" }
         }
       },
       "PushSubscription": {

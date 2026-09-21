@@ -336,6 +336,7 @@ until it is started by hand.
 | `LOGB_NOTIFY_URL`    | unset     | POST a daily digest of due reminders here, for every user without a webhook of their own (Settings > Notifications)          |
 | `LOGB_NOTIFY_HOUR`   | `8`       | hour (in the instance timezone) the digest goes out, to webhooks and browsers alike                                          |
 | `LOGB_NOTIFY_FORMAT` | `json`    | `json` posts a structured body; `text` posts the plain message with a `Title` header, which is what ntfy renders             |
+| `LOGB_TELEGRAM_BOT_TOKEN` | unset | Telegram Bot API token; users connect their own private chat under Settings → Notifications |
 | `LOGB_PUBLIC_URL`    | unset     | the address LogB is opened at (`https://logb.example.com`); puts links into the digest, so a notification opens the right form. Also the recommended setting behind a reverse proxy for QR sign-in (Account > Connect a phone): unset, the address in the pairing link and QR code is rebuilt from the request's `Host` (or `X-Forwarded-Host`, only when `LOGB_TRUST_PROXY` is set), which is right for a direct connection but easy to get wrong through a proxy that rewrites paths or terminates TLS somewhere the browser cannot see; setting `LOGB_PUBLIC_URL` makes it exact |
 | `LOGB_TIMEZONE`      | unset     | IANA name (`Europe/Berlin`); which day a reminder's due date is read against. Unset, first-run setup stores the browser's and an admin can change it in Settings; set, it wins and Settings shows it as fixed |
 | `LOGB_SECURE_COOKIE` | `auto`    | `auto` = Secure behind `X-Forwarded-Proto: https`; `true`; `false`                                                            |
@@ -466,6 +467,13 @@ Each person can also set it up for themselves under Settings > Notifications:
   the home screen. LogB never asks for notification permission until someone
   presses that button.
 - **A test notification**, sent at once to everywhere theirs go.
+
+**Telegram** is another per-person destination. Create a bot with [BotFather](https://t.me/BotFather),
+set `LOGB_TELEGRAM_BOT_TOKEN` on the LogB server, restart it, then open Settings → Notifications
+and choose **Connect Telegram**. LogB gives you a short-lived link; open it in Telegram and press
+Start. The bot token stays on the server, and each person's chat is stored separately. Disconnecting
+removes the chat association. Telegram receives the same daily digest as the webhook and browser
+notifications, in the user's language.
 
 Reading reminders ("log the odometer every month") come after the services,
 under `Readings to log:`. They clear themselves as soon as any entry with a

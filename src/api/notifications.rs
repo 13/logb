@@ -17,6 +17,8 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/me/notifications", get(read).put(write))
         .route("/me/notifications/test", post(test))
+        .route("/me/notifications/telegram/link", post(telegram_link))
+        .route("/me/notifications/telegram/unlink", post(telegram_unlink))
         .route("/push/subscriptions", post(subscribe).delete(unsubscribe))
 }
 
@@ -34,6 +36,10 @@ pub struct NotificationsOut {
     pub instance_webhook: bool,
     /// The hour, in the instance's timezone, the daily digest goes out.
     pub hour: u32,
+    pub telegram_configured: bool,
+    pub telegram_connected: bool,
+    pub telegram_display_name: Option<String>,
+    pub telegram_last_error: Option<String>,
 }
 
 async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
@@ -48,6 +54,7 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
             .fetch_one(&state.db)
             .await?;
     let kp = push::key_pair(state).await?;
+    let telegram = crate::telegram::status(state, user_id).await?;
     Ok(NotificationsOut {
         url,
         format,
@@ -55,6 +62,10 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
         vapid_public_key: push::public_key(&kp),
         instance_webhook: state.config.notify_url.is_some(),
         hour: state.config.notify_hour,
+        telegram_configured: crate::telegram::configured(state),
+        telegram_connected: telegram.is_some(),
+        telegram_display_name: telegram.as_ref().map(|v| v.0.clone()),
+        telegram_last_error: telegram.and_then(|v| v.1),
     })
 }
 
@@ -122,6 +133,7 @@ pub struct TestOut {
     pub webhook: Option<String>,
     pub push_sent: usize,
     pub push_failed: usize,
+    pub telegram: Option<String>,
 }
 
 /// Sends a test notification, now, to everywhere this user's own notifications go -- so they
@@ -148,11 +160,31 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
         "/settings/notifications",
     )
     .await?;
+    let telegram = if crate::telegram::status(&state, user.id).await?.is_some() {
+        Some(match crate::telegram::send_user(&state, user.id, &digest).await {
+            Ok(()) => "sent".to_string(),
+            Err(e) => e.to_string(),
+        })
+    } else { None };
     Ok(Json(TestOut {
         webhook,
         push_sent,
         push_failed,
+        telegram,
     }))
+}
+
+#[derive(Serialize)]
+struct TelegramLinkOut { url: String, expires_minutes: i64 }
+
+async fn telegram_link(user: AuthUser, State(state): State<App>) -> Result<Json<TelegramLinkOut>, AppError> {
+    let url = crate::telegram::create_link(&state, user.id).await?;
+    Ok(Json(TelegramLinkOut { url, expires_minutes: 10 }))
+}
+
+async fn telegram_unlink(user: AuthUser, State(state): State<App>) -> Result<StatusCode, AppError> {
+    crate::telegram::unlink(&state, user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

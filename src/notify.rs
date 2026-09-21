@@ -362,9 +362,11 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
         .await?;
     let mut personal = Vec::new();
     let mut pushes = Vec::new();
+    let mut telegrams = Vec::new();
     for r in &recipients {
         let wants_push = pushing.contains(&r.id);
-        if r.notify_url.is_none() && !wants_push {
+        let has_telegram = crate::telegram::status(state, r.id).await?.is_some();
+        if r.notify_url.is_none() && !wants_push && !has_telegram {
             continue;
         }
         let Some(d) = digest(items_for(state, r).await?, &r.lang) else {
@@ -374,8 +376,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
             personal.push((url.clone(), r.notify_format.clone(), d.clone()));
         }
         if wants_push {
-            pushes.push((r.id, d));
+            pushes.push((r.id, d.clone()));
         }
+        if has_telegram { telegrams.push((r.id, d)); }
     }
     mark_sent(state, &today).await?;
 
@@ -394,6 +397,9 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
         if let Err(e) = push_digest(state, *user_id, d).await {
             failures.push(e.to_string());
         }
+    }
+    for (user_id, d) in &telegrams {
+        if let Err(e) = crate::telegram::send_user(state, *user_id, d).await { failures.push(e.to_string()); }
     }
     if !failures.is_empty() {
         return Err(AppError::Internal(failures.join("; ")));

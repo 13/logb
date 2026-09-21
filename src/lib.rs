@@ -17,6 +17,7 @@ pub mod spa;
 pub mod state;
 pub mod sync;
 pub mod tasks;
+pub mod telegram;
 
 use axum::http::{header, HeaderName, HeaderValue, Request};
 use axum::middleware::Next;

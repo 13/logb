@@ -13,6 +13,7 @@
   let busy = $state(false);
   let message = $state('');
   let error = $state('');
+  let telegramLink = $state<string | null>(null);
 
   async function load() {
     data = await api<NotificationSettings>('GET', '/me/notifications');
@@ -52,8 +53,21 @@
       const parts: string[] = [];
       if (r.push_sent + r.push_failed > 0) parts.push($t('notify.test-push', { n: r.push_sent }));
       if (r.webhook !== null) parts.push($t('notify.test-webhook', { result: r.webhook }));
+      if (r.telegram !== null) parts.push($t('notify.test-telegram', { result: r.telegram }));
       message = parts.length > 0 ? parts.join(' ') : $t('notify.test-nowhere');
     } catch (e) { error = (e as Error).message; } finally { busy = false; }
+  }
+
+  async function linkTelegram() {
+    busy = true; error = ''; message = '';
+    try { telegramLink = (await api<{ url: string }>('POST', '/me/notifications/telegram/link')).url; }
+    catch (e) { error = (e as Error).message; } finally { busy = false; }
+  }
+
+  async function unlinkTelegram() {
+    busy = true; error = ''; message = '';
+    try { await api('POST', '/me/notifications/telegram/unlink'); telegramLink = null; await load(); }
+    catch (e) { error = (e as Error).message; } finally { busy = false; }
   }
 </script>
 
@@ -76,6 +90,21 @@
   {/if}
   {#if data && data.push_devices > 0}
     <p class="hint">{data.push_devices === 1 ? $t('notify.push-devices-one') : $t('notify.push-devices', { n: data.push_devices })}</p>
+  {/if}
+
+  <h2>{$t('notify.telegram-title')}</h2>
+  {#if !data?.telegram_configured}
+    <p class="muted">{$t('notify.telegram-unconfigured')}</p>
+  {:else if data.telegram_connected}
+    <p>{$t('notify.telegram-connected', { name: data.telegram_display_name ?? 'Telegram' })}</p>
+    {#if data.telegram_last_error}<p class="error">{data.telegram_last_error}</p>{/if}
+    <button class="ghost" onclick={unlinkTelegram} disabled={busy}>{$t('notify.telegram-disconnect')}</button>
+  {:else}
+    <p class="muted">{$t('notify.telegram-hint')}</p>
+    <button class="primary" onclick={linkTelegram} disabled={busy}>{$t('notify.telegram-connect')}</button>
+    {#if telegramLink}
+      <p class="hint"><a href={telegramLink} target="_blank" rel="noreferrer">{$t('notify.telegram-open')}</a></p>
+    {/if}
   {/if}
 
   <h2>{$t('notify.webhook-title')}</h2>

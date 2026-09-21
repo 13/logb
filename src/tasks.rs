@@ -29,7 +29,7 @@ pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> 
 }
 
 pub fn spawn(state: App) {
-    if state.config.notify_url.is_some() {
+    if state.config.notify_url.is_some() || crate::telegram::configured(&state) {
         tracing::info!(hour = state.config.notify_hour, timezone = %crate::db::timezone(), "reminder digest enabled");
     }
     // `backup::tick` is `VACUUM INTO`, a SQLite mechanism -- calling it every tick against
@@ -67,6 +67,9 @@ pub fn spawn(state: App) {
                 }
                 Ok(None) => {}
                 Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
+            }
+            if let Err(e) = crate::telegram::poll(&state).await {
+                tracing::warn!(error = %e, "telegram polling failed");
             }
             if backup_enabled {
                 match crate::backup::tick(&state, db::local_hour()).await {

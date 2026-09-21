@@ -32,6 +32,9 @@ pub struct Config {
     /// ntfy-style services render.
     #[arg(long, env = "LOGB_NOTIFY_FORMAT", default_value = "json")]
     pub notify_format: String,
+    /// Telegram Bot API token. Users link their own chat through Settings.
+    #[arg(long, env = "LOGB_TELEGRAM_BOT_TOKEN")]
+    pub telegram_bot_token: Option<String>,
     /// The address people open LogB at, e.g. `https://logb.example.com`. Only used to put
     /// links into the reminder digest; unset sends the digest without them.
     #[arg(long, env = "LOGB_PUBLIC_URL")]
@@ -178,6 +181,7 @@ mod tests {
             max_upload_mb: 2,
             max_import_mb: 4,
             notify_url: None,
+            telegram_bot_token: None,
             notify_hour: 8,
             notify_format: "json".into(),
             public_url: None,
