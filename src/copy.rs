@@ -16,9 +16,10 @@ use sqlx::{Any, AnyPool, AssertSqlSafe, Column, Row, ValueRef};
 /// silently: a table missing from it is copied nowhere *and* invisible to the verification
 /// below, which reads the same list. `tests/schema_parity.rs` asserts it names exactly the
 /// tables the schema has.
-pub const TABLES: [&str; 16] = [
+pub const TABLES: [&str; 17] = [
     "users",
     "object_types",
+    "telegram_credentials",
     "telegram_connections",
     "telegram_link_codes",
     "push_subscriptions",

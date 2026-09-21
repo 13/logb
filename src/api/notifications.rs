@@ -9,7 +9,7 @@ use crate::push::{self, Subscription};
 use crate::state::App;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,7 @@ pub fn router() -> Router<App> {
     Router::new()
         .route("/me/notifications", get(read).put(write))
         .route("/me/notifications/test", post(test))
+        .route("/me/notifications/telegram", put(telegram_save).delete(telegram_remove))
         .route("/me/notifications/telegram/link", post(telegram_link))
         .route("/me/notifications/telegram/unlink", post(telegram_unlink))
         .route("/push/subscriptions", post(subscribe).delete(unsubscribe))
@@ -40,6 +41,8 @@ pub struct NotificationsOut {
     pub telegram_connected: bool,
     pub telegram_display_name: Option<String>,
     pub telegram_last_error: Option<String>,
+    pub telegram_bot_username: Option<String>,
+    pub telegram_legacy: bool,
 }
 
 async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
@@ -62,10 +65,12 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
         vapid_public_key: push::public_key(&kp),
         instance_webhook: state.config.notify_url.is_some(),
         hour: state.config.notify_hour,
-        telegram_configured: crate::telegram::configured(state),
-        telegram_connected: telegram.as_ref().is_some_and(|v| v.connected),
-        telegram_display_name: telegram.as_ref().map(|v| v.display_name.clone()),
-        telegram_last_error: telegram.and_then(|v| v.last_error),
+        telegram_configured: telegram.configured,
+        telegram_connected: telegram.connected,
+        telegram_display_name: telegram.display_name,
+        telegram_last_error: telegram.last_error,
+        telegram_bot_username: telegram.bot_username,
+        telegram_legacy: telegram.legacy,
     })
 }
 
@@ -176,6 +181,19 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
 
 #[derive(Serialize)]
 struct TelegramLinkOut { url: String, qr_svg: String, expires_at: String }
+
+#[derive(Deserialize)]
+struct TelegramTokenIn { token: String }
+
+async fn telegram_save(user: AuthUser, State(state): State<App>, Json(body): Json<TelegramTokenIn>) -> Result<Json<NotificationsOut>, AppError> {
+    crate::telegram::save_token(&state, user.id, &body.token).await?;
+    Ok(Json(out(&state, user.id).await?))
+}
+
+async fn telegram_remove(user: AuthUser, State(state): State<App>) -> Result<StatusCode, AppError> {
+    crate::telegram::remove_token(&state, user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 async fn telegram_link(user: AuthUser, State(state): State<App>) -> Result<Json<TelegramLinkOut>, AppError> {
     let link = crate::telegram::create_link(&state, user.id).await?;

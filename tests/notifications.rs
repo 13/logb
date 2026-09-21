@@ -65,12 +65,12 @@ async fn telegram_stub() -> (String, TelegramStub) {
     let updates = stub.updates.clone();
     let sent = stub.sent.clone();
     let app = Router::new()
-        .route("/botsecret/getMe", post(|| async { axum::Json(json!({"ok":true,"result":{"username":"logb_test_bot"}})) }))
-        .route("/botsecret/getUpdates", post(move || {
+        .route("/bot123:secret/getMe", post(|| async { axum::Json(json!({"ok":true,"result":{"username":"logb_test_bot"}})) }))
+        .route("/bot123:secret/getUpdates", post(move || {
             let updates = updates.clone();
             async move { axum::Json(json!({"ok":true,"result":updates.lock().unwrap().clone()})) }
         }))
-        .route("/botsecret/sendMessage", post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+        .route("/bot123:secret/sendMessage", post(move |axum::Json(body): axum::Json<serde_json::Value>| {
             let sent = sent.clone();
             async move { sent.lock().unwrap().push(body); axum::Json(json!({"ok":true,"result":{}})) }
         }));
@@ -145,13 +145,38 @@ async fn telegram_link_requires_instance_configuration() {
 }
 
 #[tokio::test]
+async fn a_bot_token_belongs_to_only_one_user() {
+    let (api_url, _telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    save_telegram(&app, &app.client).await;
+    let response = anna.put(app.url("/me/notifications/telegram"))
+        .json(&json!({"token":"123:secret"})).send().await.unwrap();
+    assert_eq!(response.status(), 409);
+}
+
+async fn save_telegram(app: &common::TestApp, client: &reqwest::Client) -> serde_json::Value {
+    let response = client.put(app.url("/me/notifications/telegram"))
+        .json(&json!({"token":"123:secret"})).send().await.unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap()
+}
+
+#[tokio::test]
 async fn telegram_links_a_private_chat_and_sends_to_its_chat_id() {
     let (api_url, telegram) = telegram_stub().await;
-    let app = common::spawn_with(|c| {
-        c.telegram_bot_token = Some("secret".into());
-        c.telegram_api_url = api_url;
-    }).await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
     app.setup("ben", "correct horse").await;
+    let configured = save_telegram(&app, &app.client).await;
+    assert_eq!(configured["telegram_bot_username"], "logb_test_bot");
+    assert!(configured.get("token").is_none(), "the API never returns the secret");
+    let stored: String = sqlx::query_scalar("SELECT token_cipher FROM telegram_credentials").fetch_one(&app.state.db).await.unwrap();
+    assert!(!stored.contains("secret"), "the database only contains ciphertext");
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(app.state.config.data_dir.join("telegram.key")).unwrap().permissions().mode() & 0o777, 0o600);
+    }
 
     let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
         .send().await.unwrap().json().await.unwrap();
@@ -176,11 +201,9 @@ async fn telegram_links_a_private_chat_and_sends_to_its_chat_id() {
 #[tokio::test]
 async fn telegram_rejects_group_chats_without_consuming_the_link() {
     let (api_url, telegram) = telegram_stub().await;
-    let app = common::spawn_with(|c| {
-        c.telegram_bot_token = Some("secret".into());
-        c.telegram_api_url = api_url;
-    }).await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
     app.setup("ben", "correct horse").await;
+    save_telegram(&app, &app.client).await;
     let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
         .send().await.unwrap().json().await.unwrap();
     let code = link["url"].as_str().unwrap().split("start=").nth(1).unwrap().to_string();
@@ -203,7 +226,7 @@ async fn telegram_rejects_group_chats_without_consuming_the_link() {
 async fn telegram_chat_cannot_be_stolen_by_another_account() {
     let (api_url, telegram) = telegram_stub().await;
     let app = common::spawn_with(|c| {
-        c.telegram_bot_token = Some("secret".into());
+        c.telegram_bot_token = Some("123:secret".into());
         c.telegram_api_url = api_url;
     }).await;
     app.setup("ben", "correct horse").await;

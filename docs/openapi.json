@@ -1969,6 +1969,17 @@
         }
       }
     },
+    "/me/notifications/telegram": {
+      "put": {
+        "summary": "Validate and securely save the caller's Telegram bot token. Replacing it disconnects the old chat.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TelegramTokenInput" } } } },
+        "responses": { "200": { "description": "Updated settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } } }
+      },
+      "delete": {
+        "summary": "Delete the caller's saved Telegram bot token and chat association.",
+        "responses": { "204": { "description": "Removed" } }
+      }
+    },
     "/me/notifications/telegram/unlink": {
       "post": {
         "summary": "Disconnect the caller's Telegram chat.",
@@ -5447,7 +5458,9 @@
           "telegram_configured": { "type": "boolean" },
           "telegram_connected": { "type": "boolean" },
           "telegram_display_name": { "type": ["string", "null"] },
-          "telegram_last_error": { "type": ["string", "null"] }
+          "telegram_last_error": { "type": ["string", "null"] },
+          "telegram_bot_username": { "type": ["string", "null"] },
+          "telegram_legacy": { "type": "boolean", "description": "The connection still uses the deprecated instance token" }
         }
       },
       "NotificationSettingsInput": {
@@ -5500,6 +5513,11 @@
           "qr_svg": { "type": "string" },
           "expires_at": { "type": "string", "format": "date-time" }
         }
+      },
+      "TelegramTokenInput": {
+        "type": "object",
+        "required": ["token"],
+        "properties": { "token": { "type": "string", "writeOnly": true } }
       },
       "PushSubscription": {
         "type": "object",

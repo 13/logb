@@ -24,6 +24,7 @@ export interface NotificationSettings {
   url: string | null; format: 'text' | 'json'; push_devices: number; vapid_public_key: string;
   instance_webhook: boolean; hour: number; telegram_configured: boolean; telegram_connected: boolean;
   telegram_display_name: string | null; telegram_last_error: string | null;
+  telegram_bot_username: string | null; telegram_legacy: boolean;
 }
 export interface NotificationTest { webhook: string | null; push_sent: number; push_failed: number; telegram: string | null }
 export interface TelegramLink { url: string; qr_svg: string; expires_at: string }

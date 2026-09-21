@@ -14,6 +14,7 @@
   let message = $state('');
   let error = $state('');
   let telegramLink = $state<TelegramLink | null>(null);
+  let telegramToken = $state('');
   let now = $state(Date.now());
   const telegramSeconds = $derived(telegramLink ? Math.max(0, Math.ceil((Date.parse(telegramLink.expires_at) - now) / 1000)) : 0);
 
@@ -78,6 +79,20 @@
     catch (e) { error = (e as Error).message; } finally { busy = false; }
   }
 
+  async function saveTelegram() {
+    busy = true; error = ''; message = '';
+    try {
+      data = await api<NotificationSettings>('PUT', '/me/notifications/telegram', { token: telegramToken.trim() });
+      telegramToken = ''; telegramLink = null; message = $t('object.saved');
+    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+  }
+
+  async function removeTelegram() {
+    busy = true; error = ''; message = '';
+    try { await api('DELETE', '/me/notifications/telegram'); telegramToken = ''; telegramLink = null; await load(); }
+    catch (e) { error = (e as Error).message; } finally { busy = false; }
+  }
+
   async function unlinkTelegram() {
     busy = true; error = ''; message = '';
     try { await api('POST', '/me/notifications/telegram/unlink'); telegramLink = null; await load(); }
@@ -108,12 +123,20 @@
 
   <h2>{$t('notify.telegram-title')}</h2>
   {#if !data?.telegram_configured}
-    <p class="muted">{$t('notify.telegram-unconfigured')}</p>
-  {:else if data.telegram_connected}
+    <p class="muted">{$t('notify.telegram-setup')}</p>
+    <div class="field">
+      <label for="telegram-token">{$t('notify.telegram-token')}</label>
+      <input id="telegram-token" type="password" autocomplete="off" bind:value={telegramToken} />
+    </div>
+    <button class="primary" onclick={saveTelegram} disabled={busy || !telegramToken.trim()}>{$t('notify.telegram-save')}</button>
+  {:else}
+    <p class="muted">{$t('notify.telegram-bot', { name: data.telegram_bot_username ? `@${data.telegram_bot_username}` : 'Telegram' })}</p>
+    {#if data.telegram_legacy}<p class="warn">{$t('notify.telegram-legacy')}</p>{/if}
+    {#if data.telegram_connected}
     <p>{$t('notify.telegram-connected', { name: data.telegram_display_name ?? 'Telegram' })}</p>
     {#if data.telegram_last_error}<p class="error">{data.telegram_last_error}</p>{/if}
     <button class="ghost" onclick={unlinkTelegram} disabled={busy}>{$t('notify.telegram-disconnect')}</button>
-  {:else}
+    {:else}
     <p class="muted">{$t('notify.telegram-hint')}</p>
     {#if data.telegram_last_error}<p class="error">{data.telegram_last_error}</p>{/if}
     <button class="primary" onclick={linkTelegram} disabled={busy}>{$t('notify.telegram-connect')}</button>
@@ -124,6 +147,15 @@
         <span class="hint">{$t('notify.telegram-expires', { n: telegramSeconds })}</span>
       </div>
     {/if}
+    {/if}
+    {#if !data.telegram_legacy}
+      <details>
+        <summary>{$t('notify.telegram-replace')}</summary>
+        <div class="field"><label for="telegram-replacement">{$t('notify.telegram-token')}</label><input id="telegram-replacement" type="password" autocomplete="off" bind:value={telegramToken} /></div>
+        <button onclick={saveTelegram} disabled={busy || !telegramToken.trim()}>{$t('notify.telegram-save')}</button>
+      </details>
+    {/if}
+    <button class="danger" onclick={removeTelegram} disabled={busy}>{$t('notify.telegram-remove')}</button>
   {/if}
 
   <h2>{$t('notify.webhook-title')}</h2>
