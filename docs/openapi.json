@@ -5494,10 +5494,11 @@
       },
       "TelegramLink": {
         "type": "object",
-        "required": ["url", "expires_minutes"],
+        "required": ["url", "qr_svg", "expires_at"],
         "properties": {
           "url": { "type": "string", "format": "uri" },
-          "expires_minutes": { "type": "integer" }
+          "qr_svg": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" }
         }
       },
       "PushSubscription": {

@@ -35,6 +35,9 @@ pub struct Config {
     /// Telegram Bot API token. Users link their own chat through Settings.
     #[arg(long, env = "LOGB_TELEGRAM_BOT_TOKEN")]
     pub telegram_bot_token: Option<String>,
+    /// Telegram Bot API base URL. Primarily useful for a self-hosted Bot API server and tests.
+    #[arg(long, env = "LOGB_TELEGRAM_API_URL", default_value = "https://api.telegram.org")]
+    pub telegram_api_url: String,
     /// The address people open LogB at, e.g. `https://logb.example.com`. Only used to put
     /// links into the reminder digest; unset sends the digest without them.
     #[arg(long, env = "LOGB_PUBLIC_URL")]
@@ -182,6 +185,7 @@ mod tests {
             max_import_mb: 4,
             notify_url: None,
             telegram_bot_token: None,
+            telegram_api_url: "https://api.telegram.org".into(),
             notify_hour: 8,
             notify_format: "json".into(),
             public_url: None,

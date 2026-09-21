@@ -645,6 +645,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         max_import_mb: 4,
         notify_url: None,
         telegram_bot_token: None,
+        telegram_api_url: "https://api.telegram.org".into(),
         notify_hour: 8,
         notify_format: "json".into(),
         public_url: None,

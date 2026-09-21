@@ -365,7 +365,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
     let mut telegrams = Vec::new();
     for r in &recipients {
         let wants_push = pushing.contains(&r.id);
-        let has_telegram = crate::telegram::status(state, r.id).await?.is_some();
+        let has_telegram = crate::telegram::connected(state, r.id).await?;
         if r.notify_url.is_none() && !wants_push && !has_telegram {
             continue;
         }

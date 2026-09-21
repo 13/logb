@@ -125,6 +125,7 @@ export default {
   'notify.telegram-connect': 'Telegram verbinden',
   'notify.telegram-disconnect': 'Telegram trennen',
   'notify.telegram-open': 'Telegram öffnen und Start drücken',
+  'notify.telegram-expires': 'Dieser Link läuft in {n} Sekunden ab.',
   'notify.test-telegram': 'Telegram: {result}.',
   'dash.sort-cost': 'Höchste Kosten',
   'dash.sort-counter': 'Höchster Zählerstand',

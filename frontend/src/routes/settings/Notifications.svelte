@@ -4,7 +4,7 @@
   import { api } from '../../lib/api';
   import { t } from '../../i18n';
   import { disablePush, enablePush, pushState, type PushState } from '../../lib/push';
-  import type { NotificationSettings, NotificationTest } from '../../lib/types';
+  import type { NotificationSettings, NotificationTest, TelegramLink } from '../../lib/types';
 
   let data = $state<NotificationSettings | null>(null);
   let push = $state<PushState | null>(null);
@@ -13,19 +13,33 @@
   let busy = $state(false);
   let message = $state('');
   let error = $state('');
-  let telegramLink = $state<string | null>(null);
+  let telegramLink = $state<TelegramLink | null>(null);
+  let now = $state(Date.now());
+  const telegramSeconds = $derived(telegramLink ? Math.max(0, Math.ceil((Date.parse(telegramLink.expires_at) - now) / 1000)) : 0);
 
   async function load() {
     data = await api<NotificationSettings>('GET', '/me/notifications');
   }
 
-  onMount(async () => {
-    try {
-      await load();
-      url = data?.url ?? '';
-      format = data?.format ?? 'text';
-    } catch (e) { error = (e as Error).message; }
-    push = await pushState();
+  onMount(() => {
+    void (async () => {
+      try {
+        await load();
+        url = data?.url ?? '';
+        format = data?.format ?? 'text';
+      } catch (e) { error = (e as Error).message; }
+      push = await pushState();
+    })();
+    const timer = setInterval(async () => {
+      now = Date.now();
+      if (!telegramLink) return;
+      if (telegramSeconds === 0) { telegramLink = null; return; }
+      try {
+        await load();
+        if (data?.telegram_connected) telegramLink = null;
+      } catch { /* the page already reports explicit actions; a background refresh retries */ }
+    }, 2000);
+    return () => clearInterval(timer);
   });
 
   async function togglePush() {
@@ -60,7 +74,7 @@
 
   async function linkTelegram() {
     busy = true; error = ''; message = '';
-    try { telegramLink = (await api<{ url: string }>('POST', '/me/notifications/telegram/link')).url; }
+    try { telegramLink = await api<TelegramLink>('POST', '/me/notifications/telegram/link'); now = Date.now(); }
     catch (e) { error = (e as Error).message; } finally { busy = false; }
   }
 
@@ -101,9 +115,14 @@
     <button class="ghost" onclick={unlinkTelegram} disabled={busy}>{$t('notify.telegram-disconnect')}</button>
   {:else}
     <p class="muted">{$t('notify.telegram-hint')}</p>
+    {#if data.telegram_last_error}<p class="error">{data.telegram_last_error}</p>{/if}
     <button class="primary" onclick={linkTelegram} disabled={busy}>{$t('notify.telegram-connect')}</button>
     {#if telegramLink}
-      <p class="hint"><a href={telegramLink} target="_blank" rel="noreferrer">{$t('notify.telegram-open')}</a></p>
+      <div class="telegram-link">
+        <div class="qr" role="img" aria-label={$t('notify.telegram-title')}>{@html telegramLink.qr_svg}</div>
+        <a href={telegramLink.url} target="_blank" rel="noreferrer">{$t('notify.telegram-open')}</a>
+        <span class="hint">{$t('notify.telegram-expires', { n: telegramSeconds })}</span>
+      </div>
     {/if}
   {/if}
 
@@ -129,4 +148,7 @@
 <style>
   .actions { margin-top: var(--space-2); }
   .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-2); }
+  .telegram-link { display: grid; justify-items: start; gap: var(--space-2); margin-top: var(--space-3); }
+  .qr { width: min(240px, 100%); }
+  .qr :global(svg) { width: 100%; height: auto; display: block; }
 </style>

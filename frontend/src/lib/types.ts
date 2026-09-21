@@ -26,6 +26,7 @@ export interface NotificationSettings {
   telegram_display_name: string | null; telegram_last_error: string | null;
 }
 export interface NotificationTest { webhook: string | null; push_sent: number; push_failed: number; telegram: string | null }
+export interface TelegramLink { url: string; qr_svg: string; expires_at: string }
 
 export interface ObjectStats {
   latest_weight_grams?: number | null; latest_weight_date?: string | null;

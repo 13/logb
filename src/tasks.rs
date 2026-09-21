@@ -43,6 +43,7 @@ pub fn spawn(state: App) {
              operator's own responsibility"
         );
     }
+    crate::telegram::spawn(state.clone());
     tokio::spawn(async move {
         let mut since_prune = PRUNE_EVERY;
         loop {
@@ -67,9 +68,6 @@ pub fn spawn(state: App) {
                 }
                 Ok(None) => {}
                 Err(e) => tracing::warn!(error = %e, "reminder digest failed"),
-            }
-            if let Err(e) = crate::telegram::poll(&state).await {
-                tracing::warn!(error = %e, "telegram polling failed");
             }
             if backup_enabled {
                 match crate::backup::tick(&state, db::local_hour()).await {

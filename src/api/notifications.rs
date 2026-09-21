@@ -63,9 +63,9 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
         instance_webhook: state.config.notify_url.is_some(),
         hour: state.config.notify_hour,
         telegram_configured: crate::telegram::configured(state),
-        telegram_connected: telegram.is_some(),
-        telegram_display_name: telegram.as_ref().map(|v| v.0.clone()),
-        telegram_last_error: telegram.and_then(|v| v.1),
+        telegram_connected: telegram.as_ref().is_some_and(|v| v.connected),
+        telegram_display_name: telegram.as_ref().map(|v| v.display_name.clone()),
+        telegram_last_error: telegram.and_then(|v| v.last_error),
     })
 }
 
@@ -160,7 +160,7 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
         "/settings/notifications",
     )
     .await?;
-    let telegram = if crate::telegram::status(&state, user.id).await?.is_some() {
+    let telegram = if crate::telegram::connected(&state, user.id).await? {
         Some(match crate::telegram::send_user(&state, user.id, &digest).await {
             Ok(()) => "sent".to_string(),
             Err(e) => e.to_string(),
@@ -175,11 +175,11 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
 }
 
 #[derive(Serialize)]
-struct TelegramLinkOut { url: String, expires_minutes: i64 }
+struct TelegramLinkOut { url: String, qr_svg: String, expires_at: String }
 
 async fn telegram_link(user: AuthUser, State(state): State<App>) -> Result<Json<TelegramLinkOut>, AppError> {
-    let url = crate::telegram::create_link(&state, user.id).await?;
-    Ok(Json(TelegramLinkOut { url, expires_minutes: 10 }))
+    let link = crate::telegram::create_link(&state, user.id).await?;
+    Ok(Json(TelegramLinkOut { url: link.url, qr_svg: link.qr_svg, expires_at: link.expires_at }))
 }
 
 async fn telegram_unlink(user: AuthUser, State(state): State<App>) -> Result<StatusCode, AppError> {

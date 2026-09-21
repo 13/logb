@@ -54,6 +54,32 @@ async fn receiver() -> (String, Receiver) {
     (format!("http://{addr}/in"), r)
 }
 
+#[derive(Clone, Default)]
+struct TelegramStub {
+    updates: Arc<Mutex<Vec<serde_json::Value>>>,
+    sent: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+async fn telegram_stub() -> (String, TelegramStub) {
+    let stub = TelegramStub::default();
+    let updates = stub.updates.clone();
+    let sent = stub.sent.clone();
+    let app = Router::new()
+        .route("/botsecret/getMe", post(|| async { axum::Json(json!({"ok":true,"result":{"username":"logb_test_bot"}})) }))
+        .route("/botsecret/getUpdates", post(move || {
+            let updates = updates.clone();
+            async move { axum::Json(json!({"ok":true,"result":updates.lock().unwrap().clone()})) }
+        }))
+        .route("/botsecret/sendMessage", post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let sent = sent.clone();
+            async move { sent.lock().unwrap().push(body); axum::Json(json!({"ok":true,"result":{}})) }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    (format!("http://{addr}"), stub)
+}
+
 async fn overdue(app: &common::TestApp, client: &reqwest::Client, object: &str, title: &str) {
     let o = app.create_object(client, object, None).await;
     let res = client.post(app.url(&format!("/objects/{}/reminders", o["id"])))
@@ -116,6 +142,92 @@ async fn telegram_link_requires_instance_configuration() {
     app.setup("ben", "correct horse").await;
     let response = app.client.post(app.url("/me/notifications/telegram/link")).send().await.unwrap();
     assert_eq!(response.status(), 503);
+}
+
+#[tokio::test]
+async fn telegram_links_a_private_chat_and_sends_to_its_chat_id() {
+    let (api_url, telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| {
+        c.telegram_bot_token = Some("secret".into());
+        c.telegram_api_url = api_url;
+    }).await;
+    app.setup("ben", "correct horse").await;
+
+    let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(link["qr_svg"].as_str().unwrap().contains("<svg"));
+    let deep_link = link["url"].as_str().unwrap();
+    let code = deep_link.split("start=").nth(1).unwrap();
+    telegram.updates.lock().unwrap().push(json!({
+        "update_id": 41,
+        "message": {"text": format!("/start {code}"), "chat":{"id":4242,"type":"private"}, "from":{"first_name":"Ada"}}
+    }));
+    logb::telegram::poll_once(&app.state).await.unwrap();
+
+    let settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["telegram_connected"], true);
+    assert_eq!(settings["telegram_display_name"], "Ada");
+    let response: serde_json::Value = app.client.post(app.url("/me/notifications/test")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(response["telegram"], "sent");
+    let sent = telegram.sent.lock().unwrap();
+    assert_eq!(sent.last().unwrap()["chat_id"], "4242", "delivery uses the chat id, not the display name");
+}
+
+#[tokio::test]
+async fn telegram_rejects_group_chats_without_consuming_the_link() {
+    let (api_url, telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| {
+        c.telegram_bot_token = Some("secret".into());
+        c.telegram_api_url = api_url;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+    let code = link["url"].as_str().unwrap().split("start=").nth(1).unwrap().to_string();
+    telegram.updates.lock().unwrap().push(json!({
+        "update_id": 1, "message":{"text":format!("/start {code}"),"chat":{"id":-99,"type":"group"},"from":{"first_name":"Group"}}
+    }));
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    let settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["telegram_connected"], false);
+
+    telegram.updates.lock().unwrap().push(json!({
+        "update_id": 2, "message":{"text":format!("/start {code}"),"chat":{"id":55,"type":"private"},"from":{"first_name":"Ben"}}
+    }));
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    let settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["telegram_connected"], true, "the group attempt did not consume the code");
+}
+
+#[tokio::test]
+async fn telegram_chat_cannot_be_stolen_by_another_account() {
+    let (api_url, telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| {
+        c.telegram_bot_token = Some("secret".into());
+        c.telegram_api_url = api_url;
+    }).await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let ben_link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+    let ben_code = ben_link["url"].as_str().unwrap().split("start=").nth(1).unwrap();
+    *telegram.updates.lock().unwrap() = vec![json!({
+        "update_id":1,"message":{"text":format!("/start {ben_code}"),"chat":{"id":77,"type":"private"},"from":{"first_name":"Ben"}}
+    })];
+    logb::telegram::poll_once(&app.state).await.unwrap();
+
+    let anna_link: serde_json::Value = anna.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+    let anna_code = anna_link["url"].as_str().unwrap().split("start=").nth(1).unwrap();
+    *telegram.updates.lock().unwrap() = vec![json!({
+        "update_id":2,"message":{"text":format!("/start {anna_code}"),"chat":{"id":77,"type":"private"},"from":{"first_name":"Anna"}}
+    })];
+    logb::telegram::poll_once(&app.state).await.unwrap();
+
+    let ben_settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    let anna_settings: serde_json::Value = anna.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(ben_settings["telegram_connected"], true);
+    assert_eq!(anna_settings["telegram_connected"], false);
 }
 
 /// A browser's side of a subscription, with keys this test holds so it can read what arrives.
