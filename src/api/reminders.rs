@@ -6,7 +6,7 @@ use crate::db;
 use crate::domain::insights::estimated_date;
 use crate::domain::reminder::{
     counter_until, days_until, is_due, is_upcoming, next_due, reading_status, snoozed_date, Every,
-    Repeat, KIND_READING, KIND_SERVICE, MAX_EVERY,
+    CalendarSchedule, Repeat, KIND_READING, KIND_SERVICE, MAX_EVERY,
 };
 use crate::error::AppError;
 use crate::state::App;
@@ -50,6 +50,8 @@ pub struct ReminderRow {
     /// A reading reminder's interval; both null on a service reminder.
     pub every_n: Option<i64>,
     pub every_unit: Option<String>,
+    /// Calendar recurrence: daily, weekly:1..7, monthly:1..31, monthly:last, or yearly:M:D.
+    pub schedule: Option<String>,
     /// The row's sync identity, so a client can name it in an op without a bootstrap first.
     pub client_uuid: Option<String>,
     // joined
@@ -182,7 +184,7 @@ pub(crate) fn select_reminders(where_and_order: &str) -> String {
     format!(
         "SELECT r.id, r.object_id, r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, \
          r.repeat_counter, r.done_at, r.done_activity_id, r.created_at, r.snoozed_until, \
-         r.kind, r.every_n, r.every_unit, r.client_uuid, o.name AS object_name, o.type AS object_type, o.tags AS object_tags, o.counter_unit, \
+         r.kind, r.every_n, r.every_unit, r.schedule, r.client_uuid, o.name AS object_name, o.type AS object_type, o.tags AS object_tags, o.counter_unit, \
          (SELECT MAX(counter_value) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL) AS current_counter, \
          (SELECT MAX(a.date) FROM activities a WHERE a.object_id = o.id AND a.deleted_at IS NULL \
             AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $1) AS last_reading_date \
@@ -230,6 +232,8 @@ pub struct ReminderInput {
     pub every_n: Option<i64>,
     #[serde(default)]
     pub every_unit: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<String>,
     /// Identity minted by the client before the server saw the row. A replay carrying the
     /// same value answers with the row the first attempt made. See `super::normalize_client_uuid`.
     #[serde(default)]
@@ -251,6 +255,9 @@ impl ReminderInput {
         }
         match self.kind.as_str() {
             KIND_READING => {
+                if self.schedule.is_some() {
+                    return Err(AppError::BadRequest("calendar schedules belong to a service reminder".into()));
+                }
                 if counter_unit.is_none() {
                     return Err(AppError::BadRequest("this object has no counter".into()));
                 }
@@ -278,9 +285,19 @@ impl ReminderInput {
                         "every_n and every_unit belong to a reading reminder".into(),
                     ));
                 }
+                if let Some(raw) = self.schedule.as_deref() {
+                    let schedule = CalendarSchedule::parse(raw)
+                        .ok_or_else(|| AppError::BadRequest("invalid calendar schedule".into()))?;
+                    if self.repeat_months.is_some() {
+                        return Err(AppError::BadRequest("repeat_months cannot be combined with a calendar schedule".into()));
+                    }
+                    if self.due_date.is_none() {
+                        self.due_date = schedule.on_or_after(today()).map(|d| d.to_string());
+                    }
+                }
                 if self.due_date.is_none() && self.due_counter.is_none() {
                     return Err(AppError::BadRequest(
-                        "due_date or due_counter is required".into(),
+                        "due_date, due_counter, or schedule is required".into(),
                     ));
                 }
                 if (self.due_counter.is_some() || self.repeat_counter.is_some())
@@ -317,12 +334,12 @@ async fn insert(
     uuid: String,
 ) -> Result<(i64, String), AppError> {
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
-        "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid, kind, every_n, every_unit) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
+        "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, created_at, client_uuid, kind, every_n, every_unit, schedule) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
     )
     .bind(object_id).bind(&b.title).bind(&b.notes).bind(&b.due_date).bind(b.due_counter)
     .bind(b.repeat_months).bind(b.repeat_counter).bind(db::now()).bind(&uuid)
-    .bind(&b.kind).bind(b.every_n).bind(&b.every_unit)
+    .bind(&b.kind).bind(b.every_n).bind(&b.every_unit).bind(&b.schedule)
     .fetch_one(&mut *tx).await;
     let (id,) = match inserted {
         Ok(row) => row,
@@ -517,14 +534,17 @@ async fn update(
     if body.every_unit != existing.every_unit {
         changed.push(("every_unit", json!(body.every_unit)));
     }
+    if body.schedule != existing.schedule {
+        changed.push(("schedule", json!(body.schedule)));
+    }
 
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query(
         "UPDATE reminders SET title = $1, notes = $2, due_date = $3, due_counter = $4, repeat_months = $5, repeat_counter = $6, \
-         every_n = $7, every_unit = $8 WHERE id = $9 AND deleted_at IS NULL",
+         every_n = $7, every_unit = $8, schedule = $9 WHERE id = $10 AND deleted_at IS NULL",
     )
     .bind(&body.title).bind(&body.notes).bind(&body.due_date).bind(body.due_counter)
-    .bind(body.repeat_months).bind(body.repeat_counter).bind(body.every_n).bind(&body.every_unit).bind(id)
+    .bind(body.repeat_months).bind(body.repeat_counter).bind(body.every_n).bind(&body.every_unit).bind(&body.schedule).bind(id)
     .execute(&mut *tx).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Reminder, id).await?;
@@ -637,7 +657,15 @@ async fn done(
         months: r.repeat_months.map(|m| m as u32),
         counter: r.repeat_counter,
     };
-    let next_plan = next_due(base_date, base_counter, r.due_counter, repeat);
+    let next_plan = if let Some(schedule) = r.schedule.as_deref().and_then(CalendarSchedule::parse) {
+        let anchor = r.due_date.as_deref().and_then(parse_date).unwrap_or(base_date).max(today());
+        schedule.next_after(anchor).map(|date| {
+            let counter = repeat.counter.and_then(|step| base_counter.or(r.due_counter).map(|c| c + step));
+            (Some(date), counter)
+        })
+    } else {
+        next_due(base_date, base_counter, r.due_counter, repeat)
+    };
 
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query("UPDATE reminders SET done_at = $1, done_activity_id = $2 WHERE id = $3 AND deleted_at IS NULL")
@@ -673,6 +701,7 @@ async fn done(
                 kind: KIND_SERVICE.to_string(),
                 every_n: None,
                 every_unit: None,
+                schedule: r.schedule.clone(),
                 client_uuid: None,
             };
             let (nid, nuuid) = insert(
@@ -825,6 +854,7 @@ mod tests {
             kind: KIND_SERVICE.into(),
             every_n: None,
             every_unit: None,
+            schedule: None,
             client_uuid: None,
             object_name: "Golf".into(),
             object_type: "car".into(),

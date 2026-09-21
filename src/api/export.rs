@@ -114,6 +114,8 @@ struct ReminderExport {
     every_n: Option<i64>,
     #[serde(default)]
     every_unit: Option<String>,
+    #[serde(default)]
+    schedule: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -356,6 +358,7 @@ async fn export(
                     kind: r.kind.clone(),
                     every_n: r.every_n,
                     every_unit: r.every_unit.clone(),
+                    schedule: r.schedule.clone(),
                 })
                 .collect(),
         });
@@ -799,13 +802,13 @@ async fn import(
                 .and_then(|i| activity_ids.get(i).copied());
             let reminder_uuid = uuid::Uuid::new_v4().to_string();
             sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)")
+                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit, schedule) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)")
                 .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
                 .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
                 .bind(&r.snoozed_until)
                 .bind(&reminder_uuid)
-                .bind(&r.kind).bind(r.every_n).bind(&r.every_unit)
+                .bind(&r.kind).bind(r.every_n).bind(&r.every_unit).bind(&r.schedule)
                 .execute(&mut *tx).await?;
             record::record_create(
                 &mut tx,
@@ -959,6 +962,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                 kind: r.kind.clone(),
                 every_n: r.every_n,
                 every_unit: r.every_unit.clone(),
+                schedule: r.schedule.clone(),
                 client_uuid: None,
             };
             // `validate` fills in a missing start for a reading reminder, but the insert below

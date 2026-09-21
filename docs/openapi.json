@@ -3922,6 +3922,10 @@
               null
             ]
           },
+          "schedule": {
+            "type": ["string", "null"],
+            "description": "Calendar recurrence: daily, weekly:1..7 (Monday..Sunday), monthly:1..31, monthly:last, or yearly:month:day. Short months clamp to their final day."
+          },
           "last_reading_date": {
             "type": [
               "string",
@@ -4023,6 +4027,10 @@
               "month",
               null
             ]
+          },
+          "schedule": {
+            "type": ["string", "null"],
+            "description": "A service reminder's fixed calendar recurrence. Cannot be combined with repeat_months."
           },
           "client_uuid": {
             "type": "string",

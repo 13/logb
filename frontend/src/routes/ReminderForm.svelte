@@ -18,10 +18,33 @@
   let input = $state<ReminderInput>(emptyReminder());
   let error = $state('');
   let busy = $state(false);
+  let recurrence = $state<'none' | 'interval' | 'daily' | 'weekly' | 'monthly' | 'yearly'>('none');
+  let weekday = $state(1);
+  let monthDay = $state<'last' | number>(1);
+  let yearMonth = $state(1);
+  let yearDay = $state(1);
+
+  function readSchedule() {
+    if (input.repeat_months) recurrence = 'interval';
+    else if (input.schedule === 'daily') recurrence = 'daily';
+    else if (input.schedule?.startsWith('weekly:')) { recurrence = 'weekly'; weekday = Number(input.schedule.split(':')[1]); }
+    else if (input.schedule?.startsWith('monthly:')) { recurrence = 'monthly'; const d = input.schedule.split(':')[1]; monthDay = d === 'last' ? 'last' : Number(d); }
+    else if (input.schedule?.startsWith('yearly:')) { recurrence = 'yearly'; [, yearMonth, yearDay] = input.schedule.split(':').map(Number); }
+    else recurrence = 'none';
+  }
+
+  function writeSchedule() {
+    input.repeat_months = recurrence === 'interval' ? (input.repeat_months ?? 1) : null;
+    input.schedule = recurrence === 'daily' ? 'daily'
+      : recurrence === 'weekly' ? `weekly:${weekday}`
+      : recurrence === 'monthly' ? `monthly:${monthDay}`
+      : recurrence === 'yearly' ? `yearly:${yearMonth}:${yearDay}` : null;
+    if (input.schedule) input.due_date = null;
+  }
 
   onMount(async () => {
     object = await api<MemObject>('GET', `/objects/${oid}`);
-    if (rid) input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`));
+    if (rid) { input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`)); readSchedule(); }
     else if (presetKind === 'reading' && (object.counter_unit || object.type === 'body')) input = readingReminder($t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title'));
   });
 
@@ -98,14 +121,35 @@
       <div class="field"><label for="st">{$t('reminder.starts')}</label><DateInput id="st" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
       <p class="hint">{$t(object?.type === 'body' ? 'weight.reminder-hint' : 'reminder.reading-hint')}</p>
     {:else}
+      <div class="field">
+        <label for="recurrence">{$t('reminder.recurrence')}</label>
+        <select id="recurrence" bind:value={recurrence} onchange={writeSchedule}>
+          <option value="none">{$t('reminder.recurrence-none')}</option>
+          <option value="interval">{$t('reminder.recurrence-interval')}</option>
+          <option value="daily">{$t('reminder.recurrence-daily')}</option>
+          <option value="weekly">{$t('reminder.recurrence-weekly')}</option>
+          <option value="monthly">{$t('reminder.recurrence-monthly')}</option>
+          <option value="yearly">{$t('reminder.recurrence-yearly')}</option>
+        </select>
+      </div>
+      {#if recurrence === 'weekly'}
+        <div class="field"><label for="weekday">{$t('reminder.weekday')}</label><select id="weekday" bind:value={weekday} onchange={writeSchedule}>{#each [1,2,3,4,5,6,7] as d}<option value={d}>{$t(`weekday.${d}`)}</option>{/each}</select></div>
+      {:else if recurrence === 'monthly'}
+        <div class="field"><label for="monthday">{$t('reminder.month-day')}</label><select id="monthday" bind:value={monthDay} onchange={writeSchedule}>{#each Array.from({length:31},(_,i)=>i+1) as d}<option value={d}>{d}</option>{/each}<option value="last">{$t('reminder.last-day')}</option></select></div>
+      {:else if recurrence === 'yearly'}
+        <div class="row">
+          <div class="field"><label for="yearmonth">{$t('reminder.month')}</label><select id="yearmonth" bind:value={yearMonth} onchange={writeSchedule}>{#each Array.from({length:12},(_,i)=>i+1) as m}<option value={m}>{$t(`month.${m}`)}</option>{/each}</select></div>
+          <div class="field"><label for="yearday">{$t('reminder.month-day')}</label><select id="yearday" bind:value={yearDay} onchange={writeSchedule}>{#each Array.from({length:31},(_,i)=>i+1) as d}<option value={d}>{d}</option>{/each}</select></div>
+        </div>
+      {/if}
       <div class="row">
-        <div class="field"><label for="dd">{$t('reminder.due-date')}</label><DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
+        {#if !input.schedule}<div class="field"><label for="dd">{$t('reminder.due-date')}</label><DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>{/if}
         {#if object?.counter_unit}
           <div class="field"><label for="dc">{$t('reminder.due-counter')} ({object.counter_unit})</label><input id="dc" type="number" min="0" bind:value={input.due_counter} /></div>
         {/if}
       </div>
       <div class="row">
-        <div class="field"><label for="rm">{$t('reminder.repeat-months')}</label><input id="rm" type="number" min="1" bind:value={input.repeat_months} /></div>
+        {#if recurrence === 'interval'}<div class="field"><label for="rm">{$t('reminder.repeat-months')}</label><input id="rm" type="number" min="1" bind:value={input.repeat_months} /></div>{/if}
         {#if object?.counter_unit}
           <div class="field"><label for="rc">{$t('reminder.repeat-counter')} ({object.counter_unit})</label><input id="rc" type="number" min="1" bind:value={input.repeat_counter} /></div>
         {/if}

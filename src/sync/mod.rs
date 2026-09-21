@@ -192,6 +192,7 @@ fn whitelist(entity: Entity) -> &'static [(&'static str, FieldType)] {
             // `api::reminders::update`), so it is fixed at create like `object_id`.
             ("every_n", Integer),
             ("every_unit", Text),
+            ("schedule", Text),
         ],
         Entity::Attachment => &[("kind", Text), ("caption", Text)],
         // Content-addressed and written once. A file changes by being replaced, never edited.

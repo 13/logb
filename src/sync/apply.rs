@@ -171,6 +171,11 @@ fn validate_value(entity: Entity, field: &str, bound: &Binding) -> Result<(), St
         }
         return Ok(());
     };
+    if entity == Entity::Reminder && field == "schedule"
+        && crate::domain::reminder::CalendarSchedule::parse(text).is_none()
+    {
+        return Err("invalid calendar schedule".into());
+    }
 
     match (entity, field) {
         (Entity::Object, "name" | "type")

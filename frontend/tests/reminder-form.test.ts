@@ -9,7 +9,7 @@ function r(id: number, over: Partial<Reminder> = {}): Reminder {
     id, object_id: 1, title: `r${id}`, notes: '', due_date: '2030-01-01', due_counter: null,
     repeat_months: null, repeat_counter: null, done_at: null, done_activity_id: null, created_at: '',
     snoozed_until: null, object_name: 'Golf', counter_unit: 'km', current_counter: null, due: false,
-    days_until: null, counter_until: null, kind: 'service', every_n: null, every_unit: null,
+    days_until: null, counter_until: null, kind: 'service', every_n: null, every_unit: null, schedule: null,
     last_reading_date: null, next_due_date: '2030-01-01', estimated_due_date: null, ...over,
   };
 }
@@ -18,14 +18,14 @@ describe('reminder form', () => {
   it('starts empty, as a service reminder', () => {
     expect(emptyReminder()).toEqual({
       title: '', notes: '', due_date: null, due_counter: null, repeat_months: null, repeat_counter: null,
-      kind: 'service', every_n: null, every_unit: null,
+      kind: 'service', every_n: null, every_unit: null, schedule: null,
     });
   });
 
   it('maps a reminder to input', () => {
     expect(toReminderInput(r(1, { due_counter: 5000, repeat_months: 12 }))).toEqual({
       title: 'r1', notes: '', due_date: '2030-01-01', due_counter: 5000, repeat_months: 12, repeat_counter: null,
-      kind: 'service', every_n: null, every_unit: null,
+      kind: 'service', every_n: null, every_unit: null, schedule: null,
     });
     expect(toReminderInput(r(2, { kind: 'reading', every_n: 2, every_unit: 'week' }))).toMatchObject({
       kind: 'reading', every_n: 2, every_unit: 'week',
@@ -39,6 +39,8 @@ describe('reminder form', () => {
     expect(validateReminder({ ...emptyReminder(), title: 'x', due_counter: 100 })).toBeNull();
     expect(validateReminder({ ...emptyReminder(), title: 'x', due_counter: 100, repeat_months: 0 })).toBe('reminder.repeat-months');
     expect(validateReminder({ ...emptyReminder(), title: 'x', due_counter: 100, repeat_counter: -5 })).toBe('reminder.repeat-counter');
+    expect(validateReminder({ ...emptyReminder(), title: 'x', schedule: 'monthly:last' })).toBeNull();
+    expect(validateReminder({ ...emptyReminder(), title: 'x', schedule: 'monthly:32' })).toBe('reminder.schedule');
   });
 
   it('asks a reading reminder for an interval instead of a due condition', () => {
@@ -53,7 +55,7 @@ describe('reminder form', () => {
   it('sends only the fields the kind takes', () => {
     // Switching kind in the form leaves the other kind's fields typed in; the server refuses a mix.
     const mixed = { ...readingReminder('Log km'), due_counter: 5000, repeat_months: 3 };
-    expect(reminderBody(mixed)).toMatchObject({ kind: 'reading', due_counter: null, repeat_months: null, every_n: 1 });
+    expect(reminderBody({ ...mixed, schedule: 'daily' })).toMatchObject({ kind: 'reading', due_counter: null, repeat_months: null, every_n: 1, schedule: null });
     const service = { ...emptyReminder(), title: 'Oil', due_date: '2030-01-01', every_n: 1, every_unit: 'month' as const };
     expect(reminderBody(service)).toMatchObject({ kind: 'service', every_n: null, every_unit: null });
   });

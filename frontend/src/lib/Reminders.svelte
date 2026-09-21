@@ -71,6 +71,13 @@
 
   function when(r: Reminder): string {
     const parts: string[] = [];
+    if (r.schedule) {
+      const p = r.schedule.split(':');
+      if (p[0] === 'daily') parts.push($t('reminder.recurrence-daily'));
+      if (p[0] === 'weekly') parts.push($t('reminder.schedule-weekly', { day: $t(`weekday.${p[1]}`) }));
+      if (p[0] === 'monthly') parts.push(p[1] === 'last' ? $t('reminder.last-day') : $t('reminder.schedule-monthly', { day: p[1] }));
+      if (p[0] === 'yearly') parts.push($t('reminder.schedule-yearly', { month: $t(`month.${p[1]}`), day: p[2] }));
+    }
     if (r.due_date) parts.push($t('reminder.on', { date: fmtDate(r.due_date, $dateFormat) }));
     if (r.due_counter !== null) parts.push($t('reminder.at', { counter: counter(r.due_counter, unit, $locale) }));
     return parts.join(' · ');

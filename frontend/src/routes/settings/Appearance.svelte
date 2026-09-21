@@ -76,6 +76,15 @@
     </select>
   </div>
 
+  <h2>{$t('settings.first-day')}</h2>
+  <div class="field">
+    <select bind:value={$settings.firstDayOfWeek} aria-label={$t('settings.first-day')}>
+      <option value="locale">{$t('settings.first-day-auto')}</option>
+      <option value="monday">{$t('weekday.1')}</option>
+      <option value="sunday">{$t('weekday.7')}</option>
+    </select>
+  </div>
+
   <h2>{$t('settings.theme')}</h2>
   <div class="field">
     <select bind:value={$settings.theme} aria-label={$t('settings.theme')}>

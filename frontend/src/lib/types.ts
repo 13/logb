@@ -148,6 +148,7 @@ export interface Reminder {
   created_at: string; snoozed_until: string | null; object_name: string; counter_unit: CounterUnit; current_counter: number | null; due: boolean;
   days_until: number | null; counter_until: number | null;
   kind: ReminderKind; every_n: number | null; every_unit: EveryUnit | null;
+  schedule: string | null;
   /** Date of the object's newest counter reading on or before today. */
   last_reading_date: string | null;
   /** When it comes due by date: `due_date` for a service reminder, derived for a reading one. */
@@ -160,6 +161,7 @@ export interface Reminder {
 export interface ReminderInput {
   title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null;
   kind: ReminderKind; every_n: number | null; every_unit: EveryUnit | null;
+  schedule: string | null;
 }
 export interface DoneOut { done: Reminder; next: Reminder | null }
 export interface ImportCounts {

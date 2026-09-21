@@ -31,6 +31,6 @@ describe('settings', () => {
 
     const { settings } = await import('../src/stores/settings');
 
-    expect(get(settings)).toEqual({ locale: 'de', theme: 'dark', dateFormat: 'auto' });
+    expect(get(settings)).toEqual({ locale: 'de', theme: 'dark', dateFormat: 'auto', firstDayOfWeek: 'locale' });
   });
 });

@@ -3,7 +3,7 @@ import type { EveryUnit, Reminder, ReminderInput } from './types';
 export function emptyReminder(): ReminderInput {
   return {
     title: '', notes: '', due_date: null, due_counter: null, repeat_months: null, repeat_counter: null,
-    kind: 'service', every_n: null, every_unit: null,
+    kind: 'service', every_n: null, every_unit: null, schedule: null,
   };
 }
 
@@ -16,7 +16,7 @@ export function toReminderInput(r: Reminder): ReminderInput {
   return {
     title: r.title, notes: r.notes, due_date: r.due_date, due_counter: r.due_counter,
     repeat_months: r.repeat_months, repeat_counter: r.repeat_counter,
-    kind: r.kind, every_n: r.every_n, every_unit: r.every_unit,
+    kind: r.kind, every_n: r.every_n, every_unit: r.every_unit, schedule: r.schedule,
   };
 }
 
@@ -28,7 +28,9 @@ export function validateReminder(input: ReminderInput): string | null {
     if (input.every_unit !== 'week' && input.every_unit !== 'month') return 'reminder.every';
     return null;
   }
-  if (!input.due_date && input.due_counter === null) return 'reminder.due-date';
+  if (!input.schedule && !input.due_date && input.due_counter === null) return 'reminder.due-date';
+  if (input.schedule && !/^(daily|weekly:[1-7]|monthly:(last|[1-9]|[12][0-9]|3[01])|yearly:(?:[1-9]|1[0-2]):(?:[1-9]|[12][0-9]|3[01]))$/.test(input.schedule)) return 'reminder.schedule';
+  if (input.schedule && input.repeat_months !== null) return 'reminder.repeat-months';
   if (input.due_counter !== null && (Number.isNaN(input.due_counter) || input.due_counter < 0)) return 'reminder.due-counter';
   if (input.repeat_months !== null && (Number.isNaN(input.repeat_months) || input.repeat_months <= 0)) return 'reminder.repeat-months';
   if (input.repeat_counter !== null && (Number.isNaN(input.repeat_counter) || input.repeat_counter <= 0)) return 'reminder.repeat-counter';
@@ -39,7 +41,7 @@ export function validateReminder(input: ReminderInput): string | null {
  *  service reminder no interval, since the server refuses either mix. */
 export function reminderBody(input: ReminderInput): ReminderInput {
   if (input.kind === 'reading') {
-    return { ...input, due_counter: null, repeat_months: null, repeat_counter: null, due_date: input.due_date || null };
+    return { ...input, due_counter: null, repeat_months: null, repeat_counter: null, due_date: input.due_date || null, schedule: null };
   }
   return { ...input, every_n: null, every_unit: null };
 }

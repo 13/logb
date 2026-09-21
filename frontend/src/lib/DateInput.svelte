@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { t, locale } from '../i18n';
   import { dateFormat } from '../stores/date-format';
+  import { settings } from '../stores/settings';
   import { datePlaceholder, fmtDate, parseDate, type DateFormat } from './format';
   import Icon from './Icon.svelte';
 
@@ -14,8 +15,22 @@
    *  of-range one. */
   let error = $state<string | null>(null);
   let focused = $state(false);
-  let picker: HTMLInputElement;
   let field: HTMLInputElement;
+  let pickerOpen = $state(false);
+  let view = $state(new Date());
+
+  const weekStartsMonday = $derived($settings.firstDayOfWeek === 'monday' || ($settings.firstDayOfWeek === 'locale' && $locale === 'de'));
+  const weekdays = $derived(Array.from({ length: 7 }, (_, i) => {
+    const offset = (i + (weekStartsMonday ? 1 : 0)) % 7;
+    return new Intl.DateTimeFormat($locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 7, 2 + offset)));
+  }));
+  const calendarDays = $derived.by(() => {
+    const y = view.getUTCFullYear(), m = view.getUTCMonth();
+    const first = new Date(Date.UTC(y, m, 1));
+    const lead = (first.getUTCDay() - (weekStartsMonday ? 1 : 0) + 7) % 7;
+    return Array.from({ length: 42 }, (_, i) => new Date(Date.UTC(y, m, i - lead + 1)));
+  });
+  const monthLabel = $derived(new Intl.DateTimeFormat($locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(view));
 
   /** `value` as this component last set it itself (in `commit()` or the picker's `onchange`).
    *  What tells the reformat effect below a change is genuinely from OUTSIDE -- a picked photo
@@ -108,21 +123,14 @@
   });
 
   function openPicker() {
-    picker.value = value;
-    // `field`, not `picker`: `picker` is `aria-hidden`, so focusing it as a fallback would move
-    // focus somewhere a screen reader is told does not exist.
-    try { picker.showPicker(); } catch { field.focus(); }
+    const chosen = value ? new Date(`${value}T12:00:00Z`) : new Date();
+    view = new Date(Date.UTC(chosen.getUTCFullYear(), chosen.getUTCMonth(), 1));
+    pickerOpen = !pickerOpen;
   }
 
-  function onPickerChange() {
-    const picked = picker.value;
-    // Reset immediately, win or lose: a native date input enforces its OWN `min`/`max` (were any
-    // bound here) against whatever value it last holds, even while hidden -- so leaving a stale
-    // one on it is a way for this control to silently fail its own constraint validation and
-    // block the form's submit with nothing on screen explaining why. Emptied, and with no
-    // `min`/`max` bound below, it can never do that.
-    picker.value = '';
-    if (!picked) return; // the picker's own "Clear" control
+  function isoDate(d: Date): string { return d.toISOString().slice(0, 10); }
+  function pick(d: Date) {
+    const picked = isoDate(d);
     const range = rangeMessage(picked, $dateFormat);
     // An out-of-range PICK still goes into the field: the error then describes what is actually
     // on screen, rather than referring to a value the user never typed. `value`/`lastSeenValue`
@@ -132,19 +140,29 @@
     text = fmtDate(picked, $dateFormat);
     markError(range);
     if (!range) { value = picked; lastSeenValue = picked; }
+    pickerOpen = false;
   }
+
+  function moveMonth(delta: number) { view = new Date(Date.UTC(view.getUTCFullYear(), view.getUTCMonth() + delta, 1)); }
 </script>
 
-<span class="date-input">
+<div class="date-input">
   <input {id} bind:this={field} type="text" inputmode="numeric" autocomplete="off" {required} aria-label={label}
          placeholder={datePlaceholder($dateFormat, $locale)} bind:value={text}
          aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined}
          onfocus={() => (focused = true)} onblur={() => { focused = false; commit(); }} onchange={commit} />
-  <button type="button" class="ghost" aria-label={$t('date.pick')} onclick={openPicker}><Icon name="calendar" size={18} /></button>
-  <!-- No `min`/`max` here (see `onPickerChange`'s comment): range is enforced by this component's
-       own `rangeMessage`, identically for a typed date and a picked one. -->
-  <input bind:this={picker} class="picker" type="date" tabindex="-1" aria-hidden="true" onchange={onPickerChange} />
-</span>
+  <button type="button" class="ghost" aria-label={$t('date.pick')} aria-expanded={pickerOpen} onclick={openPicker}><Icon name="calendar" size={18} /></button>
+  {#if pickerOpen}
+    <div class="calendar" role="dialog" aria-label={$t('date.pick')}>
+      <div class="calendar-head"><button type="button" class="ghost" aria-label={$t('date.previous-month')} onclick={() => moveMonth(-1)}>‹</button><strong>{monthLabel}</strong><button type="button" class="ghost" aria-label={$t('date.next-month')} onclick={() => moveMonth(1)}>›</button></div>
+      <div class="calendar-grid">{#each weekdays as day}<span class="weekday">{day}</span>{/each}
+        {#each calendarDays as day}
+          <button type="button" class:outside={day.getUTCMonth() !== view.getUTCMonth()} class:selected={isoDate(day) === value} onclick={() => pick(day)}>{day.getUTCDate()}</button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+</div>
 {#if error}
   <span id={`${id}-error`} class="error" aria-live="polite">{error}</span>
 {/if}
@@ -152,6 +170,11 @@
 <style>
   .date-input { display: flex; gap: var(--space-1); align-items: center; position: relative; }
   .date-input input[type='text'] { flex: 1; min-width: 0; }
-  /* Kept in the layout (not display:none) so showPicker() has an anchor to open from. */
-  .picker { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .calendar { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; width: min(20rem, 90vw); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow); }
+  .calendar-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; text-align: center; }
+  .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .calendar-grid button { min-width: 0; padding: var(--space-2) var(--space-1); }
+  .weekday { text-align: center; color: var(--muted); font-size: var(--text-xs); padding: var(--space-1) 0; }
+  .outside { opacity: .45; }
+  .selected { outline: 2px solid var(--accent); }
 </style>

@@ -659,7 +659,7 @@ async fn export_round_trips_a_snoozed_reminder() {
     let r: serde_json::Value = app
         .client
         .post(app.url(&format!("/objects/{id}/reminders")))
-        .json(&json!({ "title": "Service", "due_counter": 60_000 }))
+        .json(&json!({ "title": "Service", "due_counter": 60_000, "schedule": "monthly:last" }))
         .send()
         .await
         .unwrap()
@@ -722,6 +722,7 @@ async fn export_round_trips_a_snoozed_reminder() {
         imported["snoozed_until"], expected,
         "snoozed_until must survive export and import"
     );
+    assert_eq!(imported["schedule"], "monthly:last", "calendar recurrence must survive export and import");
     assert_eq!(
         imported["due"], false,
         "the imported reminder must still be suppressed"

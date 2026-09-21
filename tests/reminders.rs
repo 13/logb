@@ -15,6 +15,28 @@ async fn add_activity(
 }
 
 #[tokio::test]
+async fn a_fixed_monthly_reminder_creates_the_next_calendar_occurrence() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let home = app.create_object(&app.client, "Home", None).await;
+    let base = app.url(&format!("/objects/{}/reminders", home["id"]));
+    let response = app.client.post(&base)
+        .json(&json!({"title":"Month end","schedule":"monthly:last"}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), 201, "{}", response.text().await.unwrap());
+    let first: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(first["schedule"], "monthly:last");
+    let first_date = chrono::NaiveDate::parse_from_str(first["due_date"].as_str().unwrap(), "%Y-%m-%d").unwrap();
+
+    let done: serde_json::Value = app.client.post(app.url(&format!("/reminders/{}/done", first["id"])))
+        .json(&json!({})).send().await.unwrap().json().await.unwrap();
+    let expected = logb::domain::reminder::CalendarSchedule::Monthly(None)
+        .next_after(first_date.max(chrono::NaiveDate::parse_from_str(&logb::db::today(), "%Y-%m-%d").unwrap())).unwrap();
+    assert_eq!(done["next"]["due_date"], expected.to_string());
+    assert_eq!(done["next"]["schedule"], "monthly:last");
+}
+
+#[tokio::test]
 async fn due_by_date_and_counter_and_repeat() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

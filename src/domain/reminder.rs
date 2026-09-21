@@ -1,4 +1,4 @@
-use chrono::{Days, Months, NaiveDate};
+use chrono::{Datelike, Days, Months, NaiveDate, Weekday};
 
 /// A reminder that watches a date or a counter target, and is closed by marking it done.
 pub const KIND_SERVICE: &str = "service";
@@ -9,6 +9,78 @@ pub const KIND_READING: &str = "reading";
 /// The largest `every_n` accepted, in either unit. Five years of months is already far past
 /// anything a "log the reading" habit means.
 pub const MAX_EVERY: u32 = 60;
+
+/// A recurrence pinned to the calendar instead of measured from completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarSchedule {
+    Daily,
+    Weekly(Weekday),
+    Monthly(Option<u32>), // None means the last day of each month.
+    Yearly(u32, u32),
+}
+
+impl CalendarSchedule {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let parts: Vec<_> = raw.split(':').collect();
+        match parts.as_slice() {
+            ["daily"] => Some(Self::Daily),
+            ["weekly", day] => Some(Self::Weekly(match day.parse::<u32>().ok()? {
+                1 => Weekday::Mon, 2 => Weekday::Tue, 3 => Weekday::Wed, 4 => Weekday::Thu,
+                5 => Weekday::Fri, 6 => Weekday::Sat, 7 => Weekday::Sun, _ => return None,
+            })),
+            ["monthly", "last"] => Some(Self::Monthly(None)),
+            ["monthly", day] => Some(Self::Monthly(Some(day.parse().ok().filter(|d| (1..=31).contains(d))?))),
+            ["yearly", month, day] => Some(Self::Yearly(
+                month.parse().ok().filter(|m| (1..=12).contains(m))?,
+                day.parse().ok().filter(|d| (1..=31).contains(d))?,
+            )),
+            _ => None,
+        }
+    }
+
+    fn clamped(year: i32, month: u32, day: u32) -> Option<NaiveDate> {
+        let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+        let next = first.checked_add_months(Months::new(1))?;
+        let last = next.pred_opt()?.day();
+        NaiveDate::from_ymd_opt(year, month, day.min(last))
+    }
+
+    /// The first scheduled date strictly after `date`.
+    pub fn next_after(self, date: NaiveDate) -> Option<NaiveDate> {
+        match self {
+            Self::Daily => date.succ_opt(),
+            Self::Weekly(day) => {
+                let delta = (7 + i64::from(day.num_days_from_monday())
+                    - i64::from(date.weekday().num_days_from_monday())) % 7;
+                date.checked_add_days(Days::new(if delta == 0 { 7 } else { delta as u64 }))
+            }
+            Self::Monthly(day) => {
+                let wanted = day.unwrap_or(31);
+                let this = Self::clamped(date.year(), date.month(), wanted)?;
+                if this > date { Some(this) } else {
+                    let next = date.with_day(1)?.checked_add_months(Months::new(1))?;
+                    Self::clamped(next.year(), next.month(), wanted)
+                }
+            }
+            Self::Yearly(month, day) => {
+                let this = Self::clamped(date.year(), month, day)?;
+                if this > date { Some(this) } else { Self::clamped(date.year() + 1, month, day) }
+            }
+        }
+    }
+
+    /// The scheduled date on or after `date`, used for a newly-created reminder.
+    pub fn on_or_after(self, date: NaiveDate) -> Option<NaiveDate> {
+        match self {
+            Self::Daily => Some(date),
+            Self::Weekly(day) if date.weekday() == day => Some(date),
+            Self::Monthly(Some(day)) if Self::clamped(date.year(), date.month(), day) == Some(date) => Some(date),
+            Self::Monthly(None) if Self::clamped(date.year(), date.month(), 31) == Some(date) => Some(date),
+            Self::Yearly(month, day) if Self::clamped(date.year(), month, day) == Some(date) => Some(date),
+            _ => self.next_after(date.pred_opt()?),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Repeat {
@@ -302,6 +374,22 @@ mod tests {
     fn a_monthly_interval_clamps_to_the_end_of_a_short_month() {
         assert_eq!(Every::Month(1).after(d("2026-01-31")), Some(d("2026-02-28")));
         assert_eq!(Every::Week(2).after(d("2026-12-25")), Some(d("2027-01-08")));
+    }
+
+    #[test]
+    fn fixed_calendar_schedules_cross_boundaries_and_clamp() {
+        assert_eq!(CalendarSchedule::parse("daily").unwrap().next_after(d("2026-12-31")), Some(d("2027-01-01")));
+        assert_eq!(CalendarSchedule::parse("weekly:1").unwrap().next_after(d("2026-09-21")), Some(d("2026-09-28")));
+        assert_eq!(CalendarSchedule::parse("monthly:31").unwrap().next_after(d("2026-01-31")), Some(d("2026-02-28")));
+        assert_eq!(CalendarSchedule::parse("monthly:last").unwrap().on_or_after(d("2028-02-01")), Some(d("2028-02-29")));
+        assert_eq!(CalendarSchedule::parse("yearly:2:29").unwrap().next_after(d("2028-02-29")), Some(d("2029-02-28")));
+    }
+
+    #[test]
+    fn malformed_calendar_schedules_are_refused() {
+        for value in ["weekly:0", "weekly:8", "monthly:0", "monthly:32", "yearly:13:1", "yearly:2:32", "sometimes"] {
+            assert!(CalendarSchedule::parse(value).is_none(), "{value}");
+        }
     }
 
     #[test]
