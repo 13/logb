@@ -37,7 +37,7 @@ async fn usage(
     Path(object_id): Path<i64>,
 ) -> Result<Json<UsageOut>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
-    let counter_per_day_milli = usage_by_object(&state, Some(user.id), Some(object_id))
+    let counter_per_day_milli = usage_by_object(&state, Some(user.id), Some(object_id), user.today())
         .await?
         .get(&object_id)
         .map(|u| u.rate_milli);
@@ -122,17 +122,15 @@ pub async fn usage_by_object(
     state: &App,
     user_id: Option<i64>,
     only: Option<i64>,
+    today: NaiveDate,
 ) -> Result<HashMap<i64, Usage>, AppError> {
-    let today = db::today();
-    let from = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
-        .map(|t| (t - chrono::Duration::days(RATE_WINDOW_DAYS * 2)).to_string())
-        .unwrap_or_else(|_| today.clone());
+    let from = (today - chrono::Duration::days(RATE_WINDOW_DAYS * 2)).to_string();
     let rows: Vec<(i64, String, i64)> = sqlx::query_as(
         "SELECT a.object_id, a.date, a.counter_value FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE ($1 IS NULL OR o.user_id = $1) AND ($2 IS NULL OR o.id = $2) AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
            AND a.counter_value IS NOT NULL AND a.date <= $3 AND a.date >= $4",
     )
-    .bind(user_id).bind(only).bind(super::reminders::reading_horizon()).bind(&from)
+    .bind(user_id).bind(only).bind(super::reminders::reading_horizon(today)).bind(&from)
     .fetch_all(&state.db)
     .await?;
 
@@ -418,7 +416,7 @@ async fn read(
         })
     };
 
-    let counter_per_day_milli = usage_by_object(&state, Some(user.id), Some(object_id))
+    let counter_per_day_milli = usage_by_object(&state, Some(user.id), Some(object_id), user.today())
         .await?
         .get(&object_id)
         .map(|u| u.rate_milli);
@@ -431,7 +429,7 @@ async fn read(
              WHERE object_id = $1 AND deleted_at IS NULL AND counter_value IS NOT NULL AND date <= $2",
         )
         .bind(object_id)
-        .bind(super::reminders::reading_horizon())
+        .bind(super::reminders::reading_horizon(user.today()))
         .fetch_all(&state.db)
         .await?;
         let readings: Vec<Reading> = rows

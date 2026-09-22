@@ -113,7 +113,7 @@ async fn recipients(state: &App) -> Result<Vec<Recipient>, AppError> {
 
 async fn items_for(state: &App, r: &Recipient) -> Result<Vec<DueItem>, AppError> {
     let public_url = state.config.public_url.as_deref();
-    Ok(due_for_user(state, r.id, 0)
+    Ok(due_for_user(state, r.id, 0, crate::db::today_in(r.notify_tz.as_deref()))
         .await?
         .into_iter()
         .map(|d| DueItem {

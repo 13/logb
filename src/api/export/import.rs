@@ -15,6 +15,7 @@ use crate::sync::{record, Entity};
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::Json;
+use chrono::NaiveDate;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::Any;
@@ -171,7 +172,7 @@ pub(super) async fn import(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
 
-    validate_import(&data)?;
+    validate_import(&data, user.today())?;
     let archive_types = archive_types(&data)?;
 
     let mut counts = ImportCounts {
@@ -384,7 +385,7 @@ pub(super) async fn import(
 /// same validators the normal write paths use (`ObjectInput::validate`,
 /// `ActivityInput::validate`, `ReminderInput::validate`), so the rules stay identical to
 /// what `POST /objects`, `POST .../activities` and `POST .../reminders` already enforce.
-fn validate_import(data: &Export) -> Result<(), AppError> {
+fn validate_import(data: &Export, today: NaiveDate) -> Result<(), AppError> {
     // Each archive type maps to itself here. Whether a type is kept or remapped at insert time
     // changes the uuid in an object's key, never whether the key resolves.
     let known: HashMap<String, String> = archive_types(data)?
@@ -535,6 +536,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
                     } else {
                         o.counter_unit.as_deref()
                     },
+                    today,
                 )
                 .map_err(|e| {
                     tag(

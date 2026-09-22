@@ -58,7 +58,7 @@ pub(super) async fn export(
         let atts = attachments::for_object(&state, o.id).await?;
         let rems = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
             "WHERE r.object_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")))
-            .bind(crate::api::reminders::reading_horizon()).bind(o.id).fetch_all(&state.db).await?;
+            .bind(crate::api::reminders::reading_horizon(user.today())).bind(o.id).fetch_all(&state.db).await?;
         for a in &atts {
             blobs.push(sha_of(&sha_by_file, a.file_id)?);
         }

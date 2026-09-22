@@ -44,7 +44,7 @@ async fn history(
          ORDER BY date DESC, created_at DESC, id DESC",
     )
     .bind(id)
-    .bind(super::reminders::reading_horizon())
+    .bind(super::reminders::reading_horizon(user.today()))
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows))

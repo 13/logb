@@ -92,20 +92,15 @@ fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
-fn today() -> NaiveDate {
-    parse_date(&db::today()).expect("server-generated date is always valid")
-}
-
 /// The latest date a counter reading may carry and still count as "the last reading": one day
-/// past the server's today.
+/// past the caller's today.
 ///
-/// The reading form dates a reading by the device's own calendar, the server by
-/// `LOGB_TIMEZONE`, and the two disagree for hours every day wherever that is left at its UTC
-/// default -- a reading logged at 00:30 in Berlin is dated tomorrow as far as the server knows.
+/// The reading form dates a reading by the device's own calendar, the server by the user's
+/// zone (or `LOGB_TIMEZONE`), and the two disagree for hours every day wherever those differ
+/// -- a reading logged at 00:30 in Berlin is dated tomorrow as far as a UTC server knows.
 /// Ignoring it would leave the reminder due right after the person did what it asked. One day
 /// covers any timezone; a reading dated further out is a typo, and is still ignored.
-pub(crate) fn reading_horizon() -> String {
-    let today = today();
+pub(crate) fn reading_horizon(today: NaiveDate) -> String {
     today.succ_opt().unwrap_or(today).to_string()
 }
 
@@ -171,14 +166,8 @@ impl ReminderOut {
     }
 }
 
-impl From<ReminderRow> for ReminderOut {
-    fn from(row: ReminderRow) -> Self {
-        ReminderOut::build(row, today(), None)
-    }
-}
-
 /// The reminder columns every read shares, with `where_and_order` appended. `$1` is always
-/// `reading_horizon()` (for `last_reading_date`), so a caller's own parameters start at `$2`.
+/// `reading_horizon(today)` (for `last_reading_date`), so a caller's own parameters start at `$2`.
 ///
 /// One copy, so a column added to `ReminderRow` cannot reach one read and not another.
 pub(crate) fn select_reminders(where_and_order: &str) -> String {
@@ -193,25 +182,26 @@ pub(crate) fn select_reminders(where_and_order: &str) -> String {
     )
 }
 
-async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<ReminderRow, AppError> {
+async fn load_owned(state: &App, user: &AuthUser, id: i64) -> Result<ReminderRow, AppError> {
     // The only text spliced in is the literal clause below; the ids stay bind parameters.
     sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
         "WHERE r.id = $2 AND o.user_id = $3 AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
     )))
-    .bind(reading_horizon())
+    .bind(reading_horizon(user.today()))
     .bind(id)
-    .bind(user_id)
+    .bind(user.id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound)
 }
 
 /// A single reminder as the API answers it, with its object's usage for the estimate.
-async fn out(state: &App, user_id: i64, row: ReminderRow) -> Result<ReminderOut, AppError> {
-    let usage = usage_by_object(state, Some(user_id), Some(row.object_id))
+async fn out(state: &App, user: &AuthUser, row: ReminderRow) -> Result<ReminderOut, AppError> {
+    let today = user.today();
+    let usage = usage_by_object(state, Some(user.id), Some(row.object_id), today)
         .await?
         .remove(&row.object_id);
-    Ok(ReminderOut::build(row, today(), usage))
+    Ok(ReminderOut::build(row, today, usage))
 }
 
 #[derive(Deserialize, Serialize, sqlx::FromRow)]
@@ -246,7 +236,7 @@ pub(crate) fn service_kind() -> String {
 }
 
 impl ReminderInput {
-    pub(crate) fn validate(&mut self, counter_unit: Option<&str>) -> Result<(), AppError> {
+    pub(crate) fn validate(&mut self, counter_unit: Option<&str>, today: NaiveDate) -> Result<(), AppError> {
         self.title = self.title.trim().to_string();
         if self.title.is_empty() {
             return Err(AppError::BadRequest("title is required".into()));
@@ -281,7 +271,7 @@ impl ReminderInput {
                 }
                 // The start is optional on the way in: "from today" is what leaving it out means.
                 if self.due_date.is_none() {
-                    self.due_date = Some(db::today());
+                    self.due_date = Some(today.to_string());
                 }
             }
             KIND_SERVICE => {
@@ -298,7 +288,7 @@ impl ReminderInput {
                     if self.repeat_months.is_some() {
                         return Err(AppError::BadRequest("repeat_months cannot be combined with a calendar schedule".into()));
                     }
-                    let start = self.due_date.as_deref().and_then(parse_date).unwrap_or_else(today);
+                    let start = self.due_date.as_deref().and_then(parse_date).unwrap_or(today);
                     self.due_date = schedule.on_or_after(start).map(|d| d.to_string());
                 }
                 if self.due_date.is_none() && self.due_counter.is_none() {
@@ -368,18 +358,18 @@ async fn list(
     Path(object_id): Path<i64>,
 ) -> Result<Json<Vec<ReminderOut>>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
+    let today = user.today();
     let rows = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
         "WHERE r.object_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.done_at IS NOT NULL, r.due_date IS NULL, r.due_date, r.due_counter, r.id",
     )))
-    .bind(reading_horizon())
+    .bind(reading_horizon(today))
     .bind(object_id)
     .fetch_all(&state.db)
     .await?;
-    let usage = usage_by_object(&state, Some(user.id), Some(object_id))
+    let usage = usage_by_object(&state, Some(user.id), Some(object_id), today)
         .await?
         .remove(&object_id);
-    let today = today();
     Ok(Json(
         rows.into_iter()
             .map(|r| ReminderOut::build(r, today, usage))
@@ -393,19 +383,19 @@ pub async fn due_for_user(
     state: &App,
     user_id: i64,
     within_days: i64,
+    today: NaiveDate,
 ) -> Result<Vec<ReminderOut>, AppError> {
     let rows = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
         "WHERE o.user_id = $2 AND r.done_at IS NULL AND o.archived_at IS NULL \
            AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
          ORDER BY r.due_date IS NULL, r.due_date, r.id",
     )))
-    .bind(reading_horizon())
+    .bind(reading_horizon(today))
     .bind(user_id)
     .fetch_all(&state.db)
     .await?;
-    let today = today();
     let usage: HashMap<i64, Usage> = if within_days > 0 {
-        usage_by_object(state, Some(user_id), None).await?
+        usage_by_object(state, Some(user_id), None, today).await?
     } else {
         // The estimate only ever feeds the lookahead, and a zero-day window has none.
         HashMap::new()
@@ -440,7 +430,7 @@ async fn due_list(
     Query(q): Query<DueQuery>,
 ) -> Result<Json<Vec<ReminderOut>>, AppError> {
     Ok(Json(
-        due_for_user(&state, user.id, q.within_days.clamp(0, 365)).await?,
+        due_for_user(&state, user.id, q.within_days.clamp(0, 365), user.today()).await?,
     ))
 }
 
@@ -455,7 +445,7 @@ async fn create(
         Some("weight")
     } else {
         object.counter_unit.as_deref()
-    })?;
+    }, user.today())?;
     let client_uuid = super::normalize_client_uuid(body.client_uuid.take())?;
     if let Some(uuid) = client_uuid.as_deref() {
         // Idempotent on the caller's own live row under this object; a conflict on anyone
@@ -469,8 +459,8 @@ async fn create(
         .await?;
         match existing {
             Some((id, oid, owner, None)) if owner == user.id && oid == object_id => {
-                let row = load_owned(&state, user.id, id).await?;
-                return Ok((StatusCode::OK, Json(out(&state, user.id, row).await?)));
+                let row = load_owned(&state, &user, id).await?;
+                return Ok((StatusCode::OK, Json(out(&state, &user, row).await?)));
             }
             Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
             None => {}
@@ -482,8 +472,8 @@ async fn create(
     let (id, uuid) = insert(&mut tx, object_id, &body, uuid).await?;
     record::record_create(&mut tx, user.id, Entity::Reminder, &uuid, &edited_at).await?;
     tx.commit().await?;
-    let row = load_owned(&state, user.id, id).await?;
-    Ok((StatusCode::CREATED, Json(out(&state, user.id, row).await?)))
+    let row = load_owned(&state, &user, id).await?;
+    Ok((StatusCode::CREATED, Json(out(&state, &user, row).await?)))
 }
 
 async fn read(
@@ -491,8 +481,8 @@ async fn read(
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<Json<ReminderOut>, AppError> {
-    let row = load_owned(&state, user.id, id).await?;
-    Ok(Json(out(&state, user.id, row).await?))
+    let row = load_owned(&state, &user, id).await?;
+    Ok(Json(out(&state, &user, row).await?))
 }
 
 async fn update(
@@ -501,7 +491,7 @@ async fn update(
     Path(id): Path<i64>,
     Json(mut body): Json<ReminderInput>,
 ) -> Result<Json<ReminderOut>, AppError> {
-    let existing = load_owned(&state, user.id, id).await?;
+    let existing = load_owned(&state, &user, id).await?;
     // A reminder does not turn into the other kind: the two keep different fields, and a
     // service reminder's done history means nothing on a reading one. Delete and re-create.
     if body.kind != existing.kind {
@@ -512,7 +502,7 @@ async fn update(
         Some("weight")
     } else {
         existing.counter_unit.as_deref()
-    })?;
+    }, user.today())?;
 
     // Only fields whose value actually differs are logged (see `record::record_update`).
     let mut changed: Vec<(&str, serde_json::Value)> = Vec::new();
@@ -565,8 +555,8 @@ async fn update(
         .await?;
     }
     tx.commit().await?;
-    let row = load_owned(&state, user.id, id).await?;
-    Ok(Json(out(&state, user.id, row).await?))
+    let row = load_owned(&state, &user, id).await?;
+    Ok(Json(out(&state, &user, row).await?))
 }
 
 /// Tombstoned rather than removed, so an offline client learns the reminder is gone. A
@@ -576,7 +566,7 @@ async fn delete(
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    load_owned(&state, user.id, id).await?;
+    load_owned(&state, &user, id).await?;
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     let affected =
@@ -614,7 +604,7 @@ async fn done(
     body: Option<Json<DoneInput>>,
 ) -> Result<Json<DoneOut>, AppError> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
-    let r = load_owned(&state, user.id, id).await?;
+    let r = load_owned(&state, &user, id).await?;
     if r.kind == KIND_READING {
         // Marking one done would stop it for good -- `done_at` wins over everything -- when what
         // the user means is "I logged it", which the reading itself already says.
@@ -652,19 +642,19 @@ async fn done(
     let base_date = activity
         .as_ref()
         .and_then(|a| parse_date(&a.date))
-        .unwrap_or_else(today);
+        .unwrap_or_else(|| user.today());
     // Only fall back to the object's highest reading when the linked activity has none:
     // `.or(..)` on an awaited value would run the stats query even in the common case.
     let base_counter = match activity.as_ref().and_then(|a| a.counter_value) {
         Some(c) => Some(c),
-        None => stats(&state, r.object_id).await?.current_counter,
+        None => stats(&state, r.object_id, user.today()).await?.current_counter,
     };
     let repeat = Repeat {
         months: r.repeat_months.map(|m| m as u32),
         counter: r.repeat_counter,
     };
     let next_plan = if let Some(schedule) = r.schedule.as_deref().and_then(CalendarSchedule::parse) {
-        let anchor = r.due_date.as_deref().and_then(parse_date).unwrap_or(base_date).max(today());
+        let anchor = r.due_date.as_deref().and_then(parse_date).unwrap_or(base_date).max(user.today());
         schedule.next_after(anchor).map(|date| {
             let counter = repeat.counter.and_then(|step| base_counter.or(r.due_counter).map(|c| c + step));
             (Some(date), counter)
@@ -731,14 +721,14 @@ async fn done(
 
     let next = match next_id {
         Some(nid) => {
-            let row = load_owned(&state, user.id, nid).await?;
-            Some(out(&state, user.id, row).await?)
+            let row = load_owned(&state, &user, nid).await?;
+            Some(out(&state, &user, row).await?)
         }
         None => None,
     };
-    let done_row = load_owned(&state, user.id, id).await?;
+    let done_row = load_owned(&state, &user, id).await?;
     Ok(Json(DoneOut {
-        done: out(&state, user.id, done_row).await?,
+        done: out(&state, &user, done_row).await?,
         next,
     }))
 }
@@ -771,11 +761,11 @@ async fn snooze(
             "days must be between 1 and 365".into(),
         ));
     }
-    let r = load_owned(&state, user.id, id).await?;
+    let r = load_owned(&state, &user, id).await?;
     if r.done_at.is_some() {
         return Err(AppError::Conflict("reminder already done".into()));
     }
-    let today = today();
+    let today = user.today();
     let current_due = ReminderOut::build(r.clone(), today, None)
         .next_due_date
         .as_deref()
@@ -805,8 +795,8 @@ async fn snooze(
         .await?;
     }
     tx.commit().await?;
-    let row = load_owned(&state, user.id, id).await?;
-    Ok(Json(out(&state, user.id, row).await?))
+    let row = load_owned(&state, &user, id).await?;
+    Ok(Json(out(&state, &user, row).await?))
 }
 
 /// Undo a snooze: clears `snoozed_until` so the reminder's normal due-ness (by date, by
@@ -827,7 +817,7 @@ async fn unsnooze(
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<Json<ReminderOut>, AppError> {
-    let r = load_owned(&state, user.id, id).await?;
+    let r = load_owned(&state, &user, id).await?;
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)
@@ -846,8 +836,8 @@ async fn unsnooze(
         .await?;
     }
     tx.commit().await?;
-    let row = load_owned(&state, user.id, id).await?;
-    Ok(Json(out(&state, user.id, row).await?))
+    let row = load_owned(&state, &user, id).await?;
+    Ok(Json(out(&state, &user, row).await?))
 }
 
 #[cfg(test)]
@@ -895,7 +885,7 @@ mod tests {
             done_at: None,
             ..row()
         };
-        let out = ReminderOut::from(bad);
+        let out = ReminderOut::build(bad, d("2026-09-22"), None);
         assert!(
             !out.due,
             "an unparseable stored date must not make a reminder due"
@@ -909,7 +899,7 @@ mod tests {
             done_at: None,
             ..row()
         };
-        let out = ReminderOut::from(good);
+        let out = ReminderOut::build(good, d("2026-09-22"), None);
         assert!(
             out.due,
             "a valid past due_date must still mark the reminder due"
@@ -925,7 +915,7 @@ mod tests {
             current_counter: Some(10_000),
             ..row()
         };
-        let out = ReminderOut::from(row);
+        let out = ReminderOut::build(row, d("2026-09-22"), None);
         assert!(
             out.due,
             "a bad due_date must not stop the counter-based due check from firing"

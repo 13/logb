@@ -42,6 +42,7 @@ pub(super) async fn revalidate_reminder(
         String,
         Option<String>,
         String,
+        Option<String>,
     );
     let (
         title,
@@ -57,10 +58,13 @@ pub(super) async fn revalidate_reminder(
         uuid,
         counter_unit,
         object_type,
+        notify_tz,
     ): Row = sqlx::query_as(
         "SELECT r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, r.repeat_counter, \
-                r.kind, r.every_n, r.every_unit, r.schedule, r.client_uuid, o.counter_unit, o.type \
-         FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.client_uuid = $1",
+                r.kind, r.every_n, r.every_unit, r.schedule, r.client_uuid, o.counter_unit, o.type, \
+                u.notify_tz \
+         FROM reminders r JOIN objects o ON o.id = r.object_id JOIN users u ON u.id = o.user_id \
+         WHERE r.client_uuid = $1",
     )
     .bind(client_uuid)
     .fetch_one(&mut *tx)
@@ -84,6 +88,6 @@ pub(super) async fn revalidate_reminder(
     // A body object logs weight in grams and has no counter column, but its reading reminders are
     // valid all the same -- `validate` asks for the unit, so it gets the one weight is kept in.
     let unit = if object_type == "body" { Some("g") } else { counter_unit.as_deref() };
-    Ok(input.validate(unit).err().map(|e| e.to_string()))
+    Ok(input.validate(unit, crate::db::today_in(notify_tz.as_deref())).err().map(|e| e.to_string()))
 }
 
