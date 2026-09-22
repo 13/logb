@@ -167,6 +167,11 @@ async fn search(
 /// Whether any of `fields`, or any tag in `tags_json`, contains the already-folded `term`.
 /// Tags are matched one by one after decoding, so a term made of JSON punctuation cannot match
 /// the encoding of every tagged row.
+///
+/// A `tags` column that does not decode as a JSON array matches nothing rather than failing the
+/// search: the column is written only by this server (`domain::tags`), so a value that does not
+/// parse is a bug elsewhere, and refusing the whole request -- or logging once per row per
+/// search -- would serve the user worse than the missing tag match does.
 fn matches(term: &str, fields: &[Option<&str>], tags_json: &str) -> bool {
     if fields.iter().flatten().any(|f| fold(f).contains(term)) {
         return true;

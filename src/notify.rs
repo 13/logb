@@ -364,8 +364,8 @@ enum Destination {
 /// per day" is counted in the recipient's calendar. Delivery-history pruning and the instance
 /// webhook stay on the instance's day.
 fn local_hour(tz: Option<&str>, instance_hour: u32) -> u32 {
-    let tz = crate::db::zone(tz);
     let instance = crate::db::timezone();
+    let tz = crate::db::zone_in(tz, instance);
     let today = chrono::Utc::now().with_timezone(&instance).date_naive();
     let Some(at) = today
         .and_hms_opt(instance_hour, 0, 0)

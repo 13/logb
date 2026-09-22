@@ -352,7 +352,14 @@ pub fn now() -> String {
 /// Settings → Notifications (`users.notify_tz`), the instance's otherwise. A stored name that
 /// no longer parses is treated as unset rather than failing the request.
 pub fn zone(tz: Option<&str>) -> Tz {
-    tz.and_then(|raw| raw.parse::<Tz>().ok()).unwrap_or_else(timezone)
+    zone_in(tz, timezone())
+}
+
+/// `zone` for a caller that already holds the instance zone, so a loop over recipients reads
+/// the process-wide value once instead of once per user. The fallback rule lives here, in one
+/// place, rather than being spelled out again at such a call site.
+pub fn zone_in(tz: Option<&str>, instance: Tz) -> Tz {
+    tz.and_then(|raw| raw.parse::<Tz>().ok()).unwrap_or(instance)
 }
 
 /// Today in `zone(tz)`. This is the date a reminder's `due_date` is compared against for that
@@ -496,6 +503,11 @@ mod tests {
         assert_eq!(zone(Some("Europe/Berlin")), Tz::Europe__Berlin);
         assert_eq!(zone(Some("Mars/Olympus")), timezone());
         assert_eq!(zone(None), timezone());
+        // `zone_in` answers the same way against a fallback the caller supplies, which is how a
+        // loop over recipients avoids reading the process-wide zone once per user.
+        assert_eq!(zone_in(Some("Europe/Berlin"), Tz::Asia__Tokyo), Tz::Europe__Berlin);
+        assert_eq!(zone_in(Some("Mars/Olympus"), Tz::Asia__Tokyo), Tz::Asia__Tokyo);
+        assert_eq!(zone_in(None, Tz::Asia__Tokyo), Tz::Asia__Tokyo);
     }
 }
 
