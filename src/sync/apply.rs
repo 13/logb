@@ -555,6 +555,91 @@ const PG_SQLSTATE_LEN: usize = 5;
 /// The SQLSTATE class PostgreSQL reports every integrity constraint violation under.
 const PG_INTEGRITY_CONSTRAINT_CLASS: &str = "23";
 
+/// The reminder fields whose value only makes sense against the rest of the row: an interval is
+/// legal on its own and illegal beside a calendar schedule, and `apply_op` sees one field at a
+/// time. Anything listed here is re-checked by `revalidate_reminder`.
+const REVALIDATED_REMINDER_FIELDS: [&str; 7] = [
+    "schedule",
+    "every_n",
+    "every_unit",
+    "repeat_months",
+    "repeat_counter",
+    "due_counter",
+    "due_date",
+];
+
+/// Answers the rejection reason for a field write that the whole-row rules refuse, or `None` when
+/// the row would still be valid with that field replaced.
+///
+/// The stored row is turned into JSON, the one field is overwritten, and the result is read back
+/// as a `ReminderInput` so `validate` -- the same function the REST handler calls -- decides. The
+/// round-trip looks gratuitous next to a hand-written check, and that is the point: a rule added
+/// to `validate` applies to sync writes without anyone remembering to copy it here.
+async fn revalidate_reminder(
+    tx: &mut sqlx::AnyConnection,
+    client_uuid: &str,
+    field: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<Option<String>, AppError> {
+    type Row = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        String,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        String,
+    );
+    let (
+        title,
+        notes,
+        due_date,
+        due_counter,
+        repeat_months,
+        repeat_counter,
+        kind,
+        every_n,
+        every_unit,
+        schedule,
+        uuid,
+        counter_unit,
+        object_type,
+    ): Row = sqlx::query_as(
+        "SELECT r.title, r.notes, r.due_date, r.due_counter, r.repeat_months, r.repeat_counter, \
+                r.kind, r.every_n, r.every_unit, r.schedule, r.client_uuid, o.counter_unit, o.type \
+         FROM reminders r JOIN objects o ON o.id = r.object_id WHERE r.client_uuid = $1",
+    )
+    .bind(client_uuid)
+    .fetch_one(&mut *tx)
+    .await?;
+    let mut row = serde_json::json!({
+        "title": title,
+        "notes": notes,
+        "due_date": due_date,
+        "due_counter": due_counter,
+        "repeat_months": repeat_months,
+        "repeat_counter": repeat_counter,
+        "kind": kind,
+        "every_n": every_n,
+        "every_unit": every_unit,
+        "schedule": schedule,
+        "client_uuid": uuid,
+    });
+    row[field] = value.cloned().unwrap_or(serde_json::Value::Null);
+    let mut input: crate::api::reminders::ReminderInput =
+        serde_json::from_value(row).map_err(|e| AppError::Internal(e.to_string()))?;
+    // A body object logs weight in grams and has no counter column, but its reading reminders are
+    // valid all the same -- `validate` asks for the unit, so it gets the one weight is kept in.
+    let unit = if object_type == "body" { Some("g") } else { counter_unit.as_deref() };
+    Ok(input.validate(unit).err().map(|e| e.to_string()))
+}
+
 /// Applies one op inside the caller's transaction and returns how it landed.
 ///
 /// Ownership is resolved by joining back to `objects.user_id` rather than trusting anything in
@@ -804,20 +889,11 @@ pub async fn apply_op(
                 return Ok(Outcome::Rejected { reason });
             }
 
-            if op.entity == Entity::Reminder && matches!(field,
-                "schedule" | "every_n" | "every_unit" | "repeat_months" | "repeat_counter" | "due_counter" | "due_date") {
-                let input: crate::api::reminders::ReminderInput = sqlx::query_as(
-                    "SELECT title, notes, due_date, due_counter, repeat_months, repeat_counter, kind, every_n, every_unit, schedule, client_uuid FROM reminders WHERE client_uuid = $1"
-                ).bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
-                let (counter, kind): (Option<String>, String) = sqlx::query_as(
-                    "SELECT o.counter_unit, o.type FROM objects o JOIN reminders r ON r.object_id = o.id WHERE r.client_uuid = $1"
-                ).bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
-                let mut value = serde_json::to_value(input).map_err(|e| AppError::Internal(e.to_string()))?;
-                value[field] = op.value.clone().unwrap_or(serde_json::Value::Null);
-                let mut input: crate::api::reminders::ReminderInput = serde_json::from_value(value)
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                if let Err(e) = input.validate(if kind == "body" { Some("g") } else { counter.as_deref() }) {
-                    return Ok(Outcome::Rejected { reason: e.to_string() });
+            if op.entity == Entity::Reminder && REVALIDATED_REMINDER_FIELDS.contains(&field) {
+                if let Some(reason) =
+                    revalidate_reminder(&mut *tx, &op.entity_uuid, field, op.value.as_ref()).await?
+                {
+                    return Ok(Outcome::Rejected { reason });
                 }
             }
 

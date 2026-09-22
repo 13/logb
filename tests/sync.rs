@@ -41,6 +41,50 @@ async fn sync_cannot_mix_calendar_schedules_with_intervals() {
 }
 
 #[tokio::test]
+async fn every_guarded_reminder_field_is_revalidated_on_sync() {
+    // The guard in `apply_op` lists seven fields. A field named there but never pushed in a test
+    // is a field whose validation can be dropped without anything failing, so each one gets a
+    // value the REST handler refuses. The expected reason is asserted too: `every_n: 0` is turned
+    // away by the generic numeric check before the reminder rules ever run, which would leave
+    // this test passing while proving nothing about the guard.
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Meter", Some("km")).await;
+    let response = app.client.post(app.url(&format!("/objects/{}/reminders", object["id"])))
+        .json(&json!({"title":"Reading", "kind":"reading", "every_n":1, "every_unit":"month"})).send().await.unwrap();
+    assert_eq!(response.status(), 201);
+    let reminder: serde_json::Value = response.json().await.unwrap();
+    let cases = [
+        ("schedule", json!("daily"), "cannot be combined with an interval"),
+        ("every_n", json!(61), "every_n must be 1..60"),
+        ("every_unit", json!("fortnight"), "every_unit week or month"),
+        ("repeat_months", json!(3), "not due_counter or repeat_*"),
+        ("repeat_counter", json!(2), "not due_counter or repeat_*"),
+        ("due_counter", json!(500), "not due_counter or repeat_*"),
+        ("due_date", json!("2026-13-40"), "expected YYYY-MM-DD"),
+    ];
+    for (offset, (field, value, expected)) in cases.iter().enumerate() {
+        let response = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+            "client_op_id": format!("guard-{field}"), "entity":"reminder", "entity_uuid":reminder["client_uuid"],
+            "op":"set", "field":field, "value":value, "edited_at":after_now(60 + offset as i64), "device_id":"phone"
+        }]))).send().await.unwrap();
+        assert_eq!(response.status(), 200, "{field}");
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert!(result.to_string().contains("rejected"), "{field} was accepted: {result}");
+        let reason = result["results"][0]["reason"].as_str().unwrap_or_default();
+        assert!(reason.contains(expected), "{field} was rejected for an unrelated reason: {reason}");
+    }
+    // Nothing above landed: the reminder is the one that was created.
+    let actual = app.get_json(&format!("/reminders/{}", reminder["id"])).await;
+    assert!(actual["schedule"].is_null());
+    assert_eq!(actual["every_n"], 1);
+    assert_eq!(actual["every_unit"], "month");
+    assert!(actual["repeat_months"].is_null());
+    assert!(actual["repeat_counter"].is_null());
+    assert!(actual["due_counter"].is_null());
+}
+
+#[tokio::test]
 async fn every_created_row_gets_a_client_uuid() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
