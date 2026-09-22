@@ -97,7 +97,7 @@ pub(crate) fn scrub(text: &str, url: &str) -> String {
 /// How long a SQLite connection waits for the database's write lock before giving up, and how
 /// long a writer waits for the one writer connection. One number, because they are the same
 /// promise to a caller: five seconds of waiting, then an answer telling it to retry.
-const WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// SQLite needs three settings that a connection URL cannot carry: sqlx 0.9's URL parser accepts
 /// only `mode`, `cache`, `immutable` and `vfs`. `AnyPool` connects by URL, so they are applied

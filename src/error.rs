@@ -85,7 +85,20 @@ impl IntoResponse for AppError {
         let busy = matches!(&self, AppError::Db(e) if is_write_contention(e));
         let message = if busy {
             // Warn, not error: nothing is broken, and the client is being asked to come back.
-            tracing::warn!(error = %self, "the database was busy; asked the client to retry");
+            //
+            // The two halves are logged apart on purpose. A database that said "busy" is one
+            // writer losing a race it will win next time. A pool timeout means the single writer
+            // connection was not handed back within `db::WRITE_WAIT`, which is a long import or
+            // copy -- or a transaction nobody closed, the one bug this answer could otherwise
+            // hide behind a retry forever. Searching for the second line finds it.
+            if matches!(&self, AppError::Db(sqlx::Error::PoolTimedOut)) {
+                tracing::warn!(
+                    "waited {:?} for the writer connection and did not get it; asked the client to retry",
+                    crate::db::WRITE_WAIT
+                );
+            } else {
+                tracing::warn!(error = %self, "the database was busy; asked the client to retry");
+            }
             "the database is busy, please retry".to_string()
         } else if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = %self, "request failed");
