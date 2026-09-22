@@ -281,7 +281,7 @@
   function buildInput(): ActivityInput {
     return buildActivityInput(
       input,
-      { weightText, costText, counterText, quantityText, meterReadingText, fromText, toText, durationText, chargedFull },
+      { costText, counterText, quantityText, meterReadingText, fromText, toText, durationText, chargedFull },
       { text: weightText, unit: weightUnit, originalText: originalWeightText, originalUnit: originalWeightUnit, original: originalWeight },
       object, $t,
     );

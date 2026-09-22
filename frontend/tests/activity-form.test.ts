@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { activityTitle, emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
 import { hashToNegativeId, resolveCategory, parseCategoryParam, counterBelowLast, weightDeviates, firstExifDate, activityToFormText, changeWeightUnitState, buildActivityInput, optimisticActivity } from '../src/lib/activity-form';
 import { categoriesFor } from '../src/lib/type-registry';
-import type { Activity, TitleSuggestion } from '../src/lib/types';
+import type { Activity, MemObject, TitleSuggestion } from '../src/lib/types';
 
 function a(id: number, date: string): Activity {
   return {
@@ -244,7 +244,7 @@ describe('changeWeightUnitState', () => {
   });
 });
 
-const texts = { weightText: '', costText: '', counterText: '', quantityText: '', meterReadingText: '', fromText: '', toText: '', durationText: '', chargedFull: true };
+const texts = { costText: '', counterText: '', quantityText: '', meterReadingText: '', fromText: '', toText: '', durationText: '', chargedFull: true };
 const weight = { text: '', unit: 'kg' as const, originalText: '', originalUnit: 'kg' as const, original: null };
 const t = (k: string) => k;
 
@@ -264,7 +264,7 @@ describe('buildActivityInput', () => {
     expect(repair).toMatchObject({ quantity_milli: null, charged_full: 0 });
   });
   it('a weight entry gets grams and the category word as its title', () => {
-    const out = buildActivityInput({ ...emptyActivity(), category: 'weight', title: '' }, { ...texts, weightText: '80', costText: '5' }, weight, null, t);
+    const out = buildActivityInput({ ...emptyActivity(), category: 'weight', title: '' }, { ...texts, costText: '5' }, { ...weight, text: '80' }, null, t);
     expect(out).toMatchObject({ weight_grams: 80_000, title: 'cat.weight', cost_cents: null, counter_value: null });
   });
   it('copies tags into a plain array', () => {
@@ -272,6 +272,54 @@ describe('buildActivityInput', () => {
     const out = buildActivityInput({ ...emptyActivity(), tags }, texts, weight, null, t);
     expect(out.tags).toEqual(['a']);
     expect(out.tags).not.toBe(tags);
+  });
+});
+
+describe('buildActivityInput for usage entries', () => {
+  it('sends the meter reading and estimated/reset flags, and no quantity, for a water meter object', () => {
+    const object = { resource_kind: 'water', resource_unit: 'm3', measurement_mode: 'meter', fuel_unit: null, counter_unit: null } as unknown as MemObject;
+    const out = buildActivityInput(
+      { ...emptyActivity(), category: 'usage', meter_reset: 1, estimated: 1 },
+      { ...texts, meterReadingText: '1,5', quantityText: '9' },
+      weight, object, t,
+    );
+    expect(out).toMatchObject({
+      meter_reading_milli: 1500, meter_reset: 1, estimated: 1, quantity_milli: null, charged_full: 0, fuel_level_pct: null,
+    });
+  });
+
+  it('sends the quantity and period for a water object in usage measurement mode', () => {
+    const object = { resource_kind: 'water', resource_unit: 'm3', measurement_mode: 'usage', fuel_unit: null, counter_unit: null } as unknown as MemObject;
+    const out = buildActivityInput(
+      { ...emptyActivity(), category: 'usage', period_start: '2026-01-01', period_end: '2026-01-31' },
+      { ...texts, quantityText: '12' },
+      weight, object, t,
+    );
+    expect(out).toMatchObject({
+      quantity_milli: 12_000, period_start: '2026-01-01', period_end: '2026-01-31', meter_reading_milli: null, meter_reset: 0,
+    });
+  });
+
+  it('sends charged_full and fuel_level_pct for a liquid non-water resource', () => {
+    const object = { resource_kind: 'heating_fuel', resource_unit: 'l', measurement_mode: 'usage', fuel_unit: null, counter_unit: null } as unknown as MemObject;
+    const out = buildActivityInput(
+      { ...emptyActivity(), category: 'usage', fuel_level_pct: 40 },
+      { ...texts, chargedFull: true },
+      weight, object, t,
+    );
+    expect(out).toMatchObject({ charged_full: 1, fuel_level_pct: 40 });
+  });
+
+  it('nulls every usage field on the same liquid object once the category leaves usage', () => {
+    const object = { resource_kind: 'heating_fuel', resource_unit: 'l', measurement_mode: 'usage', fuel_unit: null, counter_unit: null } as unknown as MemObject;
+    const out = buildActivityInput(
+      { ...emptyActivity(), category: 'repair', fuel_level_pct: 40 },
+      { ...texts, chargedFull: true },
+      weight, object, t,
+    );
+    expect(out).toMatchObject({
+      meter_reading_milli: null, period_start: null, period_end: null, estimated: 0, meter_reset: 0, fuel_level_pct: null, charged_full: 0,
+    });
   });
 });
 

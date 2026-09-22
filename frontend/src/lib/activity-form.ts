@@ -148,12 +148,12 @@ export function firstExifDate(attachments: { taken_at: string | null }[]): strin
 }
 
 export interface FormTexts {
-  weightText: string; costText: string; counterText: string; quantityText: string; meterReadingText: string;
+  costText: string; counterText: string; quantityText: string; meterReadingText: string;
   fromText: string; toText: string; durationText: string; chargedFull: boolean;
 }
 
 /** The loaded row as the form's text fields show it. */
-export function activityToFormText(a: Activity, weightUnit: WeightUnit): FormTexts & { distance: number | null } {
+export function activityToFormText(a: Activity, weightUnit: WeightUnit): FormTexts & { weightText: string; distance: number | null } {
   return {
     weightText: weightInput(a.weight_grams, weightUnit),
     costText: centsToInput(a.cost_cents),
@@ -180,9 +180,9 @@ export function changeWeightUnitState(s: WeightState, next: WeightUnit): WeightS
   return { text, unit: next, originalText: text, originalUnit: next, original: grams };
 }
 
-function storedGrams(texts: FormTexts, w: WeightState): number {
-  const untouched = w.original !== null && texts.weightText === w.originalText && w.unit === w.originalUnit;
-  return untouched ? w.original! : parseWeight(texts.weightText, w.unit);
+function storedGrams(w: WeightState): number {
+  const untouched = w.text === w.originalText && w.unit === w.originalUnit && w.original !== null;
+  return untouched ? w.original! : parseWeight(w.text, w.unit);
 }
 
 /** The request body for the current form state: category-gated so a field typed under one
@@ -201,7 +201,7 @@ export function buildActivityInput(input: ActivityInput, texts: FormTexts, weigh
   return {
     ...input,
     title: isWeight ? (input.title || t('cat.weight')) : input.title,
-    weight_grams: isWeight ? storedGrams(texts, weight) : null,
+    weight_grams: isWeight ? storedGrams(weight) : null,
     // A plain copy: `input.tags` is a $state proxy, and IndexedDB cannot clone a proxy, so
     // queuing this body offline (the outbox) would fail with the spread's array left as it is.
     tags: [...(input.tags ?? [])],
