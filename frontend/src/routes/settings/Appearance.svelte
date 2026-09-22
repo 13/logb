@@ -4,7 +4,7 @@
   import { api } from '../../lib/api';
   import { locale, navigatorLangs, t } from '../../i18n';
   import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
-  import { settings, deviceOverride, applyAccountAppearance, type LocalSettings } from '../../stores/settings';
+  import { settings, appearance, setDeviceOverride, applyAccountAppearance, type LocalSettings } from '../../stores/settings';
   import { currency, rememberCurrentCurrency, user } from '../../stores/session';
   import { DATE_FORMATS, fmtDate, resolveDateFormat, type DateFormat } from '../../lib/format';
   import type { Settings } from '../../lib/types';
@@ -25,11 +25,12 @@
   let timezoneLocked = $state(false);
   let message = $state('');
   let error = $state('');
-  const overridden = $derived(!!$deviceOverride[String($user?.id)]);
+  // Read from the store itself, so the checkbox re-renders when the stored record changes.
+  const overridden = $derived(!!$appearance[String($user?.id)]?.override);
 
   function setOverride(enabled: boolean) {
     if (!$user) return;
-    deviceOverride.update(all => ({ ...all, [String($user!.id)]: enabled }));
+    setDeviceOverride($user.id, enabled);
   }
   async function saveAppearance() {
     if (!$user) return;

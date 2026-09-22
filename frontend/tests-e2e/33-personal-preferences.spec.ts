@@ -4,7 +4,7 @@ import { signInFresh } from './helpers';
 /** Erase every local preference while keeping the session cookie: a fresh device, same account. */
 async function forgetLocalPreferences(page: import('@playwright/test').Page) {
   await page.evaluate(() => {
-    for (const key of ['logb.settings', 'logb.appearance-accounts', 'logb.appearance-devices', 'logb.appearance-overrides']) {
+    for (const key of ['logb.settings', 'logb.appearance']) {
       localStorage.removeItem(key);
     }
   });

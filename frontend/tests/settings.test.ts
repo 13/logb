@@ -34,24 +34,63 @@ describe('settings', () => {
     expect(get(settings)).toEqual({ locale: 'de', theme: 'dark', dateFormat: 'auto', firstDayOfWeek: 'locale' });
   });
 
-  it('isolates accounts, honors device overrides and ignores stale preference loads', async () => {
-    vi.resetModules(); installStorage();
-    const { settings, appearanceOwner, applyAccountAppearance, appearanceRevision, deviceOverride } = await import('../src/stores/settings');
+  /** The four behaviours the account/device split has to keep, whatever its storage looks like. */
+  async function load() {
+    vi.resetModules();
+    installStorage();
+    return import('../src/stores/settings');
+  }
+
+  const ACCOUNT = { locale: 'de' as const, theme: 'dark' as const, dateFormat: 'iso' as const, firstDayOfWeek: 'monday' as const };
+
+  it('lets a preference load that started before a local edit lose to that edit', async () => {
+    const { settings, appearanceOwner, applyAccountAppearance, appearanceSnapshot } = await load();
     appearanceOwner(1);
-    const account = { locale: 'de' as const, theme: 'dark' as const, dateFormat: 'iso' as const, firstDayOfWeek: 'monday' as const };
-    applyAccountAppearance(1, account);
-    const beforeEdit = appearanceRevision();
+    const inFlight = appearanceSnapshot();
     settings.update(s => ({ ...s, firstDayOfWeek: 'sunday' }));
-    applyAccountAppearance(1, account, beforeEdit);
+    applyAccountAppearance(1, ACCOUNT, inFlight);
     expect(get(settings).firstDayOfWeek).toBe('sunday');
-    deviceOverride.set({ '1': true });
-    applyAccountAppearance(1, account);
+    // The account value is still remembered: the next device that loads it gets it.
+    appearanceOwner(null);
+    appearanceOwner(1);
     expect(get(settings).firstDayOfWeek).toBe('sunday');
+  });
+
+  it('applies a preference load that nothing has raced', async () => {
+    const { settings, appearanceOwner, applyAccountAppearance, appearanceSnapshot } = await load();
+    appearanceOwner(1);
+    applyAccountAppearance(1, ACCOUNT, appearanceSnapshot());
+    expect(get(settings)).toEqual(ACCOUNT);
+  });
+
+  it('keeps a device override across a sign-out and back in', async () => {
+    const { settings, appearanceOwner, applyAccountAppearance, setDeviceOverride } = await load();
+    appearanceOwner(1);
+    setDeviceOverride(1, true);
+    settings.update(s => ({ ...s, theme: 'light' }));
+    appearanceOwner(null);
+    appearanceOwner(1);
+    applyAccountAppearance(1, ACCOUNT);
+    expect(get(settings).theme).toBe('light');
+  });
+
+  it('does not leak one account\'s appearance into another on the same device', async () => {
+    const { settings, appearanceOwner, applyAccountAppearance } = await load();
+    appearanceOwner(1);
+    applyAccountAppearance(1, ACCOUNT);
     appearanceOwner(2);
     expect(get(settings).locale).toBe('auto');
-    applyAccountAppearance(1, account);
+    // A load that arrives for the account that just left changes nothing for the one here now.
+    applyAccountAppearance(1, ACCOUNT);
     expect(get(settings).locale).toBe('auto');
     appearanceOwner(1);
-    expect(get(settings).firstDayOfWeek).toBe('sunday');
+    expect(get(settings).locale).toBe('de');
+  });
+
+  it('adopts what a fresh device was already set to when its first account signs in', async () => {
+    const { settings, appearanceOwner } = await load();
+    settings.update(s => ({ ...s, theme: 'dark' }));
+    appearanceOwner(7);
+    expect(get(settings).theme).toBe('dark');
   });
 });

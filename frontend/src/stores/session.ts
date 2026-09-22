@@ -7,7 +7,7 @@ import { forgetObjectDraft } from '../lib/object-draft';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
-import { appearanceOwner, appearanceRevision, applyAccountAppearance, type LocalSettings } from './settings';
+import { appearanceOwner, appearanceSnapshot, applyAccountAppearance, type LocalSettings } from './settings';
 
 /**
  * How this module navigates. Injected the same way `setUnauthorizedHandler` is, so the session
@@ -236,10 +236,10 @@ async function adoptUser(me: User): Promise<void> {
   offlineState.set(false);
   stopOfflineRetry();
   appearanceOwner(me.id);
-  const preferencesRevision = appearanceRevision();
+  const onScreen = appearanceSnapshot();
   user.set(me);
   void api<LocalSettings | null>('GET', '/me/appearance')
-    .then(value => applyAccountAppearance(me.id, value, preferencesRevision))
+    .then(value => applyAccountAppearance(me.id, value, onScreen))
     .catch(() => { /* Keep this account's cached appearance while offline. */ });
   setOutboxUser(me.id);
 }
