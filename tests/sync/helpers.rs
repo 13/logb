@@ -3,6 +3,10 @@ use super::common;
 use reqwest::multipart::{Form, Part};
 use serde_json::json;
 
+/// An `edited_at` a fixed number of seconds after "right now", in the same canonical form
+/// `sync::apply::canonical_edited_at` produces. A literal calendar date pinned "in the future"
+/// (2031, say) is only in the future until the wall clock passes it -- this file used to
+/// hardcode exactly that, and every `set` op relying on it to beat a REST create's real-time
 /// `field_clock` stamp would have started failing the moment "now" caught up to the literal.
 /// An offset from the clock the test actually runs against cannot expire.
 pub fn after_now(secs: i64) -> String {
