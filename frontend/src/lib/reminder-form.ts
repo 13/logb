@@ -23,13 +23,18 @@ export function toReminderInput(r: Reminder): ReminderInput {
 /** Returns the i18n key of the offending field, or null when valid. */
 export function validateReminder(input: ReminderInput): string | null {
   if (!input.title.trim()) return 'reminder.title';
+  if (input.every_n !== null || input.every_unit !== null) {
+    if (!Number.isInteger(input.every_n) || input.every_n! < 1 || input.every_n! > 60 || !['week', 'month'].includes(input.every_unit ?? '')
+      || input.schedule || input.repeat_months !== null) return 'reminder.every';
+  }
+  if (input.schedule && !/^(daily|weekly:[1-7]|monthly:(last|[1-9]|[12][0-9]|3[01])|yearly:(?:[1-9]|1[0-2]):(?:[1-9]|[12][0-9]|3[01]))$/.test(input.schedule)) return 'reminder.schedule';
   if (input.kind === 'reading') {
+    if (input.schedule) return input.every_n !== null || input.every_unit !== null ? 'reminder.every' : null;
     if (input.every_n === null || Number.isNaN(input.every_n) || input.every_n < 1 || input.every_n > 60) return 'reminder.every';
     if (input.every_unit !== 'week' && input.every_unit !== 'month') return 'reminder.every';
     return null;
   }
   if (!input.schedule && !input.due_date && input.due_counter === null) return 'reminder.due-date';
-  if (input.schedule && !/^(daily|weekly:[1-7]|monthly:(last|[1-9]|[12][0-9]|3[01])|yearly:(?:[1-9]|1[0-2]):(?:[1-9]|[12][0-9]|3[01]))$/.test(input.schedule)) return 'reminder.schedule';
   if (input.schedule && input.repeat_months !== null) return 'reminder.repeat-months';
   if (input.due_counter !== null && (Number.isNaN(input.due_counter) || input.due_counter < 0)) return 'reminder.due-counter';
   if (input.repeat_months !== null && (Number.isNaN(input.repeat_months) || input.repeat_months <= 0)) return 'reminder.repeat-months';
@@ -37,13 +42,13 @@ export function validateReminder(input: ReminderInput): string | null {
   return null;
 }
 
-/** The body the server takes for this kind: a reading reminder sends no service fields and a
- *  service reminder no interval, since the server refuses either mix. */
+/** Reading reminders omit service-only counter targets; both kinds share recurrence fields. */
 export function reminderBody(input: ReminderInput): ReminderInput {
   if (input.kind === 'reading') {
-    return { ...input, due_counter: null, repeat_months: null, repeat_counter: null, due_date: input.due_date || null, schedule: null };
+    return { ...input, due_counter: null, repeat_months: null, repeat_counter: null, due_date: input.due_date || null,
+      every_n: input.schedule ? null : input.every_n, every_unit: input.schedule ? null : input.every_unit };
   }
-  return { ...input, every_n: null, every_unit: null };
+  return input;
 }
 
 export function splitReminders(list: Reminder[]): { due: Reminder[]; open: Reminder[]; done: Reminder[] } {

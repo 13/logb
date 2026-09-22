@@ -804,6 +804,23 @@ pub async fn apply_op(
                 return Ok(Outcome::Rejected { reason });
             }
 
+            if op.entity == Entity::Reminder && matches!(field,
+                "schedule" | "every_n" | "every_unit" | "repeat_months" | "repeat_counter" | "due_counter" | "due_date") {
+                let input: crate::api::reminders::ReminderInput = sqlx::query_as(
+                    "SELECT title, notes, due_date, due_counter, repeat_months, repeat_counter, kind, every_n, every_unit, schedule, client_uuid FROM reminders WHERE client_uuid = $1"
+                ).bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
+                let (counter, kind): (Option<String>, String) = sqlx::query_as(
+                    "SELECT o.counter_unit, o.type FROM objects o JOIN reminders r ON r.object_id = o.id WHERE r.client_uuid = $1"
+                ).bind(&op.entity_uuid).fetch_one(&mut *tx).await?;
+                let mut value = serde_json::to_value(input).map_err(|e| AppError::Internal(e.to_string()))?;
+                value[field] = op.value.clone().unwrap_or(serde_json::Value::Null);
+                let mut input: crate::api::reminders::ReminderInput = serde_json::from_value(value)
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                if let Err(e) = input.validate(if kind == "body" { Some("g") } else { counter.as_deref() }) {
+                    return Ok(Outcome::Rejected { reason: e.to_string() });
+                }
+            }
+
             // Tags are normalised, not merely checked: a REST write stores the normalised
             // spelling, so a sync write has to store the same one. Done again here, even though
             // the push handler already rewrote the logged value, so `apply_op` never relies on

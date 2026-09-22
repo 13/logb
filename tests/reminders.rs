@@ -15,6 +15,32 @@ async fn add_activity(
 }
 
 #[tokio::test]
+async fn service_intervals_share_week_month_options_and_calendar_skip_is_exact() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let home = app.create_object(&app.client, "Home", None).await;
+    for (n, unit) in [(2, "week"), (3, "month")] {
+        let response = app.client.post(app.url(&format!("/objects/{}/reminders", home["id"])))
+            .json(&json!({"title":"Interval", "due_date":"2020-01-01", "every_n":n, "every_unit":unit})).send().await.unwrap();
+        assert_eq!(response.status(), 201);
+        let first: serde_json::Value = response.json().await.unwrap();
+        let done: serde_json::Value = app.client.post(app.url(&format!("/reminders/{}/done", first["id"])))
+            .json(&json!({})).send().await.unwrap().json().await.unwrap();
+        let today = chrono::NaiveDate::parse_from_str(&logb::db::today(), "%Y-%m-%d").unwrap();
+        let expected = logb::domain::reminder::Every::from_parts(Some(n), Some(unit)).unwrap().after(today).unwrap();
+        assert_eq!(done["next"]["due_date"], expected.to_string());
+        assert_eq!(done["next"]["every_n"], n);
+    }
+    let response = app.client.post(app.url(&format!("/objects/{}/reminders", home["id"])))
+        .json(&json!({"title":"Future", "due_date":"2096-02-01", "schedule":"monthly:last"})).send().await.unwrap();
+    let first: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(first["due_date"], "2096-02-29");
+    let skipped: serde_json::Value = app.client.post(app.url(&format!("/reminders/{}/snooze", first["id"])))
+        .json(&json!({"skip":true})).send().await.unwrap().json().await.unwrap();
+    assert_eq!(skipped["snoozed_until"], "2096-03-31");
+}
+
+#[tokio::test]
 async fn a_fixed_monthly_reminder_creates_the_next_calendar_occurrence() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

@@ -1,4 +1,6 @@
 export default {
+  'reminder.preview': 'Nächste Termine',
+  'reminder.calendar-hint': 'Die Termine bleiben im Kalender verankert. Kurze Monate verwenden ihren letzten Tag; der 29. Februar wird in anderen Jahren zum 28. Februar.',
   "cat.usage": "Verbrauch",
   "template.object-water": "Wasserzähler",
   "object.resource-kind": "Ressource",

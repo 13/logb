@@ -5,7 +5,7 @@
   import { activityTitle } from './activity-form';
   import { dateFormat } from '../stores/date-format';
   import { locale, t } from '../i18n';
-  import { intervalDays, splitReminders } from './reminder-form';
+  import { splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
   import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
@@ -63,7 +63,7 @@
    *  rather than tomorrow. The server measures it from today when the reading is overdue. */
   async function skip(r: Reminder) {
     try {
-      await api<Reminder>('POST', `/reminders/${r.id}/snooze`, { days: intervalDays(r.every_n, r.every_unit) });
+      await api<Reminder>('POST', `/reminders/${r.id}/snooze`, { skip: true });
       await load();
       onchanged?.();
     } catch (e) { error = (e as Error).message; }
@@ -84,6 +84,7 @@
   }
 
   function every(r: Reminder): string {
+    if (r.schedule) return when({ ...r, due_date: null });
     const n = r.every_n ?? 1;
     if (r.every_unit === 'week') return n === 1 ? $t('reminder.every-week') : $t('reminder.every-weeks', { n });
     return n === 1 ? $t('reminder.every-month') : $t('reminder.every-months', { n });

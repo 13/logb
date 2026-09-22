@@ -57,6 +57,27 @@ async fn car(app: &common::TestApp) -> i64 {
 }
 
 #[tokio::test]
+async fn fixed_reading_schedules_follow_readings_and_restore_after_deletion() {
+    let app = common::spawn().await;
+    let id = car(&app).await;
+    for schedule in ["daily", "weekly:1", "monthly:15", "monthly:last", "yearly:2:29"] {
+        let r = reading_reminder(&app, id, json!({
+            "title": schedule, "kind": "reading", "schedule": schedule, "due_date": "2020-01-01"
+        })).await;
+        assert_eq!(r["due"], true);
+        let entry = add_activity(&app, id, json!({ "category": "reading", "title": "Counter", "date": today().to_string(), "counter_value": 100 })).await;
+        let path = format!("/reminders/{}", r["id"]);
+        let advanced = get(&app, &path).await;
+        assert_eq!(advanced["due"], false, "{schedule}: {advanced}");
+        let expected = logb::domain::reminder::CalendarSchedule::parse(schedule).unwrap().next_after(today()).unwrap().to_string();
+        assert_eq!(advanced["next_due_date"], expected);
+        let removed = app.client.delete(app.url(&format!("/activities/{}", entry["id"]))).send().await.unwrap();
+        assert!(removed.status().is_success());
+        assert_eq!(get(&app, &path).await["due"], true);
+    }
+}
+
+#[tokio::test]
 async fn a_reading_reminder_is_validated_as_its_own_kind() {
     let app = common::spawn().await;
     let id = car(&app).await;
@@ -88,7 +109,7 @@ async fn a_reading_reminder_is_validated_as_its_own_kind() {
         ),
         (
             id,
-            json!({ "title": "Oil", "due_date": "2030-01-01", "every_n": 1, "every_unit": "month" }),
+            json!({ "title": "Oil", "due_date": "2030-01-01", "every_n": 1, "every_unit": "month", "schedule": "daily" }),
         ),
         (
             id,
@@ -375,6 +396,9 @@ async fn a_reading_reminder_survives_export_and_import() {
     reading_reminder(&app, id, json!({
         "title": "Log km", "kind": "reading", "every_n": 2, "every_unit": "week", "due_date": "2026-01-05"
     })).await;
+    reading_reminder(&app, id, json!({
+        "title": "Calendar km", "kind": "reading", "schedule": "monthly:last", "due_date": "2026-01-05"
+    })).await;
     add_activity(&app, id, json!({ "date": "2026-01-01", "category": "reading", "title": "Odometer", "counter_value": 1_000 })).await;
 
     let zip = app
@@ -414,7 +438,11 @@ async fn a_reading_reminder_survives_export_and_import() {
         .json()
         .await
         .unwrap();
-    assert_eq!(rems.len(), 1);
+    assert_eq!(rems.len(), 2);
+    let fixed = rems.iter().find(|r| r["schedule"] == "monthly:last").unwrap();
+    assert_eq!(fixed["kind"], "reading");
+    assert_eq!(fixed["due_date"], "2026-01-05");
+    let rems: Vec<_> = rems.iter().filter(|r| r["schedule"].is_null()).collect();
     assert_eq!(rems[0]["kind"], "reading");
     assert_eq!(rems[0]["every_n"], 2);
     assert_eq!(rems[0]["every_unit"], "week");

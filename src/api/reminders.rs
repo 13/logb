@@ -47,7 +47,7 @@ pub struct ReminderRow {
     pub snoozed_until: Option<String>,
     /// `service` or `reading` -- see `domain::reminder::KIND_READING`.
     pub kind: String,
-    /// A reading reminder's interval; both null on a service reminder.
+    /// An interval for either reminder kind; null when using a fixed calendar schedule.
     pub every_n: Option<i64>,
     pub every_unit: Option<String>,
     /// Calendar recurrence: daily, weekly:1..7, monthly:1..31, monthly:last, or yearly:M:D.
@@ -119,7 +119,8 @@ impl ReminderOut {
                 today,
                 row.due_date.as_deref().and_then(parse_date),
                 row.last_reading_date.as_deref().and_then(parse_date),
-                Every::from_parts(row.every_n, row.every_unit.as_deref()),
+                row.schedule.as_deref().and_then(CalendarSchedule::parse).map(Every::Calendar)
+                    .or_else(|| Every::from_parts(row.every_n, row.every_unit.as_deref())),
                 snoozed_until,
             );
             return ReminderOut {
@@ -213,7 +214,7 @@ async fn out(state: &App, user_id: i64, row: ReminderRow) -> Result<ReminderOut,
     Ok(ReminderOut::build(row, today(), usage))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, sqlx::FromRow)]
 pub struct ReminderInput {
     pub title: String,
     #[serde(default)]
@@ -255,9 +256,6 @@ impl ReminderInput {
         }
         match self.kind.as_str() {
             KIND_READING => {
-                if self.schedule.is_some() {
-                    return Err(AppError::BadRequest("calendar schedules belong to a service reminder".into()));
-                }
                 if counter_unit.is_none() {
                     return Err(AppError::BadRequest("this object has no counter".into()));
                 }
@@ -269,7 +267,14 @@ impl ReminderInput {
                         "a reading reminder takes every_n and every_unit, not due_counter or repeat_*".into(),
                     ));
                 }
-                if Every::from_parts(self.every_n, self.every_unit.as_deref()).is_none() {
+                if let Some(raw) = self.schedule.as_deref() {
+                    if CalendarSchedule::parse(raw).is_none() {
+                        return Err(AppError::BadRequest("invalid calendar schedule".into()));
+                    }
+                    if self.every_n.is_some() || self.every_unit.is_some() {
+                        return Err(AppError::BadRequest("calendar schedule cannot be combined with an interval".into()));
+                    }
+                } else if Every::from_parts(self.every_n, self.every_unit.as_deref()).is_none() {
                     return Err(AppError::BadRequest(format!(
                         "every_n must be 1..{MAX_EVERY} and every_unit week or month"
                     )));
@@ -280,9 +285,11 @@ impl ReminderInput {
                 }
             }
             KIND_SERVICE => {
-                if self.every_n.is_some() || self.every_unit.is_some() {
+                if (self.every_n.is_some() || self.every_unit.is_some())
+                    && (Every::from_parts(self.every_n, self.every_unit.as_deref()).is_none()
+                        || self.repeat_months.is_some() || self.schedule.is_some()) {
                     return Err(AppError::BadRequest(
-                        "every_n and every_unit belong to a reading reminder".into(),
+                        "invalid interval or conflicting recurrence".into(),
                     ));
                 }
                 if let Some(raw) = self.schedule.as_deref() {
@@ -291,9 +298,8 @@ impl ReminderInput {
                     if self.repeat_months.is_some() {
                         return Err(AppError::BadRequest("repeat_months cannot be combined with a calendar schedule".into()));
                     }
-                    if self.due_date.is_none() {
-                        self.due_date = schedule.on_or_after(today()).map(|d| d.to_string());
-                    }
+                    let start = self.due_date.as_deref().and_then(parse_date).unwrap_or_else(today);
+                    self.due_date = schedule.on_or_after(start).map(|d| d.to_string());
                 }
                 if self.due_date.is_none() && self.due_counter.is_none() {
                     return Err(AppError::BadRequest(
@@ -663,6 +669,11 @@ async fn done(
             let counter = repeat.counter.and_then(|step| base_counter.or(r.due_counter).map(|c| c + step));
             (Some(date), counter)
         })
+    } else if let Some(every) = Every::from_parts(r.every_n, r.every_unit.as_deref()) {
+        every.after(base_date).map(|date| {
+            let counter = repeat.counter.and_then(|step| base_counter.or(r.due_counter).map(|c| c + step));
+            (Some(date), counter)
+        })
     } else {
         next_due(base_date, base_counter, r.due_counter, repeat)
     };
@@ -699,8 +710,8 @@ async fn done(
                 repeat_months: r.repeat_months,
                 repeat_counter: r.repeat_counter,
                 kind: KIND_SERVICE.to_string(),
-                every_n: None,
-                every_unit: None,
+                every_n: r.every_n,
+                every_unit: r.every_unit.clone(),
                 schedule: r.schedule.clone(),
                 client_uuid: None,
             };
@@ -734,7 +745,10 @@ async fn done(
 
 #[derive(Deserialize)]
 pub struct SnoozeInput {
+    #[serde(default)]
     pub days: i64,
+    #[serde(default)]
+    pub skip: bool,
 }
 
 /// Hide a reminder from `due` for `days`. Snoozing means "not now, in a week", so an overdue
@@ -752,7 +766,7 @@ async fn snooze(
     Path(id): Path<i64>,
     Json(body): Json<SnoozeInput>,
 ) -> Result<Json<ReminderOut>, AppError> {
-    if !(1..=365).contains(&body.days) {
+    if !body.skip && !(1..=365).contains(&body.days) {
         return Err(AppError::BadRequest(
             "days must be between 1 and 365".into(),
         ));
@@ -766,7 +780,12 @@ async fn snooze(
         .next_due_date
         .as_deref()
         .and_then(parse_date);
-    let until = snoozed_date(today, current_due, body.days).to_string();
+    let until = if body.skip {
+        let base = current_due.unwrap_or(today).max(today);
+        r.schedule.as_deref().and_then(CalendarSchedule::parse).and_then(|s| s.next_after(base))
+            .or_else(|| Every::from_parts(r.every_n, r.every_unit.as_deref()).and_then(|e| e.after(base)))
+            .ok_or_else(|| AppError::BadRequest("skip requires a repeating reminder".into()))?
+    } else { snoozed_date(today, current_due, body.days) }.to_string();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     sqlx::query("UPDATE reminders SET snoozed_until = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(&until)

@@ -1492,14 +1492,14 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "days"
                 ],
                 "properties": {
                   "days": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 365
-                  }
+                  },
+                  "skip": { "type": "boolean", "default": false, "description": "Advance snooze to the next scheduled date or complete interval instead of using days" }
                 }
               }
             }
@@ -3909,7 +3909,7 @@
               "integer",
               "null"
             ],
-            "description": "A reading reminder's interval, 1..60"
+            "description": "Week/month interval for any reminder kind, 1..60; cannot be combined with schedule or repeat_months"
           },
           "every_unit": {
             "type": [
@@ -4009,7 +4009,7 @@
               "reading"
             ],
             "default": "service",
-            "description": "Fixed at create; a PATCH naming another kind is refused. A reading reminder takes every_n and every_unit, needs an object with a counter, refuses due_counter and repeat_*, and treats a missing due_date as today"
+            "description": "Fixed at create; a PATCH naming another kind is refused. Reading reminders take either schedule or every_n/every_unit, require a counter or body object, refuse due_counter and repeat_*, and default their start to today"
           },
           "every_n": {
             "type": [
@@ -4030,7 +4030,7 @@
           },
           "schedule": {
             "type": ["string", "null"],
-            "description": "A service reminder's fixed calendar recurrence. Cannot be combined with repeat_months."
+            "description": "Fixed calendar recurrence for service, counter-reading or weight reminders. Cannot be combined with repeat_months or every_n/every_unit. due_date selects the start."
           },
           "client_uuid": {
             "type": "string",

@@ -456,7 +456,7 @@ async fn due_readings(
     user_id: Option<i64>,
     only: Option<i64>,
 ) -> Result<HashMap<i64, i64>, AppError> {
-    use crate::domain::reminder::{reading_status, Every};
+    use crate::domain::reminder::{reading_status, CalendarSchedule, Every};
     type ReadingRow = (
         i64,
         Option<String>,
@@ -464,10 +464,11 @@ async fn due_readings(
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
     );
     let today_str = db::today();
     let rows: Vec<ReadingRow> = sqlx::query_as(
-        "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, \
+        "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, r.schedule, \
            (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
               AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $2) AS last_reading_date \
          FROM reminders r JOIN objects o ON o.id = r.object_id \
@@ -484,8 +485,9 @@ async fn due_readings(
         return Ok(HashMap::new());
     };
     let mut counts = HashMap::new();
-    for (object_id, start, every_n, every_unit, snoozed, last) in rows {
-        let every = Every::from_parts(every_n, every_unit.as_deref());
+    for (object_id, start, every_n, every_unit, snoozed, schedule, last) in rows {
+        let every = schedule.as_deref().and_then(CalendarSchedule::parse).map(Every::Calendar)
+            .or_else(|| Every::from_parts(every_n, every_unit.as_deref()));
         if reading_status(today, parse(&start), parse(&last), every, parse(&snoozed)).0 {
             *counts.entry(object_id).or_insert(0) += 1;
         }

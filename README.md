@@ -437,13 +437,17 @@ reminder come due most of a day late and one in UTC−8 sees it a day early. It
 also decides when `LOGB_NOTIFY_HOUR` fires. Stored timestamps stay UTC and are
 rendered in the reader's locale.
 
-Service reminders can repeat on fixed calendar dates: every day, a chosen weekday, a chosen
+Service, counter-reading, and weight reminders share the same recurrence options: week/month
+intervals or fixed calendar dates—every day, a chosen weekday, a chosen
 day of each month (including the last day), or a month and day each year. Days that do not exist
 in a shorter month clamp to that month's final day; February 29 therefore becomes February 28 in
 non-leap years. Completing an overdue reminder creates the next future calendar occurrence rather
 than another overdue one. Each device can choose Monday, Sunday, or its language default as the
 first day of the week under Settings → Appearance; the calendar picker follows that choice and the
-selected interface language.
+selected interface language. The form previews the next three fixed dates and allows a future
+start. Logging a counter value (or weight for a body object) advances its reading reminder;
+deleting that entry recalculates the date. Skipping a reading uses its actual next occurrence.
+The picker supports arrow keys, Home/End, Page Up/Down, Enter, and Escape.
 
 ## Reminder notifications
 

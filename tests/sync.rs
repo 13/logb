@@ -20,6 +20,27 @@ fn before_now(secs: i64) -> String {
 }
 
 #[tokio::test]
+async fn sync_cannot_mix_calendar_schedules_with_intervals() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Meter", Some("km")).await;
+    let response = app.client.post(app.url(&format!("/objects/{}/reminders", object["id"])))
+        .json(&json!({"title":"Reading", "kind":"reading", "every_n":1, "every_unit":"month"})).send().await.unwrap();
+    assert_eq!(response.status(), 201);
+    let reminder: serde_json::Value = response.json().await.unwrap();
+    let response = app.client.post(app.url("/sync/push")).json(&push_body(json!([{
+        "client_op_id":"calendar-conflict", "entity":"reminder", "entity_uuid":reminder["client_uuid"],
+        "op":"set", "field":"schedule", "value":"daily", "edited_at":after_now(60), "device_id":"phone"
+    }]))).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let result: serde_json::Value = response.json().await.unwrap();
+    assert!(result.to_string().contains("rejected"), "{result}");
+    let actual = app.get_json(&format!("/reminders/{}", reminder["id"])).await;
+    assert!(actual["schedule"].is_null());
+    assert_eq!(actual["every_n"], 1);
+}
+
+#[tokio::test]
 async fn every_created_row_gets_a_client_uuid() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;

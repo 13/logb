@@ -93,6 +93,7 @@ pub struct Repeat {
 pub enum Every {
     Week(u32),
     Month(u32),
+    Calendar(CalendarSchedule),
 }
 
 impl Every {
@@ -113,6 +114,7 @@ impl Every {
         match self {
             Every::Week(n) => date.checked_add_days(Days::new(7 * u64::from(n))),
             Every::Month(n) => date.checked_add_months(Months::new(n)),
+            Every::Calendar(schedule) => schedule.next_after(date),
         }
     }
 }
@@ -124,6 +126,15 @@ impl Every {
 /// entry, a service, the quick reading form, a device syncing an entry made offline -- moves
 /// it, and deleting that reading moves it back, with nothing to keep in step.
 pub fn reading_next_due(start: NaiveDate, last_reading: Option<NaiveDate>, every: Every) -> NaiveDate {
+    if let Every::Calendar(schedule) = every {
+        let first = schedule.on_or_after(start).unwrap_or(start);
+        // A reading before the start cannot satisfy the first occurrence. Once started,
+        // an early reading satisfies the upcoming occurrence, just like early service completion.
+        return match last_reading.filter(|d| *d >= start) {
+            Some(last) => schedule.next_after(last.max(first)).unwrap_or(first),
+            None => first,
+        };
+    }
     match last_reading.and_then(|d| every.after(d)) {
         Some(next) if next > start => next,
         _ => start,
@@ -374,6 +385,18 @@ mod tests {
     fn a_monthly_interval_clamps_to_the_end_of_a_short_month() {
         assert_eq!(Every::Month(1).after(d("2026-01-31")), Some(d("2026-02-28")));
         assert_eq!(Every::Week(2).after(d("2026-12-25")), Some(d("2027-01-08")));
+    }
+
+    #[test]
+    fn calendar_readings_respect_start_and_early_late_or_removed_readings() {
+        let every = Every::Calendar(CalendarSchedule::Monthly(Some(31)));
+        let start = d("2028-01-01");
+        assert_eq!(reading_next_due(start, None, every), d("2028-01-31"));
+        assert_eq!(reading_next_due(start, Some(d("2027-12-31")), every), d("2028-01-31"));
+        assert_eq!(reading_next_due(start, Some(d("2028-01-15")), every), d("2028-02-29"));
+        assert_eq!(reading_next_due(start, Some(d("2028-02-04")), every), d("2028-02-29"));
+        assert_eq!(reading_next_due(start, Some(d("2028-02-29")), every), d("2028-03-31"));
+        assert_eq!(reading_next_due(start, None, every), d("2028-01-31"));
     }
 
     #[test]

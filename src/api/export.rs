@@ -967,7 +967,7 @@ fn validate_import(data: &Export) -> Result<(), AppError> {
             };
             // `validate` fills in a missing start for a reading reminder, but the insert below
             // writes the archive's own value -- so the archive has to carry one.
-            if r.kind == crate::domain::reminder::KIND_READING && r.due_date.is_none() {
+            if (r.kind == crate::domain::reminder::KIND_READING || r.schedule.is_some()) && r.due_date.is_none() {
                 return Err(tag(
                     AppError::BadRequest("a reading reminder needs a due_date (its start)".into()),
                     &format!("object {oi} ({}) reminder {ri} ({})", o.name, r.title),

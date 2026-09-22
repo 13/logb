@@ -1,4 +1,6 @@
 export default {
+  'reminder.preview': 'Next dates',
+  'reminder.calendar-hint': 'Dates stay on the calendar. Short months use their final day; February 29 becomes February 28 in other years.',
   "cat.usage": "Usage",
   "template.object-water": "Water meter",
   "object.resource-kind": "Resource",

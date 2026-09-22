@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { t, locale } from '../i18n';
   import { dateFormat } from '../stores/date-format';
   import { settings } from '../stores/settings';
@@ -18,6 +18,35 @@
   let field: HTMLInputElement;
   let pickerOpen = $state(false);
   let view = $state(new Date());
+  let container: HTMLDivElement;
+  let trigger: HTMLButtonElement;
+  let focusedDay = $state('');
+
+  function closePicker() { pickerOpen = false; trigger?.focus(); }
+  function outside(event: PointerEvent) {
+    if (pickerOpen && event.target instanceof Node && !container.contains(event.target)) pickerOpen = false;
+  }
+  async function focusDay(date: Date) {
+    focusedDay = isoDate(date);
+    view = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+    await tick();
+    container.querySelector<HTMLButtonElement>(`[data-date="${focusedDay}"]`)?.focus();
+  }
+  function calendarKey(event: KeyboardEvent, date: Date) {
+    const next = new Date(date);
+    const steps: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+    if (event.key in steps) next.setUTCDate(next.getUTCDate() + steps[event.key]);
+    else if (event.key === 'Home') next.setUTCDate(next.getUTCDate() - (next.getUTCDay() - (weekStartsMonday ? 1 : 0) + 7) % 7);
+    else if (event.key === 'End') next.setUTCDate(next.getUTCDate() + 6 - (next.getUTCDay() - (weekStartsMonday ? 1 : 0) + 7) % 7);
+    else if (event.key === 'PageUp' || event.key === 'PageDown') {
+      const d = next.getUTCDate();
+      next.setUTCDate(1);
+      next.setUTCMonth(next.getUTCMonth() + (event.key === 'PageUp' ? -1 : 1));
+      next.setUTCDate(Math.min(d, new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate()));
+    } else return;
+    event.preventDefault();
+    void focusDay(next);
+  }
 
   const weekStartsMonday = $derived($settings.firstDayOfWeek === 'monday' || ($settings.firstDayOfWeek === 'locale' && $locale === 'de'));
   const weekdays = $derived(Array.from({ length: 7 }, (_, i) => {
@@ -123,9 +152,11 @@
   });
 
   function openPicker() {
-    const chosen = value ? new Date(`${value}T12:00:00Z`) : new Date();
-    view = new Date(Date.UTC(chosen.getUTCFullYear(), chosen.getUTCMonth(), 1));
-    pickerOpen = !pickerOpen;
+    if (pickerOpen) { closePicker(); return; }
+    const now = new Date();
+    const chosen = value ? new Date(`${value}T12:00:00Z`) : new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    pickerOpen = true;
+    void focusDay(chosen);
   }
 
   function isoDate(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -140,24 +171,32 @@
     text = fmtDate(picked, $dateFormat);
     markError(range);
     if (!range) { value = picked; lastSeenValue = picked; }
-    pickerOpen = false;
+    closePicker();
   }
 
-  function moveMonth(delta: number) { view = new Date(Date.UTC(view.getUTCFullYear(), view.getUTCMonth() + delta, 1)); }
+  function moveMonth(delta: number) {
+    view = new Date(Date.UTC(view.getUTCFullYear(), view.getUTCMonth() + delta, 1));
+    focusedDay = isoDate(view);
+  }
 </script>
 
-<div class="date-input">
+<svelte:window onpointerdown={outside} onkeydown={(e) => { if (pickerOpen && e.key === 'Escape') { e.preventDefault(); closePicker(); } }} />
+<div class="date-input" bind:this={container} onfocusout={(e) => { if (e.relatedTarget instanceof Node && !container.contains(e.relatedTarget)) pickerOpen = false; }}>
   <input {id} bind:this={field} type="text" inputmode="numeric" autocomplete="off" {required} aria-label={label}
          placeholder={datePlaceholder($dateFormat, $locale)} bind:value={text}
          aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined}
          onfocus={() => (focused = true)} onblur={() => { focused = false; commit(); }} onchange={commit} />
-  <button type="button" class="ghost" aria-label={$t('date.pick')} aria-expanded={pickerOpen} onclick={openPicker}><Icon name="calendar" size={18} /></button>
+  <button bind:this={trigger} type="button" class="ghost" aria-label={$t('date.pick')} aria-haspopup="dialog" aria-controls={`${id}-calendar`} aria-expanded={pickerOpen} onclick={openPicker}><Icon name="calendar" size={18} /></button>
   {#if pickerOpen}
-    <div class="calendar" role="dialog" aria-label={$t('date.pick')}>
+    <div id={`${id}-calendar`} class="calendar" role="dialog" aria-label={$t('date.pick')}>
       <div class="calendar-head"><button type="button" class="ghost" aria-label={$t('date.previous-month')} onclick={() => moveMonth(-1)}>‹</button><strong>{monthLabel}</strong><button type="button" class="ghost" aria-label={$t('date.next-month')} onclick={() => moveMonth(1)}>›</button></div>
       <div class="calendar-grid">{#each weekdays as day}<span class="weekday">{day}</span>{/each}
         {#each calendarDays as day}
-          <button type="button" class:outside={day.getUTCMonth() !== view.getUTCMonth()} class:selected={isoDate(day) === value} onclick={() => pick(day)}>{day.getUTCDate()}</button>
+          <button type="button" data-date={isoDate(day)} tabindex={isoDate(day) === focusedDay ? 0 : -1}
+            aria-label={new Intl.DateTimeFormat($locale, { dateStyle: 'full', timeZone: 'UTC' }).format(day)}
+            aria-pressed={isoDate(day) === value} aria-disabled={!!rangeMessage(isoDate(day), $dateFormat)}
+            class:outside={day.getUTCMonth() !== view.getUTCMonth()} class:selected={isoDate(day) === value}
+            onkeydown={(e) => calendarKey(e, day)} onclick={() => { if (!rangeMessage(isoDate(day), $dateFormat)) pick(day); }}>{day.getUTCDate()}</button>
         {/each}
       </div>
     </div>

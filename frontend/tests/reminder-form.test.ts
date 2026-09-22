@@ -55,9 +55,9 @@ describe('reminder form', () => {
   it('sends only the fields the kind takes', () => {
     // Switching kind in the form leaves the other kind's fields typed in; the server refuses a mix.
     const mixed = { ...readingReminder('Log km'), due_counter: 5000, repeat_months: 3 };
-    expect(reminderBody({ ...mixed, schedule: 'daily' })).toMatchObject({ kind: 'reading', due_counter: null, repeat_months: null, every_n: 1, schedule: null });
+    expect(reminderBody({ ...mixed, schedule: 'daily' })).toMatchObject({ kind: 'reading', due_counter: null, repeat_months: null, every_n: null, schedule: 'daily' });
     const service = { ...emptyReminder(), title: 'Oil', due_date: '2030-01-01', every_n: 1, every_unit: 'month' as const };
-    expect(reminderBody(service)).toMatchObject({ kind: 'service', every_n: null, every_unit: null });
+    expect(reminderBody(service)).toMatchObject({ kind: 'service', every_n: 1, every_unit: 'month' });
   });
 
   it('skips roughly one interval', () => {
