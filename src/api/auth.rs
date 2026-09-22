@@ -273,7 +273,7 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
     let user = sqlx::query_as::<_, AuthUser>(
-        "SELECT id, username, is_admin, lang FROM users WHERE id = $1",
+        "SELECT id, username, is_admin, lang, notify_tz AS tz FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)

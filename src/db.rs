@@ -1,4 +1,4 @@
-use chrono::{SecondsFormat, Utc};
+use chrono::{NaiveDate, SecondsFormat, Utc};
 use chrono_tz::Tz;
 use sqlx::any::AnyPoolOptions;
 use sqlx::AnyPool;
@@ -347,16 +347,25 @@ pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// The zone a user's dates are read in: their own when they chose a valid one under
+/// Settings → Notifications (`users.notify_tz`), the instance's otherwise. A stored name that
+/// no longer parses is treated as unset rather than failing the request.
+pub fn zone(tz: Option<&str>) -> Tz {
+    tz.and_then(|raw| raw.parse::<Tz>().ok()).unwrap_or_else(timezone)
+}
+
+/// Today in `zone(tz)`. This is the date a reminder's `due_date` is compared against for that
+/// user; `today()` below is the instance-wide answer for everything that is not per user.
+pub fn today_in(tz: Option<&str>) -> NaiveDate {
+    Utc::now().with_timezone(&zone(tz)).date_naive()
+}
+
 /// Today's date in the configured timezone as `YYYY-MM-DD`.
 ///
-/// This is the date a reminder's `due_date` is compared against, so it has to be the user's
-/// today, not the server's: on UTC a household in UTC+13 would see a reminder come due most
-/// of a day late, and one in UTC-8 would see it a day early.
+/// This is the instance's today: file names, delivery-history pruning and every stats bucket use
+/// it. A reminder's due date is read against `today_in` with the user's own zone instead.
 pub fn today() -> String {
-    Utc::now()
-        .with_timezone(&timezone())
-        .date_naive()
-        .to_string()
+    today_in(None).to_string()
 }
 
 /// The current hour (0-23) in the configured timezone.
@@ -478,6 +487,14 @@ mod tests {
     #[test]
     fn the_local_hour_is_in_range() {
         assert!(local_hour() < 24);
+    }
+
+    #[test]
+    fn a_users_zone_falls_back_to_the_instance_zone() {
+        use chrono_tz::Tz;
+        assert_eq!(zone(Some("Europe/Berlin")), Tz::Europe__Berlin);
+        assert_eq!(zone(Some("Mars/Olympus")), timezone());
+        assert_eq!(zone(None), timezone());
     }
 }
 

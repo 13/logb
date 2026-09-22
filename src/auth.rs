@@ -32,6 +32,20 @@ pub struct AuthUser {
     #[serde(skip)]
     #[sqlx(default)]
     pub token_id: Option<i64>,
+    /// `users.notify_tz`, the zone the user chose for their digest hour and, from the same
+    /// setting, for reading their reminders' due dates. `#[serde(skip)]` because `/auth/me`
+    /// returns this struct and the notifications endpoint already reports the zone;
+    /// `#[sqlx(default)]` so a query that does not select it still decodes.
+    #[serde(skip)]
+    #[sqlx(default)]
+    pub tz: Option<String>,
+}
+
+impl AuthUser {
+    /// Today in this user's own zone (`db::zone`), the date their reminders are due against.
+    pub fn today(&self) -> chrono::NaiveDate {
+        crate::db::today_in(self.tz.as_deref())
+    }
 }
 
 pub struct AdminUser(pub AuthUser);
@@ -307,8 +321,8 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     // lands in `AuthUser::token_id` by column name, so a caller authenticated this way carries
     // the id of the very token it used.
     let row = sqlx::query_as::<_, AuthUser>(
-        "SELECT u.id, u.username, u.is_admin, u.lang, t.id AS token_id FROM api_tokens t \
-         JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
+        "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz, t.id AS token_id \
+         FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -342,7 +356,7 @@ impl FromRequestParts<App> for SessionUser {
     async fn from_request_parts(parts: &mut Parts, state: &App) -> Result<Self, AppError> {
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         let user = sqlx::query_as::<_, AuthUser>(
-            "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
+            "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz FROM sessions s \
              JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
@@ -369,7 +383,7 @@ impl FromRequestParts<App> for AuthUser {
         }
         let token = token_from_parts(parts).ok_or(AppError::Unauthorized)?;
         sqlx::query_as::<_, AuthUser>(
-            "SELECT u.id, u.username, u.is_admin, u.lang FROM sessions s \
+            "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz FROM sessions s \
              JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
         .bind(token)
