@@ -523,10 +523,10 @@ not a conversion. Amounts are formatted in each user's own locale.
 ## Search
 
 `GET /api/search?q=...` returns the caller's own objects and activities whose
-name, category, description, title or notes contain the term (`limit`, default
-25, caps at 100). The magnifier on the dashboard opens the same thing. It is a
-substring scan, not a full-text index: instant at household scale, and
-case-insensitive for ASCII only, so `olwechsel` will not find `Ölwechsel`.
+name, description, tags, title, notes or trip places contain the term (`limit`,
+default 25, caps at 100). The magnifier on the dashboard opens the same thing.
+It is a substring scan, not a full-text index: instant at household scale, and
+it ignores case and accents on both databases, so `olwechsel` finds `Ölwechsel`.
 
 ## Statistics
 

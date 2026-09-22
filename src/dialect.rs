@@ -4,9 +4,11 @@
 //! next person can read the whole surface of the difference in under a minute, rather than
 //! discovering it one failing query at a time.
 //!
-//! There are six, and only the first four need code here:
+//! There are six, and only items 2 to 4 need code here:
 //!
-//! 1. Case-insensitive matching in `LIKE` -- `case_insensitive_like`.
+//! 1. Case-insensitive matching. Neither backend folds accents in SQL (SQLite's `LIKE` is
+//!    ASCII-only; PostgreSQL's `ILIKE` follows the cluster collation), so search folds in
+//!    Rust with `domain::tags::fold` and needs nothing here.
 //! 2. Case-insensitive sorting of names -- `name_order`.
 //! 3. How a transaction that intends to write begins -- `begin_write`.
 //! 4. How a write transaction claims the right to be the only one -- `write_lock`. SQLite
@@ -34,20 +36,6 @@ impl Backend {
     /// connect long before it reached a statement built here.
     pub fn of(url: &str) -> Self {
         if url.starts_with("sqlite:") { Self::Sqlite } else { Self::Postgres }
-    }
-
-    /// SQLite's `LIKE` already ignores case for ASCII; PostgreSQL needs `ILIKE`.
-    ///
-    /// The two are not equivalent beyond ASCII, and that difference is real rather than
-    /// cosmetic: `ILIKE` folds case by the server's collation, so on a UTF-8 PostgreSQL
-    /// "ölwechsel" finds "Ölwechsel", while SQLite's built-in `LIKE` folds only the 26 ASCII
-    /// letters and does not. Folding the rest would need ICU on SQLite's side. See
-    /// `tests/dialect.rs`, which pins both halves of that.
-    pub fn case_insensitive_like(&self) -> &'static str {
-        match self {
-            Self::Sqlite => "LIKE",
-            Self::Postgres => "ILIKE",
-        }
     }
 
     /// How to begin a transaction that is going to write.
@@ -116,8 +104,6 @@ mod tests {
 
     #[test]
     fn each_backend_gets_the_operator_it_understands() {
-        assert_eq!(Backend::Sqlite.case_insensitive_like(), "LIKE");
-        assert_eq!(Backend::Postgres.case_insensitive_like(), "ILIKE");
         assert_eq!(Backend::Sqlite.name_order("name"), "name COLLATE NOCASE");
         assert_eq!(Backend::Postgres.name_order("name"), "lower(name)");
         // Qualified columns are passed through whole, since the search joins two tables.
