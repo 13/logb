@@ -163,9 +163,8 @@ async fn a_root_objects_search_hit_has_no_parent_name() {
     assert_eq!(res["objects"][0]["parent_name"], serde_json::Value::Null);
 }
 
-/// A trip's places are searched like its title and notes -- and the umlaut proves this runs
-/// through the backend's own case-folding (`state.backend.case_insensitive_like()`), not an
-/// ASCII-only shortcut.
+/// A trip's places are searched like its title and notes -- and the umlaut proves the fold
+/// applies to them too.
 #[tokio::test]
 async fn a_trip_is_found_by_its_places() {
     let app = common::spawn().await;
@@ -183,4 +182,27 @@ async fn a_trip_is_found_by_its_places() {
     let acts = r["activities"].as_array().unwrap();
     assert_eq!(acts.len(), 1, "{r}");
     assert_eq!(acts[0]["category"], "trip");
+}
+
+/// A tag matches through the same fold as everything else, and a term made of JSON
+/// punctuation matches no tag rather than every tagged row (the guarantee the old
+/// `match_tags` special case gave).
+#[tokio::test]
+async fn tags_are_found_folded_and_punctuation_finds_nothing() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bike = app.create_object(&app.client, "Tern", Some("km")).await;
+    let id = bike["id"].as_i64().unwrap();
+    let res = app.client.patch(app.url(&format!("/objects/{id}")))
+        .json(&json!({ "name": "Tern", "type": "car", "description": "", "tags": ["Fahrräder"] }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+
+    let r = app.search("fahrrader").await;
+    assert_eq!(r["objects"].as_array().unwrap().len(), 1, "{r}");
+    for term in ["[", "\"", "[\"Fahrr"] {
+        let r = app.search(term).await;
+        assert_eq!(r["objects"].as_array().unwrap().len(), 0, "{term}: {r}");
+        assert_eq!(r["activities"].as_array().unwrap().len(), 0, "{term}: {r}");
+    }
 }

@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::domain::tags::fold;
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Query, State};
@@ -39,7 +40,7 @@ pub struct ActivityHit {
     #[serde(serialize_with = "crate::domain::tags::serialize_json_text")]
     pub tags: String,
     /// A trip's places, so a hit on one of them is readable in the result list without a second
-    /// request -- see the `{like}` match on both, below.
+    /// request -- matched the same way as `title` and `notes`, below.
     pub from_place: Option<String>,
     pub to_place: Option<String>,
 }
@@ -77,33 +78,18 @@ pub struct SearchResults {
     pub has_more: bool,
 }
 
-/// Wraps `q` in `%...%` after neutralising the LIKE wildcards, so a query containing `%` or
-/// `_` matches those characters literally instead of turning into a match-everything pattern.
-/// Pairs with `ESCAPE '\'` in the statements below.
-fn like_pattern(q: &str) -> String {
-    let mut escaped = String::with_capacity(q.len() + 2);
-    for c in q.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            escaped.push('\\');
-        }
-        escaped.push(c);
-    }
-    format!("%{escaped}%")
-}
-
 /// Substring search over the caller's own objects and activities.
 ///
 /// Deliberately `LIKE` rather than FTS5: at the scale LogB is built for -- one household's
 /// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
 ///
-/// The operator is the one thing the two backends spell differently: PostgreSQL's `LIKE` does
-/// not fold case at all, so it needs `ILIKE`. That is not a pure translation, and it is the
-/// one place a user can tell the two apart. SQLite's `LIKE` folds only the 26 ASCII letters,
-/// so "ÖLWECHSEL" finds "Ölwechsel" but "ölwechsel" does not; PostgreSQL's `ILIKE` folds by the
-/// server's collation, so on a UTF-8 database it finds it. Closing that gap would mean an ICU
-/// build of SQLite or a shadow column of folded text -- a cost out of all proportion to a
-/// search box over one household's belongings. `tests/dialect.rs` pins both halves so the
-/// difference stays a known one rather than a surprise.
+/// Matching is done in Rust, not SQL: both statements select the caller's live rows and
+/// `matches` folds each field with `domain::tags::fold` (NFD, combining marks stripped, lower
+/// case) before testing `contains`. SQLite's `LIKE` folds only ASCII and PostgreSQL's `ILIKE`
+/// folds by the cluster's collation, so a SQL predicate would answer "ölwechsel" differently
+/// per backend; folding here makes the two agree, and matches what the objects list already
+/// does on the client (`lib/object-list.ts`). A household's rows fit in one scan, the same
+/// cost `activities::list_for_object` already pays for its tag filter.
 ///
 /// `type` is deliberately not matched. It used to be, back when the column held whatever the
 /// user had typed -- so a German user searching "Auto" found their car. It now holds `car`, an
@@ -123,79 +109,69 @@ async fn search(
     }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let pattern = like_pattern(term);
-
-    let like = state.backend.case_insensitive_like();
+    let folded = fold(term);
     // Qualified: the self-join puts two `name` columns in scope, and an unqualified one is
     // ambiguous to PostgreSQL.
     let order = state.backend.name_order("o.name");
-    // `tags` holds JSON text, so a term containing JSON punctuation would match the encoding
-    // rather than a tag: `[` finds every row, `"` every tagged one. Such a term cannot be part
-    // of a tag the user means, so the tags match is left out of the statement for it. Only
-    // these fixed fragments are spliced in; the term itself stays a bind parameter.
-    let match_tags = !term.contains(['[', ']', '"', ',', '\\']);
-    let object_tags = if match_tags {
-        format!(" OR o.tags {like} $2 ESCAPE '\\'")
-    } else {
-        String::new()
-    };
-    let activity_tags = if match_tags {
-        format!(" OR a.tags {like} $2 ESCAPE '\\'")
-    } else {
-        String::new()
-    };
 
     let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
         "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
          o.purchase_date, o.purchase_price_cents, o.archived_at, o.cover_attachment_id, \
          o.parent_id, o.created_at, o.updated_at, p.name AS parent_name, o.tags \
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
-         WHERE o.user_id = $1 AND o.deleted_at IS NULL AND ( \
-           o.name {like} $2 ESCAPE '\\' OR o.description {like} $2 ESCAPE '\\'{object_tags}) \
-         ORDER BY o.archived_at IS NOT NULL, {order} LIMIT $3 OFFSET $4"
+         WHERE o.user_id = $1 AND o.deleted_at IS NULL \
+         ORDER BY o.archived_at IS NOT NULL, {order}"
     )))
     .bind(user.id)
-    .bind(&pattern)
-    .bind(limit + 1)
-    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
-    let activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
+    let activities = sqlx::query_as::<_, ActivityHit>(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
          a.counter_value, a.cost_cents, a.weight_grams, a.tags, a.from_place, a.to_place \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND (a.title {like} $2 ESCAPE '\\' OR a.notes {like} $2 ESCAPE '\\' \
-             OR a.from_place {like} $2 ESCAPE '\\' OR a.to_place {like} $2 ESCAPE '\\'{activity_tags}) \
-             ORDER BY a.date DESC, a.id DESC LIMIT $3 OFFSET $4")))
-    .bind(user.id).bind(&pattern).bind(limit + 1).bind(offset)
-    .fetch_all(&state.db).await?;
+         ORDER BY a.date DESC, a.id DESC",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let skip = offset as usize;
+    let mut objects: Vec<ObjectHit> = objects
+        .into_iter()
+        .filter(|o| matches(&folded, &[Some(&o.name), Some(&o.description)], &o.tags))
+        .skip(skip)
+        .take(limit as usize + 1)
+        .collect();
+    let mut activities: Vec<ActivityHit> = activities
+        .into_iter()
+        .filter(|a| {
+            matches(
+                &folded,
+                &[Some(&a.title), Some(&a.notes), a.from_place.as_deref(), a.to_place.as_deref()],
+                &a.tags,
+            )
+        })
+        .skip(skip)
+        .take(limit as usize + 1)
+        .collect();
 
     let has_more = objects.len() > limit as usize || activities.len() > limit as usize;
-    let objects = objects.into_iter().take(limit as usize).collect();
-    let activities = activities.into_iter().take(limit as usize).collect();
+    objects.truncate(limit as usize);
+    activities.truncate(limit as usize);
 
-    Ok(Json(SearchResults {
-        objects,
-        activities,
-        has_more,
-    }))
+    Ok(Json(SearchResults { objects, activities, has_more }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::like_pattern;
-
-    #[test]
-    fn plain_terms_become_a_contains_pattern() {
-        assert_eq!(like_pattern("oil"), "%oil%");
+/// Whether any of `fields`, or any tag in `tags_json`, contains the already-folded `term`.
+/// Tags are matched one by one after decoding, so a term made of JSON punctuation cannot match
+/// the encoding of every tagged row.
+fn matches(term: &str, fields: &[Option<&str>], tags_json: &str) -> bool {
+    if fields.iter().flatten().any(|f| fold(f).contains(term)) {
+        return true;
     }
-
-    #[test]
-    fn like_wildcards_in_the_query_are_matched_literally() {
-        assert_eq!(like_pattern("100%"), "%100\\%%");
-        assert_eq!(like_pattern("a_b"), "%a\\_b%");
-        assert_eq!(like_pattern("c:\\temp"), "%c:\\\\temp%");
-    }
+    serde_json::from_str::<Vec<String>>(tags_json)
+        .map(|tags| tags.iter().any(|t| fold(t).contains(term)))
+        .unwrap_or(false)
 }

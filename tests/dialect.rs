@@ -4,12 +4,9 @@
 //! entry titled "Ölwechsel" is the case that decides whether this app behaves the same on both.
 //!
 //! These run against whichever backend the harness is configured for, so they catch a dialect
-//! difference rather than describing one. The one place the two genuinely cannot be made to
-//! agree is pinned per backend below, so that it stays a known difference instead of a surprise.
+//! difference rather than describing one.
 
 mod common;
-
-use logb::dialect::Backend;
 
 fn hits(results: &serde_json::Value, kind: &str) -> usize {
     results[kind].as_array().unwrap_or_else(|| panic!("no {kind} in {results}")).len()
@@ -31,41 +28,21 @@ async fn search_ignores_case_on_both_backends() {
     }
 }
 
-/// The one difference the two backends cannot be talked out of.
-///
-/// SQLite's built-in `LIKE` folds the 26 ASCII letters and nothing else, so a lowercase "ö" in
-/// the term does not match the stored "Ö". PostgreSQL's `ILIKE` folds by the database
-/// collation, so on a UTF-8 server it does. Closing the gap would mean an ICU build of SQLite
-/// or a second, case-folded copy of every searchable column; neither is worth it for a search
-/// box over one household's belongings.
-///
-/// Asserted rather than skipped, in both directions: if SQLite ever starts folding accents, or
-/// PostgreSQL ever stops, this is the test that says so.
+/// Accents fold the same way on both backends: the term and the stored text are both run
+/// through `domain::tags::fold` in Rust, so neither SQLite's ASCII-only `LIKE` nor the
+/// PostgreSQL cluster's collation decides the answer.
 #[tokio::test]
-async fn only_postgresql_folds_the_case_of_accented_letters() {
+async fn search_folds_accents_on_both_backends() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
     let object = app.create_object(&app.client, "Golf", Some("km")).await;
     app.create_activity(&object["id"], "Ölwechsel").await;
 
-    let expected = match app.state.backend {
-        // A property of SQLite's built-in `LIKE`, true of every build without ICU.
-        Backend::Sqlite => 0,
-        // PostgreSQL's answer depends on the cluster's collation -- a `C`-locale cluster folds
-        // no more than SQLite does -- so ask the server what its own operator says and require
-        // the endpoint to agree with it. On the ordinary UTF-8 cluster this is 1, and a search
-        // still built on `LIKE` would answer 0 and fail here.
-        Backend::Postgres => {
-            let folds: logb::db::Bool = sqlx::query_scalar("SELECT 'Ölwechsel' ILIKE '%ölwech%'")
-                .fetch_one(&app.state.db).await.unwrap();
-            usize::from(folds.0)
-        },
-    };
-    for term in ["ölwechsel", "ölwech"] {
+    for term in ["ölwechsel", "olwechsel", "ÖLWECH", "olwech"] {
         let results = app.search(term).await;
         assert_eq!(
             hits(&results, "activities"),
-            expected,
+            1,
             "{:?} searching {term} for \"Ölwechsel\": {results}",
             app.state.backend
         );
