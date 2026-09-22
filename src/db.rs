@@ -292,8 +292,9 @@ impl<'r> sqlx::Decode<'r, sqlx::Any> for Bool {
 /// The instance's wall-clock timezone.
 ///
 /// A process-wide value rather than a parameter because `today()` is called from places with
-/// no access to the config -- notably the `ReminderRow -> ReminderOut` conversion that decides
-/// whether a reminder is due. Unset (in tests, and before `build`) it reads as UTC.
+/// no access to the config: file names, stats buckets, the instance webhook's day. Whether a
+/// reminder is due is no longer decided here -- that reads `today_in` with the user's own zone,
+/// and `zone` falls back to this one. Unset (in tests, and before `build`) it reads as UTC.
 ///
 /// A lock rather than a `OnceLock`, because it is no longer only a startup setting: with no
 /// `LOGB_TIMEZONE`, first-run setup stores the browser's timezone and an administrator can change

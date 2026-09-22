@@ -105,7 +105,6 @@ weight entry satisfies it; symptoms, treatments, and appointments do not. As wit
 reminders, dates up to tomorrow count to accommodate device/server timezone differences.
 The reminder's metric follows the object's type if it is changed later.
 
-
 ## Household resources and recurring activities
 
 Electricity meters, heating-oil tanks and water meters are ordinary objects, so they keep the same timeline,

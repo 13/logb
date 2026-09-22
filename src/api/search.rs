@@ -80,7 +80,7 @@ pub struct SearchResults {
 
 /// Substring search over the caller's own objects and activities.
 ///
-/// Deliberately `LIKE` rather than FTS5: at the scale LogB is built for -- one household's
+/// Deliberately a scan rather than FTS5: at the scale LogB is built for -- one household's
 /// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
 ///
 /// Matching is done in Rust, not SQL: both statements select the caller's live rows and

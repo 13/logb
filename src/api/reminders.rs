@@ -639,22 +639,23 @@ async fn done(
     // hoisting the read changes nothing about `next_due`'s result. `stats`'s query also reads
     // `reminders`, for `due_reminder_count`, which this transaction DOES write (the UPDATE
     // below); that column is simply never looked at here, so its staleness is harmless.
+    let today = user.today();
     let base_date = activity
         .as_ref()
         .and_then(|a| parse_date(&a.date))
-        .unwrap_or_else(|| user.today());
+        .unwrap_or(today);
     // Only fall back to the object's highest reading when the linked activity has none:
     // `.or(..)` on an awaited value would run the stats query even in the common case.
     let base_counter = match activity.as_ref().and_then(|a| a.counter_value) {
         Some(c) => Some(c),
-        None => stats(&state, r.object_id, user.today()).await?.current_counter,
+        None => stats(&state, r.object_id, today).await?.current_counter,
     };
     let repeat = Repeat {
         months: r.repeat_months.map(|m| m as u32),
         counter: r.repeat_counter,
     };
     let next_plan = if let Some(schedule) = r.schedule.as_deref().and_then(CalendarSchedule::parse) {
-        let anchor = r.due_date.as_deref().and_then(parse_date).unwrap_or(base_date).max(user.today());
+        let anchor = r.due_date.as_deref().and_then(parse_date).unwrap_or(base_date).max(today);
         schedule.next_after(anchor).map(|date| {
             let counter = repeat.counter.and_then(|step| base_counter.or(r.due_counter).map(|c| c + step));
             (Some(date), counter)

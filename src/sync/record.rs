@@ -55,7 +55,7 @@ pub(crate) fn edited_at_now() -> String {
 /// Every row has carried one since migration `0007_sync.sql` backfilled every existing row and
 /// every insert path began minting a fresh v4 for every new one -- there is no code path left
 /// that creates a row without it. That makes it safe to treat as an invariant here rather than
-/// as an `Option` a caller has to plan around, the same way `reminders::today()` treats a
+/// as an `Option` a caller has to plan around, the same way `insights::read` treats a
 /// server-generated date as always parseable. (Contrast `apply::nameable`, which *does* still
 /// treat a cascaded CHILD's uuid as possibly absent -- that row's existence is not this
 /// function's to guarantee, only its own.)

@@ -4,7 +4,7 @@ import { setOutboxUser, setUnauthorizedHandler, ApiError } from '../src/lib/api'
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 // Every flush in this file stands in for one made by a signed-in user: `flushOutbox` sends
-// nothing at all when it does not know who is asking (see `doFlushOutbox` in ../src/lib/api.ts),
+// nothing at all when it does not know who is asking (see `doFlushOutbox` in ../src/lib/api-outbox.ts),
 // which is what keeps the boot flush from replaying one user's queue under another's cookie.
 // The few tests that are ABOUT not knowing set the user to null themselves.
 beforeEach(() => setOutboxUser(1));

@@ -3,6 +3,13 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.16.0: per-user today
+
+A person who has chosen their own timezone under Settings → Notifications now gets the daily
+digest for their own day, and "sent today" is counted in that calendar. On the first delivery
+after this upgrade their existing delivery record still carries the instance's day, so they may
+receive one extra digest that day. It corrects itself from the next day on.
+
 ## 0.13.0: body weight
 
 Weight and unit preferences are included in sync and export/import. Older archives

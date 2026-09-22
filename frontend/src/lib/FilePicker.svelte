@@ -18,7 +18,7 @@
 
   /** A negative placeholder id for an attachment that only reached the outbox, so it can sit
    *  in an `Attachment[]`-keyed list without colliding with a real (always positive) one --
-   *  same scheme as `pendingId` in ObjectDetail.svelte. */
+   *  same scheme as `hashToNegativeId` in ./activity-form.ts. */
   function pendingAttachmentId(): number {
     const s = crypto.randomUUID();
     let h = 0;

@@ -233,9 +233,9 @@
 
   /** A negative id for the draft being created underground, so a file upload has a parent id
    *  to attach to before the server has assigned a real one. Negative so it can never collide
-   *  with a real (always positive) activity id -- same scheme as `pendingId` in
-   *  ObjectDetail.svelte, though that one hashes an existing op id rather than minting a fresh
-   *  one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
+   *  with a real (always positive) activity id -- `hashToNegativeId` in ../lib/activity-form.ts,
+   *  which ObjectDetail also uses, though there it hashes an existing op id rather than minting
+   *  a fresh one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
    *  id the outbox stores and later rewrites (see `persistResolvedId` in ../lib/outbox.ts). */
   function mintTempId(): number {
     return hashToNegativeId(newOpId()); // not crypto.randomUUID: absent on a plain-http origin (see ../lib/outbox.ts)
