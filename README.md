@@ -345,6 +345,15 @@ project's whole run, so it is easy to write a spec that quietly depends on
 data an earlier one left behind — and then a single-spec run, which is what
 you reach for when investigating a failure, fails for an unrelated reason.
 
+**Only one run at a time.** The two ports and the two scratch directories are
+fixed, so a second `playwright test` started while one is in flight wipes the
+first's database out from under its still-running server, which keeps serving
+the deleted file. The result is a handful of specs failing as though the
+application were broken — a first-run test finding an account already there, a
+search finding two of something it seeded once. Both runs have to finish (or be
+killed, along with any `target/debug/logb` they left behind) before the next
+one starts.
+
 ### Two rules learned the hard way
 
 **When a second review lands in the same area, redesign instead of patching.**
