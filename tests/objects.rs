@@ -277,6 +277,30 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
     );
 }
 
+/// The SQL count and the Rust `is_due` must agree for a user whose today is not the
+/// instance's. Same fixture shape as above, one reminder on the boundary date.
+#[tokio::test]
+async fn due_reminder_count_agrees_for_a_user_in_another_zone() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let res = app.client.put(app.url("/me/notifications/hour"))
+        .json(&json!({ "hour": 8, "timezone": "Pacific/Kiritimati" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let user_today = chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Kiritimati).date_naive();
+    for (title, date) in [("On the day", user_today), ("Tomorrow there", user_today.succ_opt().unwrap())] {
+        let res = app.client.post(app.url(&format!("/objects/{id}/reminders")))
+            .json(&json!({ "title": title, "due_date": date.to_string() })).send().await.unwrap();
+        assert_eq!(res.status(), 201);
+    }
+    let reminders = app.get_json(&format!("/objects/{id}/reminders")).await;
+    let due_flags = reminders.as_array().unwrap().iter().filter(|r| r["due"] == true).count();
+    assert_eq!(due_flags, 1, "{reminders}");
+    let object = app.get_json(&format!("/objects/{id}")).await;
+    assert_eq!(object["stats"]["due_reminder_count"], 1, "{object}");
+}
+
 /// PATCH on an object is a full replace for every field but the cover, so a field the client
 /// leaves out is written as NULL rather than kept. That is the contract every read-modify-write
 /// caller depends on -- `Documents.svelte`'s "set as cover" used to hand-list the fields and

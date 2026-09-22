@@ -398,12 +398,15 @@ async fn derived(
     state: &App,
     user_id: Option<i64>,
     only: Option<i64>,
+    today: chrono::NaiveDate,
 ) -> Result<HashMap<i64, DerivedRow>, AppError> {
     // INVARIANT: this due_reminder_count subquery is a second, hand-written encoding of
     // `domain::reminder::is_due` -- it exists only so N objects' counts can be computed in one
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
     // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
-    // in tests/objects.rs is what catches them drifting apart.
+    // in tests/objects.rs is what catches them drifting apart. Both encodings read the same
+    // `today`, the caller's own (`AuthUser::today`), so a user in another zone gets one answer
+    // from both.
     //
     // It counts service reminders only. A reading reminder's due date is a calendar-month
     // addition on the latest reading, which SQL cannot spell the same way on both backends, so
@@ -432,16 +435,16 @@ async fn derived(
            (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
          FROM objects o WHERE o.deleted_at IS NULL AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
     )
-    .bind(user_id).bind(db::today()).bind(only).bind(super::reminders::reading_horizon())
+    .bind(user_id).bind(today.to_string()).bind(only).bind(super::reminders::reading_horizon(today))
     .fetch_all(&state.db).await?;
     let mut rows: HashMap<i64, DerivedRow> = rows.into_iter().map(|r| (r.object_id, r)).collect();
-    for (object_id, due) in due_readings(state, user_id, only).await? {
+    for (object_id, due) in due_readings(state, user_id, only, today).await? {
         if let Some(row) = rows.get_mut(&object_id) {
             row.due_reminder_count += due;
         }
     }
     // One query for every object in scope, the same rate reminders and the Info tab use.
-    for (object_id, usage) in super::insights::usage_by_object(state, user_id, only).await? {
+    for (object_id, usage) in super::insights::usage_by_object(state, user_id, only, today).await? {
         if let Some(row) = rows.get_mut(&object_id) {
             row.counter_per_day_milli = Some(usage.rate_milli);
         }
@@ -455,6 +458,7 @@ async fn due_readings(
     state: &App,
     user_id: Option<i64>,
     only: Option<i64>,
+    today: chrono::NaiveDate,
 ) -> Result<HashMap<i64, i64>, AppError> {
     use crate::domain::reminder::{reading_status, CalendarSchedule, Every};
     type ReadingRow = (
@@ -466,7 +470,6 @@ async fn due_readings(
         Option<String>,
         Option<String>,
     );
-    let today_str = db::today();
     let rows: Vec<ReadingRow> = sqlx::query_as(
         "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, r.schedule, \
            (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
@@ -475,14 +478,11 @@ async fn due_readings(
          WHERE r.kind = 'reading' AND r.done_at IS NULL AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
            AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
     )
-    .bind(user_id).bind(super::reminders::reading_horizon()).bind(only)
+    .bind(user_id).bind(super::reminders::reading_horizon(today)).bind(only)
     .fetch_all(&state.db).await?;
     let parse = |s: &Option<String>| {
         s.as_deref()
             .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-    };
-    let Some(today) = parse(&Some(today_str.clone())) else {
-        return Ok(HashMap::new());
     };
     let mut counts = HashMap::new();
     for (object_id, start, every_n, every_unit, snoozed, schedule, last) in rows {
@@ -523,8 +523,8 @@ impl DerivedRow {
 
 /// The stats block for one object, for callers outside this module. Ownership is not checked
 /// here: every caller has already loaded the object through `load_owned_object`.
-pub async fn stats(state: &App, object_id: i64) -> Result<ObjectStats, AppError> {
-    derived(state, None, Some(object_id))
+pub async fn stats(state: &App, object_id: i64, today: chrono::NaiveDate) -> Result<ObjectStats, AppError> {
+    derived(state, None, Some(object_id), today)
         .await?
         .get(&object_id)
         .map(DerivedRow::stats)
@@ -595,10 +595,10 @@ async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>
     Ok(chain)
 }
 
-async fn with_stats(state: &App, object: ObjectRow) -> Result<ObjectOut, AppError> {
+async fn with_stats(state: &App, user: &AuthUser, object: ObjectRow) -> Result<ObjectOut, AppError> {
     let id = object.id;
     let chain = ancestors(state, &object).await?;
-    let mut out = derived(state, Some(object.user_id), Some(id))
+    let mut out = derived(state, Some(object.user_id), Some(id), user.today())
         .await?
         .remove(&id)
         .map(|d| d.into_out(object))
@@ -645,7 +645,7 @@ async fn list(
     if rows.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    let mut derived = derived(&state, Some(user.id), None).await?;
+    let mut derived = derived(&state, Some(user.id), None, user.today()).await?;
     let out = rows
         .into_iter()
         .filter_map(|row| derived.remove(&row.id).map(|d| d.into_out(row)))
@@ -674,7 +674,7 @@ async fn create(
             Some((id, owner, None)) if owner == user.id => {
                 // By design a replay answers with the row the first attempt created, before the type and parent checks below.
                 let row = load_owned_object(&state, user.id, id).await?;
-                return Ok((StatusCode::OK, Json(with_stats(&state, row).await?)));
+                return Ok((StatusCode::OK, Json(with_stats(&state, &user, row).await?)));
             }
             Some(_) => return Err(AppError::Conflict(super::CLIENT_UUID_TAKEN.into())),
             None => {}
@@ -770,7 +770,7 @@ async fn create(
     };
     record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(with_stats(&state, row).await?)))
+    Ok((StatusCode::CREATED, Json(with_stats(&state, &user, row).await?)))
 }
 
 async fn read(
@@ -779,7 +779,7 @@ async fn read(
     Path(id): Path<i64>,
 ) -> Result<Json<ObjectOut>, AppError> {
     let row = load_owned_object(&state, user.id, id).await?;
-    Ok(Json(with_stats(&state, row).await?))
+    Ok(Json(with_stats(&state, &user, row).await?))
 }
 
 async fn update(
@@ -1030,7 +1030,7 @@ async fn update(
     tx.commit().await?;
 
     let row = load_owned_object(&state, user.id, id).await?;
-    Ok(Json(with_stats(&state, row).await?))
+    Ok(Json(with_stats(&state, &user, row).await?))
 }
 
 /// Deleting an object writes a tombstone rather than removing the row, so a client that was
