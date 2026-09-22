@@ -101,16 +101,24 @@ In `src/db.rs`, after `connect_with_pool_size` (ends :161):
 ///
 /// `connect_with_pool_size` has already migrated and seeded this database, so this opens a pool
 /// and does nothing else to it.
+///
+/// The test is `sqlite_file`, not the `sqlite:` prefix: an in-memory database belongs to the
+/// pool that opened it, so a second pool against `sqlite::memory:` would quietly be a second,
+/// empty database rather than another way into this one. Nothing in the server opens one, and
+/// this is what keeps that true.
 pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError> {
-    if !url.starts_with("sqlite:") {
+    let Some(_) = sqlite_file(url) else {
         return Ok(db.clone());
-    }
+    };
     Ok(pool_options(url, 1, WRITE_WAIT.as_millis() as u32)
         .acquire_timeout(WRITE_WAIT)
         .connect(url)
         .await?)
 }
 ```
+
+`sqlite_file` (`src/db.rs:41`) is `pub(crate)` and already returns `None` for both a
+PostgreSQL URL and `:memory:`, which is exactly the set that should share one pool.
 
 - [ ] **Step 3: Carry it on the state**
 
@@ -129,9 +137,19 @@ pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError
     let write_db = db::connect_writer(&url, &db).await?;
 ```
 
-and add `write_db,` to the `AppState { .. }` literal at :209. In `src/auth.rs`'s test module,
-add `write_db: db.clone(),` to its `AppState` literal — a unit test with one pool is fine, and
-`begin_write` there only needs a pool that works.
+and add `write_db,` to the `AppState { .. }` literal at :209.
+
+In `src/auth.rs`'s test module the literal is `Arc::new(AppState { db, database_url: url, .. })`,
+and `db` is moved by that first field. Put the clone **before** it or the borrow fails:
+
+```rust
+        Arc::new(AppState {
+            write_db: db.clone(),
+            db,
+```
+
+A unit test with one pool is right: it never contends, and `begin_write` there only needs a pool
+that works.
 
 - [ ] **Step 4: Split `begin_write`**
 
