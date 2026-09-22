@@ -49,17 +49,20 @@ test('a device-only choice stays on the device and leaves the account alone', as
   await expect(page.getByLabel('Date format')).toHaveValue('iso');
 });
 
-test('a personal delivery hour is saved and read back', async ({ page }) => {
+test('a personal delivery hour and timezone are saved and read back', async ({ page }) => {
   await signInFresh(page, '33-hour');
   await page.goto('/settings/notifications');
-  const hour = page.getByLabel('Daily delivery hour (instance timezone)');
+  const hour = page.getByLabel('Daily delivery hour');
   await expect(hour).toHaveValue('8');
   await hour.fill('17');
+  await page.getByLabel('Timezone for that hour').selectOption('America/New_York');
   await page.getByRole('button', { name: 'Apply delivery time', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('Saved');
 
   await page.reload();
-  await expect(page.getByLabel('Daily delivery hour (instance timezone)')).toHaveValue('17');
+  await expect(page.getByLabel('Daily delivery hour')).toHaveValue('17');
+  await expect(page.getByLabel('Timezone for that hour')).toHaveValue('America/New_York');
   const settings = await (await page.request.get('/api/me/notifications')).json();
   expect(settings.hour).toBe(17);
+  expect(settings.timezone).toBe('America/New_York');
 });

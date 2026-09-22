@@ -36,8 +36,11 @@ pub struct NotificationsOut {
     pub vapid_public_key: String,
     /// Whether `LOGB_NOTIFY_URL` is set. While `url` is null, this user's reminders are in it.
     pub instance_webhook: bool,
-    /// The hour, in the instance's timezone, the daily digest goes out.
+    /// The hour the daily digest goes out, in `timezone` when one is set and the instance's
+    /// timezone otherwise.
     pub hour: u32,
+    /// The recipient's own timezone, when they chose one.
+    pub timezone: Option<String>,
     pub deliveries: Vec<DeliveryStatus>,
     pub telegram_configured: bool,
     pub telegram_connected: bool,
@@ -57,17 +60,31 @@ pub struct DeliveryStatus {
 }
 
 #[derive(Deserialize)]
-struct DeliveryHour { hour: u32 }
+struct DeliveryHour {
+    hour: u32,
+    /// An IANA name such as `Europe/Berlin`. Left out, the instance's timezone is used; sent as
+    /// null, a timezone chosen earlier is cleared.
+    #[serde(default)]
+    timezone: Option<String>,
+}
 
 async fn write_hour(user: AuthUser, State(state): State<App>, Json(body): Json<DeliveryHour>) -> Result<Json<NotificationsOut>, AppError> {
     if body.hour > 23 { return Err(AppError::BadRequest("hour must be 0..23".into())); }
-    sqlx::query("UPDATE users SET notify_hour = $1 WHERE id = $2").bind(i64::from(body.hour)).bind(user.id).execute(&state.db).await?;
+    // Parsed rather than pattern-matched: the list of zones is the timezone database's to keep,
+    // and a name this build cannot resolve is a name the scheduler could not honour either.
+    if let Some(tz) = body.timezone.as_deref() {
+        if tz.parse::<chrono_tz::Tz>().is_err() {
+            return Err(AppError::BadRequest("unknown timezone".into()));
+        }
+    }
+    sqlx::query("UPDATE users SET notify_hour = $1, notify_tz = $2 WHERE id = $3")
+        .bind(i64::from(body.hour)).bind(&body.timezone).bind(user.id).execute(&state.db).await?;
     Ok(Json(out(&state, user.id).await?))
 }
 
 async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
-    let (url, format, hour): (Option<String>, String, Option<i64>) =
-        sqlx::query_as("SELECT notify_url, notify_format, notify_hour FROM users WHERE id = $1")
+    let (url, format, hour, timezone): (Option<String>, String, Option<i64>, Option<String>) =
+        sqlx::query_as("SELECT notify_url, notify_format, notify_hour, notify_tz FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.db)
             .await?;
@@ -87,6 +104,7 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
         vapid_public_key: push::public_key(&kp),
         instance_webhook: state.config.notify_url.is_some(),
         hour: hour.map(|h| h as u32).unwrap_or(state.config.notify_hour),
+        timezone,
         deliveries,
         telegram_configured: telegram.configured,
         telegram_connected: telegram.connected,
@@ -274,8 +292,20 @@ async fn unsubscribe(
     State(state): State<App>,
     Json(body): Json<EndpointIn>,
 ) -> Result<StatusCode, AppError> {
+    // The delivery row goes first: it is keyed by `push:{id}`, so once the subscription is gone
+    // nothing can say which device that history belonged to, and it would sit in Settings as a
+    // destination nobody recognises.
+    let endpoint = body.endpoint.trim();
+    sqlx::query(
+        "DELETE FROM notification_deliveries WHERE target IN \
+         (SELECT 'push:' || id FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2)",
+    )
+    .bind(endpoint)
+    .bind(user.id)
+    .execute(&state.db)
+    .await?;
     sqlx::query("DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2")
-        .bind(body.endpoint.trim())
+        .bind(endpoint)
         .bind(user.id)
         .execute(&state.db)
         .await?;

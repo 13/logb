@@ -24,7 +24,7 @@
       "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences" }, "400": { "description": "Invalid preference" } } }
     },
     "/me/notifications/hour": {
-      "put": { "summary": "Set personal daily delivery hour in the instance timezone; the instance webhook keeps its configured hour", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["hour"], "properties": { "hour": { "type": "integer", "minimum": 0, "maximum": 23 } } } } } }, "responses": { "200": { "description": "Notification settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } }, "400": { "description": "Invalid hour" } } }
+      "put": { "summary": "Set personal daily delivery hour, optionally in the recipient's own timezone; the instance webhook keeps its configured hour", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["hour"], "properties": { "hour": { "type": "integer", "minimum": 0, "maximum": 23 }, "timezone": { "type": ["string", "null"], "description": "IANA name such as Europe/Berlin; null uses the instance timezone" } } } } } }, "responses": { "200": { "description": "Notification settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } }, "400": { "description": "Invalid hour" } } }
     },
     "/health": {
       "get": {
@@ -5478,7 +5478,11 @@
           },
           "hour": {
             "type": "integer",
-            "description": "The hour, in the instance timezone, the digest goes out"
+            "description": "The hour the digest goes out, in `timezone` when one is set and the instance timezone otherwise"
+          },
+          "timezone": {
+            "type": ["string", "null"],
+            "description": "The recipient's own IANA timezone, when they chose one"
           },
           "telegram_configured": { "type": "boolean" },
           "telegram_connected": { "type": "boolean" },

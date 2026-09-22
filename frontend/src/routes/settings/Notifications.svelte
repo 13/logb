@@ -11,10 +11,13 @@
   let url = $state('');
   let format = $state<'text' | 'json'>('text');
   let hour = $state(8);
+  // '' means "the instance's timezone", which is what the server stores as null.
+  let timezone = $state('');
+  const zones: string[] = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? [];
   async function saveHour() {
     busy = true; error = ''; message = '';
     try {
-      data = await api<NotificationSettings>('PUT', '/me/notifications/hour', { hour });
+      data = await api<NotificationSettings>('PUT', '/me/notifications/hour', { hour, timezone: timezone || null });
       message = $t('object.saved');
     } catch (e) { error = (e as Error).message; } finally { busy = false; }
   }
@@ -37,6 +40,7 @@
         url = data?.url ?? '';
         format = data?.format ?? 'text';
         hour = data?.hour ?? 8;
+        timezone = data?.timezone ?? '';
       } catch (e) { error = (e as Error).message; }
       push = await pushState();
     })();
@@ -112,6 +116,19 @@
 <main>
   <TopBar title={$t('settings.notifications')} backTo="/settings" />
   <div class="field"><label for="delivery-hour">{$t('notify.delivery-hour')}</label><input id="delivery-hour" type="number" min="0" max="23" bind:value={hour} /></div>
+  <div class="field"><label for="delivery-timezone">{$t('notify.delivery-timezone')}</label>
+    {#if zones.length > 0}
+      <select id="delivery-timezone" bind:value={timezone}>
+        <option value="">{$t('notify.instance-timezone')}</option>
+        <!-- The stored value stays selectable even when this browser's list lacks it. -->
+        {#if timezone && !zones.includes(timezone)}<option value={timezone}>{timezone}</option>{/if}
+        {#each zones as z}<option value={z}>{z}</option>{/each}
+      </select>
+    {:else}
+      <input id="delivery-timezone" bind:value={timezone} placeholder={$t('notify.instance-timezone')} />
+    {/if}
+    <span class="hint">{$t('notify.delivery-timezone-hint')}</span>
+  </div>
   <button disabled={busy || !Number.isInteger(hour) || hour < 0 || hour > 23} onclick={saveHour}>{$t('notify.save-hour')}</button>
   {#if data?.deliveries?.length}
     <h2>{$t('notify.delivery-status')}</h2>

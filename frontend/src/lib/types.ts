@@ -23,7 +23,7 @@ export interface Settings { currency: string; timezone: string; timezone_locked:
 export interface NotificationSettings {
   deliveries?: { target: string; attempted_at: string | null; last_success: string | null; last_error: string | null; attempts: number }[];
   url: string | null; format: 'text' | 'json'; push_devices: number; vapid_public_key: string;
-  instance_webhook: boolean; hour: number; telegram_configured: boolean; telegram_connected: boolean;
+  instance_webhook: boolean; hour: number; timezone: string | null; telegram_configured: boolean; telegram_connected: boolean;
   telegram_display_name: string | null; telegram_last_error: string | null;
   telegram_bot_username: string | null; telegram_legacy: boolean;
 }

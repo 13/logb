@@ -12,6 +12,7 @@ use crate::api::reminders::due_for_user;
 use crate::db;
 use crate::domain::reminder::KIND_READING;
 use crate::error::AppError;
+use chrono::TimeZone;
 use crate::push::{self, Delivery, Subscription};
 use crate::state::App;
 use serde::Serialize;
@@ -99,11 +100,12 @@ struct Recipient {
     notify_url: Option<String>,
     notify_format: String,
     notify_hour: Option<i64>,
+    notify_tz: Option<String>,
 }
 
 async fn recipients(state: &App) -> Result<Vec<Recipient>, AppError> {
     Ok(sqlx::query_as::<_, Recipient>(
-        "SELECT id, username, lang, notify_url, notify_format, notify_hour FROM users ORDER BY username",
+        "SELECT id, username, lang, notify_url, notify_format, notify_hour, notify_tz FROM users ORDER BY username",
     )
     .fetch_all(&state.db)
     .await?)
@@ -289,10 +291,7 @@ pub(crate) async fn push_to(
         match push::send(&kp, &contact, &sub, payload.as_bytes()).await {
             Delivery::Sent => sent += 1,
             Delivery::Gone => {
-                sqlx::query("DELETE FROM push_subscriptions WHERE id = $1")
-                    .bind(id)
-                    .execute(&state.db)
-                    .await?;
+                forget_subscription(state, id).await?;
             }
             Delivery::Failed(reason) => {
                 failed += 1;
@@ -354,15 +353,70 @@ enum Destination {
     Push(i64, Subscription),
 }
 
+/// The hour it is where a recipient lives, given the hour it is where the instance runs.
+///
+/// A personal delivery hour without a personal timezone would be the instance's hour wearing a
+/// different label: someone who moved abroad would still be woken by the server's morning. The
+/// instance's own date is used to resolve the offset, so a day that gains or loses an hour is
+/// handled by the timezone database rather than by arithmetic on a fixed offset.
+///
+/// The digest's *day* is still the instance's day (`db::today()` decides which reminders are due
+/// and which deliveries have been claimed). A recipient far enough east or west therefore reads a
+/// digest for the server's today, not necessarily their own.
+fn local_hour(tz: Option<&str>, instance_hour: u32) -> u32 {
+    let Some(tz) = tz.and_then(|raw| raw.parse::<chrono_tz::Tz>().ok()) else {
+        return instance_hour;
+    };
+    let instance = crate::db::timezone();
+    let today = chrono::Utc::now().with_timezone(&instance).date_naive();
+    let Some(at) = today
+        .and_hms_opt(instance_hour, 0, 0)
+        .and_then(|naive| instance.from_local_datetime(&naive).earliest())
+    else {
+        return instance_hour;
+    };
+    use chrono::Timelike;
+    at.with_timezone(&tz).hour()
+}
+
+/// Drops a push subscription the push service has declared gone, with the delivery row that
+/// describes it -- `push:{id}` means nothing once the id is free to be reused.
+async fn forget_subscription(state: &App, id: i64) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM notification_deliveries WHERE target = $1")
+        .bind(format!("push:{id}"))
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM push_subscriptions WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+/// Delivery history is for answering "did today's digest arrive"; a row from last quarter answers
+/// nothing and keeps a row per destination per instance forever. Thirty days of it is kept.
+async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
+    let cutoff = chrono::Utc::now()
+        .with_timezone(&crate::db::timezone())
+        .date_naive()
+        - chrono::Days::new(30);
+    sqlx::query("DELETE FROM notification_deliveries WHERE day < $1")
+        .bind(cutoff.to_string())
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
 /// Build first, then deliver independently. An unavailable target cannot suppress another.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
+    prune_delivery_history(state).await?;
     let recipients = recipients(state).await?;
     let mut plans = Vec::new();
     if state.config.notify_url.is_some() && hour_now >= state.config.notify_hour {
         plans.push(("instance".to_string(), None, Destination::Instance, instance_digest(state, &recipients).await?));
     }
     for r in &recipients {
-        if hour_now < r.notify_hour.map(|h| h as u32).unwrap_or(state.config.notify_hour) { continue; }
+        if local_hour(r.notify_tz.as_deref(), hour_now) < r.notify_hour.map(|h| h as u32).unwrap_or(state.config.notify_hour) { continue; }
         let d = digest(items_for(state, r).await?, &r.lang);
         if let Some(url) = &r.notify_url {
             plans.push((format!("webhook:{}", r.id), Some(r.id), Destination::Webhook(url.clone(), r.notify_format.clone()), d.clone()));
@@ -403,7 +457,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
                 match push::send(&kp, &push::contact(state), &sub, payload.as_bytes()).await {
                     Delivery::Sent => Ok(()),
                     Delivery::Gone => {
-                        sqlx::query("DELETE FROM push_subscriptions WHERE id = $1").bind(id).execute(&state.db).await?;
+                        forget_subscription(state, id).await?;
                         Ok(())
                     }
                     Delivery::Failed(_) => Err(AppError::Internal("push delivery failed".into())),

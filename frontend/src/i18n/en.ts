@@ -1,7 +1,10 @@
 export default {
   'settings.device-only': 'Use these preferences only on this device',
   'settings.save-appearance': 'Apply appearance',
-  'notify.delivery-hour': 'Daily delivery hour (instance timezone)',
+  'notify.delivery-hour': 'Daily delivery hour',
+  'notify.delivery-timezone': 'Timezone for that hour',
+  'notify.instance-timezone': "This instance's timezone",
+  'notify.delivery-timezone-hint': 'The digest still covers the day as the instance counts it.',
   'notify.save-hour': 'Apply delivery time',
   'notify.delivery-status': 'Delivery history',
   'notify.delivery-ok': 'Last success',

@@ -501,9 +501,12 @@ the URL of its one-field reading form, and a text digest about a single
 reminder also sends ntfy's `Click` header, so tapping the notification opens
 that form.
 
-Each user can choose a daily delivery hour in Settings → Notifications, in the instance's
-timezone. The shared instance webhook retains `LOGB_NOTIFY_HOUR`. Delivery history shows the
-last successful delivery and failures for each personal destination. Failed destinations retry
+Each user can choose a daily delivery hour in Settings → Notifications, and the timezone that
+hour is read in — their own, or the instance's. The digest still covers the day as the instance
+counts it, so someone far enough east or west reads the server's today at their own breakfast.
+The shared instance webhook retains `LOGB_NOTIFY_HOUR`. Delivery history shows the last
+successful delivery and failures for each personal destination, is kept for thirty days, and a
+destination that goes away takes its history with it. Failed destinations retry
 after five minutes, then thirty minutes, up to three attempts per day; successful destinations
 are not retried. Attempts survive restarts. A crash after a remote service accepts a message but
 before success is stored can still cause a duplicate on retry. Reminders remain due until handled.

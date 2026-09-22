@@ -86,6 +86,83 @@ async fn personal_delivery_hour_can_be_earlier_than_the_instance_hour() {
 }
 
 #[tokio::test]
+async fn a_personal_timezone_moves_the_delivery_hour_with_it() {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let (url, inbox) = webhook().await;
+    // The instance runs in UTC; this person is in New York and wants the digest at 08:00 there.
+    let app = common::spawn_with(|c| c.notify_hour = 18).await;
+    seed_overdue(&app).await;
+    app.client.put(app.url("/me/notifications")).json(&json!({"url":url,"format":"text"})).send().await.unwrap();
+    let response = app.client.put(app.url("/me/notifications/hour"))
+        .json(&json!({"hour":8, "timezone":"America/New_York"})).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+
+    // What 08:00 in New York is in UTC depends on the date, so it is computed, not pinned.
+    let today = chrono::Utc::now().date_naive();
+    let local = chrono_tz::America::New_York
+        .with_ymd_and_hms(today.year(), today.month(), today.day(), 8, 0, 0)
+        .single()
+        .expect("08:00 exists in New York on every date");
+    let due_hour = local.with_timezone(&chrono::Utc).hour();
+
+    logb::notify::tick(&app.state, due_hour - 1).await.unwrap();
+    assert!(inbox.received().is_empty(), "the digest went out an hour early");
+    logb::notify::tick(&app.state, due_hour).await.unwrap();
+    assert_eq!(inbox.received().len(), 1);
+    assert_eq!(app.get_json("/me/notifications").await["timezone"], "America/New_York");
+}
+
+#[tokio::test]
+async fn an_invalid_personal_timezone_is_refused() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let response = app.client.put(app.url("/me/notifications/hour"))
+        .json(&json!({"hour":8, "timezone":"Mars/Olympus"})).send().await.unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(app.get_json("/me/notifications").await["timezone"].is_null());
+}
+
+#[tokio::test]
+async fn a_delivery_row_does_not_outlive_what_it_describes() {
+    let app = common::spawn().await;
+    let me = app.setup("ben", "correct horse").await;
+    let user_id = me["id"].as_i64().unwrap();
+    sqlx::query("INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES ($1, $2, 'key', 'auth', $3)")
+        .bind(user_id).bind("https://push.example/endpoint").bind(logb::db::now())
+        .execute(&app.state.db).await.unwrap();
+    let (subscription,): (i64,) = sqlx::query_as("SELECT id FROM push_subscriptions WHERE user_id = $1")
+        .bind(user_id).fetch_one(&app.state.db).await.unwrap();
+    sqlx::query("INSERT INTO notification_deliveries (target, user_id, day, attempts) VALUES ($1, $2, $3, 1)")
+        .bind(format!("push:{subscription}")).bind(user_id).bind(logb::db::today())
+        .execute(&app.state.db).await.unwrap();
+
+    let response = app.client.delete(app.url("/push/subscriptions"))
+        .json(&json!({"endpoint":"https://push.example/endpoint"})).send().await.unwrap();
+    assert_eq!(response.status(), 204);
+
+    let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notification_deliveries WHERE target = $1")
+        .bind(format!("push:{subscription}")).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(rows, 0, "the subscription is gone, so its delivery history describes nothing");
+}
+
+#[tokio::test]
+async fn delivery_history_older_than_a_month_is_dropped() {
+    let app = common::spawn_with(|c| c.notify_hour = 8).await;
+    let me = app.setup("ben", "correct horse").await;
+    let user_id = me["id"].as_i64().unwrap();
+    for (target, day) in [("webhook:old", "2000-01-01"), ("webhook:recent", logb::db::today().as_str())] {
+        sqlx::query("INSERT INTO notification_deliveries (target, user_id, day, attempts) VALUES ($1, $2, $3, 1)")
+            .bind(target).bind(user_id).bind(day).execute(&app.state.db).await.unwrap();
+    }
+    logb::notify::tick(&app.state, 9).await.unwrap();
+    let remaining: Vec<(String,)> = sqlx::query_as("SELECT target FROM notification_deliveries ORDER BY target")
+        .fetch_all(&app.state.db).await.unwrap();
+    let targets: Vec<&str> = remaining.iter().map(|(t,)| t.as_str()).collect();
+    assert!(!targets.contains(&"webhook:old"), "a row from 2000 is not history anyone reads: {targets:?}");
+    assert!(targets.contains(&"webhook:recent"), "today's row was dropped: {targets:?}");
+}
+
+#[tokio::test]
 async fn failed_targets_retry_without_resending_successful_targets() {
     let (good_url, inbox) = webhook().await;
     let app = common::spawn_with(|c| { c.notify_url = Some("http://127.0.0.1:1/hook".into()); c.notify_hour = 8; }).await;

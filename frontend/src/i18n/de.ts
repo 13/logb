@@ -1,7 +1,10 @@
 export default {
   'settings.device-only': 'Diese Einstellungen nur auf diesem Gerät verwenden',
   'settings.save-appearance': 'Darstellung übernehmen',
-  'notify.delivery-hour': 'Tägliche Versandstunde (Instanz-Zeitzone)',
+  'notify.delivery-hour': 'Tägliche Versandstunde',
+  'notify.delivery-timezone': 'Zeitzone für diese Stunde',
+  'notify.instance-timezone': 'Zeitzone dieser Instanz',
+  'notify.delivery-timezone-hint': 'Der Tag der Zusammenfassung bleibt der Tag der Instanz.',
   'notify.save-hour': 'Versandzeit übernehmen',
   'notify.delivery-status': 'Versandverlauf',
   'notify.delivery-ok': 'Zuletzt erfolgreich',
