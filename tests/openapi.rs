@@ -14,15 +14,29 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Every `.rs` file under `dir`, including the ones in subdirectories.
+fn rust_sources(dir: &str) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{dir} should be readable from the crate root: {e}"));
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(rust_sources(path.to_str().expect("a UTF-8 path")));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            files.push(path);
+        }
+    }
+    files
+}
+
 /// Every `.route("...", get(..).post(..))` declared under `src/api/`, as (path, method) pairs.
+///
+/// The walk recurses: a module large enough to be split into a directory (`api/export/mod.rs`
+/// and its siblings) still declares routes, and a scan that stopped at the top level would
+/// quietly stop covering them -- which is the exact drift this file exists to catch.
 fn declared_routes() -> BTreeMap<String, BTreeSet<String>> {
     let mut found: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let dir = std::fs::read_dir("src/api").expect("src/api should be readable from the crate root");
-    for entry in dir {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
+    for path in rust_sources("src/api") {
         let src = std::fs::read_to_string(&path).unwrap();
         for (i, _) in src.match_indices(".route(") {
             let rest = &src[i + ".route(".len()..];
