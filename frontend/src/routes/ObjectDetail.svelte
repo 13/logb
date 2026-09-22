@@ -14,7 +14,6 @@
   import EnergyFigures from '../lib/EnergyFigures.svelte';
   import ResourceCsvImport from '../lib/ResourceCsvImport.svelte';
   import { energyLabelKey } from '../lib/energy';
-  import { foldTag } from '../lib/tags';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
   import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
@@ -23,36 +22,33 @@
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
-  import type { Activity, ActivityInput, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
+  import type { Activity, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
-  import type { QueuedOp } from '../lib/outbox';
+  import { tagParam, offersTrip as offersTripFor, offersEnergy as offersEnergyFor, resourceCategory as resourceCategoryFor, pendingToActivity, filterPendingOps, nextUrl } from '../lib/object-detail';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
   type Tab = 'timeline' | 'documents' | 'reminders' | 'info';
   const initialQuery = new URLSearchParams(location.search);
-  /** The `?tag=` query parameter of the CURRENT address, trimmed; blank/absent is `null`. A
-   *  function, not a value read once: `App.svelte`'s route table maps every `/objects/:id` to
-   *  this same `ObjectDetail` instance, so navigating from one object to another (a card tapped
-   *  under Contents, say) only changes the `id` prop -- it does not remount this component or
-   *  re-run the `let` initialisers below. The oid-reset effect further down calls this again on
-   *  every such navigation, so a fresh `?tag=` on the object just navigated to still wins, the
-   *  same way it does here at mount. */
-  function tagParam(): string | null {
-    return new URLSearchParams(location.search).get('tag')?.trim() || null;
-  }
-  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag. */
-  const initialTag = tagParam();
+  /** A `?tag=` link (a chip tapped in search) opens the timeline already narrowed to that tag.
+   *  `tagParam` (the `?tag=` query parameter of the CURRENT address, trimmed; blank/absent is
+   *  `null`) is read again, not just once here: `App.svelte`'s route table maps every
+   *  `/objects/:id` to this same `ObjectDetail` instance, so navigating from one object to
+   *  another (a card tapped under Contents, say) only changes the `id` prop -- it does not
+   *  remount this component or re-run the `let` initialisers below. The oid-reset effect
+   *  further down calls it again on every such navigation, so a fresh `?tag=` on the object
+   *  just navigated to still wins, the same way it does here at mount. */
+  const initialTag = tagParam(location.search);
   let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
   let object = $state<MemObject | null>(null);
   /** Whether a trip can be logged here at all -- the same condition `categoriesFor`'s own
    *  `counterUnit` argument checks, so "+ Log trip" (both the FAB and the empty-state one) and
    *  the category the entry form actually offers never disagree. */
-  const offersTrip = $derived(object?.counter_unit === 'km' || object?.counter_unit === 'mi');
+  const offersTrip = $derived(offersTripFor(object));
   /** Whether a charge (or fill) can be logged here at all -- "+ Log charge" (both the FAB and
    *  the Timeline empty state), and whether the Energy section's own figures are worth loading. */
-  const offersEnergy = $derived((object?.resource_unit ?? object?.fuel_unit) != null);
-  const resourceCategory = $derived(object?.resource_kind ? 'usage' : 'fuel');
+  const offersEnergy = $derived(offersEnergyFor(object));
+  const resourceCategory = $derived(resourceCategoryFor(object));
   const resourceLogLabel = $derived(object?.resource_kind === 'water' ? $t('water.log') : $t(`${energyLabelKey(object?.resource_unit ?? object?.fuel_unit ?? null)}-log`));
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
@@ -169,64 +165,9 @@
     tab = 'timeline';
   }
 
-  /** A stable negative id for a queued create, so it can sit in the same `id`-keyed list as
-   *  real activities without colliding with one (real ids are always positive). */
-  function pendingId(opId: string): number {
-    let h = 0;
-    for (let i = 0; i < opId.length; i++) h = (h * 31 + opId.charCodeAt(i)) | 0;
-    return -(Math.abs(h) || 1);
-  }
-
-  /** A queued 'activity.create' has no server row yet, so it renders straight from what the
-   *  form queued rather than from a GET — otherwise a log made underground would stay invisible
-   *  until the phone gets signal back, which is exactly the failure this task exists to avoid.
-   *  `pending: true` tells `Timeline` to dim it and refuse navigation into its (fake) id. */
-  function pendingToActivity(op: QueuedOp): Activity {
-    const b = op.body as Partial<ActivityInput>;
-    return {
-      id: pendingId(op.id), object_id: oid,
-      date: typeof b.date === 'string' ? b.date : new Date().toISOString().slice(0, 10),
-      category: (b.category as Category) ?? 'other',
-      title: typeof b.title === 'string' ? b.title : '',
-      notes: typeof b.notes === 'string' ? b.notes : '',
-      weight_grams: typeof b.weight_grams === 'number' ? b.weight_grams : null,
-      counter_value: typeof b.counter_value === 'number' ? b.counter_value : null,
-      cost_cents: typeof b.cost_cents === 'number' ? b.cost_cents : null,
-      quantity_milli: typeof b.quantity_milli === 'number' ? b.quantity_milli : null,
-      start_counter: typeof b.start_counter === 'number' ? b.start_counter : null,
-      from_place: typeof b.from_place === 'string' ? b.from_place : null,
-      to_place: typeof b.to_place === 'string' ? b.to_place : null,
-      duration_minutes: typeof b.duration_minutes === 'number' ? b.duration_minutes : null,
-      battery_used_pct: typeof b.battery_used_pct === 'number' ? b.battery_used_pct : null,
-      charged_full: typeof b.charged_full === 'number' ? b.charged_full : 0,
-      fuel_level_pct: typeof b.fuel_level_pct === 'number' ? b.fuel_level_pct : null,
-      meter_reading_milli: typeof b.meter_reading_milli === 'number' ? b.meter_reading_milli : null,
-      period_start: typeof b.period_start === 'string' ? b.period_start : null,
-      period_end: typeof b.period_end === 'string' ? b.period_end : null,
-      estimated: typeof b.estimated === 'number' ? b.estimated : 0,
-      meter_reset: typeof b.meter_reset === 'number' ? b.meter_reset : 0,
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), attachments: [],
-      pending: true, tags: Array.isArray(b.tags) ? b.tags : [],
-    };
-  }
-
-  /** The same fold the server's `title` filter and `last_done` grouping use (`fold_title` in
-   *  `src/api/activities.rs`): trimmed and case-folded, so a queued entry matches a title filter
-   *  the same way a synced one does. */
-  const foldTitle = (title: string) => title.trim().toLowerCase();
-
   async function pendingActivities(): Promise<Activity[]> {
     const ops = await pendingOpsFor(`/objects/${oid}/activities`);
-    // The server filters the loaded page by tag and title; a queued entry has not reached it,
-    // so it is filtered here the same way (tag ignoring case and accents, title ignoring case
-    // and surrounding space), or it would show under any tag or title filter.
-    const wantedTag = tagFilter === null ? null : foldTag(tagFilter);
-    const wantedTitle = titleFilter === null ? null : foldTitle(titleFilter);
-    return ops
-      .filter((o) => !category || o.body.category === category)
-      .filter((o) => wantedTag === null || (Array.isArray(o.body.tags) && (o.body.tags as string[]).some((x) => foldTag(x) === wantedTag)))
-      .filter((o) => wantedTitle === null || (typeof o.body.title === 'string' && foldTitle(o.body.title) === wantedTitle))
-      .map(pendingToActivity);
+    return filterPendingOps(ops, { category, tagFilter, titleFilter }).map((o) => pendingToActivity(o, oid));
   }
 
   /// Guards against two loads landing out of order: only the newest may commit its result.
@@ -318,7 +259,7 @@
   $effect(() => {
     oid;
     category = '';
-    tagFilter = tagParam();
+    tagFilter = tagParam(location.search);
     titleFilter = null;
     lastDone = [];
     lastDoneSeq++;
@@ -362,12 +303,7 @@
   // opening `/objects/5` must not turn into `/objects/5?tab=timeline` a moment later, which
   // breaks a back-button history entry's match and any test waiting for the plain URL.
   $effect(() => {
-    const url = new URL(location.href);
-    if (tab === 'timeline') url.searchParams.delete('tab'); else url.searchParams.set('tab', tab);
-    // `?tag=` is read once, on load; the filter is session state from then on, like `category`,
-    // so a stale tag left in the address would come back on a reload after being cleared.
-    url.searchParams.delete('tag');
-    const next = url.pathname + url.search;
+    const next = nextUrl(location.href, tab);
     if (next !== location.pathname + location.search) history.replaceState(null, '', next);
   });
 
