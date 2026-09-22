@@ -17,8 +17,6 @@ use crate::state::App;
 use serde::Serialize;
 use std::time::Duration;
 
-/// Key in the `settings` table holding the date (`YYYY-MM-DD`) of the last digest attempt.
-const LAST_SENT_KEY: &str = "notify_last_sent";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -100,11 +98,12 @@ struct Recipient {
     lang: String,
     notify_url: Option<String>,
     notify_format: String,
+    notify_hour: Option<i64>,
 }
 
 async fn recipients(state: &App) -> Result<Vec<Recipient>, AppError> {
     Ok(sqlx::query_as::<_, Recipient>(
-        "SELECT id, username, lang, notify_url, notify_format FROM users ORDER BY username",
+        "SELECT id, username, lang, notify_url, notify_format, notify_hour FROM users ORDER BY username",
     )
     .fetch_all(&state.db)
     .await?)
@@ -304,106 +303,117 @@ pub(crate) async fn push_to(
     Ok((sent, failed))
 }
 
-async fn push_digest(state: &App, user_id: i64, d: &Digest) -> Result<(), AppError> {
-    // One reminder opens where it is dealt with; several open the dashboard, which lists them.
-    let open = match d.reminders.as_slice() {
-        [only] => path(only.object_id, &only.kind, &only.object_type),
-        _ => "/".to_string(),
-    };
-    let (_, failed) = push_to(state, user_id, &d.title, &d.message, &open).await?;
-    if failed > 0 {
-        return Err(AppError::Internal(format!(
-            "{failed} push notification(s) failed"
-        )));
-    }
-    Ok(())
-}
-
-async fn last_sent(state: &App) -> Result<Option<String>, AppError> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
-        .bind(LAST_SENT_KEY)
-        .fetch_optional(&state.db)
-        .await?;
-    Ok(row.map(|r| r.0))
-}
-
-async fn mark_sent(state: &App, date: &str) -> Result<(), AppError> {
-    sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
-        .bind(LAST_SENT_KEY).bind(date).execute(&state.db).await?;
-    Ok(())
-}
-
-/// One scheduler tick. Returns the instance digest it sent, if any.
-///
-/// Every digest is built before anything is sent, and the day is marked as handled in between:
-/// a failure while collecting (a pool timeout, a locked database) means nothing was assembled,
-/// so the day is not burnt and the next tick tries again; a failure while *sending* costs one
-/// failed request per day per target rather than one per minute until midnight. A digest lost
-/// to a failed send is not retried; its reminders stay due and are in tomorrow's.
-///
-/// Each target is tried even when an earlier one failed -- one person's broken webhook must not
-/// cost everybody else their notification -- and the failures are reported together.
-pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
-    if hour_now < state.config.notify_hour {
-        return Ok(None);
-    }
-    let today = db::today();
-    if last_sent(state).await?.as_deref() == Some(today.as_str()) {
-        return Ok(None);
-    }
-
-    let recipients = recipients(state).await?;
-    let instance = match state.config.notify_url {
-        Some(_) => instance_digest(state, &recipients).await?,
-        None => None,
-    };
-    let pushing: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT user_id FROM push_subscriptions")
-        .fetch_all(&state.db)
-        .await?;
-    let mut personal = Vec::new();
-    let mut pushes = Vec::new();
-    let mut telegrams = Vec::new();
-    for r in &recipients {
-        let wants_push = pushing.contains(&r.id);
-        let has_telegram = crate::telegram::connected(state, r.id).await?;
-        if r.notify_url.is_none() && !wants_push && !has_telegram {
-            continue;
+/// Claim a destination before sending. The durable attempt also acts as a lease after a crash.
+/// Retries wait five minutes, then thirty minutes; successful destinations are not resent.
+async fn claim_delivery(state: &App, target: &str, user_id: Option<i64>) -> Result<bool, AppError> {
+    let day = db::today();
+    let now = db::now();
+    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    type Previous = (String, i64, Option<String>, Option<String>);
+    let previous: Option<Previous> = sqlx::query_as(
+        "SELECT day, attempts, attempted_at, last_success FROM notification_deliveries WHERE target = $1"
+    ).bind(target).fetch_optional(&mut *tx).await?;
+    let mut attempts = 0;
+    if let Some((old_day, count, attempted, success)) = previous {
+        if old_day == day {
+            attempts = count;
+            if count >= 3 || success.as_ref().zip(attempted.as_ref()).is_some_and(|(s, a)| s >= a) {
+                return Ok(false);
+            }
+            if let Some(at) = attempted.and_then(|a| chrono::DateTime::parse_from_rfc3339(&a).ok()) {
+                let delay = if count < 2 { 300 } else { 1800 };
+                if chrono::Utc::now().signed_duration_since(at).num_seconds() < delay { return Ok(false); }
+            }
         }
-        let Some(d) = digest(items_for(state, r).await?, &r.lang) else {
+    }
+    sqlx::query("INSERT INTO notification_deliveries (target, user_id, day, attempts, attempted_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (target) DO UPDATE SET day = excluded.day, attempts = excluded.attempts, attempted_at = excluded.attempted_at")
+        .bind(target).bind(user_id).bind(day).bind(attempts + 1).bind(now).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+async fn finish_delivery(state: &App, target: &str, ok: bool, empty: bool) -> Result<(), AppError> {
+    if empty {
+        sqlx::query("UPDATE notification_deliveries SET attempts = 3, last_error = NULL WHERE target = $1")
+            .bind(target).execute(&state.db).await?;
+    } else if ok {
+        sqlx::query("UPDATE notification_deliveries SET last_success = $1, last_error = NULL WHERE target = $2")
+            .bind(db::now()).bind(target).execute(&state.db).await?;
+    } else {
+        // Never persist transport errors containing webhook URLs or bot credentials.
+        sqlx::query("UPDATE notification_deliveries SET last_error = 'delivery_failed' WHERE target = $1")
+            .bind(target).execute(&state.db).await?;
+    }
+    Ok(())
+}
+
+enum Destination {
+    Instance,
+    Webhook(String, String),
+    Telegram(i64),
+    Push(i64, Subscription),
+}
+
+/// Build first, then deliver independently. An unavailable target cannot suppress another.
+pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
+    let recipients = recipients(state).await?;
+    let mut plans = Vec::new();
+    if state.config.notify_url.is_some() && hour_now >= state.config.notify_hour {
+        plans.push(("instance".to_string(), None, Destination::Instance, instance_digest(state, &recipients).await?));
+    }
+    for r in &recipients {
+        if hour_now < r.notify_hour.map(|h| h as u32).unwrap_or(state.config.notify_hour) { continue; }
+        let d = digest(items_for(state, r).await?, &r.lang);
+        if let Some(url) = &r.notify_url {
+            plans.push((format!("webhook:{}", r.id), Some(r.id), Destination::Webhook(url.clone(), r.notify_format.clone()), d.clone()));
+        }
+        if crate::telegram::connected(state, r.id).await? {
+            plans.push((format!("telegram:{}", r.id), Some(r.id), Destination::Telegram(r.id), d.clone()));
+        }
+        let subs: Vec<(i64, String, String, String)> = sqlx::query_as(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1"
+        ).bind(r.id).fetch_all(&state.db).await?;
+        for (id, endpoint, p256dh, auth) in subs {
+            plans.push((format!("push:{id}"), Some(r.id), Destination::Push(id, Subscription { endpoint, p256dh, auth }), d.clone()));
+        }
+    }
+    let mut instance = None;
+    let mut failed = false;
+    for (target, owner, destination, digest) in plans {
+        if !claim_delivery(state, &target, owner).await? { continue; }
+        let Some(d) = digest else {
+            finish_delivery(state, &target, true, true).await?;
             continue;
         };
-        if let Some(url) = &r.notify_url {
-            personal.push((url.clone(), r.notify_format.clone(), d.clone()));
-        }
-        if wants_push {
-            pushes.push((r.id, d.clone()));
-        }
-        if has_telegram { telegrams.push((r.id, d)); }
+        let result = match destination {
+            Destination::Instance => {
+                let result = send(state, &d).await;
+                if result.is_ok() { instance = Some(d.clone()); }
+                result
+            }
+            Destination::Webhook(url, format) => post(&url, &format, &d).await,
+            Destination::Telegram(id) => crate::telegram::send_user(state, id, &d).await,
+            Destination::Push(id, sub) => {
+                let kp = push::key_pair(state).await?;
+                let open = match d.reminders.as_slice() {
+                    [only] => path(only.object_id, &only.kind, &only.object_type),
+                    _ => "/".to_string(),
+                };
+                let payload = serde_json::json!({ "title": d.title, "body": d.message, "url": open }).to_string();
+                match push::send(&kp, &push::contact(state), &sub, payload.as_bytes()).await {
+                    Delivery::Sent => Ok(()),
+                    Delivery::Gone => {
+                        sqlx::query("DELETE FROM push_subscriptions WHERE id = $1").bind(id).execute(&state.db).await?;
+                        Ok(())
+                    }
+                    Delivery::Failed(_) => Err(AppError::Internal("push delivery failed".into())),
+                }
+            }
+        };
+        failed |= result.is_err();
+        finish_delivery(state, &target, result.is_ok(), false).await?;
     }
-    mark_sent(state, &today).await?;
-
-    let mut failures = Vec::new();
-    if let Some(d) = &instance {
-        if let Err(e) = send(state, d).await {
-            failures.push(e.to_string());
-        }
-    }
-    for (url, format, d) in &personal {
-        if let Err(e) = post(url, format, d).await {
-            failures.push(e.to_string());
-        }
-    }
-    for (user_id, d) in &pushes {
-        if let Err(e) = push_digest(state, *user_id, d).await {
-            failures.push(e.to_string());
-        }
-    }
-    for (user_id, d) in &telegrams {
-        if let Err(e) = crate::telegram::send_user(state, *user_id, d).await { failures.push(e.to_string()); }
-    }
-    if !failures.is_empty() {
-        return Err(AppError::Internal(failures.join("; ")));
-    }
+    if failed { return Err(AppError::Internal("notification delivery failed; retry scheduled".into())); }
     Ok(instance)
 }
 

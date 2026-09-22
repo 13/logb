@@ -449,6 +449,10 @@ start. Logging a counter value (or weight for a body object) advances its readin
 deleting that entry recalculates the date. Skipping a reading uses its actual next occurrence.
 The picker supports arrow keys, Home/End, Page Up/Down, Enter, and Escape.
 
+Appearance preferences can be saved to the account with **Apply appearance**, including language,
+theme, date format, and first weekday. New devices load those preferences; **Use these preferences
+only on this device** keeps a local override. Preferences remain available offline.
+
 ## Reminder notifications
 
 LogB sends no mail of its own. Point `LOGB_NOTIFY_URL` at a webhook you
@@ -497,10 +501,12 @@ the URL of its one-field reading form, and a text digest about a single
 reminder also sends ntfy's `Click` header, so tapping the notification opens
 that form.
 
-The digest is a notification, not a queue: the day is marked as handled before
-the request goes out, so an endpoint that is down costs one failed request a
-day rather than one a minute. Reminders lost to a failure stay due and appear
-in the next day's digest.
+Each user can choose a daily delivery hour in Settings → Notifications, in the instance's
+timezone. The shared instance webhook retains `LOGB_NOTIFY_HOUR`. Delivery history shows the
+last successful delivery and failures for each personal destination. Failed destinations retry
+after five minutes, then thirty minutes, up to three attempts per day; successful destinations
+are not retried. Attempts survive restarts. A crash after a remote service accepts a message but
+before success is stored can still cause a duplicate on retry. Reminders remain due until handled.
 
 ## Languages and currency
 

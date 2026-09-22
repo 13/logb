@@ -21,6 +21,7 @@ export interface User { id: number; username: string; is_admin: boolean; lang: s
 export interface Settings { currency: string; timezone: string; timezone_locked: boolean }
 /** `GET /me/notifications`: where this person's digest goes. */
 export interface NotificationSettings {
+  deliveries?: { target: string; attempted_at: string | null; last_success: string | null; last_error: string | null; attempts: number }[];
   url: string | null; format: 'text' | 'json'; push_devices: number; vapid_public_key: string;
   instance_webhook: boolean; hour: number; telegram_configured: boolean; telegram_connected: boolean;
   telegram_display_name: string | null; telegram_last_error: string | null;

@@ -4,7 +4,7 @@
   import { api } from '../../lib/api';
   import { locale, navigatorLangs, t } from '../../i18n';
   import { LANG_NAMES, SUPPORTED } from '../../i18n/detect';
-  import { settings } from '../../stores/settings';
+  import { settings, deviceOverride, applyAccountAppearance, type LocalSettings } from '../../stores/settings';
   import { currency, rememberCurrentCurrency, user } from '../../stores/session';
   import { DATE_FORMATS, fmtDate, resolveDateFormat, type DateFormat } from '../../lib/format';
   import type { Settings } from '../../lib/types';
@@ -25,6 +25,23 @@
   let timezoneLocked = $state(false);
   let message = $state('');
   let error = $state('');
+  const overridden = $derived(!!$deviceOverride[String($user?.id)]);
+
+  function setOverride(enabled: boolean) {
+    if (!$user) return;
+    deviceOverride.update(all => ({ ...all, [String($user!.id)]: enabled }));
+  }
+  async function saveAppearance() {
+    if (!$user) return;
+    error = ''; message = '';
+    try {
+      if (!overridden) {
+        const saved = await api<LocalSettings>('PUT', '/me/appearance', $settings);
+        applyAccountAppearance($user.id, saved);
+      }
+      message = $t('object.saved');
+    } catch (e) { error = (e as Error).message; }
+  }
 
   const isAdmin = $derived($user?.is_admin === true);
   /** Every zone the browser knows, when it can say; a plain text field otherwise. */
@@ -93,6 +110,9 @@
       <option value="dark">{$t('settings.theme-dark')}</option>
     </select>
   </div>
+
+  <label class="row"><input type="checkbox" checked={overridden} onchange={(e) => setOverride(e.currentTarget.checked)} />{$t('settings.device-only')}</label>
+  <button onclick={saveAppearance}>{$t('settings.save-appearance')}</button>
 
   {#if isAdmin}
     <h2>{$t('settings.currency')}</h2>

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub fn router() -> Router<App> {
     Router::new()
         .route("/me/notifications", get(read).put(write))
+        .route("/me/notifications/hour", put(write_hour))
         .route("/me/notifications/test", post(test))
         .route("/me/notifications/telegram", put(telegram_save).delete(telegram_remove))
         .route("/me/notifications/telegram/link", post(telegram_link))
@@ -37,6 +38,7 @@ pub struct NotificationsOut {
     pub instance_webhook: bool,
     /// The hour, in the instance's timezone, the daily digest goes out.
     pub hour: u32,
+    pub deliveries: Vec<DeliveryStatus>,
     pub telegram_configured: bool,
     pub telegram_connected: bool,
     pub telegram_display_name: Option<String>,
@@ -45,9 +47,27 @@ pub struct NotificationsOut {
     pub telegram_legacy: bool,
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct DeliveryStatus {
+    pub target: String,
+    pub attempted_at: Option<String>,
+    pub last_success: Option<String>,
+    pub last_error: Option<String>,
+    pub attempts: i64,
+}
+
+#[derive(Deserialize)]
+struct DeliveryHour { hour: u32 }
+
+async fn write_hour(user: AuthUser, State(state): State<App>, Json(body): Json<DeliveryHour>) -> Result<Json<NotificationsOut>, AppError> {
+    if body.hour > 23 { return Err(AppError::BadRequest("hour must be 0..23".into())); }
+    sqlx::query("UPDATE users SET notify_hour = $1 WHERE id = $2").bind(i64::from(body.hour)).bind(user.id).execute(&state.db).await?;
+    Ok(Json(out(&state, user.id).await?))
+}
+
 async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
-    let (url, format): (Option<String>, String) =
-        sqlx::query_as("SELECT notify_url, notify_format FROM users WHERE id = $1")
+    let (url, format, hour): (Option<String>, String, Option<i64>) =
+        sqlx::query_as("SELECT notify_url, notify_format, notify_hour FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.db)
             .await?;
@@ -58,13 +78,16 @@ async fn out(state: &App, user_id: i64) -> Result<NotificationsOut, AppError> {
             .await?;
     let kp = push::key_pair(state).await?;
     let telegram = crate::telegram::status(state, user_id).await?;
+    let deliveries = sqlx::query_as("SELECT target, attempted_at, last_success, last_error, attempts FROM notification_deliveries WHERE user_id = $1 ORDER BY target")
+        .bind(user_id).fetch_all(&state.db).await?;
     Ok(NotificationsOut {
         url,
         format,
         push_devices,
         vapid_public_key: push::public_key(&kp),
         instance_webhook: state.config.notify_url.is_some(),
-        hour: state.config.notify_hour,
+        hour: hour.map(|h| h as u32).unwrap_or(state.config.notify_hour),
+        deliveries,
         telegram_configured: telegram.configured,
         telegram_connected: telegram.connected,
         telegram_display_name: telegram.display_name,

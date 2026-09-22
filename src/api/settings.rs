@@ -10,6 +10,34 @@ use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<App> {
     Router::new().route("/settings", get(read).put(write))
+        .route("/me/appearance", get(read_appearance).put(write_appearance))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Appearance {
+    pub locale: String,
+    pub theme: String,
+    pub date_format: String,
+    pub first_day_of_week: String,
+}
+
+async fn read_appearance(user: AuthUser, State(state): State<App>) -> Result<Json<Option<Appearance>>, AppError> {
+    let (raw,): (Option<String>,) = sqlx::query_as("SELECT appearance FROM users WHERE id = $1")
+        .bind(user.id).fetch_one(&state.db).await?;
+    Ok(Json(raw.and_then(|s| serde_json::from_str(&s).ok())))
+}
+
+async fn write_appearance(user: AuthUser, State(state): State<App>, Json(body): Json<Appearance>) -> Result<Json<Appearance>, AppError> {
+    if !matches!(body.locale.as_str(), "auto" | "en" | "de")
+        || !matches!(body.theme.as_str(), "auto" | "light" | "dark")
+        || !matches!(body.date_format.as_str(), "auto" | "iso" | "dmy-dot" | "dmy-slash" | "mdy-slash")
+        || !matches!(body.first_day_of_week.as_str(), "locale" | "monday" | "sunday") {
+        return Err(AppError::BadRequest("invalid appearance preference".into()));
+    }
+    let raw = serde_json::to_string(&body).map_err(|e| AppError::Internal(e.to_string()))?;
+    sqlx::query("UPDATE users SET appearance = $1 WHERE id = $2").bind(raw).bind(user.id).execute(&state.db).await?;
+    Ok(Json(body))
 }
 
 #[derive(Serialize)]

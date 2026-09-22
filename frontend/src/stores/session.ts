@@ -7,6 +7,7 @@ import { forgetObjectDraft } from '../lib/object-draft';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
+import { appearanceOwner, appearanceRevision, applyAccountAppearance, type LocalSettings } from './settings';
 
 /**
  * How this module navigates. Injected the same way `setUnauthorizedHandler` is, so the session
@@ -64,6 +65,7 @@ export const offline: Readable<boolean> = readonly(offlineState);
  * displays it until someone claims it by logging in (see `setOutboxUser` in ../lib/api).
  */
 function endSession(): void {
+  appearanceOwner(null);
   user.set(null);
   sessionKnown = true;
   offlineState.set(false);
@@ -233,7 +235,12 @@ async function adoptUser(me: User): Promise<void> {
   sessionKnown = true;
   offlineState.set(false);
   stopOfflineRetry();
+  appearanceOwner(me.id);
+  const preferencesRevision = appearanceRevision();
   user.set(me);
+  void api<LocalSettings | null>('GET', '/me/appearance')
+    .then(value => applyAccountAppearance(me.id, value, preferencesRevision))
+    .catch(() => { /* Keep this account's cached appearance while offline. */ });
   setOutboxUser(me.id);
 }
 

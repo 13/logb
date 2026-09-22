@@ -15,11 +15,11 @@ test('a person sets their own digest webhook, and the hub row says so', async ({
   await expect(page.getByRole('status')).toContainText('nowhere to send one yet');
 
   await page.getByLabel('URL').fill('not a url');
-  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('http or https');
 
   await page.getByLabel('URL').fill('https://ntfy.example/logb-e2e');
-  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('Saved');
 
   await page.reload();

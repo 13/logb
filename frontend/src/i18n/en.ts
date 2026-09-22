@@ -1,4 +1,11 @@
 export default {
+  'settings.device-only': 'Use these preferences only on this device',
+  'settings.save-appearance': 'Apply appearance',
+  'notify.delivery-hour': 'Daily delivery hour (instance timezone)',
+  'notify.save-hour': 'Apply delivery time',
+  'notify.delivery-status': 'Delivery history',
+  'notify.delivery-ok': 'Last success',
+  'notify.delivery-error': 'Last attempt failed; retries are limited to three attempts per day.',
   'reminder.preview': 'Next dates',
   'reminder.calendar-hint': 'Dates stay on the calendar. Short months use their final day; February 29 becomes February 28 in other years.',
   "cat.usage": "Usage",

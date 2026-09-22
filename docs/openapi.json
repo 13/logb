@@ -19,6 +19,13 @@
     }
   ],
   "paths": {
+    "/me/appearance": {
+      "get": { "summary": "Read personal appearance preferences (null until saved)", "responses": { "200": { "description": "Account preferences", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Appearance" }, { "type": "null" }] } } } } } },
+      "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences" }, "400": { "description": "Invalid preference" } } }
+    },
+    "/me/notifications/hour": {
+      "put": { "summary": "Set personal daily delivery hour in the instance timezone; the instance webhook keeps its configured hour", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["hour"], "properties": { "hour": { "type": "integer", "minimum": 0, "maximum": 23 } } } } } }, "responses": { "200": { "description": "Notification settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } }, "400": { "description": "Invalid hour" } } }
+    },
     "/health": {
       "get": {
         "summary": "Liveness probe. The only route needing no credential.",
@@ -2588,6 +2595,15 @@
       }
     },
     "schemas": {
+      "Appearance": {
+        "type": "object", "required": ["locale", "theme", "dateFormat", "firstDayOfWeek"],
+        "properties": {
+          "locale": { "type": "string", "enum": ["auto", "en", "de"] },
+          "theme": { "type": "string", "enum": ["auto", "light", "dark"] },
+          "dateFormat": { "type": "string", "enum": ["auto", "iso", "dmy-dot", "dmy-slash", "mdy-slash"] },
+          "firstDayOfWeek": { "type": "string", "enum": ["locale", "monday", "sunday"] }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
@@ -5433,6 +5449,7 @@
       "NotificationSettings": {
         "type": "object",
         "properties": {
+          "deliveries": { "type": "array", "description": "Per-destination status; failures retry after five then thirty minutes, at most three attempts per day", "items": { "type": "object", "properties": { "target": { "type": "string" }, "attempts": { "type": "integer" }, "attempted_at": { "type": ["string", "null"] }, "last_success": { "type": ["string", "null"] }, "last_error": { "type": ["string", "null"] } } } },
           "url": {
             "type": [
               "string",

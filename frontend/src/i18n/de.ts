@@ -1,4 +1,11 @@
 export default {
+  'settings.device-only': 'Diese Einstellungen nur auf diesem Gerät verwenden',
+  'settings.save-appearance': 'Darstellung übernehmen',
+  'notify.delivery-hour': 'Tägliche Versandstunde (Instanz-Zeitzone)',
+  'notify.save-hour': 'Versandzeit übernehmen',
+  'notify.delivery-status': 'Versandverlauf',
+  'notify.delivery-ok': 'Zuletzt erfolgreich',
+  'notify.delivery-error': 'Letzter Versuch fehlgeschlagen; höchstens drei Versuche pro Tag.',
   'reminder.preview': 'Nächste Termine',
   'reminder.calendar-hint': 'Die Termine bleiben im Kalender verankert. Kurze Monate verwenden ihren letzten Tag; der 29. Februar wird in anderen Jahren zum 28. Februar.',
   "cat.usage": "Verbrauch",

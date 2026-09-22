@@ -69,6 +69,49 @@ async fn seed_overdue(app: &common::TestApp) {
 }
 
 #[tokio::test]
+async fn personal_delivery_hour_can_be_earlier_than_the_instance_hour() {
+    let (url, inbox) = webhook().await;
+    let app = common::spawn_with(|c| c.notify_hour = 18).await;
+    seed_overdue(&app).await;
+    app.client.put(app.url("/me/notifications")).json(&json!({"url":url,"format":"text"})).send().await.unwrap();
+    app.client.put(app.url("/me/notifications/hour")).json(&json!({"hour":6})).send().await.unwrap();
+    logb::notify::tick(&app.state, 5).await.unwrap();
+    assert!(inbox.received().is_empty());
+    logb::notify::tick(&app.state, 6).await.unwrap();
+    assert_eq!(inbox.received().len(), 1);
+    logb::notify::tick(&app.state, 18).await.unwrap();
+    assert_eq!(inbox.received().len(), 1);
+    let status = app.get_json("/me/notifications").await;
+    assert!(status["deliveries"][0]["last_success"].is_string());
+}
+
+#[tokio::test]
+async fn failed_targets_retry_without_resending_successful_targets() {
+    let (good_url, inbox) = webhook().await;
+    let app = common::spawn_with(|c| { c.notify_url = Some("http://127.0.0.1:1/hook".into()); c.notify_hour = 8; }).await;
+    seed_overdue(&app).await;
+    // Personal delivery succeeds; the instance still has a second user's overdue reminder.
+    app.client.put(app.url("/me/notifications")).json(&json!({"url": good_url, "format": "text"})).send().await.unwrap();
+    let create = app.client.post(app.url("/users")).json(&json!({"username": "other", "password": "correct horse"})).send().await.unwrap();
+    let other: serde_json::Value = create.json().await.unwrap();
+    let object = app.create_object(&app.client, "Other car", Some("km")).await;
+    app.client.post(app.url(&format!("/objects/{}/reminders", object["id"]))).json(&json!({"title":"Other due", "due_date":"2020-01-01"})).send().await.unwrap();
+    sqlx::query("UPDATE objects SET user_id = $1 WHERE id = $2").bind(other["id"].as_i64().unwrap()).bind(object["id"].as_i64().unwrap()).execute(&app.state.db).await.unwrap();
+    assert!(logb::notify::tick(&app.state, 9).await.is_err());
+    assert_eq!(inbox.received().len(), 1);
+    assert!(logb::notify::tick(&app.state, 9).await.unwrap().is_none());
+    for expected in [2, 3] {
+        sqlx::query("UPDATE notification_deliveries SET attempted_at = '2000-01-01T00:00:00Z' WHERE target = 'instance'").execute(&app.state.db).await.unwrap();
+        assert!(logb::notify::tick(&app.state, 9).await.is_err());
+        let (attempts,): (i64,) = sqlx::query_as("SELECT attempts FROM notification_deliveries WHERE target = 'instance'").fetch_one(&app.state.db).await.unwrap();
+        assert_eq!(attempts, expected);
+        assert_eq!(inbox.received().len(), 1);
+    }
+    sqlx::query("UPDATE notification_deliveries SET attempted_at = '2000-01-01T00:00:00Z' WHERE target = 'instance'").execute(&app.state.db).await.unwrap();
+    assert!(logb::notify::tick(&app.state, 9).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn the_digest_posts_every_due_reminder_as_json() {
     let (url, inbox) = webhook().await;
     let app = common::spawn_with(|c| {
@@ -173,7 +216,7 @@ async fn without_a_url_the_scheduler_does_nothing() {
 
 /// An endpoint that is down must not turn into a request every minute for the rest of the day.
 #[tokio::test]
-async fn a_failing_endpoint_is_not_retried_until_tomorrow() {
+async fn a_failing_endpoint_waits_before_retrying() {
     // Port 1 on loopback refuses connections.
     let app = common::spawn_with(|c| {
         c.notify_url = Some("http://127.0.0.1:1/hook".into());

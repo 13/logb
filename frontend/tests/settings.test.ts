@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { get } from 'svelte/store';
 
 /** An in-memory `localStorage`: vitest runs in node, which has none. */
@@ -32,5 +32,26 @@ describe('settings', () => {
     const { settings } = await import('../src/stores/settings');
 
     expect(get(settings)).toEqual({ locale: 'de', theme: 'dark', dateFormat: 'auto', firstDayOfWeek: 'locale' });
+  });
+
+  it('isolates accounts, honors device overrides and ignores stale preference loads', async () => {
+    vi.resetModules(); installStorage();
+    const { settings, appearanceOwner, applyAccountAppearance, appearanceRevision, deviceOverride } = await import('../src/stores/settings');
+    appearanceOwner(1);
+    const account = { locale: 'de' as const, theme: 'dark' as const, dateFormat: 'iso' as const, firstDayOfWeek: 'monday' as const };
+    applyAccountAppearance(1, account);
+    const beforeEdit = appearanceRevision();
+    settings.update(s => ({ ...s, firstDayOfWeek: 'sunday' }));
+    applyAccountAppearance(1, account, beforeEdit);
+    expect(get(settings).firstDayOfWeek).toBe('sunday');
+    deviceOverride.set({ '1': true });
+    applyAccountAppearance(1, account);
+    expect(get(settings).firstDayOfWeek).toBe('sunday');
+    appearanceOwner(2);
+    expect(get(settings).locale).toBe('auto');
+    applyAccountAppearance(1, account);
+    expect(get(settings).locale).toBe('auto');
+    appearanceOwner(1);
+    expect(get(settings).firstDayOfWeek).toBe('sunday');
   });
 });

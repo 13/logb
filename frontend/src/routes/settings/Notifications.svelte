@@ -10,6 +10,14 @@
   let push = $state<PushState | null>(null);
   let url = $state('');
   let format = $state<'text' | 'json'>('text');
+  let hour = $state(8);
+  async function saveHour() {
+    busy = true; error = ''; message = '';
+    try {
+      data = await api<NotificationSettings>('PUT', '/me/notifications/hour', { hour });
+      message = $t('object.saved');
+    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+  }
   let busy = $state(false);
   let message = $state('');
   let error = $state('');
@@ -28,6 +36,7 @@
         await load();
         url = data?.url ?? '';
         format = data?.format ?? 'text';
+        hour = data?.hour ?? 8;
       } catch (e) { error = (e as Error).message; }
       push = await pushState();
     })();
@@ -102,6 +111,17 @@
 
 <main>
   <TopBar title={$t('settings.notifications')} backTo="/settings" />
+  <div class="field"><label for="delivery-hour">{$t('notify.delivery-hour')}</label><input id="delivery-hour" type="number" min="0" max="23" bind:value={hour} /></div>
+  <button disabled={busy || !Number.isInteger(hour) || hour < 0 || hour > 23} onclick={saveHour}>{$t('notify.save-hour')}</button>
+  {#if data?.deliveries?.length}
+    <h2>{$t('notify.delivery-status')}</h2>
+    {#each data.deliveries as delivery}
+      <p>{delivery.target.startsWith('telegram:') ? 'Telegram' : delivery.target.startsWith('push:') ? $t('notify.push-title') : $t('notify.webhook-title')}
+        {#if delivery.last_success} · {$t('notify.delivery-ok')}: {delivery.last_success}{/if}
+        {#if delivery.last_error}<span class="error"> · {$t('notify.delivery-error')}</span>{/if}
+      </p>
+    {/each}
+  {/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if message}<p class="muted" role="status">{message}</p>{/if}
 
