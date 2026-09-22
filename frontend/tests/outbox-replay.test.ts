@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createObjectQueued, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, setOutboxUser, setUnauthorizedHandler, updateQueuedActivity, uploadQueued, ApiError, outboxDeadCount } from '../src/lib/api';
+import { cancelQueuedActivity, createObjectQueued, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, outboxDeadCount } from '../src/lib/api-outbox';
+import { setOutboxUser, setUnauthorizedHandler, ApiError } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
 // Every flush in this file stands in for one made by a signed-in user: `flushOutbox` sends
