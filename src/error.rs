@@ -39,6 +39,21 @@ pub enum AppError {
     InUse(i64),
 }
 
+/// Whether this is the database saying "not now" rather than "no". Both mean the request never
+/// ran and sending it again is the right thing to do.
+///
+/// `PoolTimedOut` is a writer that waited out `db::WRITE_WAIT` for the one writer connection.
+/// SQLite codes 5 and 6 are `SQLITE_BUSY` and `SQLITE_LOCKED`, which a single-statement write on
+/// the read pool can still meet while something long-running holds the lock -- an import, a
+/// database copy, the retention purge.
+fn is_write_contention(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::PoolTimedOut => true,
+        sqlx::Error::Database(d) => matches!(d.code().as_deref(), Some("5") | Some("6")),
+        _ => false,
+    }
+}
+
 impl AppError {
     fn status_and_code(&self) -> (StatusCode, &'static str) {
         match self {
@@ -53,6 +68,9 @@ impl AppError {
             AppError::Gone => (StatusCode::GONE, "gone"),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+            AppError::Db(e) if is_write_contention(e) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+            }
             AppError::Db(sqlx::Error::RowNotFound) => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Db(_) | AppError::Io(_) | AppError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
@@ -64,7 +82,12 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code) = self.status_and_code();
-        let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
+        let busy = matches!(&self, AppError::Db(e) if is_write_contention(e));
+        let message = if busy {
+            // Warn, not error: nothing is broken, and the client is being asked to come back.
+            tracing::warn!(error = %self, "the database was busy; asked the client to retry");
+            "the database is busy, please retry".to_string()
+        } else if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = %self, "request failed");
             "internal error".to_string()
         } else {
@@ -74,6 +97,11 @@ impl IntoResponse for AppError {
             AppError::InUse(count) => json!({ "error": code, "message": message, "count": count }),
             _ => json!({ "error": code, "message": message }),
         };
+        if busy {
+            // One second is the smallest value that means "not immediately"; a client that
+            // queues writes (the bundled one does) uses its own backoff from here.
+            return (status, [(axum::http::header::RETRY_AFTER, "1")], Json(body)).into_response();
+        }
         (status, Json(body)).into_response()
     }
 }

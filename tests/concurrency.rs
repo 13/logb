@@ -358,3 +358,41 @@ async fn every_one_of_many_concurrent_writers_is_served() {
         .fetch_one(&app.state.db).await.unwrap();
     assert_eq!(count, 32);
 }
+
+/// A write that cannot take the lock is not an internal error: the request was fine, the
+/// database was busy. It answers 503 with `Retry-After`, which the bundled client already
+/// treats as "unknown, queue it and replay" and a third-party client can act on.
+///
+/// Deterministic because the writer pool has one connection: holding it means the next write
+/// cannot be served, and it gives up after `WRITE_WAIT`. That wait is what this test costs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_write_that_cannot_take_the_lock_asks_the_client_to_retry() {
+    // PostgreSQL waits on `pg_advisory_xact_lock` with no timeout, so the request below would
+    // block until the transaction this test holds is dropped -- which happens after it. There
+    // is no busy deadline there to test, because there is no busy failure there to prevent.
+    if common::skipped_on_postgres(
+        "a_write_that_cannot_take_the_lock_asks_the_client_to_retry",
+        "PostgreSQL blocks on the advisory lock rather than timing out, so this would hang",
+    ) {
+        return;
+    }
+    let app = common::spawn_with(|c| c.db_pool_size = Some(4)).await;
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = object["id"].as_i64().unwrap();
+
+    let held = logb::db::begin_write(&app.state).await.unwrap();
+    let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+        .json(&serde_json::json!({
+            "date": "2026-01-01", "category": "maintenance", "title": "blocked", "notes": ""
+        }))
+        .send().await.unwrap();
+    let status = res.status();
+    let retry = res.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let body = res.text().await.unwrap();
+    drop(held);
+
+    assert_eq!(status, 503, "{body}");
+    assert_eq!(retry.as_deref(), Some("1"), "no Retry-After to act on: {body}");
+    assert!(!body.contains("database is locked"), "the driver's text reached the client: {body}");
+}
