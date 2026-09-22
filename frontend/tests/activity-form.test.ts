@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { activityTitle, emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
+import { hashToNegativeId, resolveCategory, parseCategoryParam, counterBelowLast, weightDeviates, firstExifDate, activityToFormText, changeWeightUnitState, buildActivityInput, optimisticActivity } from '../src/lib/activity-form';
 import { categoriesFor } from '../src/lib/type-registry';
 import type { Activity, TitleSuggestion } from '../src/lib/types';
 
@@ -160,5 +161,124 @@ describe('categoriesFor offering trip', () => {
   it('offers fuel by resource capability, independent of object type', () => {
     expect(categoriesFor('home', [], undefined, 'h', 'l')).toContain('fuel');
     expect(categoriesFor('appliance', [], undefined, 'h', 'kwh')).toContain('fuel');
+  });
+});
+
+describe('hashToNegativeId', () => {
+  it('is negative, stable and never zero', () => {
+    expect(hashToNegativeId('op-1')).toBeLessThan(0);
+    expect(hashToNegativeId('op-1')).toBe(hashToNegativeId('op-1'));
+    expect(hashToNegativeId('')).toBe(-1);
+  });
+});
+
+describe('resolveCategory', () => {
+  it('takes a wanted category the object offers and marks it touched', () => {
+    expect(resolveCategory(['trip', 'fuel'], 'trip', 'maintenance')).toEqual({ category: 'trip', touched: true });
+  });
+  it('falls back to the first offered category when the current one is not offered', () => {
+    expect(resolveCategory(['weight'], null, 'maintenance')).toEqual({ category: 'weight', touched: false });
+  });
+  it('keeps a current category that is offered', () => {
+    expect(resolveCategory(['repair', 'maintenance'], null, 'maintenance')).toEqual({ category: 'maintenance', touched: false });
+  });
+  it('ignores a wanted category the object does not offer', () => {
+    expect(resolveCategory(['repair'], 'trip', 'repair')).toEqual({ category: 'repair', touched: false });
+  });
+});
+
+describe('parseCategoryParam', () => {
+  it('reads a known category and ignores anything else', () => {
+    expect(parseCategoryParam('?category=trip')).toBe('trip');
+    expect(parseCategoryParam('?category=nope')).toBeNull();
+    expect(parseCategoryParam('')).toBeNull();
+  });
+});
+
+describe('warnings', () => {
+  it('flags a counter below the last known one', () => {
+    expect(counterBelowLast('100', 200)).toBe(true);
+    expect(counterBelowLast('300', 200)).toBe(false);
+    expect(counterBelowLast('', 200)).toBe(false);
+    expect(counterBelowLast('100', null)).toBe(false);
+  });
+  it('flags a weight more than ten percent off the latest', () => {
+    expect(weightDeviates('weight', '90', 'kg', 80_000)).toBe(true);
+    expect(weightDeviates('weight', '81', 'kg', 80_000)).toBe(false);
+    expect(weightDeviates('repair', '90', 'kg', 80_000)).toBe(false);
+    expect(weightDeviates('weight', '90', 'kg', null)).toBe(false);
+  });
+  it('picks the first attachment with an EXIF date', () => {
+    expect(firstExifDate([{ taken_at: null }, { taken_at: '2026-01-02T10:00:00Z' }])).toBe('2026-01-02');
+    expect(firstExifDate([])).toBeNull();
+  });
+});
+
+describe('activityToFormText', () => {
+  it('renders every nullable field as text', () => {
+    const t = activityToFormText({ ...a(1, '2026-01-01'), category: 'trip', cost_cents: 1234, counter_value: 500, quantity_milli: 42_500, meter_reading_milli: 1_500, charged_full: 1, from_place: 'A', to_place: 'B', duration_minutes: 90, weight_grams: 80_000, start_counter: 400 }, 'kg');
+    expect(t).toMatchObject({ costText: '12.34', counterText: '500', quantityText: '42.5', meterReadingText: '1.5', chargedFull: true, fromText: 'A', toText: 'B', durationText: '1:30', distance: 100 });
+    expect(t.weightText).toBe('80');
+  });
+  it('renders nulls as empty strings', () => {
+    const t = activityToFormText(a(1, '2026-01-01'), 'kg');
+    expect(t).toMatchObject({ costText: '', counterText: '', quantityText: '', meterReadingText: '', chargedFull: false, fromText: '', toText: '', durationText: '', distance: null });
+  });
+});
+
+describe('changeWeightUnitState', () => {
+  it('converts the typed text and remembers the original grams', () => {
+    const s = changeWeightUnitState({ text: '80', unit: 'kg', originalText: '', originalUnit: 'kg', original: null }, 'lb');
+    expect(s.unit).toBe('lb');
+    expect(s.original).toBe(80_000);
+    expect(Number(s.text)).toBeCloseTo(176.4, 1);
+  });
+  it('reuses the original grams when the text is untouched', () => {
+    const s = changeWeightUnitState({ text: '176.4', unit: 'lb', originalText: '176.4', originalUnit: 'lb', original: 80_000 }, 'kg');
+    expect(s.original).toBe(80_000);
+    expect(s.text).toBe('80');
+  });
+  it('only switches the unit when the text is not a number', () => {
+    const s = changeWeightUnitState({ text: 'abc', unit: 'kg', originalText: '', originalUnit: 'kg', original: null }, 'lb');
+    expect(s).toEqual({ text: 'abc', unit: 'lb', originalText: '', originalUnit: 'kg', original: null });
+  });
+});
+
+const texts = { weightText: '', costText: '', counterText: '', quantityText: '', meterReadingText: '', fromText: '', toText: '', durationText: '', chargedFull: true };
+const weight = { text: '', unit: 'kg' as const, originalText: '', originalUnit: 'kg' as const, original: null };
+const t = (k: string) => k;
+
+describe('buildActivityInput', () => {
+  it('nulls every trip field on a non-trip entry', () => {
+    const out = buildActivityInput({ ...emptyActivity(), category: 'repair', start_counter: 5, battery_used_pct: 3 }, { ...texts, fromText: 'A', toText: 'B', durationText: '1:00', counterText: '700' }, weight, null, t);
+    expect(out).toMatchObject({ start_counter: null, from_place: null, to_place: null, duration_minutes: null, battery_used_pct: null, counter_value: 700 });
+  });
+  it('keeps trip fields on a trip and reads the end from the input', () => {
+    const out = buildActivityInput({ ...emptyActivity(), category: 'trip', start_counter: 400, counter_value: 600 }, { ...texts, fromText: ' A ', toText: '', durationText: '0:45' }, weight, null, t);
+    expect(out).toMatchObject({ start_counter: 400, counter_value: 600, from_place: 'A', to_place: null, duration_minutes: 45 });
+  });
+  it('sends fuel quantity and charged_full only for fuel', () => {
+    const fuel = buildActivityInput({ ...emptyActivity(), category: 'fuel' }, { ...texts, quantityText: '42,5' }, weight, null, t);
+    expect(fuel).toMatchObject({ quantity_milli: 42_500, charged_full: 1 });
+    const repair = buildActivityInput({ ...emptyActivity(), category: 'repair' }, { ...texts, quantityText: '42,5' }, weight, null, t);
+    expect(repair).toMatchObject({ quantity_milli: null, charged_full: 0 });
+  });
+  it('a weight entry gets grams and the category word as its title', () => {
+    const out = buildActivityInput({ ...emptyActivity(), category: 'weight', title: '' }, { ...texts, weightText: '80', costText: '5' }, weight, null, t);
+    expect(out).toMatchObject({ weight_grams: 80_000, title: 'cat.weight', cost_cents: null, counter_value: null });
+  });
+  it('copies tags into a plain array', () => {
+    const tags = ['a'];
+    const out = buildActivityInput({ ...emptyActivity(), tags }, texts, weight, null, t);
+    expect(out.tags).toEqual(['a']);
+    expect(out.tags).not.toBe(tags);
+  });
+});
+
+describe('optimisticActivity', () => {
+  it('fills every nullable field and marks the row pending', () => {
+    const out = optimisticActivity(-7, 3, { ...emptyActivity(), title: 'x' });
+    expect(out).toMatchObject({ id: -7, object_id: 3, title: 'x', pending: true, attachments: [], charged_full: 0, estimated: 0, meter_reset: 0, tags: [] });
+    expect(typeof out.created_at).toBe('string');
   });
 });

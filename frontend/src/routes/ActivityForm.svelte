@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseWeight, weightInput, formatWeight, changeWeightUnitValue } from '../lib/weight';
+  import { formatWeight } from '../lib/weight';
   import type { WeightUnit } from '../lib/types';
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
@@ -11,15 +11,15 @@
   import { newOpId, serialize } from '../lib/outbox';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
   import { go, back } from '../lib/router';
-  import { centsToInput, counter as fmtCounter, fmtDate, parseMoney, parseQuantity, todayIso } from '../lib/format';
+  import { centsToInput, counter as fmtCounter, fmtDate, todayIso } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
-  import { activityTitle, emptyActivity, exifDate, suggestionsFor, toActivityInput, validateActivity } from '../lib/activity-form';
+  import { activityTitle, activityToFormText, buildActivityInput, changeWeightUnitState, counterBelowLast, emptyActivity, firstExifDate, hashToNegativeId, optimisticActivity, parseCategoryParam, resolveCategory, suggestionsFor, toActivityInput, validateActivity, weightDeviates } from '../lib/activity-form';
   import { fieldError } from '../lib/form-error';
-  import { formatDuration, linkTripDistance, linkTripEnd, linkTripStart, parseDuration, tripDistance, type TripLink } from '../lib/trip';
+  import { linkTripDistance, linkTripEnd, linkTripStart, type TripLink } from '../lib/trip';
   import { energyLabelKey, fuelUnitLabel } from '../lib/energy';
   import { categoriesFor, customTypes } from '../lib/type-registry';
   import { locale, t } from '../i18n';
-  import { CATEGORIES, type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
+  import { type Activity, type Attachment, type Category, type MemObject, type ActivityInput, type TagCount, type TitleSuggestion, type TripPlaces } from '../lib/types';
 
   let { id, aid }: { id: string; aid?: string } = $props();
   const oid = $derived(Number(id));
@@ -77,23 +77,16 @@
   let ready = $state(untrack(() => aid === undefined));
 
   const lastCounter = $derived(object?.stats.current_counter ?? null);
-  const counterWarn = $derived(
-    counterText !== '' && lastCounter !== null && Number(counterText) < lastCounter,
-  );
-  const weightWarn = $derived.by(() => {
-    if (input.category !== 'weight' || object?.stats.latest_weight_grams == null) return false;
-    const grams = parseWeight(weightText, weightUnit);
-    return Number.isFinite(grams) && Math.abs(grams - object.stats.latest_weight_grams) / object.stats.latest_weight_grams > 0.1;
-  });
-  const photoDate = $derived(attachments.map(exifDate).find((d) => d !== null) ?? null);
+  const counterWarn = $derived(counterBelowLast(counterText, lastCounter));
+  const weightWarn = $derived(weightDeviates(input.category, weightText, weightUnit, object?.stats.latest_weight_grams));
+  const photoDate = $derived(firstExifDate(attachments));
 
   /** The `?category=` query parameter of a `.../activities/new` link -- ObjectDetail's "+ Log
    *  trip" button uses it (see Step 4 of the trip-log task). A garbage or unknown value is
    *  simply ignored, same as `offered`'s own fallback below would ignore a category the object's
    *  type does not actually offer. */
   function categoryParam(): Category | null {
-    const c = new URLSearchParams(location.search).get('category');
-    return c && (CATEGORIES as readonly string[]).includes(c) ? (c as Category) : null;
+    return parseCategoryParam(location.search);
   }
 
   onMount(async () => {
@@ -124,13 +117,9 @@
     if (!aid && object) {
       const unit = object.resource_unit ?? object.fuel_unit ?? null;
       const list = categoriesFor(object.type, $customTypes, undefined, object.counter_unit, unit, object.resource_kind);
-      const wanted = categoryParam();
-      if (wanted && list.includes(wanted)) {
-        input.category = wanted;
-        categoryTouched = true;
-      } else if (!list.includes(input.category)) {
-        input.category = list[0];
-      }
+      const picked = resolveCategory(list, categoryParam(), input.category);
+      input.category = picked.category;
+      if (picked.touched) categoryTouched = true;
     }
     try {
       allSuggestions = await api<TitleSuggestion[]>('GET', `/objects/${oid}/recent-titles`);
@@ -146,17 +135,11 @@
         saved = a;
         autoDraft = false; // this row predates the form; never let a stray click earlier mark it disposable
         input = toActivityInput(a);
-        weightText = weightInput(a.weight_grams, weightUnit);
+        const f = activityToFormText(a, weightUnit);
+        weightText = f.weightText; costText = f.costText; counterText = f.counterText; quantityText = f.quantityText;
+        meterReadingText = f.meterReadingText; chargedFull = f.chargedFull; fromText = f.fromText; toText = f.toText;
+        durationText = f.durationText; distance = f.distance;
         originalWeightText = weightText; originalWeightUnit = weightUnit; originalWeight = a.weight_grams ?? null;
-        costText = centsToInput(a.cost_cents);
-        counterText = a.counter_value === null ? '' : String(a.counter_value);
-        quantityText = a.quantity_milli === null ? '' : String(a.quantity_milli / 1000);
-        meterReadingText = a.meter_reading_milli == null ? '' : String(a.meter_reading_milli / 1000);
-        chargedFull = a.charged_full === 1;
-        fromText = a.from_place ?? '';
-        toText = a.to_place ?? '';
-        durationText = a.duration_minutes === null ? '' : formatDuration(a.duration_minutes);
-        distance = tripDistance(a);
         attachments = a.attachments;
         ready = true;
       } catch (e) {
@@ -178,13 +161,9 @@
     if (aid || !object || categoryTouched) return;
     const unit = object.resource_unit ?? object.fuel_unit ?? null;
     const own = categoriesFor(object.type, list, undefined, object.counter_unit, unit, object.resource_kind);
-    const wanted = categoryParam();
-    if (wanted && own.includes(wanted)) {
-      input.category = wanted;
-      categoryTouched = true;
-    } else if (!own.includes(untrack(() => input.category))) {
-      input.category = own[0];
-    }
+    const picked = resolveCategory(own, categoryParam(), untrack(() => input.category));
+    input.category = picked.category;
+    if (picked.touched) categoryTouched = true;
   });
 
   // A new trip's start defaults to the object's current counter -- "from where the odometer
@@ -259,10 +238,7 @@
    *  one -- this id is what gets passed to `createQueued` as `tempId`, so it is also the exact
    *  id the outbox stores and later rewrites (see `persistResolvedId` in ../lib/outbox.ts). */
   function mintTempId(): number {
-    const s = newOpId(); // not crypto.randomUUID: absent on a plain-http origin (see ../lib/outbox.ts)
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-    return -(Math.abs(h) || 1);
+    return hashToNegativeId(newOpId()); // not crypto.randomUUID: absent on a plain-http origin (see ../lib/outbox.ts)
   }
 
   /** Files need an activity row to hang on, so save the draft first.
@@ -292,73 +268,23 @@
     // lands (see `persistResolvedId` in ../lib/outbox.ts) -- not a second, unrelated numbering
     // scheme invented here.
     const result = await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>, tempId);
-    saved = result ?? {
-      id: tempId, object_id: oid, ...body, tags: body.tags ?? [],
-      start_counter: body.start_counter ?? null, from_place: body.from_place ?? null,
-      to_place: body.to_place ?? null, duration_minutes: body.duration_minutes ?? null,
-      battery_used_pct: body.battery_used_pct ?? null, charged_full: body.charged_full ?? 0, weight_grams: body.weight_grams ?? null,
-      fuel_level_pct: body.fuel_level_pct ?? null,
-      meter_reading_milli: body.meter_reading_milli ?? null, period_start: body.period_start ?? null, period_end: body.period_end ?? null,
-      estimated: body.estimated ?? 0, meter_reset: body.meter_reset ?? 0,
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      attachments: [], pending: true,
-    };
+    saved = result ?? optimisticActivity(tempId, oid, body);
     autoDraft = true;
     return saved;
   });
 
   function changeWeightUnit(next: WeightUnit) {
-    const grams = originalWeight !== null && weightText === originalWeightText && weightUnit === originalWeightUnit
-      ? originalWeight : parseWeight(weightText, weightUnit);
-    if (Number.isFinite(grams)) {
-      weightText = changeWeightUnitValue(weightText, weightUnit, next);
-      originalWeight = grams; originalWeightText = weightText; originalWeightUnit = next;
-    }
-    weightUnit = next;
+    const s = changeWeightUnitState({ text: weightText, unit: weightUnit, originalText: originalWeightText, originalUnit: originalWeightUnit, original: originalWeight }, next);
+    weightText = s.text; weightUnit = s.unit; originalWeightText = s.originalText; originalWeightUnit = s.originalUnit; originalWeight = s.original;
   }
 
   function buildInput(): ActivityInput {
-    const isTrip = input.category === 'trip';
-    const isSession = input.category === 'session';
-    return {
-      ...input,
-      title: input.category === 'weight' ? (input.title || $t('cat.weight')) : input.title,
-      weight_grams: input.category === 'weight' ? (originalWeight !== null && weightText === originalWeightText && weightUnit === originalWeightUnit ? originalWeight : parseWeight(weightText, weightUnit)) : null,
-      // A plain copy: `input.tags` is a $state proxy, and IndexedDB cannot clone a proxy, so
-      // queuing this body offline (the outbox) would fail with the spread's array left as it is.
-      tags: [...(input.tags ?? [])],
-      cost_cents: input.category === 'weight' ? null : parseMoney(costText),
-      // A trip's end IS the counter (`input.counter_value` is bound straight to the End field
-      // below, unlike the generic Counter field's own `counterText`); every other category keeps
-      // reading the generic field, exactly as before.
-      counter_value: input.category === 'weight' ? null : isTrip ? input.counter_value : (String(counterText).trim() === '' ? null : Number(counterText)),
-      // The quantity field only exists in the form for the fuel category (see the template
-      // below) -- send it only then, so switching category away from fuel after typing an
-      // amount can't leave a fuel quantity stuck on a repair/maintenance/... row.
-      // Same comma/dot handling as parseMoney, so this field and cost agree on what's valid input.
-      quantity_milli: input.category === 'fuel' || (input.category === 'usage' && object?.measurement_mode !== 'meter') ? parseQuantity(quantityText) : null,
-      // Same pattern as `quantity_milli` just above: 1 only while this IS a fuel entry and the
-      // box is ticked, 0 otherwise -- so switching category away from fuel after ticking it
-      // can't leave the flag stuck set on a repair/maintenance/... row (the backend rejects it
-      // there outright: "only a charge can be marked full").
-      charged_full: (input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')) && chargedFull ? 1 : 0,
-      fuel_level_pct: (input.category === 'fuel' || input.category === 'usage') && (resourceUnit === 'l' || resourceUnit === 'gal') && object?.resource_kind !== 'water' ? (input.fuel_level_pct ?? null) : null,
-      meter_reading_milli: input.category === 'usage' && object?.resource_kind === 'water' && object?.measurement_mode === 'meter' ? parseQuantity(meterReadingText) : null,
-      period_start: input.category === 'usage' && object?.measurement_mode === 'usage' ? (input.period_start || null) : null,
-      period_end: input.category === 'usage' && object?.measurement_mode === 'usage' ? (input.period_end || null) : null,
-      estimated: input.category === 'usage' ? (input.estimated ?? 0) : 0,
-      meter_reset: input.category === 'usage' && object?.measurement_mode === 'meter' ? (input.meter_reset ?? 0) : 0,
-      // The five trip fields exist in the form only for the trip category (see the template
-      // below) -- sent as null otherwise, mirroring `quantity_milli` above, so switching away
-      // from trip after filling any of them in can't leave them stuck on a repair/maintenance/...
-      // row (the backend rejects them there outright, and PATCH keeps whatever it last stored
-      // when a field is merely absent from the body).
-      start_counter: isTrip ? input.start_counter : null,
-      from_place: isTrip || isSession ? (fromText.trim() || null) : null,
-      to_place: isTrip ? (toText.trim() || null) : null,
-      duration_minutes: isTrip || isSession ? parseDuration(durationText) : null,
-      battery_used_pct: isTrip ? input.battery_used_pct : null,
-    };
+    return buildActivityInput(
+      input,
+      { weightText, costText, counterText, quantityText, meterReadingText, fromText, toText, durationText, chargedFull },
+      { text: weightText, unit: weightUnit, originalText: originalWeightText, originalUnit: originalWeightUnit, original: originalWeight },
+      object, $t,
+    );
   }
 
   /** Prefill from a past entry. The user still reviews and saves; nothing is written here. */
