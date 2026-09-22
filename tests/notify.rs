@@ -348,3 +348,30 @@ async fn a_failure_while_collecting_does_not_burn_the_day() {
     assert_eq!(digest.reminders.len(), 2);
     assert_eq!(inbox.received().len(), 1);
 }
+
+/// A recipient far east of the instance gets a digest for their own today, and the delivery
+/// row records that day, not the instance's.
+#[tokio::test]
+async fn the_digest_covers_the_recipients_own_day() {
+    let (url, inbox) = webhook().await;
+    let app = common::spawn_with(|c| c.notify_hour = 18).await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let user_today = chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Kiritimati).date_naive();
+    app.client.post(app.url(&format!("/objects/{id}/reminders")))
+        .json(&json!({ "title": "Inspection", "due_date": user_today.to_string() }))
+        .send().await.unwrap();
+    app.client.put(app.url("/me/notifications")).json(&json!({"url":url,"format":"text"})).send().await.unwrap();
+    // Hour 0 in Kiritimati: the tick below runs at an instance hour that is past it there.
+    app.client.put(app.url("/me/notifications/hour"))
+        .json(&json!({"hour":0, "timezone":"Pacific/Kiritimati"})).send().await.unwrap();
+
+    logb::notify::tick(&app.state, 23).await.unwrap();
+    let received = inbox.received();
+    assert_eq!(received.len(), 1, "no digest for the recipient's own today");
+    assert!(received[0].2.contains("Inspection"), "{}", received[0].2);
+    let day: (String,) = sqlx::query_as("SELECT day FROM notification_deliveries WHERE target = $1")
+        .bind(format!("webhook:{}", 1)).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(day.0, user_today.to_string());
+}

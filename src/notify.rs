@@ -304,8 +304,7 @@ pub(crate) async fn push_to(
 
 /// Claim a destination before sending. The durable attempt also acts as a lease after a crash.
 /// Retries wait five minutes, then thirty minutes; successful destinations are not resent.
-async fn claim_delivery(state: &App, target: &str, user_id: Option<i64>) -> Result<bool, AppError> {
-    let day = db::today();
+async fn claim_delivery(state: &App, target: &str, user_id: Option<i64>, day: &str) -> Result<bool, AppError> {
     let now = db::now();
     let mut tx = db::begin_write(&state.db, state.backend).await?;
     type Previous = (String, i64, Option<String>, Option<String>);
@@ -360,13 +359,12 @@ enum Destination {
 /// instance's own date is used to resolve the offset, so a day that gains or loses an hour is
 /// handled by the timezone database rather than by arithmetic on a fixed offset.
 ///
-/// The digest's *day* is still the instance's day (`db::today()` decides which reminders are due
-/// and which deliveries have been claimed). A recipient far enough east or west therefore reads a
-/// digest for the server's today, not necessarily their own.
+/// The digest's day is the recipient's too: `items_for` reads due dates against
+/// `db::today_in(notify_tz)`, and `claim_delivery` records that day, so "once per destination
+/// per day" is counted in the recipient's calendar. Delivery-history pruning and the instance
+/// webhook stay on the instance's day.
 fn local_hour(tz: Option<&str>, instance_hour: u32) -> u32 {
-    let Some(tz) = tz.and_then(|raw| raw.parse::<chrono_tz::Tz>().ok()) else {
-        return instance_hour;
-    };
+    let tz = crate::db::zone(tz);
     let instance = crate::db::timezone();
     let today = chrono::Utc::now().with_timezone(&instance).date_naive();
     let Some(at) = today
@@ -413,28 +411,29 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
     let recipients = recipients(state).await?;
     let mut plans = Vec::new();
     if state.config.notify_url.is_some() && hour_now >= state.config.notify_hour {
-        plans.push(("instance".to_string(), None, Destination::Instance, instance_digest(state, &recipients).await?));
+        plans.push(("instance".to_string(), None, db::today(), Destination::Instance, instance_digest(state, &recipients).await?));
     }
     for r in &recipients {
         if local_hour(r.notify_tz.as_deref(), hour_now) < r.notify_hour.map(|h| h as u32).unwrap_or(state.config.notify_hour) { continue; }
         let d = digest(items_for(state, r).await?, &r.lang);
+        let day = crate::db::today_in(r.notify_tz.as_deref()).to_string();
         if let Some(url) = &r.notify_url {
-            plans.push((format!("webhook:{}", r.id), Some(r.id), Destination::Webhook(url.clone(), r.notify_format.clone()), d.clone()));
+            plans.push((format!("webhook:{}", r.id), Some(r.id), day.clone(), Destination::Webhook(url.clone(), r.notify_format.clone()), d.clone()));
         }
         if crate::telegram::connected(state, r.id).await? {
-            plans.push((format!("telegram:{}", r.id), Some(r.id), Destination::Telegram(r.id), d.clone()));
+            plans.push((format!("telegram:{}", r.id), Some(r.id), day.clone(), Destination::Telegram(r.id), d.clone()));
         }
         let subs: Vec<(i64, String, String, String)> = sqlx::query_as(
             "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1"
         ).bind(r.id).fetch_all(&state.db).await?;
         for (id, endpoint, p256dh, auth) in subs {
-            plans.push((format!("push:{id}"), Some(r.id), Destination::Push(id, Subscription { endpoint, p256dh, auth }), d.clone()));
+            plans.push((format!("push:{id}"), Some(r.id), day.clone(), Destination::Push(id, Subscription { endpoint, p256dh, auth }), d.clone()));
         }
     }
     let mut instance = None;
     let mut failed = false;
-    for (target, owner, destination, digest) in plans {
-        if !claim_delivery(state, &target, owner).await? { continue; }
+    for (target, owner, day, destination, digest) in plans {
+        if !claim_delivery(state, &target, owner, &day).await? { continue; }
         let Some(d) = digest else {
             finish_delivery(state, &target, true, true).await?;
             continue;
