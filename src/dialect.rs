@@ -103,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn each_backend_gets_the_operator_it_understands() {
+    fn each_backend_sorts_names_its_own_way() {
         assert_eq!(Backend::Sqlite.name_order("name"), "name COLLATE NOCASE");
         assert_eq!(Backend::Postgres.name_order("name"), "lower(name)");
         // Qualified columns are passed through whole, since the search joins two tables.
