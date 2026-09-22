@@ -506,7 +506,7 @@ async fn change_seqs(url: &str) -> Vec<i64> {
 }
 
 /// The Settings flow copies from the database the server is using, which `run` deliberately
-/// refuses. `run_live` does it from the pool the server already holds, inside the write
+/// refuses. `run_live` does it from the writer pool the server already holds, inside the write
 /// transaction -- so the snapshot is consistent and no write can land on the old database while
 /// the copy is in flight.
 #[tokio::test]
@@ -514,7 +514,7 @@ async fn a_running_server_can_copy_its_own_database() {
     let app = seeded().await;                 // its server is running and holds the database
     let dest = common::scratch_database().await;
 
-    let report = logb::copy::run_live(&app.state.db, app.state.backend, &dest.url).await.unwrap();
+    let report = logb::copy::run_live(&app.state, &dest.url).await.unwrap();
 
     assert!(report.tables.iter().any(|(t, n)| t == "activities" && *n == 2), "{:?}", report.tables);
     // And the source is untouched and still serving: this is not a move. `/objects` answers a

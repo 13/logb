@@ -7,6 +7,10 @@ use std::time::Instant;
 
 pub struct AppState {
     pub db: AnyPool,
+    /// The pool write transactions come from: on SQLite one connection, so writers queue for
+    /// their turn instead of racing the file lock; on PostgreSQL the same pool as `db`. See
+    /// `db::connect_writer`.
+    pub write_db: AnyPool,
     /// The URL `db` was opened from -- what this instance is *actually* serving, which is not
     /// always what `config.database_url()` would answer now: writing the pointer file from
     /// Settings changes that answer immediately, while the pool goes on serving the database it

@@ -203,11 +203,13 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     // After the database is open, because a timezone nobody configured is the one first-run
     // setup stored there.
     db::load_timezone(config.timezone, &db).await?;
+    let write_db = db::connect_writer(&url, &db).await?;
     let storage = files::Storage::new(&config.data_dir)?;
     let max_upload = config.max_upload_bytes();
     let max_import = config.max_import_bytes();
     let state: App = Arc::new(AppState {
         db,
+        write_db,
         // The URL this pool was actually opened from, kept because the answer to "which
         // database is this instance on" changes the moment Settings writes a pointer file --
         // and until the restart, the true answer is still this one.

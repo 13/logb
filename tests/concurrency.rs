@@ -14,12 +14,12 @@ use std::time::Duration;
 #[tokio::test]
 async fn two_write_transactions_do_not_overlap() {
     let app = common::spawn().await;
-    let a = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+    let a = logb::db::begin_write(&app.state).await.unwrap();
 
     // The second one must not be able to start while the first is open.
     let blocked = tokio::time::timeout(
         Duration::from_millis(750),
-        logb::db::begin_write(&app.state.db, app.state.backend),
+        logb::db::begin_write(&app.state),
     )
     .await;
     assert!(blocked.is_err(), "a second write transaction began while the first was still open");
@@ -28,7 +28,7 @@ async fn two_write_transactions_do_not_overlap() {
     // And it must proceed once the first is done, rather than deadlocking forever.
     let after = tokio::time::timeout(
         Duration::from_secs(5),
-        logb::db::begin_write(&app.state.db, app.state.backend),
+        logb::db::begin_write(&app.state),
     )
     .await;
     assert!(after.is_ok(), "the lock was not released when the transaction ended");
@@ -251,7 +251,7 @@ async fn a_child_created_during_a_purge_is_not_cascade_deleted() {
     // do not commit yet: this is the create that got past the liveness check and is still in
     // flight when the purge starts.
     const UUID: &str = "late-arrival-uuid";
-    let mut writer = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+    let mut writer = logb::db::begin_write(&app.state).await.unwrap();
     sqlx::query(
         "INSERT INTO activities \
            (object_id, date, category, title, notes, created_at, updated_at, client_uuid) \
@@ -319,4 +319,42 @@ async fn the_later_edit_wins_regardless_of_arrival_order() {
 
     let name = app.object_name(&object).await;
     assert_eq!(name, "newer name", "the older edit won: the clock was read before it was safe to");
+}
+
+/// Thirty-two writers against one object, all of which must be served. This is the shape that
+/// used to fail: SQLite's busy handler retries on a backoff rather than queueing, so a writer
+/// could lose every retry for five seconds and answer 500 while the others made progress. It
+/// takes the writer pool to make the queue real, so this is a regression test rather than a
+/// test that fails on demand -- to watch the old failure, set `WRITE_WAIT` in `src/db.rs` to
+/// 20 milliseconds, revert this task's `begin_write`, and run it under `taskset -c 0`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn every_one_of_many_concurrent_writers_is_served() {
+    let app = std::sync::Arc::new(common::spawn_with(|c| c.db_pool_size = Some(4)).await);
+    app.setup("ben", "correct horse").await;
+    let object = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = object["id"].as_i64().unwrap();
+
+    let writers: Vec<_> = (0..32)
+        .map(|i| {
+            let app = app.clone();
+            tokio::spawn(async move {
+                let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
+                    .json(&serde_json::json!({
+                        "date": "2026-01-01", "category": "maintenance",
+                        "title": format!("entry {i}"), "notes": ""
+                    }))
+                    .send().await.unwrap();
+                let status = res.status();
+                (status, res.text().await.unwrap())
+            })
+        })
+        .collect();
+
+    for w in writers {
+        let (status, body) = w.await.unwrap();
+        assert_eq!(status, 201, "a writer was refused rather than queued: {body}");
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM activities")
+        .fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(count, 32);
 }

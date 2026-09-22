@@ -201,7 +201,6 @@ async fn rows(
 /// ahead of its own expiry, so a parent whose children have not all aged out is skipped and
 /// tried again next run. See the guards on the delete loop below.
 pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64, AppError> {
-    let db = &state.db;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -301,7 +300,7 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
     // lock it takes is the one every write path takes, on SQLite because `BEGIN IMMEDIATE` holds
     // the only write lock the database has for the length of the transaction rather than for one
     // statement at a time.
-    let mut tx = crate::db::begin_write(db, state.backend).await?;
+    let mut tx = crate::db::begin_write(state).await?;
 
     // Aged-out log rows, in the same transaction as everything below rather than run against
     // the pool first: nothing here reads `changes` afterwards, so a row landing in the gap

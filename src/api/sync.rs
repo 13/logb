@@ -62,7 +62,7 @@ async fn push(
     // 500. PostgreSQL spells the same intention as a plain `BEGIN` -- and rejects SQLite's
     // spelling as a syntax error -- and additionally needs the advisory lock that makes it the
     // only writer, so both halves come from `db::begin_write`.
-    let mut tx = crate::db::begin_write(&state.db, state.backend).await?;
+    let mut tx = crate::db::begin_write(&state).await?;
     let mut ids = HashMap::new();
 
     // Canonicalise before anything reads the value: the ordering rule, the `field_clock` row

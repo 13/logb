@@ -187,7 +187,7 @@ async fn create(
     }
     let uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let now = db::now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     if name_taken(&mut tx, user.id, &input.name, None).await? {
         return Err(name_taken_error());
     }
@@ -233,7 +233,7 @@ async fn update(
     Json(body): Json<TypeBody>,
 ) -> Result<Json<TypeOut>, AppError> {
     let (input, _) = body.normalized()?;
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let existing: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT client_uuid, name, icon, categories, counter_unit FROM object_types \
          WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
@@ -292,7 +292,7 @@ async fn delete(
     State(state): State<App>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let uuid: Option<(String,)> =
         sqlx::query_as("SELECT client_uuid FROM object_types WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL")
             .bind(id).bind(user.id)

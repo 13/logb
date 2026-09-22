@@ -284,7 +284,7 @@ async fn switch(
         )));
     }
 
-    let report = copy::run_live(&state.db, state.backend, &url).await.map_err(|e| {
+    let report = copy::run_live(&state, &url).await.map_err(|e| {
         let reason = db::scrub(&e.to_string(), &url);
         tracing::warn!(destination = %db::redacted(&url), error = %reason, "the copy to a new database failed");
         // Almost always a fact about the URL that was typed -- unreachable, not empty, wrong

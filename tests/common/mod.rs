@@ -774,8 +774,14 @@ impl TestApp {
     /// database has to put the app down first. The app itself stays alive -- it still owns the
     /// data directory and, on PostgreSQL, the scratch database -- it just holds no connections
     /// any more, so anything it is asked to serve after this will fail.
+    ///
+    /// `write_db` too: on SQLite it is a second pool holding its own open connection to the
+    /// same file, and a claim on the source taken while that connection is still open finds the
+    /// database locked -- the same refusal `copying_from_a_database_still_in_use_is_refused`
+    /// means to test, for a reason that has nothing to do with it.
     pub async fn release_database(&self) {
         self.state.db.close().await;
+        self.state.write_db.close().await;
         if let Some(database) = &self._database {
             database.wait_until_unused().await;
         }

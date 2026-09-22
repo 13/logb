@@ -255,7 +255,7 @@ async fn upload(
             // a client that sees the new file can ask for a /thumb that is not on disk yet.
             // Writing both inside one transaction closes that window: other connections see
             // the row only at commit, by which point the JPEG is already written.
-            let mut tx = db::begin_write(&state.db, state.backend).await?;
+            let mut tx = db::begin_write(&state).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
@@ -290,7 +290,7 @@ async fn upload(
 
     let attachment_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, client_op_id, created_at, client_uuid) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
@@ -367,7 +367,7 @@ pub struct UpdateAttachment {
 async fn update(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, Json(body): Json<UpdateAttachment>) -> Result<Json<AttachmentOut>, AppError> {
     let existing = load_owned(&state, user.id, id).await?;
     let caption = body.caption.trim();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query("UPDATE attachments SET caption = $1 WHERE id = $2 AND deleted_at IS NULL").bind(caption).bind(id).execute(&mut *tx).await?;
     if existing.caption != caption {
         let uuid = record::uuid_of(&mut tx, Entity::Attachment, id).await?;
@@ -389,7 +389,7 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
     load_owned(&state, user.id, id).await?;
     let now = db::now();
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let affected = sqlx::query("UPDATE attachments SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
     if affected == 0 {

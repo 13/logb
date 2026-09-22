@@ -94,6 +94,11 @@ pub(crate) fn scrub(text: &str, url: &str) -> String {
     out
 }
 
+/// How long a SQLite connection waits for the database's write lock before giving up, and how
+/// long a writer waits for the one writer connection. One number, because they are the same
+/// promise to a caller: five seconds of waiting, then an answer telling it to retry.
+const WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// SQLite needs three settings that a connection URL cannot carry: sqlx 0.9's URL parser accepts
 /// only `mode`, `cache`, `immutable` and `vfs`. `AnyPool` connects by URL, so they are applied
 /// to every connection as it is opened instead.
@@ -152,7 +157,7 @@ pub async fn connect_with_pool_size(
         }
     }
     let default_size = if url.starts_with("sqlite:") { 4 } else { 16 };
-    let pool = pool_options(url, pool_size.unwrap_or(default_size), 5_000)
+    let pool = pool_options(url, pool_size.unwrap_or(default_size), WRITE_WAIT.as_millis() as u32)
         .connect(url)
         .await?;
     migrator(url).run(&pool).await?;
@@ -160,11 +165,50 @@ pub async fn connect_with_pool_size(
     Ok(pool)
 }
 
+/// The pool every write transaction comes from.
+///
+/// On SQLite this is a second pool of exactly one connection against the same file. SQLite has
+/// one write lock and its busy handler is not a queue: it retries on a backoff, so under enough
+/// concurrent writers one can lose every retry and fail with `database is locked` while the
+/// others make progress. One connection makes the queue explicit -- a writer waits in
+/// `pool.acquire()`, in turn -- and this process never contends with itself for the file lock.
+///
+/// On PostgreSQL it is the ordinary pool. Writers there are already serialized by
+/// `pg_advisory_xact_lock` (see `dialect::write_lock`), there is no file lock to lose, and a
+/// second queue in front of the advisory lock would buy nothing.
+///
+/// `connect_with_pool_size` has already migrated and seeded this database, so this opens a pool
+/// and does nothing else to it.
+///
+/// The test is `sqlite_file`, not the `sqlite:` prefix: an in-memory database belongs to the
+/// pool that opened it, so a second pool against `sqlite::memory:` would quietly be a second,
+/// empty database rather than another way into this one. Nothing in the server opens one, and
+/// this is what keeps that true.
+pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError> {
+    let Some(_) = sqlite_file(url) else {
+        return Ok(db.clone());
+    };
+    Ok(pool_options(url, 1, WRITE_WAIT.as_millis() as u32)
+        .acquire_timeout(WRITE_WAIT)
+        .connect(url)
+        .await?)
+}
+
 /// Begins a transaction that intends to write, and makes it the only one.
 ///
-/// Every write path goes through here. See `dialect::Backend::write_lock` for why PostgreSQL
-/// needs more than a `BEGIN`.
+/// Every write path in a request goes through here. The transaction comes from `write_db`, so
+/// on SQLite it is holding the process's single writer connection for its whole life and any
+/// other writer is queued behind it rather than competing for the file lock. See
+/// `dialect::Backend::write_lock` for what PostgreSQL needs on top of the `BEGIN`.
 pub async fn begin_write(
+    state: &crate::state::App,
+) -> Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+    begin_write_on(&state.write_db, state.backend).await
+}
+
+/// `begin_write` against a pool that is not this instance's own database: the destination of a
+/// copy, or a test taking the lock by hand. A caller that has an `App` wants `begin_write`.
+pub async fn begin_write_on(
     pool: &AnyPool,
     backend: crate::dialect::Backend,
 ) -> Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {

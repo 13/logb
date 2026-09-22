@@ -468,7 +468,7 @@ async fn create(
     }
     let uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let (id, uuid) = insert(&mut tx, object_id, &body, uuid).await?;
     record::record_create(&mut tx, user.id, Entity::Reminder, &uuid, &edited_at).await?;
     tx.commit().await?;
@@ -534,7 +534,7 @@ async fn update(
         changed.push(("schedule", json!(body.schedule)));
     }
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query(
         "UPDATE reminders SET title = $1, notes = $2, due_date = $3, due_counter = $4, repeat_months = $5, repeat_counter = $6, \
          every_n = $7, every_unit = $8, schedule = $9 WHERE id = $10 AND deleted_at IS NULL",
@@ -568,7 +568,7 @@ async fn delete(
 ) -> Result<StatusCode, AppError> {
     load_owned(&state, &user, id).await?;
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let affected =
         sqlx::query("UPDATE reminders SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL")
             .bind(db::now())
@@ -669,7 +669,7 @@ async fn done(
         next_due(base_date, base_counter, r.due_counter, repeat)
     };
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query("UPDATE reminders SET done_at = $1, done_activity_id = $2 WHERE id = $3 AND deleted_at IS NULL")
         .bind(&done_at).bind(body.activity_id).bind(id)
         .execute(&mut *tx).await?;
@@ -777,7 +777,7 @@ async fn snooze(
             .or_else(|| Every::from_parts(r.every_n, r.every_unit.as_deref()).and_then(|e| e.after(base)))
             .ok_or_else(|| AppError::BadRequest("skip requires a repeating reminder".into()))?
     } else { snoozed_date(today, current_due, body.days) }.to_string();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query("UPDATE reminders SET snoozed_until = $1 WHERE id = $2 AND deleted_at IS NULL")
         .bind(&until)
         .bind(id)
@@ -819,7 +819,7 @@ async fn unsnooze(
     Path(id): Path<i64>,
 ) -> Result<Json<ReminderOut>, AppError> {
     let r = load_owned(&state, &user, id).await?;
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query("UPDATE reminders SET snoozed_until = NULL WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)
         .execute(&mut *tx)

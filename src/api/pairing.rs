@@ -138,7 +138,7 @@ async fn create_pair(
     // to notice or revoke. Delete and insert share one write transaction (the same
     // `db::begin_write` `redeem` uses) so a crash between them cannot leave this user with the
     // old code deleted and no new one in its place.
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     sqlx::query("DELETE FROM pairing_codes WHERE user_id = $1")
         .bind(user.id)
         .execute(&mut *tx)
@@ -247,7 +247,7 @@ async fn redeem(
     let name = device_token_name(&body.device_name)?;
 
     let now = db::now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let redeemed: Option<(i64,)> = sqlx::query_as(
         "UPDATE pairing_codes SET used_at = $1 WHERE code_hash = $2 AND used_at IS NULL AND expires_at > $3 \
          RETURNING user_id",

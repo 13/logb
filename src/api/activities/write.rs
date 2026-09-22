@@ -68,7 +68,7 @@ pub(crate) async fn create(
     let now = db::now();
     let activity_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     if body.category == "usage" {
         if let (Some(start), Some(end)) = (
             body.period_start.as_ref().and_then(|v| v.as_ref()),
@@ -257,7 +257,7 @@ pub(crate) async fn update(
         None => None,
     };
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     if body.category == "usage" {
         if let (Some(start), Some(end)) = (
             body.period_start.as_ref().and_then(|v| v.as_ref()),
@@ -517,7 +517,7 @@ pub(crate) async fn delete(
     load_owned_activity(&state, user.id, id).await?;
     let now = db::now();
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let affected = sqlx::query("UPDATE activities SET deleted_at = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL")
         .bind(&now).bind(&now).bind(id)
         .execute(&mut *tx).await?.rows_affected();

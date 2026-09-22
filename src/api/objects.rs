@@ -688,7 +688,7 @@ async fn create(
     };
     let object_uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     check_type(&mut tx, user.id, &body.type_).await?;
     // Checked inside the transaction, on its connection -- never from the pool -- for the two
     // reasons spelled out on `update`: a pool connection taken while `begin_write` holds the
@@ -793,7 +793,7 @@ async fn update(
     // stalling every other writer in the instance for the length of a transaction.
     body.validate()?;
 
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
 
     // EVERY read this handler makes is made here, inside the transaction holding the write
     // lock, and on that transaction's own connection. Both halves of that are load-bearing.
@@ -1052,7 +1052,7 @@ async fn delete(
 ) -> Result<StatusCode, AppError> {
     let now = db::now();
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let affected = sqlx::query(
         "UPDATE objects SET deleted_at = $1, updated_at = $2 \
          WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL",

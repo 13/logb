@@ -188,7 +188,7 @@ pub(super) async fn import(
     // the row itself, per rule 1 in `sync::record` -- this is about `changes`/`field_clock`
     // only).
     let edited_at = record::edited_at_now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
 
     // Types before objects, so every `custom:` key has somewhere to point. `type_uuids` maps the
     // archive's uuid to the one the type has in this account.

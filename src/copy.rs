@@ -114,15 +114,15 @@ pub async fn run(source_url: &str, dest_url: &str) -> Result<Report, BoxError> {
 /// refusal is unusable here because the process asking for the copy is precisely the server
 /// that would be refused.
 ///
-/// Takes the pool the server already holds rather than a URL, and hands the transaction down:
-/// on PostgreSQL that transaction holds this application's advisory lock, so anything below
-/// that acquired a second connection from this pool would block against it and hang rather
-/// than fail. The destination is a different database, so its own pool is free to open.
-pub async fn run_live(db: &AnyPool, backend: Backend, dest_url: &str) -> Result<Report, BoxError> {
+/// Takes the state rather than a URL, and hands the transaction down: on PostgreSQL that
+/// transaction holds this application's advisory lock, so anything below that acquired a
+/// second connection from this pool would block against it and hang rather than fail. The
+/// destination is a different database, so its own pool is free to open.
+pub async fn run_live(state: &crate::state::App, dest_url: &str) -> Result<Report, BoxError> {
     // Opened before the write lock is taken: `db::connect` migrates the destination, and every
     // write to this server is stalled for as long as the transaction below is open.
     let dest = db::connect(dest_url).await?;
-    let mut src = match db::begin_write(db, backend).await {
+    let mut src = match db::begin_write(state).await {
         Ok(src) => src,
         Err(e) => {
             dest.close().await;
@@ -170,7 +170,7 @@ async fn copy_from(
     dest: &AnyPool,
     dest_backend: Backend,
 ) -> Result<Report, BoxError> {
-    let mut tx = db::begin_write(dest, dest_backend).await?;
+    let mut tx = db::begin_write_on(dest, dest_backend).await?;
     // Everything below runs on `tx`, never on `dest` itself. On PostgreSQL that transaction
     // holds the application's advisory lock, so a helper that opened a connection of its own
     // here would block against it and hang rather than fail.

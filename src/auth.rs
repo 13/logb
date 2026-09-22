@@ -461,6 +461,7 @@ mod tests {
             db_pool_size: None,
         };
         Arc::new(AppState {
+            write_db: db.clone(),
             db,
             database_url: url,
             backend: crate::dialect::Backend::Sqlite,

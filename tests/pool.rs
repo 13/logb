@@ -70,3 +70,28 @@ async fn deleting_an_object_still_takes_its_attachments() {
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM attachments").fetch_one(&pool).await.unwrap();
     assert_eq!(left, 0, "the attachment outlived its object: foreign keys are not enforced");
 }
+
+/// The writer pool is a second pool, so the after-connect hook has to reach it too: a writer
+/// connection without WAL or the busy timeout is the same silent loss the test above exists to
+/// catch. Its single connection is the point -- that is what makes writers queue.
+#[tokio::test]
+async fn the_writer_pool_is_one_configured_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}/logb.db?mode=rwc", dir.path().display());
+    let pool = logb::db::connect(&url).await.unwrap();
+    let writer = logb::db::connect_writer(&url, &pool).await.unwrap();
+
+    let mut held = writer.acquire().await.unwrap();
+    let mode: String =
+        sqlx::query_scalar("PRAGMA journal_mode").fetch_one(&mut *held).await.unwrap();
+    assert_eq!(mode, "wal", "the after-connect hook did not reach the writer connection");
+    let timeout: i64 =
+        sqlx::query_scalar("PRAGMA busy_timeout").fetch_one(&mut *held).await.unwrap();
+    assert_eq!(timeout, 5000, "the writer connection has no busy timeout");
+
+    // The second acquire cannot be served while the first is held: one connection is the queue.
+    let second = tokio::time::timeout(std::time::Duration::from_millis(300), writer.acquire()).await;
+    assert!(second.is_err(), "a second writer connection was handed out; writes would race");
+    drop(held);
+    assert!(writer.acquire().await.is_ok(), "the writer connection was not returned to the pool");
+}

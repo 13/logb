@@ -213,7 +213,7 @@ async fn setup(
     // both transactions see an empty `users` table and both insert under READ COMMITTED
     // without it. `WHERE NOT EXISTS` is kept because it costs nothing and still states the
     // intent in the statement that depends on it, but it is no longer what makes this safe.
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(&state).await?;
     let user = sqlx::query_as::<_, AuthUser>(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) \
          SELECT $1, $2, 1, 'en', $3 WHERE NOT EXISTS (SELECT 1 FROM users) \

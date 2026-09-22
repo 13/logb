@@ -306,7 +306,7 @@ pub(crate) async fn push_to(
 /// Retries wait five minutes, then thirty minutes; successful destinations are not resent.
 async fn claim_delivery(state: &App, target: &str, user_id: Option<i64>, day: &str) -> Result<bool, AppError> {
     let now = db::now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     type Previous = (String, i64, Option<String>, Option<String>);
     let previous: Option<Previous> = sqlx::query_as(
         "SELECT day, attempts, attempted_at, last_success FROM notification_deliveries WHERE target = $1"

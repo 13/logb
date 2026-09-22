@@ -757,9 +757,10 @@ async fn listing_with_all_returns_every_object_at_every_depth() {
 /// and PostgreSQL alike, with Garage's parent restored to House on top of House's new parent.
 #[tokio::test]
 async fn a_patch_that_omits_parent_id_cannot_write_back_a_stale_parent() {
-    // Two connections are wanted at once -- the lock the test holds, and the one the blocked
-    // request eventually gets -- and the harness's default pool is exactly two. A little room
-    // above that keeps the test measuring the handler rather than pool exhaustion.
+    // `db_pool_size` sizes the read pool only: the lock this test holds, and the write the
+    // blocked PATCH eventually makes, both come from the writer pool's one connection instead,
+    // so they no longer compete for these. The default of 2 would still pass; the extra room
+    // just keeps this test's own reads from waiting on connections other tests are using.
     let app = common::spawn_with(|c| c.db_pool_size = Some(4)).await;
     app.setup("ben", "correct horse").await;
     let house = app.create_object(&app.client, "House", None).await;
@@ -771,7 +772,7 @@ async fn a_patch_that_omits_parent_id_cannot_write_back_a_stale_parent() {
     assert_eq!(garage["parent_id"], house["id"], "Garage must start inside House");
 
     // The lock the PATCH below will have to wait for, held before it is sent.
-    let mut lock = logb::db::begin_write(&app.state.db, app.state.backend).await.unwrap();
+    let mut lock = logb::db::begin_write(&app.state).await.unwrap();
 
     let url = app.url(&format!("/objects/{garage_id}"));
     let client = app.client.clone();

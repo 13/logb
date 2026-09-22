@@ -190,7 +190,7 @@ pub async fn save_token(state: &App, user_id: i64, raw: &str) -> Result<(), AppE
         .ok_or_else(|| AppError::BadRequest("this Telegram bot has no username".into()))?;
     let (cipher, nonce) = encrypt(state, token)?;
     let now = db::now();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     sqlx::query("DELETE FROM telegram_connections WHERE user_id=$1")
         .bind(user_id)
         .execute(&mut *tx)
@@ -215,7 +215,7 @@ pub async fn save_token(state: &App, user_id: i64, raw: &str) -> Result<(), AppE
     Ok(())
 }
 pub async fn remove_token(state: &App, user_id: i64) -> Result<(), AppError> {
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     sqlx::query("DELETE FROM telegram_connections WHERE user_id=$1")
         .bind(user_id)
         .execute(&mut *tx)
@@ -261,7 +261,7 @@ pub async fn create_link(state: &App, user_id: i64) -> Result<Link, AppError> {
     rand::rng().fill(&mut bytes);
     let code = hex::encode(bytes);
     let expires_at = (Utc::now() + ChronoDuration::minutes(CODE_LIFETIME_MINUTES)).to_rfc3339();
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     sqlx::query("DELETE FROM telegram_link_codes WHERE user_id=$1")
         .bind(user_id)
         .execute(&mut *tx)
@@ -281,7 +281,7 @@ pub async fn create_link(state: &App, user_id: i64) -> Result<Link, AppError> {
     })
 }
 pub async fn unlink(state: &App, user_id: i64) -> Result<(), AppError> {
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     sqlx::query("DELETE FROM telegram_connections WHERE user_id=$1")
         .bind(user_id)
         .execute(&mut *tx)
@@ -366,7 +366,7 @@ async fn link_update(
     let Some(chat_number) = update["message"]["chat"]["id"].as_i64() else {
         return Ok(false);
     };
-    let mut tx = db::begin_write(&state.db, state.backend).await?;
+    let mut tx = db::begin_write(state).await?;
     let row: Option<(i64, String)> = sqlx::query_as(
         "SELECT user_id,expires_at FROM telegram_link_codes WHERE code_hash=$1 AND used_at IS NULL",
     )
