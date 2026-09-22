@@ -3896,14 +3896,14 @@
           },
           "due": {
             "type": "boolean",
-            "description": "Due now, accounting for any live snooze"
+            "description": "Due now against the caller's own today (their notification timezone, else the instance's), accounting for any live snooze"
           },
           "days_until": {
             "type": [
               "integer",
               "null"
             ],
-            "description": "Against the real due date, snooze or not"
+            "description": "Measured from the caller's own today. Against the real due date, snooze or not"
           },
           "counter_until": {
             "type": [
@@ -5482,7 +5482,7 @@
           },
           "timezone": {
             "type": ["string", "null"],
-            "description": "The recipient's own IANA timezone, when they chose one"
+            "description": "The recipient's own IANA timezone, when they chose one. Also the zone their reminders' due dates are read against."
           },
           "telegram_configured": { "type": "boolean" },
           "telegram_connected": { "type": "boolean" },

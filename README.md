@@ -437,6 +437,11 @@ reminder come due most of a day late and one in UTC−8 sees it a day early. It
 also decides when `LOGB_NOTIFY_HOUR` fires. Stored timestamps stay UTC and are
 rendered in the reader's locale.
 
+A person who picks their own timezone under Settings → Notifications has their reminders read
+against today in that zone instead: due dates, the day a counter reading still counts as the
+latest, the object's due count and the digest they receive. Statistics, insights, the trip
+summary's default date and export file names stay on the instance's day.
+
 Service, counter-reading, and weight reminders share the same recurrence options: week/month
 intervals or fixed calendar dates—every day, a chosen weekday, a chosen
 day of each month (including the last day), or a month and day each year. Days that do not exist
@@ -502,8 +507,8 @@ reminder also sends ntfy's `Click` header, so tapping the notification opens
 that form.
 
 Each user can choose a daily delivery hour in Settings → Notifications, and the timezone that
-hour is read in — their own, or the instance's. The digest still covers the day as the instance
-counts it, so someone far enough east or west reads the server's today at their own breakfast.
+hour is read in — their own, or the instance's. That zone also decides which day the digest
+covers, so someone far east or west reads their own today, not the server's.
 The shared instance webhook retains `LOGB_NOTIFY_HOUR`. Delivery history shows the last
 successful delivery and failures for each personal destination, is kept for thirty days, and a
 destination that goes away takes its history with it. Failed destinations retry
