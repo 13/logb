@@ -14,7 +14,10 @@
 //! 4. How a write transaction claims the right to be the only one -- `write_lock`. SQLite
 //!    needs nothing in SQL: `BEGIN IMMEDIATE` takes the one write lock the database has, and
 //!    writers queue for a single connection in `db::connect_writer` before they ever reach it.
-//!    PostgreSQL permits concurrent writers and so has to be told not to.
+//!    PostgreSQL permits concurrent writers and so has to be told not to. Only one backend's
+//!    queue has a deadline: SQLite's writer waits at most `db::WRITE_WAIT` before a caller is
+//!    answered 503; PostgreSQL's `pg_advisory_xact_lock` waits for its turn with no timeout at
+//!    all.
 //! 5. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
 //!    column; PostgreSQL has no per-column collation of that kind without `citext`, so its
 //!    schema carries a unique index on `lower(username)` instead. The statements themselves

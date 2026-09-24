@@ -8,9 +8,14 @@ mod common;
 
 use std::time::Duration;
 
-/// Two write transactions must not overlap. On SQLite `BEGIN IMMEDIATE` already guarantees it;
-/// on PostgreSQL the advisory lock does. Remove `Backend::write_lock`'s PostgreSQL arm and this
-/// fails on PostgreSQL while still passing on SQLite -- which is the whole point of it.
+/// Two write transactions must not overlap. What this measures differs by backend: on
+/// PostgreSQL the second `begin_write` blocks on the advisory lock, so removing
+/// `Backend::write_lock`'s PostgreSQL arm turns this red there while it stays green on SQLite --
+/// which is the whole point of it. On SQLite the pool of one writer connection is what blocks
+/// the second `begin_write`, in `acquire()`, whatever the `BEGIN` flavour is -- `BEGIN
+/// IMMEDIATE` no longer has to be the thing under test for the mutation to be caught, so this
+/// test does not pin its spelling. `dialect.rs`'s own
+/// `each_backend_begins_a_writing_transaction_its_own_way` is what pins that instead.
 #[tokio::test]
 async fn two_write_transactions_do_not_overlap() {
     let app = common::spawn().await;
@@ -382,6 +387,20 @@ async fn a_write_that_cannot_take_the_lock_asks_the_client_to_retry() {
     let id = object["id"].as_i64().unwrap();
 
     let held = logb::db::begin_write(&app.state).await.unwrap();
+
+    // Reads must not come from the writer pool. `state.db` and `state.write_db` are separate
+    // pools; a future `fetch_one(&state.write_db)` on a read path would serialize every read
+    // behind this held connection and stall it for up to `WRITE_WAIT`. The one-second timeout
+    // turns that into a failed test rather than a merely slow one.
+    let read = tokio::time::timeout(
+        Duration::from_secs(1),
+        app.client.get(app.url("/objects")).send(),
+    )
+    .await
+    .expect("a GET queued behind the held writer connection instead of using its own pool")
+    .unwrap();
+    assert_eq!(read.status(), 200, "a read failed while a write transaction was held");
+
     let res = app.client.post(app.url(&format!("/objects/{id}/activities")))
         .json(&serde_json::json!({
             "date": "2026-01-01", "category": "maintenance", "title": "blocked", "notes": ""

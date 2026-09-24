@@ -21,6 +21,11 @@ pub enum AppError {
     Conflict(String),
     #[error("{0}")]
     Unavailable(String),
+    /// A write that could not be started because the writer connection never came free. The
+    /// request never ran, so the caller should send it again; `into_response` says so with a
+    /// `Retry-After`.
+    #[error("the database is busy, please retry")]
+    Busy,
     #[error("this cursor cannot be resumed -- re-bootstrap")]
     Gone,
     #[error("payload too large")]
@@ -39,19 +44,31 @@ pub enum AppError {
     InUse(i64),
 }
 
-/// Whether this is the database saying "not now" rather than "no". Both mean the request never
-/// ran and sending it again is the right thing to do.
+/// Whether the database itself answered "busy" rather than running the query -- SQLite codes 5
+/// and 6, `SQLITE_BUSY` and `SQLITE_LOCKED`, which a single-statement write on the read pool can
+/// still meet while something long-running holds the write lock: an import, a database copy,
+/// the retention purge. Both mean the request never ran and sending it again is the right thing
+/// to do.
 ///
-/// `PoolTimedOut` is a writer that waited out `db::WRITE_WAIT` for the one writer connection.
-/// SQLite codes 5 and 6 are `SQLITE_BUSY` and `SQLITE_LOCKED`, which a single-statement write on
-/// the read pool can still meet while something long-running holds the lock -- an import, a
-/// database copy, the retention purge.
+/// A writer that waited out its own acquire timeout is `AppError::Busy`, not this: this function
+/// only ever sees a `sqlx::Error`, so it cannot tell a writer-pool `PoolTimedOut` apart from an
+/// ordinary read-pool one (the read pool sets no `acquire_timeout`, so sqlx's default 30s
+/// applies) -- and on PostgreSQL `write_db` is the read pool, so guessing here would misclassify
+/// PostgreSQL's read timeouts too. `db::begin_write` already turned its own acquire failure into
+/// `AppError::Busy` before this ever runs, so this has no `PoolTimedOut` arm to get wrong.
+///
+/// The code SQLite reports is the *extended* result code, not the primary one, so a busy
+/// database can also arrive as `SQLITE_BUSY_SNAPSHOT` (517), `SQLITE_BUSY_TIMEOUT` (773),
+/// `SQLITE_BUSY_RECOVERY` (261) or `SQLITE_LOCKED_SHAREDCACHE` (262). Masking to the low byte
+/// mirrors `apply::is_constraint_violation`, which has the same problem with
+/// `SQLITE_CONSTRAINT`'s own subtypes and explains the masking at more length.
 fn is_write_contention(e: &sqlx::Error) -> bool {
-    match e {
-        sqlx::Error::PoolTimedOut => true,
-        sqlx::Error::Database(d) => matches!(d.code().as_deref(), Some("5") | Some("6")),
-        _ => false,
-    }
+    let sqlx::Error::Database(d) = e else {
+        return false;
+    };
+    d.code()
+        .and_then(|c| c.parse::<i32>().ok())
+        .is_some_and(|code| matches!(code & 0xff, 5 | 6))
 }
 
 impl AppError {
@@ -65,6 +82,7 @@ impl AppError {
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             AppError::InUse(_) => (StatusCode::CONFLICT, "in_use"),
             AppError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+            AppError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             AppError::Gone => (StatusCode::GONE, "gone"),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
@@ -82,16 +100,18 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code) = self.status_and_code();
-        let busy = matches!(&self, AppError::Db(e) if is_write_contention(e));
+        let busy =
+            matches!(&self, AppError::Busy) || matches!(&self, AppError::Db(e) if is_write_contention(e));
         let message = if busy {
             // Warn, not error: nothing is broken, and the client is being asked to come back.
             //
-            // The two halves are logged apart on purpose. A database that said "busy" is one
-            // writer losing a race it will win next time. A pool timeout means the single writer
-            // connection was not handed back within `db::WRITE_WAIT`, which is a long import or
-            // copy -- or a transaction nobody closed, the one bug this answer could otherwise
-            // hide behind a retry forever. Searching for the second line finds it.
-            if matches!(&self, AppError::Db(sqlx::Error::PoolTimedOut)) {
+            // The two are logged apart on purpose, and split on the variant rather than by
+            // matching inside the error: `AppError::Busy` is the writer connection itself not
+            // coming free within `db::WRITE_WAIT`, which is a long import or copy -- or a
+            // transaction nobody closed, the one bug this answer could otherwise hide behind a
+            // retry forever. A busy `Db` error is one writer losing a race it will win next
+            // time. Searching for the writer's own line finds the first kind.
+            if matches!(&self, AppError::Busy) {
                 tracing::warn!(
                     "waited {:?} for the writer connection and did not get it; asked the client to retry",
                     crate::db::WRITE_WAIT

@@ -355,8 +355,12 @@ pub async fn load_owned_object(state: &App, user_id: i64, id: i64) -> Result<Obj
 /// `load_owned_object` on a connection the caller already holds -- in practice the one
 /// `db::begin_write` has just taken the write lock on.
 ///
-/// It has to be the transaction's own connection rather than a second one from the pool: a pool
-/// connection acquired while `begin_write` holds SQLite's write lock does not fail, it hangs.
+/// It has to be the transaction's own connection rather than a second one from the pool: reads
+/// and writes are on separate pools now, so a pool connection taken here would not fail or
+/// deadlock -- but it would come from a different connection than the one holding the write
+/// lock, and the two could disagree about what the row looks like right now. The cost of
+/// getting this wrong is holding the writer connection longer than it needs to be held, not a
+/// hang.
 pub async fn load_owned_object_on(
     conn: &mut sqlx::AnyConnection,
     user_id: i64,
@@ -691,11 +695,11 @@ async fn create(
     let mut tx = db::begin_write(&state).await?;
     check_type(&mut tx, user.id, &body.type_).await?;
     // Checked inside the transaction, on its connection -- never from the pool -- for the two
-    // reasons spelled out on `update`: a pool connection taken while `begin_write` holds the
-    // write lock deadlocks on SQLite, and a check taken before the lock can go stale before
-    // the write it guards lands. `flatten()` collapses "absent" and an explicit `null` to the
-    // same `None`: on create there is no existing value for the two to mean different things
-    // about.
+    // reasons spelled out on `update`: reads and writes are on separate pools now, so a pool
+    // connection taken here would not deadlock, but it costs holding the writer connection
+    // longer for no reason, and a check taken before the lock can go stale before the write it
+    // guards lands. `flatten()` collapses "absent" and an explicit `null` to the same `None`:
+    // on create there is no existing value for the two to mean different things about.
     let parent_id = body.parent_id.flatten();
     if let Some(pid) = parent_id {
         if !record::parent_is_valid(&mut tx, user.id, None, pid).await? {
@@ -820,8 +824,9 @@ async fn update(
     // shipped PWA always sends `parent_id`; a hand-written client against the bearer-token API
     // is exactly what omits an optional field.
     //
-    // On `tx`'s connection, because a second pool connection acquired while `begin_write` holds
-    // SQLite's write lock does not fail, it hangs.
+    // On `tx`'s connection, because reads and writes are on separate pools now: a second pool
+    // connection taken here would not fail or hang, but it would read from outside this
+    // transaction while holding the writer connection open longer than it needs to be.
     let existing = load_owned_object_on(&mut tx, user.id, id).await?;
     check_type(&mut tx, user.id, &body.type_).await?;
     // `km` and `mi` may always trade places; only a change that leaves that pair (to `h`, or to

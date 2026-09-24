@@ -97,6 +97,13 @@ pub(crate) fn scrub(text: &str, url: &str) -> String {
 /// How long a SQLite connection waits for the database's write lock before giving up, and how
 /// long a writer waits for the one writer connection. One number, because they are the same
 /// promise to a caller: five seconds of waiting, then an answer telling it to retry.
+///
+/// The two are sequential in the worst case, not alternatives: a queued writer can wait up to
+/// this long in `pool.acquire()` for the connection, and then, once it has the connection and
+/// issues `BEGIN IMMEDIATE`, up to this long again in `busy_timeout` for the write lock itself.
+/// The second half is milliseconds in practice, because by the time a writer holds the one
+/// connection this process hands out, the only other thing that can still be holding the write
+/// lock is a single-statement write on the read pool -- never another write transaction.
 pub(crate) const WRITE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// SQLite needs three settings that a connection URL cannot carry: sqlx 0.9's URL parser accepts
@@ -186,6 +193,17 @@ pub async fn connect_with_pool_size(
 /// this is what keeps that true.
 pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError> {
     let Some(_) = sqlite_file(url) else {
+        if url.starts_with("sqlite:") {
+            // A `sqlite:` URL `sqlite_file` does not recognise (`:memory:`, or a spelling it
+            // does not parse) falls back to sharing `db`, which quietly restores the unqueued,
+            // racing writers this pool exists to avoid. Nothing produces such a URL today, but
+            // it is operator-supplied, so say so rather than staying silent about it.
+            tracing::info!(
+                url = %redacted(url),
+                "this sqlite: URL has no file for a second writer pool to open, so writes will \
+                 share the read pool instead of a dedicated writer connection"
+            );
+        }
         return Ok(db.clone());
     };
     Ok(pool_options(url, 1, WRITE_WAIT.as_millis() as u32)
@@ -202,8 +220,15 @@ pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError
 /// `dialect::Backend::write_lock` for what PostgreSQL needs on top of the `BEGIN`.
 pub async fn begin_write(
     state: &crate::state::App,
-) -> Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
-    begin_write_on(&state.write_db, state.backend).await
+) -> Result<sqlx::Transaction<'static, sqlx::Any>, crate::error::AppError> {
+    begin_write_on(&state.write_db, state.backend)
+        .await
+        .map_err(|e| match e {
+            // The one writer connection did not come free inside `WRITE_WAIT`. That is this
+            // pool, known here and nowhere else -- `error.rs` cannot tell which pool timed out.
+            sqlx::Error::PoolTimedOut => crate::error::AppError::Busy,
+            other => other.into(),
+        })
 }
 
 /// `begin_write` against a pool that is not this instance's own database: the destination of a

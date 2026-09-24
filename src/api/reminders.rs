@@ -630,11 +630,12 @@ async fn done(
     let done_at = db::now();
     let edited_at = record::edited_at_now();
 
-    // Computed before `begin()`, not after: `stats` acquires its own pooled connection, and
-    // the pool is `max_connections(4)` (`db.rs`). Calling it while this handler's transaction
-    // already holds the write lock lets four concurrent `done` calls each hold a connection
-    // and block waiting for a fifth -- a deadlock until the acquire timeout, then a 500. The
-    // only field of `stats`'s result this call reads is `current_counter`
+    // Computed before `begin()`, not after: `stats` acquires its own connection from the read
+    // pool, a different pool from the one write transaction below now comes from. Calling it
+    // after `begin()` would not deadlock or exhaust anything -- but the writer connection is
+    // one connection for this whole process, so anything done while holding it delays every
+    // other queued write by that much; hoisting the read avoids paying that cost for nothing.
+    // The only field of `stats`'s result this call reads is `current_counter`
     // (`MAX(activities.counter_value)`), and this transaction never writes `activities` -- so
     // hoisting the read changes nothing about `next_due`'s result. `stats`'s query also reads
     // `reminders`, for `due_reminder_count`, which this transaction DOES write (the UPDATE

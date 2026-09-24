@@ -285,6 +285,12 @@ async fn switch(
     }
 
     let report = copy::run_live(&state, &url).await.map_err(|e| {
+        // `AppError::Busy` -- the writer connection did not come free within `WRITE_WAIT` --
+        // is a fact about this server, not about the URL that was typed, so it passes through
+        // as itself rather than being folded into the message below.
+        if matches!(e.downcast_ref::<AppError>(), Some(AppError::Busy)) {
+            return AppError::Busy;
+        }
         let reason = db::scrub(&e.to_string(), &url);
         tracing::warn!(destination = %db::redacted(&url), error = %reason, "the copy to a new database failed");
         // Almost always a fact about the URL that was typed -- unreachable, not empty, wrong

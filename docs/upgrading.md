@@ -7,10 +7,11 @@ A new image applies any pending database migrations when it starts. Take a snaps
 
 A write that cannot take the database's write lock now waits for it. Under heavy concurrent
 writing SQLite could previously fail one writer with a 500 while serving the others; it now
-queues them. A write that still cannot be served -- because a database copy, a large import or
-the nightly purge is holding the lock -- answers `503` with `Retry-After: 1` instead of `500`,
-which clients should retry. A SQLite instance now opens five database connections rather than
-four.
+queues them. On SQLite, a write that still cannot be served within five seconds -- because a
+database copy, a large import or the nightly purge is holding the lock -- answers `503` with
+`Retry-After: 1` instead of `500`, which clients should retry; a SQLite instance now opens five
+database connections rather than four. PostgreSQL writers already serialized on an advisory
+lock and simply wait their turn on it, with no five-second budget and no `503`.
 
 ## 0.16.0: per-user today
 
