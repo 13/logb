@@ -3,6 +3,15 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.16.1: writes queue instead of racing
+
+A write that cannot take the database's write lock now waits for it. Under heavy concurrent
+writing SQLite could previously fail one writer with a 500 while serving the others; it now
+queues them. A write that still cannot be served -- because a database copy, a large import or
+the nightly purge is holding the lock -- answers `503` with `Retry-After: 1` instead of `500`,
+which clients should retry. A SQLite instance now opens five database connections rather than
+four.
+
 ## 0.16.0: per-user today
 
 A person who has chosen their own timezone under Settings → Notifications now gets the daily

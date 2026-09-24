@@ -12,8 +12,9 @@
 //! 2. Case-insensitive sorting of names -- `name_order`.
 //! 3. How a transaction that intends to write begins -- `begin_write`.
 //! 4. How a write transaction claims the right to be the only one -- `write_lock`. SQLite
-//!    needs nothing, because `BEGIN IMMEDIATE` already took the one write lock the database
-//!    has; PostgreSQL permits concurrent writers and so has to be told not to.
+//!    needs nothing in SQL: `BEGIN IMMEDIATE` takes the one write lock the database has, and
+//!    writers queue for a single connection in `db::connect_writer` before they ever reach it.
+//!    PostgreSQL permits concurrent writers and so has to be told not to.
 //! 5. Case-insensitive username uniqueness. SQLite declares `UNIQUE COLLATE NOCASE` on the
 //!    column; PostgreSQL has no per-column collation of that kind without `citext`, so its
 //!    schema carries a unique index on `lower(username)` instead. The statements themselves
@@ -60,8 +61,9 @@ impl Backend {
 
     /// How a write transaction claims the right to be the only one.
     ///
-    /// SQLite needs nothing here: `BEGIN IMMEDIATE` already took the database's write lock, and
-    /// there is exactly one. PostgreSQL permits concurrent writers, which is precisely what
+    /// SQLite needs nothing here: `BEGIN IMMEDIATE` already took the database's write lock,
+    /// there is exactly one, and `db::connect_writer` has already made this process take its
+    /// writers one at a time. PostgreSQL permits concurrent writers, which is precisely what
     /// this codebase is not written for -- the audit in part two's spec found five places where
     /// check-then-act is atomic only because SQLite serialises writers.
     ///
