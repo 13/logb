@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, parseSort, parseTab, sortObjects, visibleRows } from '../src/lib/object-list';
+import { matchesQuery, parseSort, parseTab, sortObjects, visibleRows, withPendingObjects } from '../src/lib/object-list';
 import type { MemObject, ObjectType } from '../src/lib/types';
 
 let nextId = 1;
@@ -112,5 +112,16 @@ describe('tags in the objects list', () => {
   it('a tag filter keeps carriers at every depth, ignoring case', () => {
     const rows = visibleRows([house, boiler, car], [], 'active', '', 'name', (t) => t, 'en', 'WINTER');
     expect(rows.map((r) => [r.object.name, r.parentName])).toEqual([['Tag Boiler', 'Tag House'], ['Tag Car', null]]);
+  });
+});
+
+describe('withPendingObjects', () => {
+  it('puts queued objects first and never stacks them on an earlier merge', () => {
+    const real = obj({ id: 5 });
+    const queued = obj({ id: -9, pending: true });
+    const once = withPendingObjects([queued], [real]);
+    expect(once.map((o) => o.id)).toEqual([-9, 5]);
+    // A second load that fell back to what is on screen (offline) merges into its own output.
+    expect(withPendingObjects([queued], once).map((o) => o.id)).toEqual([-9, 5]);
   });
 });

@@ -48,6 +48,13 @@ export function sortObjects(list: MemObject[], key: SortKey, locale: string): Me
   });
 }
 
+/** The dashboard's active list: objects still only in the outbox first, then the server's rows.
+ *  Pending rows already in `rows` are dropped first, so merging into an earlier merge (an
+ *  offline load keeps what is on screen) never shows a queued object twice. */
+export function withPendingObjects(queued: MemObject[], rows: MemObject[]): MemObject[] {
+  return [...queued, ...rows.filter((o) => !o.pending)];
+}
+
 export interface ListRow { object: MemObject; parentName: string | null }
 
 /** What the list shows for a tab, a query, a sort and a tag filter.
