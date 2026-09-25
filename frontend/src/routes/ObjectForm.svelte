@@ -23,6 +23,7 @@
   import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
   import { saveObjectDraft, takeObjectDraft } from '../lib/object-draft';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
+  import { user } from '../stores/session';
   import { loadObjectTemplates, removeObjectTemplate, saveObjectTemplate, type SavedObjectTemplate } from '../lib/object-templates';
 
   let { id }: { id?: string } = $props();
@@ -44,6 +45,8 @@
   let capacityText = $state('');
   let targetText = $state('');
   let savedTemplates = $state<SavedObjectTemplate[]>([]);
+  /** Whose templates these are: they are kept per user (see ../lib/object-templates.ts). */
+  const userId = () => $user?.id ?? null;
   /** Ticked template ids. Opt-in, never automatic: a reminder nobody asked for is the kind that
    *  gets muted. */
   let chosen = $state<string[]>([]);
@@ -132,7 +135,7 @@
   }
 
   onMount(async () => {
-    savedTemplates = loadObjectTemplates();
+    savedTemplates = loadObjectTemplates(userId());
     // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
     // wait for them or lose its object load over them.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
@@ -298,7 +301,7 @@
       <button type="button" class="chip" onclick={() => applyObjectTemplate('water')}>{$t('template.object-water')}</button>
       {#each savedTemplates as template (template.id)}
         <button type="button" class="chip" onclick={() => applySavedTemplate(template)}>{template.name}</button>
-        <button type="button" class="chip" aria-label={$t('template.remove', { name: template.name })} onclick={() => (savedTemplates = removeObjectTemplate(template.id))}>×</button>
+        <button type="button" class="chip" aria-label={$t('template.remove', { name: template.name })} onclick={() => (savedTemplates = removeObjectTemplate(userId(), template.id))}>×</button>
       {/each}
     </div>
   {/if}
@@ -416,7 +419,7 @@
     <p class="hint">{$t('object.private-hint')}</p>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row actions">
-      {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate($state.snapshot(input)))}>{$t('template.save')}</button>{/if}
+      {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate(userId(), $state.snapshot(input)))}>{$t('template.save')}</button>{/if}
       <button type="button" class="ghost" onclick={() => back(editing ? `/objects/${id}` : '/')}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>
