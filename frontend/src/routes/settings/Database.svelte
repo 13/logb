@@ -101,7 +101,7 @@
 
 <main>
   <TopBar title={$t('db.title')} backTo="/settings" />
-  {#if dbError}<p class="error">{dbError}</p>{/if}
+  {#if dbError}<p class="error" role="alert">{dbError}</p>{/if}
   {#if db}
     <p class="muted">{$t('db.current')}</p>
     <div class="card stack">

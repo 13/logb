@@ -77,7 +77,7 @@
 
 <main>
   <TopBar title={$t('settings.appearance')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
 
   <h2>{$t('settings.language')}</h2>

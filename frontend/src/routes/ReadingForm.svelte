@@ -93,14 +93,14 @@
             : $t('reading.warn-implausible', { date: fmtDate(lastDate, $dateFormat) })}
         </p>
       {/if}
-      {#if error}<p class="error">{error}</p>{/if}
+      {#if error}<p class="error" role="alert">{error}</p>{/if}
       <div class="row actions">
         <button type="button" class="ghost" onclick={() => back(`/objects/${oid}`)}>{$t('nav.cancel')}</button>
         <button class="primary" disabled={busy}>{$t('nav.save')}</button>
       </div>
     </form>
   {:else if error}
-    <p class="error">{error}</p>
+    <p class="error" role="alert">{error}</p>
   {:else}
     <p class="muted">{$t('nav.loading')}</p>
   {/if}

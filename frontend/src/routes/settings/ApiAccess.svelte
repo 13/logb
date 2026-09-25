@@ -56,7 +56,7 @@
 
 <main>
   <TopBar title={$t('tokens.title')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
 
   <p class="muted">{$t('tokens.intro')}</p>
   {#if freshToken}

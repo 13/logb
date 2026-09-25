@@ -39,7 +39,7 @@
 
 <main>
   <TopBar title={$t('settings.account')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
 
   <p class="muted">{$user?.username}</p>

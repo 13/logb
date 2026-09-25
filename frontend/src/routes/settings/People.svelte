@@ -37,7 +37,7 @@
 
 <main>
   <TopBar title={$t('settings.users')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
 
   <div class="list">
     {#each users as u (u.id)}

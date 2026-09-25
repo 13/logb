@@ -25,5 +25,5 @@
   <p class="hint">{$t('resource.csv-hint')}</p>
   <input aria-label={$t('resource.csv-file')} type="file" accept=".csv,text/csv" onchange={selected} />
   {#if count > 0}<button class="ghost" disabled={busy} onclick={run}>{$t('resource.csv-import', { n: count })}</button>{/if}
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>

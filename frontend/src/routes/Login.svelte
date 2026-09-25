@@ -26,7 +26,7 @@
   <form onsubmit={submit}>
     <div class="field"><label for="u">{$t('login.username')}</label><input id="u" bind:value={username} autocomplete="username" required /></div>
     <div class="field"><label for="p">{$t('login.password')}</label><input id="p" type="password" bind:value={password} autocomplete="current-password" required /></div>
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <button class="primary" disabled={busy}>{$t('login.submit')}</button>
   </form>
 </main>

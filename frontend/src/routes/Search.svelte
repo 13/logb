@@ -81,7 +81,7 @@
     bind:value={q}
   />
 
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if loading && !results}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if empty}

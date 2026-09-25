@@ -49,7 +49,7 @@
     {$t('insights.contents')}
   </label>
 {/if}
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" role="alert">{error}</p>{/if}
 {#if data}
   {#if data.ownership.total_cents > 0}
     {@const o = data.ownership}

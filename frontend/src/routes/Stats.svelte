@@ -161,7 +161,7 @@
   {/if}
 
   {#if error}
-    <p class="error">{error}</p>
+    <p class="error" role="alert">{error}</p>
   {:else if !data}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if data.total_cents === 0}
