@@ -237,6 +237,7 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         storage,
         config,
         login_attempts: Mutex::new(HashMap::new()),
+        backup_verified: Mutex::new(None),
     });
     // Off unless configured: the bundled SPA is same-origin and needs none of this. It exists
     // for a SEPARATE web client -- another origin in development, say -- which cannot call the

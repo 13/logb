@@ -468,6 +468,7 @@ mod tests {
             storage,
             config,
             login_attempts: Mutex::new(HashMap::new()),
+            backup_verified: Mutex::new(None),
         })
     }
 

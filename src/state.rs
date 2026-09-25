@@ -26,6 +26,11 @@ pub struct AppState {
     pub config: Config,
     /// login attempts per IP: (count, window start)
     pub login_attempts: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    /// The snapshot `backup::tick` last wrote-and-verified, or found and verified, in this
+    /// process. Today's file, once it is in here, is not opened again until tomorrow's name
+    /// replaces it -- see `backup::tick`. In memory on purpose: after a restart nothing is
+    /// remembered, so a file this process never checked is checked once.
+    pub backup_verified: Mutex<Option<std::path::PathBuf>>,
 }
 
 pub type App = Arc<AppState>;
