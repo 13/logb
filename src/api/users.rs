@@ -63,7 +63,7 @@ async fn create(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES ($1, $2, $3, 'en', $4) \
          RETURNING id, username, is_admin, lang, created_at",
     )
-    .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(i64::from(body.is_admin)).bind(db::now())
+    .bind(&body.username).bind(auth::hash_password(&body.password).await?).bind(i64::from(body.is_admin)).bind(db::now())
     .fetch_one(&state.db).await
     .map_err(|e| match e.as_database_error().filter(|d| d.is_unique_violation()) {
         Some(_) => AppError::Conflict("username already taken".into()),
@@ -115,7 +115,7 @@ async fn update(
     let mut jar = jar;
     if let Some(p) = &body.password {
         sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-            .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
+            .bind(auth::hash_password(p).await?).bind(id).execute(&state.db).await?;
         // The new password only means anything if the sessions opened with the old one stop
         // working. Someone changing their own password keeps this browser signed in, on a
         // freshly issued session; every other session for that account is gone either way.

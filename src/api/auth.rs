@@ -205,7 +205,7 @@ async fn setup(
     // Hashed before the write transaction opens: Argon2 takes hundreds of milliseconds, and
     // doing it here means it happens outside the `begin_write` lock instead of holding
     // PostgreSQL's advisory lock -- and every other writer in the app -- for the duration.
-    let hash = auth::hash_password(&body.password)?;
+    let hash = auth::hash_password(&body.password).await?;
     // Count, conditional insert and session creation all happen inside one `db::begin_write`
     // transaction, which on PostgreSQL holds the same advisory lock every other write path
     // takes (see `db::begin_write`). That -- not the `WHERE NOT EXISTS` below -- is what stops
@@ -269,10 +269,10 @@ async fn login(
     let Some((id, hash)) = row else {
         // No such user: still do a full Argon2 verification so this path takes about as long
         // as the "wrong password" path below, and the two can't be told apart by timing.
-        auth::verify_dummy_password(&body.password);
+        auth::verify_dummy_password(&body.password).await;
         return Err(AppError::Unauthorized);
     };
-    if !auth::verify_password(&body.password, &hash) {
+    if !auth::verify_password(&body.password, &hash).await {
         return Err(AppError::Unauthorized);
     }
     let user = sqlx::query_as::<_, AuthUser>(

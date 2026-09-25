@@ -50,14 +50,36 @@ impl AuthUser {
 
 pub struct AdminUser(pub AuthUser);
 
-pub fn hash_password(password: &str) -> Result<String, AppError> {
-    Argon2::default()
-        .hash_password(password.as_bytes())
-        .map(|h| h.to_string())
-        .map_err(|e| AppError::Internal(format!("hash: {e}")))
+/// Hashes a password with Argon2, on the blocking thread pool.
+///
+/// Argon2 is deliberately slow -- tens to hundreds of milliseconds of pure CPU, and 19 MiB of
+/// memory, per call. Run inline, that time is taken from a Tokio worker thread, which then
+/// serves no other request until it finishes: a handful of concurrent sign-ins could stall
+/// every other request on the instance, and a flood of wrong passwords would be a cheap way to
+/// do it on purpose. `spawn_blocking` moves the work to the pool that exists for exactly this.
+pub async fn hash_password(password: &str) -> Result<String, AppError> {
+    let password = password.to_owned();
+    tokio::task::spawn_blocking(move || {
+        Argon2::default()
+            .hash_password(password.as_bytes())
+            .map(|h| h.to_string())
+            .map_err(|e| AppError::Internal(format!("hash: {e}")))
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("hash task: {e}")))?
 }
 
-pub fn verify_password(password: &str, hash: &str) -> bool {
+/// Checks `password` against a stored PHC hash, on the blocking thread pool for the same
+/// reason as `hash_password`. A hash that does not parse, or a task that did not finish,
+/// verifies nothing: both answer `false`, never an error a caller could mistake for success.
+pub async fn verify_password(password: &str, hash: &str) -> bool {
+    let (password, hash) = (password.to_owned(), hash.to_owned());
+    tokio::task::spawn_blocking(move || verify_password_blocking(&password, &hash))
+        .await
+        .unwrap_or(false)
+}
+
+fn verify_password_blocking(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .map(|parsed| {
             Argon2::default()
@@ -77,8 +99,8 @@ const DUMMY_PASSWORD_HASH: &str =
 /// Runs a full Argon2 verification against a fixed dummy hash so the "user not found" login
 /// path costs about as much time as the "wrong password" path (see `DUMMY_PASSWORD_HASH`).
 /// The result is always `false` and is not meant to be checked; only the timing matters.
-pub fn verify_dummy_password(password: &str) {
-    verify_password(password, DUMMY_PASSWORD_HASH);
+pub async fn verify_dummy_password(password: &str) {
+    verify_password(password, DUMMY_PASSWORD_HASH).await;
 }
 
 pub fn validate_username(u: &str) -> Result<(), AppError> {
@@ -481,7 +503,7 @@ mod tests {
             PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok(),
             "DUMMY_PASSWORD_HASH must be a valid PHC string"
         );
-        assert!(!verify_password(
+        assert!(!verify_password_blocking(
             "definitely-not-the-password",
             DUMMY_PASSWORD_HASH
         ));
