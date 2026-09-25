@@ -112,28 +112,47 @@ async fn update(
         }
     }
 
-    let mut jar = jar;
-    if let Some(p) = &body.password {
+    // Hashed before the write transaction opens, as `setup` does: Argon2 takes long enough that
+    // holding the one writer connection (SQLite) or the advisory lock (PostgreSQL) through it
+    // would stall every other write in the app.
+    let new_hash = match &body.password {
+        Some(p) => Some(auth::hash_password(p).await?),
+        None => None,
+    };
+
+    // Every statement below runs in one write transaction, so a failure part-way can no longer
+    // leave, say, the new password committed while the sessions opened with the old one live
+    // on. Everything inside uses `tx` and nothing else: acquiring a second pooled connection
+    // between `begin_write` and `commit` would, on SQLite, wait on the very connection this
+    // transaction holds.
+    let mut tx = db::begin_write(&state).await?;
+    let mut new_token = None;
+    if let Some(hash) = &new_hash {
         sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-            .bind(auth::hash_password(p).await?).bind(id).execute(&state.db).await?;
+            .bind(hash).bind(id).execute(&mut *tx).await?;
         // The new password only means anything if the sessions opened with the old one stop
         // working. Someone changing their own password keeps this browser signed in, on a
         // freshly issued session; every other session for that account is gone either way.
-        auth::delete_sessions_for_user(&state, id).await?;
+        auth::delete_sessions_for_user_in(&mut tx, id).await?;
         if me.id == id {
-            let token = auth::create_session(&state, id).await?;
-            jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
+            new_token = Some(auth::create_session_in(&mut tx, id).await?);
         }
     }
     if let Some(a) = body.is_admin {
         // An integer, for the same reason as the INSERT above.
-        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(i64::from(a)).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(i64::from(a)).bind(id).execute(&mut *tx).await?;
     }
     if let Some(l) = &body.lang {
-        sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&mut *tx).await?;
     }
     let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = $1")
-        .bind(id).fetch_one(&state.db).await?;
+        .bind(id).fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    // The cookie only once the session it names has committed.
+    let jar = match new_token {
+        Some(token) => jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers))),
+        None => jar,
+    };
     Ok((jar, Json(user)))
 }
 

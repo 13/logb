@@ -201,14 +201,32 @@ pub async fn create_session_in(
 /// that left them alone would revoke the credential the owner can see and keep the one an
 /// attacker actually took. The cost is that a password change signs the phone out of the API
 /// too, which is why the README says so and the Settings screen says so next to the button.
+///
+/// Both deletes commit together or not at all: its own write transaction, so a failure between
+/// them cannot leave the sessions gone and the tokens -- the credential that matters more --
+/// still working.
 pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), AppError> {
+    let mut tx = db::begin_write(state).await?;
+    delete_sessions_for_user_in(&mut tx, user_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// As `delete_sessions_for_user`, inside a write transaction the caller already holds -- for a
+/// caller whose other statements must commit with these, like a password change
+/// (`api::users::update`). See `create_session_in` for why it must not take a pool connection
+/// of its own.
+pub async fn delete_sessions_for_user_in(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    user_id: i64,
+) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE user_id = $1")
         .bind(user_id)
-        .execute(&state.db)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
         .bind(user_id)
-        .execute(&state.db)
+        .execute(&mut **tx)
         .await?;
     Ok(())
 }
