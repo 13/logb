@@ -70,6 +70,16 @@ export function filterPendingOps(ops: QueuedOp[], f: { category: string | null; 
     .filter((o) => wantedTitle === null || (typeof o.body.title === 'string' && foldTitle(o.body.title) === wantedTitle));
 }
 
+/** Where a view of an offline-created object should go once a flush gives it a real id: the
+ *  same page under the real id, or `null` when this pass resolved nothing for it. The temp id
+ *  keeps nothing current after that -- its cache entry is a snapshot from before the server had
+ *  the row, and every queued write under it has already been rewritten to the real id. */
+export function resolvedObjectPath(oid: number, resolved: Map<number, number>, search: string): string | null {
+  if (oid >= 0) return null;
+  const real = resolved.get(oid);
+  return real === undefined ? null : `/objects/${real}${search}`;
+}
+
 /** The address for the current tab: the default tab is left out and `?tag=` is dropped, since
  *  the tag filter is session state once read. */
 export function nextUrl(href: string, tab: string): string {

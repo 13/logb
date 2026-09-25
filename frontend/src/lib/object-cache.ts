@@ -41,6 +41,13 @@ export function setCachedObject(id: number, obj: MemObject): void {
   objects.set(id, obj);
 }
 
+/** Forgets one object and its activities page -- for an offline-created object's temp id once
+ *  the server has given it a real one, so the snapshot cannot be served again under the old id. */
+export function dropCachedObject(id: number): void {
+  objects.delete(id);
+  activityPages.delete(id);
+}
+
 export function getCachedActivities(id: number): { items: Activity[]; total: number } | undefined {
   return activityPages.get(id);
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tagParam, offersTrip, offersEnergy, resourceCategory, foldTitle, pendingToActivity, filterPendingOps, nextUrl } from '../src/lib/object-detail';
+import { tagParam, offersTrip, offersEnergy, resourceCategory, foldTitle, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath } from '../src/lib/object-detail';
 import type { QueuedOp } from '../src/lib/outbox';
 
 function op(id: string, body: Record<string, unknown>): QueuedOp {
@@ -63,4 +63,16 @@ describe('nextUrl', () => {
 
 it('foldTitle trims and lowercases', () => {
   expect(foldTitle('  Oil Change ')).toBe('oil change');
+});
+
+describe('resolvedObjectPath', () => {
+  it('points a temp object at its real id once a flush resolves it, keeping the query', () => {
+    expect(resolvedObjectPath(-9, new Map([[-9, 44]]), '?tab=info')).toBe('/objects/44?tab=info');
+    expect(resolvedObjectPath(-9, new Map([[-9, 44]]), '')).toBe('/objects/44');
+  });
+
+  it('stays put for a real id or a temp id this pass did not resolve', () => {
+    expect(resolvedObjectPath(-9, new Map([[-10, 45]]), '')).toBeNull();
+    expect(resolvedObjectPath(5, new Map([[5, 45]]), '')).toBeNull();
+  });
 });
