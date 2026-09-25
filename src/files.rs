@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 pub const THUMB_MAX: u32 = 400;
+pub const MAX_IMAGE_SIDE: u32 = 12_000;
 const DOC_EXTENSIONS: [&str; 6] = ["txt", "md", "doc", "docx", "xls", "xlsx"];
 
 #[derive(Clone, Debug)]
@@ -23,40 +24,53 @@ impl Storage {
         self.root.join("files").join(&sha[..2]).join(sha)
     }
 
-    pub fn thumb_path(&self, file_id: i64) -> PathBuf {
-        self.root.join("thumbs").join(format!("{file_id}.jpg"))
+    /// Where the thumbnail of the content hashing to `sha` lives: `thumbs/ab/<sha>.jpg`, sharded
+    /// like the blobs.
+    ///
+    /// Named after the content, not the `files` row, and that is the point. It used to be
+    /// `thumbs/<file_id>.jpg`, written inside the transaction that inserted the row -- and SQLite
+    /// hands a rolled-back `AUTOINCREMENT` id straight to the next insert, so a failed upload
+    /// left a thumbnail on disk that the next, unrelated file with the same id then served as its
+    /// own. A hash names exactly one picture, whichever row points at it and whenever it was
+    /// written, so a thumbnail written by a request that later failed is at worst an orphan the
+    /// sweep collects, never someone else's image. It also means two rows with the same bytes --
+    /// two users uploading one photo -- share one thumbnail, as they already share one blob.
+    pub fn thumb_path(&self, sha: &str) -> PathBuf {
+        self.thumbs_dir().join(&sha[..2]).join(format!("{sha}.jpg"))
     }
 
-    /// Write the blob unless an identical one already exists.
+    /// The directory holding the blob shards (and scratch files).
+    pub fn files_dir(&self) -> PathBuf {
+        self.root.join("files")
+    }
+
+    /// The directory holding the thumbnail shards -- and, until `files_gc::migrate_legacy_thumbs`
+    /// has run once, the old id-named thumbnails directly inside it.
+    pub fn thumbs_dir(&self) -> PathBuf {
+        self.root.join("thumbs")
+    }
+
+    /// Writes the blob, unless an intact one is already there.
+    ///
+    /// "Intact" is checked, not assumed: an existing file under this name is hashed, and only a
+    /// match is kept. The name promises the content, but a write torn by a crash before this
+    /// function fsynced, or a disk that rotted a sector, breaks that promise silently -- and
+    /// every later upload of the same bytes used to find the file "already there" and leave the
+    /// damage in place for good. A mismatch is rewritten from the bytes in hand.
+    ///
+    /// The write itself is durable before this returns: see `write_durably`.
     pub async fn write_blob(&self, sha: &str, bytes: &[u8]) -> std::io::Result<()> {
         let path = self.blob_path(sha);
         if tokio::fs::try_exists(&path).await? {
-            return Ok(());
-        }
-        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        let mut token = [0u8; 16];
-        rand::rng().fill(&mut token);
-        let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
-        tokio::fs::write(&tmp, bytes).await?;
-        match tokio::fs::rename(&tmp, &path).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Another concurrent writer for the same content hash may have won the
-                // race and already produced the destination file. Since the path is
-                // derived from the content hash, that file has identical bytes to ours.
-                //
-                // Unreachable on Linux, where POSIX rename() replaces an existing
-                // destination atomically; this arm is here for platforms whose rename
-                // fails when the destination exists.
-                if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    Ok(())
-                } else {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    Err(e)
-                }
+            match hash_file(&path).await {
+                Ok(on_disk) if on_disk == sha => return Ok(()),
+                Ok(on_disk) => tracing::warn!(
+                    sha, on_disk = %on_disk, "a stored blob does not match its name; rewriting it"
+                ),
+                Err(e) => tracing::warn!(sha, error = %e, "a stored blob cannot be read; rewriting it"),
             }
         }
+        write_durably(&path, bytes).await
     }
 
     /// A unique path in the data directory for a temporary working file (a whole export
@@ -68,14 +82,114 @@ impl Storage {
         self.root.join("files").join(format!(".{prefix}-{}.tmp", hex::encode(token)))
     }
 
-    pub async fn write_thumb(&self, file_id: i64, jpeg: &[u8]) -> std::io::Result<()> {
-        tokio::fs::write(self.thumb_path(file_id), jpeg).await
+    /// Writes the thumbnail of the content hashing to `sha`. Callers write it before the
+    /// transaction that inserts the `files` row opens, so the row never becomes visible ahead of
+    /// its thumbnail -- and since the name is the content's, a transaction that then fails leaves
+    /// an orphan, not a wrong picture (see `thumb_path`).
+    ///
+    /// Through a temporary file and a rename, so a reader never sees half a JPEG, and always
+    /// written rather than skipped when one exists: the bytes are a pure function of the content,
+    /// so replacing an identical file changes nothing, while trusting a torn one would serve it
+    /// forever.
+    pub async fn write_thumb(&self, sha: &str, jpeg: &[u8]) -> std::io::Result<()> {
+        write_durably(&self.thumb_path(sha), jpeg).await
     }
 
-    pub async fn remove(&self, sha: &str, file_id: i64) {
-        let _ = tokio::fs::remove_file(self.blob_path(sha)).await;
-        let _ = tokio::fs::remove_file(self.thumb_path(file_id)).await;
+    /// Writes the blob, and the thumbnail if there is one, again if either is missing from disk.
+    ///
+    /// For a writer that stored both before taking the write lock and now holds it: a
+    /// concurrent `discard_blob` may have deleted them in between, having seen no row naming
+    /// the hash -- this writer's row was not committed yet. Only a stat each in the common case,
+    /// which is what makes it cheap enough to run inside the write transaction.
+    pub async fn restore_if_missing(&self, sha: &str, bytes: &[u8], thumb: Option<&[u8]>) -> std::io::Result<()> {
+        if !tokio::fs::try_exists(self.blob_path(sha)).await? {
+            write_durably(&self.blob_path(sha), bytes).await?;
+        }
+        if let Some(jpeg) = thumb {
+            if !tokio::fs::try_exists(self.thumb_path(sha)).await? {
+                self.write_thumb(sha, jpeg).await?;
+            }
+        }
+        Ok(())
     }
+
+    /// Removes the blob and the thumbnail of the content hashing to `sha`. The caller decides
+    /// that nothing references them any more -- see `api::attachments::discard_blob`.
+    pub async fn remove(&self, sha: &str) {
+        let _ = tokio::fs::remove_file(self.blob_path(sha)).await;
+        let _ = tokio::fs::remove_file(self.thumb_path(sha)).await;
+    }
+}
+
+/// Puts `bytes` at `path` so that, once this returns, a crash cannot leave `path` holding
+/// anything but the whole of them.
+///
+/// Written to a uniquely named `.part` file beside the destination (same directory, so the same
+/// filesystem, so the rename is atomic), fsynced, renamed over the destination, and then the
+/// directory is fsynced too. The first fsync is what stops a crash from leaving a renamed but
+/// empty or partial file -- a rename can reach the disk before the data it points at does. The
+/// second makes the rename itself durable, so the file cannot vanish again after the caller has
+/// gone on to commit a row that names it. A `.part` file a crash strands is collected by
+/// `files_gc::sweep`.
+async fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let dir = path.parent().expect("a stored file always has a shard directory");
+    tokio::fs::create_dir_all(dir).await?;
+    let mut token = [0u8; 16];
+    rand::rng().fill(&mut token);
+    let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
+    let written = async {
+        let mut f = tokio::fs::File::create(&tmp).await?;
+        f.write_all(bytes).await?;
+        f.sync_all().await
+    }
+    .await;
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        // Another concurrent writer of the same content may have won the race and already
+        // produced the destination; its name is derived from the content, so it is identical.
+        //
+        // Unreachable on Linux, where POSIX rename() replaces an existing destination
+        // atomically; this arm is here for platforms whose rename fails when the destination
+        // exists.
+        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Err(e);
+        }
+    }
+    sync_dir(dir).await
+}
+
+/// Flushes a directory's entries (a rename into it, say) to disk.
+#[cfg(unix)]
+async fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    tokio::fs::File::open(dir).await?.sync_all().await
+}
+
+/// Directories cannot be opened for fsync everywhere (Windows refuses); there the rename's own
+/// durability is what the platform gives.
+#[cfg(not(unix))]
+async fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// The sha256 of a file's contents, read in chunks rather than into memory whole.
+pub async fn hash_file(path: &Path) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt;
+    let mut f = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -105,10 +219,41 @@ pub struct ImageInfo {
     pub thumb_jpeg: Vec<u8>,
 }
 
+/// How many images may be decoding at once, across every upload and import.
+const DECODE_SLOTS: usize = 2;
+static DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(DECODE_SLOTS);
+
+/// `process_image` on a blocking thread, at most `DECODE_SLOTS` at a time.
+///
+/// A decode holds the whole bitmap -- up to `MAX_DECODE_ALLOC` -- plus the rotated copy and the
+/// thumbnail. Ten photos uploaded at once from a phone used to mean ten of those in memory
+/// together, on a server sized for a household; waiting for a slot costs a moment instead.
+/// A task that panics while decoding surfaces as an error rather than taking the request down.
+pub async fn process_image_queued(
+    bytes: impl AsRef<[u8]> + Send + 'static,
+) -> Result<Option<ImageInfo>, tokio::task::JoinError> {
+    let _slot = DECODES.acquire().await.expect("the decode semaphore is never closed");
+    tokio::task::spawn_blocking(move || process_image(bytes.as_ref())).await
+}
+
+/// The most a decoder may allocate for one image. Generous for any camera -- a 12 000 x 12 000
+/// RGBA bitmap is 550 MiB, so the side limit usually binds first -- but a bound, where the
+/// default is double this.
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+
 /// Decode, apply EXIF orientation, extract DateTimeOriginal, build a JPEG thumbnail.
-/// Returns None when the bytes are not a decodable image.
+/// Returns None when the bytes are not a decodable image -- including one whose header promises
+/// more than `MAX_IMAGE_SIDE` pixels a side or needs more than `MAX_DECODE_ALLOC` to decode.
+/// A few kilobytes of PNG can declare a 100 000 x 100 000 canvas; without limits the decoder
+/// would try to allocate it. Such a file is still stored, as a document without a thumbnail.
 pub fn process_image(bytes: &[u8]) -> Option<ImageInfo> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let exif = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)).ok();
     let orientation = exif.as_ref()
         .and_then(|e| e.get_field(exif::Tag::Orientation, exif::In::PRIMARY))
@@ -182,12 +327,47 @@ mod tests {
         assert!(process_image(b"not an image").is_none());
     }
 
+    /// A PNG header is a few bytes; the pixels it promises are what gets allocated. An image
+    /// past the side limit is not decoded, so it gets no thumbnail and is stored as a document.
+    #[test]
+    fn images_past_the_side_limit_are_not_decoded() {
+        let png = |w: u32, h: u32| {
+            let mut buf = Cursor::new(Vec::new());
+            DynamicImage::new_luma8(w, h).write_to(&mut buf, image::ImageFormat::Png).unwrap();
+            buf.into_inner()
+        };
+        assert!(process_image(&png(MAX_IMAGE_SIDE, 1)).is_some());
+        assert!(process_image(&png(MAX_IMAGE_SIDE + 1, 1)).is_none());
+        assert!(process_image(&png(1, MAX_IMAGE_SIDE + 1)).is_none());
+    }
+
     #[test]
     fn blob_paths_are_sharded() {
         let s = Storage { root: PathBuf::from("/data") };
         assert_eq!(s.blob_path("abcdef"), PathBuf::from("/data/files/ab/abcdef"));
-        assert_eq!(s.thumb_path(7), PathBuf::from("/data/thumbs/7.jpg"));
+        assert_eq!(s.thumb_path("abcdef"), PathBuf::from("/data/thumbs/ab/abcdef.jpg"));
         assert_eq!(sha256_hex(b"").len(), 64);
+    }
+
+    /// A blob that exists under its hash is not taken on trust: a torn write from before a
+    /// crash, or bit rot, would otherwise be served forever, since every later upload of the
+    /// same bytes would find the file "already there" and skip it.
+    #[tokio::test]
+    async fn write_blob_replaces_a_damaged_blob_under_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path()).unwrap();
+        let bytes = b"the real content".to_vec();
+        let sha = sha256_hex(&bytes);
+        let path = storage.blob_path(&sha);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"the real con").unwrap();
+
+        storage.write_blob(&sha, &bytes).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        // And an intact one is left exactly as it is.
+        storage.write_blob(&sha, &bytes).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     #[tokio::test]

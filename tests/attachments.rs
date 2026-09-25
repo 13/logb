@@ -565,3 +565,208 @@ async fn file_responses_are_revalidated_and_a_304_needs_ownership() {
     }
     assert_ne!(etags[0], etags[1], "the thumbnail is different bytes, so a different validator");
 }
+
+/// SQLite hands a rolled-back `AUTOINCREMENT` id straight to the next insert: the counter lives
+/// in `sqlite_sequence`, an ordinary table the rollback restores. A thumbnail named after the
+/// file id and written inside the failed transaction therefore used to outlive it and be served
+/// as the thumbnail of whatever unrelated file got that id next -- here a PDF, which has no
+/// thumbnail at all.
+#[tokio::test]
+async fn a_rolled_back_upload_leaves_no_thumbnail_a_later_file_serves() {
+    if common::skipped_on_postgres(
+        "a_rolled_back_upload_leaves_no_thumbnail_a_later_file_serves",
+        "PostgreSQL sequences never hand a rolled-back id out again, and the trigger is SQLite's",
+    ) {
+        return;
+    }
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+
+    app.fail_changes_for("file").await;
+    let res = app.client.post(&base).multipart(form(png(800, 600), "front.png", "image/png")).send().await.unwrap();
+    assert_eq!(res.status(), 500, "{}", res.text().await.unwrap());
+    app.stop_failing_changes_for("file").await;
+    assert_eq!(file_row_count(&app).await, 0, "the failed upload committed its row");
+
+    let res = app.client.post(&base).multipart(form(b"%PDF-1.4 manual".to_vec(), "manual.pdf", "application/pdf")).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let pdf: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(pdf["file_id"], 1, "the precondition: the rolled-back id was handed out again");
+
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", pdf["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 404, "a PDF was served the failed upload's thumbnail");
+}
+
+/// An instance upgraded from the id-named layout keeps every thumbnail a live image row owns,
+/// loses the ones nothing could rightly serve, and running the move again changes nothing.
+#[tokio::test]
+async fn id_named_thumbnails_move_to_their_content_name_once() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+    let photo: serde_json::Value = app.client.post(&base).multipart(form(png(800, 600), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let pdf: serde_json::Value = app.client.post(&base).multipart(form(b"%PDF-1.4 m".to_vec(), "m.pdf", "application/pdf"))
+        .send().await.unwrap().json().await.unwrap();
+    let (sha,): (String,) = sqlx::query_as("SELECT sha256 FROM files WHERE id = $1")
+        .bind(photo["file_id"].as_i64().unwrap()).fetch_one(&app.state.db).await.unwrap();
+
+    // Put the disk back the way the old layout had it: the photo's thumbnail under its id, a
+    // stray under the document's id (a rolled-back upload's), and one under an id nobody has.
+    let storage = &app.state.storage;
+    let jpeg = std::fs::read(storage.thumb_path(&sha)).unwrap();
+    std::fs::remove_file(storage.thumb_path(&sha)).unwrap();
+    let legacy = |id: &serde_json::Value| storage.thumbs_dir().join(format!("{id}.jpg"));
+    std::fs::write(legacy(&photo["file_id"]), &jpeg).unwrap();
+    std::fs::write(legacy(&pdf["file_id"]), b"stray").unwrap();
+    std::fs::write(legacy(&json!(9999)), b"stray").unwrap();
+
+    let report = logb::files_gc::migrate_legacy_thumbs(&app.state).await.unwrap();
+    assert_eq!(report, logb::files_gc::LegacyThumbs { moved: 1, deleted: 2 });
+    assert_eq!(std::fs::read(storage.thumb_path(&sha)).unwrap(), jpeg);
+    for id in [&photo["file_id"], &pdf["file_id"], &json!(9999)] {
+        assert!(!legacy(id).exists(), "{id}.jpg is still there");
+    }
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 200);
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", pdf["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 404);
+
+    let again = logb::files_gc::migrate_legacy_thumbs(&app.state).await.unwrap();
+    assert_eq!(again, logb::files_gc::LegacyThumbs::default());
+    assert_eq!(std::fs::read(storage.thumb_path(&sha)).unwrap(), jpeg);
+}
+
+/// Runs `work` while a write transaction is held open, and says whether it finished before that
+/// transaction ended -- i.e. whether it ran without the write lock.
+async fn finishes_while_a_writer_holds_the_lock<F>(app: &common::TestApp, work: F) -> bool
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let tx = logb::db::begin_write(&app.state).await.unwrap();
+    let task = tokio::spawn(work);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let finished_early = task.is_finished();
+    tx.rollback().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), task).await
+        .expect("still waiting after the writer let go").unwrap();
+    finished_early
+}
+
+/// Discarding a blob is a check ("no row names this hash") followed by an unlink. Run outside
+/// the write lock, an upload of the same bytes could commit its row between the two and be left
+/// pointing at nothing. Both halves now happen under the write connection, so a writer holding
+/// it keeps the discard waiting.
+#[tokio::test]
+async fn discarding_a_blob_waits_for_the_write_lock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bytes = b"%PDF-1.4 nobody's".to_vec();
+    let sha = logb::files::sha256_hex(&bytes);
+    app.state.storage.write_blob(&sha, &bytes).await.unwrap();
+    let blob = app.state.storage.blob_path(&sha);
+
+    let (state, s) = (app.state.clone(), sha.clone());
+    let early = finishes_while_a_writer_holds_the_lock(&app, async move {
+        logb::api::attachments::discard_blob(&state, &s).await.unwrap();
+    }).await;
+    assert!(!early, "the discard ran without the write lock");
+    assert!(!blob.exists(), "an unreferenced blob survived the discard");
+}
+
+/// The same for the orphan purge: its "no attachment references this file" check and the
+/// delete belong to one writer's turn.
+#[tokio::test]
+async fn purging_orphan_files_waits_for_the_write_lock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (user_id,): (i64,) = sqlx::query_as("SELECT id FROM users LIMIT 1").fetch_one(&app.state.db).await.unwrap();
+    let (file_id,): (i64,) = sqlx::query_as(
+        "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at, client_uuid) \
+         VALUES ($1, $2, 'o.pdf', 'application/pdf', 1, '2024-01-01T00:00:00Z', 'orphan-file-uuid') RETURNING id")
+        .bind(user_id).bind("ab".repeat(32)).fetch_one(&app.state.write_db).await.unwrap();
+
+    let state = app.state.clone();
+    let early = finishes_while_a_writer_holds_the_lock(&app, async move {
+        logb::api::attachments::purge_orphan_files(&state, &[file_id]).await.unwrap();
+    }).await;
+    assert!(!early, "the purge ran without the write lock");
+    assert_eq!(file_row_count(&app).await, 0, "the orphan row survived the purge");
+}
+
+/// Backdates a file's modification time by `hours`.
+fn age(path: &std::path::Path, hours: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600);
+    std::fs::File::options().write(true).open(path).unwrap().set_modified(when).unwrap();
+}
+
+/// Plants `bytes` at `path`, creating its shard directory, aged by `hours`.
+fn plant(path: &std::path::Path, bytes: &[u8], hours: u64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    age(path, hours);
+}
+
+/// Whatever a failed request, a crash or a lost race leaves on disk is collected once it is a
+/// day old: blobs and thumbnails no `files` row names, and stranded `.part`/`.tmp` scratch.
+/// Anything younger is left alone -- it may belong to a request still in flight -- and anything
+/// a row names is kept however old it is.
+#[tokio::test]
+async fn the_sweep_collects_old_orphans_and_nothing_else() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let photo: serde_json::Value = app.client.post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(form(png(800, 600), "front.png", "image/png")).send().await.unwrap().json().await.unwrap();
+    let (kept,): (String,) = sqlx::query_as("SELECT sha256 FROM files WHERE id = $1")
+        .bind(photo["file_id"].as_i64().unwrap()).fetch_one(&app.state.db).await.unwrap();
+    let storage = &app.state.storage;
+    age(&storage.blob_path(&kept), 48);
+    age(&storage.thumb_path(&kept), 48);
+
+    let old = "0a".repeat(32);
+    let young = "0b".repeat(32);
+    plant(&storage.blob_path(&old), b"old orphan", 25);
+    plant(&storage.thumb_path(&old), b"old orphan", 25);
+    plant(&storage.blob_path(&young), b"young orphan", 1);
+    plant(&storage.thumb_path(&young), b"young orphan", 1);
+    let old_part = storage.blob_path(&old).with_extension("deadbeef.part");
+    let old_thumb_part = storage.thumb_path(&old).with_extension("deadbeef.part");
+    let old_tmp = storage.files_dir().join(".export-deadbeef.tmp");
+    let young_tmp = storage.files_dir().join(".import-cafebabe.tmp");
+    plant(&old_part, b"torn", 25);
+    plant(&old_thumb_part, b"torn", 25);
+    plant(&old_tmp, b"stranded", 25);
+    plant(&young_tmp, b"in flight", 1);
+
+    let swept = logb::files_gc::sweep(&app.state, logb::files_gc::GRACE).await.unwrap();
+    assert_eq!(swept, logb::files_gc::Swept { blobs: 1, thumbs: 1, scratch: 3 });
+
+    for gone in [storage.blob_path(&old), storage.thumb_path(&old), old_part, old_thumb_part, old_tmp] {
+        assert!(!gone.exists(), "{} survived the sweep", gone.display());
+    }
+    for kept in [storage.blob_path(&kept), storage.thumb_path(&kept), storage.blob_path(&young), storage.thumb_path(&young), young_tmp] {
+        assert!(kept.exists(), "{} was swept", kept.display());
+    }
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 200);
+}
+
+/// The original is streamed from disk rather than read into memory first; what arrives must
+/// still be every byte, with a length the client can show progress against.
+#[tokio::test]
+async fn an_original_streams_back_whole_with_its_length() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let bytes = png(1200, 900);
+    let a: serde_json::Value = app.client.post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(form(bytes.clone(), "big.png", "image/png")).send().await.unwrap().json().await.unwrap();
+    let res = app.client.get(app.url(&format!("/files/{}", a["file_id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-length"], bytes.len().to_string().as_str());
+    assert_eq!(res.bytes().await.unwrap().to_vec(), bytes);
+}

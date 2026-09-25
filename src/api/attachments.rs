@@ -85,38 +85,54 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
 /// error. So this only ever fires for a file no attachment has ever pointed at -- the orphan a
 /// lost upload race leaves behind. Files whose attachments were merely tombstoned are freed
 /// when the retention purge finally removes those rows.
+///
+/// Check and delete run in one write transaction, so no attachment can be inserted against a
+/// candidate between the two. The caller must not be holding a write transaction of its own:
+/// on SQLite the write pool has one connection, and this would wait for it forever.
 pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), AppError> {
     if candidates.is_empty() {
         return Ok(());
     }
-    let mut orphans: Vec<(i64, String)> = Vec::new();
+    let mut orphans: Vec<String> = Vec::new();
+    let mut tx = db::begin_write(state).await?;
     for &file_id in candidates {
-        let row: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
         )
-        .bind(file_id).fetch_optional(&state.db).await?;
-        if let Some(r) = row {
-            orphans.push(r);
+        .bind(file_id).fetch_optional(&mut *tx).await?;
+        if let Some((sha,)) = row {
+            sqlx::query("DELETE FROM files WHERE id = $1").bind(file_id).execute(&mut *tx).await?;
+            orphans.push(sha);
         }
     }
-    for (id, sha) in orphans {
-        sqlx::query("DELETE FROM files WHERE id = $1").bind(id).execute(&state.db).await?;
-        discard_blob(state, id, &sha).await?;
+    tx.commit().await?;
+    for sha in orphans {
+        discard_blob(state, &sha).await?;
     }
     Ok(())
 }
 
-/// Drops the on-disk artefacts of a `files` row that has already been deleted: the thumbnail
-/// always, and the blob only once no other row still points at that content hash (two users
-/// uploading the same photo share one blob, and each has their own `files` row).
-pub async fn discard_blob(state: &App, file_id: i64, sha: &str) -> Result<(), AppError> {
+/// Drops the on-disk artefacts of a `files` row that has already been deleted -- blob and
+/// thumbnail both, since both are named after the content -- once no other row still points at
+/// that content hash (two users uploading the same photo share one blob and one thumbnail, and
+/// each has their own `files` row).
+///
+/// The check and the unlink happen while this holds the write connection. Otherwise an upload
+/// of the same bytes could commit its `files` row between the two -- having found the blob on
+/// disk a moment earlier -- and be left naming a blob this then deletes. Under the lock the
+/// upload either commits first, and this sees its row and keeps the blob, or commits after, and
+/// `restore_if_missing` inside its own transaction finds the blob gone and writes it back.
+///
+/// The transaction writes nothing; it is only the turn at the lock. Like `purge_orphan_files`,
+/// this must not be called while the caller holds a write transaction.
+pub async fn discard_blob(state: &App, sha: &str) -> Result<(), AppError> {
+    let mut tx = db::begin_write(state).await?;
     let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = $1 LIMIT 1")
-        .bind(sha).fetch_optional(&state.db).await?;
+        .bind(sha).fetch_optional(&mut *tx).await?;
     if still_used.is_none() {
-        state.storage.remove(sha, file_id).await;
-    } else {
-        let _ = tokio::fs::remove_file(state.storage.thumb_path(file_id)).await;
+        state.storage.remove(sha).await;
     }
+    tx.rollback().await?;
     Ok(())
 }
 
@@ -142,7 +158,9 @@ async fn upload(
 ) -> Result<(StatusCode, Json<AttachmentOut>), AppError> {
     load_owned_object(&state, user.id, object_id).await?;
     let max = state.config.max_upload_bytes();
-    let mut file: Option<(String, Option<String>, Vec<u8>)> = None;
+    // The body's own buffer, held once: `Bytes` clones share it, so handing it to the decoder
+    // below costs a reference count, not a second copy of the upload.
+    let mut file: Option<(String, Option<String>, axum::body::Bytes)> = None;
     let mut activity_id: Option<i64> = None;
     let mut kind: Option<String> = None;
     let mut caption = String::new();
@@ -164,7 +182,7 @@ async fn upload(
                     if e.status() == StatusCode::PAYLOAD_TOO_LARGE { AppError::TooLarge } else { AppError::BadRequest(e.body_text()) }
                 })?;
                 if bytes.len() > max { return Err(AppError::TooLarge); }
-                file = Some((name, declared, bytes.to_vec()));
+                file = Some((name, declared, bytes));
             }
             "activity_id" => {
                 let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
@@ -233,8 +251,7 @@ async fn upload(
 
     let sha = files::sha256_hex(&bytes);
     let image = if mime.starts_with("image/") {
-        let b = bytes.clone();
-        tokio::task::spawn_blocking(move || files::process_image(&b)).await.map_err(|e| AppError::Internal(e.to_string()))?
+        files::process_image_queued(bytes.clone()).await.map_err(|e| AppError::Internal(e.to_string()))?
     } else { None };
     let kind = match kind.as_deref() {
         Some("photo") | Some("document") => kind.unwrap(),
@@ -247,15 +264,24 @@ async fn upload(
     let file_id = match existing {
         Some((id,)) => id,
         None => {
+            // Blob and thumbnail both go to disk before the transaction opens, so the row can
+            // never become visible ahead of either -- a client that sees the new file may ask
+            // for its /thumb at once. Both are named after the content hash, so if the insert
+            // below then fails they are orphans for `files_gc::sweep`, never files some later
+            // row with a reused id would serve as its own (see `Storage::thumb_path`). It also
+            // keeps disk writes out of the write transaction, which every other writer queues
+            // behind.
             state.storage.write_blob(&sha, &bytes).await?;
+            if let Some(img) = &image {
+                state.storage.write_thumb(&sha, &img.thumb_jpeg).await?;
+            }
             let file_uuid = uuid::Uuid::new_v4().to_string();
             let edited_at = record::edited_at_now();
-            // The thumbnail is named after the file id, so it can only be written once the
-            // row exists -- but the row must not become visible before the thumbnail does, or
-            // a client that sees the new file can ask for a /thumb that is not on disk yet.
-            // Writing both inside one transaction closes that window: other connections see
-            // the row only at commit, by which point the JPEG is already written.
             let mut tx = db::begin_write(&state).await?;
+            // A discard of the same hash may have run between the writes above and this lock
+            // (see `discard_blob`). Now that no discard can run until this commits, put back
+            // whatever it took.
+            state.storage.restore_if_missing(&sha, &bytes, image.as_ref().map(|i| i.thumb_jpeg.as_slice())).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
@@ -267,9 +293,6 @@ async fn upload(
             .fetch_one(&mut *tx).await;
             match inserted {
                 Ok((id,)) => {
-                    if let Some(img) = &image {
-                        state.storage.write_thumb(id, &img.thumb_jpeg).await?;
-                    }
                     record::record_create(&mut tx, user.id, Entity::File, &file_uuid, &edited_at).await?;
                     tx.commit().await?;
                     id
@@ -406,7 +429,6 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
 
 #[derive(sqlx::FromRow)]
 struct FileRow {
-    id: i64,
     sha256: String,
     original_name: String,
     mime: String,
@@ -418,7 +440,7 @@ struct FileRow {
 /// read as absent even though the row and blob survive for the sync window.
 async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, AppError> {
     sqlx::query_as::<_, FileRow>(
-        "SELECT f.id, f.sha256, f.original_name, f.mime FROM files f \
+        "SELECT f.sha256, f.original_name, f.mime FROM files f \
          WHERE f.id = $1 AND f.user_id = $2 AND EXISTS ( \
            SELECT 1 FROM attachments a JOIN objects o ON o.id = a.object_id \
            WHERE a.file_id = f.id AND a.deleted_at IS NULL AND o.deleted_at IS NULL)",
@@ -438,7 +460,7 @@ async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, 
 /// same browser the previous person's bytes for `/api/files/N` without `load_owned_file` ever
 /// running. With `no-cache` every reuse is revalidated, and the 304 that makes that cheap is
 /// only ever answered after the ownership check (see `not_modified`).
-fn file_response(bytes: Vec<u8>, mime: &str, disposition: String, etag: &str) -> Response {
+fn file_response(body: Body, mime: &str, disposition: String, etag: &str) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
@@ -448,7 +470,7 @@ fn file_response(bytes: Vec<u8>, mime: &str, disposition: String, etag: &str) ->
             (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
             (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")),
         ],
-        Body::from(bytes),
+        body,
     ).into_response()
 }
 
@@ -528,21 +550,30 @@ async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path
     let f = load_owned_file(&state, user.id, id).await?;
     let etag = file_etag(&f.sha256, false);
     if if_none_match_hits(&headers, &etag) { return Ok(not_modified(&etag)); }
-    let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    // Streamed from disk, not read whole: an original can be as large as the upload limit, and
+    // a gallery of them opened at once used to hold every one in memory for the length of its
+    // download.
+    let file = tokio::fs::File::open(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    let len = file.metadata().await?.len();
     let inline = may_render_inline(&f.mime);
-    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name), &etag))
+    let mut res = file_response(
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        &f.mime, content_disposition(inline, &f.original_name), &etag,
+    );
+    res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    Ok(res)
 }
 
 async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, headers: HeaderMap) -> Result<Response, AppError> {
     let f = load_owned_file(&state, user.id, id).await?;
     let etag = file_etag(&f.sha256, true);
     // A thumbnail only exists for images; the 304 must not claim one that was never made.
-    let path = state.storage.thumb_path(f.id);
+    let path = state.storage.thumb_path(&f.sha256);
     if if_none_match_hits(&headers, &etag) && tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return Ok(not_modified(&etag));
     }
     let bytes = tokio::fs::read(path).await.map_err(|_| AppError::NotFound)?;
-    Ok(file_response(bytes, "image/jpeg", "inline".to_string(), &etag))
+    Ok(file_response(Body::from(bytes), "image/jpeg", "inline".to_string(), &etag))
 }
 
 #[cfg(test)]

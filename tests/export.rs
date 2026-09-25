@@ -567,34 +567,31 @@ async fn import_rejects_invalid_activity_category() {
 
 /// A tiny archive whose entries inflate to far more than the import budget must be refused
 /// before the bytes are buffered, not after. `max_import_mb` is 4 in the test harness, so the
-/// decompression budget is 8 MiB; 32 MiB of zeroes deflates to a few kilobytes.
+/// decompression budget is 8 MiB; five entries of 1.9 MiB of zeroes each -- every one inside
+/// the 2 MiB upload limit, so it is the shared budget that trips -- deflate to a few kilobytes.
+///
+/// Each entry is named by an attachment: the import only inflates blobs an attachment names,
+/// so a bomb nothing refers to is never opened at all.
 #[tokio::test]
 async fn import_rejects_a_zip_bomb() {
     let app = common::spawn().await;
     app.setup("ben", "correct horse").await;
 
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut w = zip::ZipWriter::new(&mut cursor);
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        w.start_file("data.json", opts).unwrap();
-        std::io::Write::write_all(
-            &mut w,
-            serde_json::to_vec(&export_shell(base_object()))
-                .unwrap()
-                .as_slice(),
-        )
-        .unwrap();
-        w.start_file(
-            "files/0000000000000000000000000000000000000000000000000000000000000000",
-            opts,
-        )
-        .unwrap();
-        std::io::Write::write_all(&mut w, &vec![0u8; 32 * 1024 * 1024]).unwrap();
-        w.finish().unwrap();
-    }
-    let bomb = cursor.into_inner();
+    let names: Vec<String> = (0..5).map(|i| format!("{i:064}")).collect();
+    let mut object = base_object();
+    object["attachments"] = names
+        .iter()
+        .map(|sha| {
+            json!({
+                "sha256": sha, "original_name": "m.pdf", "mime": "application/pdf",
+                "kind": "document", "caption": "", "taken_at": null,
+                "created_at": "2024-01-01T00:00:00Z"
+            })
+        })
+        .collect();
+    let zeroes = vec![0u8; 1900 * 1024];
+    let blobs: Vec<(String, Vec<u8>)> = names.iter().map(|n| (n.clone(), zeroes.clone())).collect();
+    let bomb = zip_with_files(&export_shell(object), &blobs);
     assert!(
         bomb.len() < 1024 * 1024,
         "the bomb itself must be small: {} bytes",
@@ -1703,4 +1700,145 @@ async fn an_archive_with_one_uuid_on_two_types_is_refused() {
     );
     assert_eq!(app.get_json("/types").await, json!([]));
     assert_eq!(app.get_json("/objects").await, json!([]));
+}
+
+/// Zips `data` as `data.json` plus each `(name, bytes)` as `files/<name>`, the way an export
+/// carries its blobs. The name is normally the bytes' own sha256; a test may lie about it.
+fn zip_with_files(data: &serde_json::Value, blobs: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("data.json", opts).unwrap();
+        std::io::Write::write_all(&mut w, &serde_json::to_vec(data).unwrap()).unwrap();
+        for (name, bytes) in blobs {
+            w.start_file(format!("files/{name}"), opts).unwrap();
+            std::io::Write::write_all(&mut w, bytes).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+/// One object carrying one attachment of `bytes`, named `name` and declared as `mime`.
+fn archive_with_attachment(name: &str, mime: &str, bytes: Vec<u8>) -> (Vec<u8>, String) {
+    let sha = logb::files::sha256_hex(&bytes);
+    let mut object = base_object();
+    object["attachments"] = json!([{
+        "sha256": sha, "original_name": name, "mime": mime, "kind": "document",
+        "caption": "", "taken_at": null, "created_at": "2024-01-01T00:00:00Z"
+    }]);
+    (zip_with_files(&export_shell(object), &[(sha.clone(), bytes)]), sha)
+}
+
+async fn count_files(app: &common::TestApp) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM files")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+/// The import twin of the upload test of the same name in `tests/attachments.rs`: an import
+/// that rolls back after writing a file row must not leave a thumbnail behind for the next file
+/// SQLite hands the same id to.
+#[tokio::test]
+async fn a_rolled_back_import_leaves_no_thumbnail_a_later_file_serves() {
+    if common::skipped_on_postgres(
+        "a_rolled_back_import_leaves_no_thumbnail_a_later_file_serves",
+        "PostgreSQL sequences never hand a rolled-back id out again, and the trigger is SQLite's",
+    ) {
+        return;
+    }
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (zip, _) = archive_with_attachment("front.png", "image/png", png());
+
+    // The file row and its thumbnail are written; the attachment after it is what fails.
+    app.fail_changes_for("attachment").await;
+    let res = app
+        .client
+        .post(app.url("/import"))
+        .body(zip)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 500, "{}", res.text().await.unwrap());
+    app.stop_failing_changes_for("attachment").await;
+    assert_eq!(count_files(&app).await, 0, "the failed import committed a file row");
+
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(
+            Form::new().part(
+                "file",
+                Part::bytes(b"%PDF-1.4 manual".to_vec())
+                    .file_name("manual.pdf")
+                    .mime_str("application/pdf")
+                    .unwrap(),
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let pdf: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(pdf["file_id"], 1, "the precondition: the rolled-back id was handed out again");
+    let thumb = app
+        .client
+        .get(app.url(&format!("/files/{}/thumb", pdf["file_id"])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(thumb.status(), 404, "a PDF was served the failed import's thumbnail");
+}
+
+/// An archive is not a way around the upload rules: a type `POST .../attachments` refuses is
+/// refused here too, before anything reaches the database or the disk.
+#[tokio::test]
+async fn import_refuses_a_file_type_an_upload_would_refuse() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (zip, sha) = archive_with_attachment(
+        "virus.exe",
+        "application/octet-stream",
+        b"MZ not really".to_vec(),
+    );
+    let res = app
+        .client
+        .post(app.url("/import"))
+        .body(zip)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let text = res.text().await.unwrap();
+    assert!(text.contains("not allowed"), "{text}");
+    assert_eq!(app.get_json("/objects").await, json!([]));
+    assert_eq!(count_files(&app).await, 0);
+    assert!(!app.state.storage.blob_path(&sha).exists(), "the refused blob reached the disk");
+}
+
+/// Nor is it a way around the upload size limit (2 MiB in tests): one blob over it refuses the
+/// whole archive with the same 413 an upload of it would get.
+#[tokio::test]
+async fn import_refuses_a_blob_over_the_upload_limit() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    // Zeroes deflate to almost nothing, so the archive itself is well inside the body limit.
+    let (zip, sha) =
+        archive_with_attachment("manual.pdf", "application/pdf", vec![0u8; 3 * 1024 * 1024]);
+    let res = app
+        .client
+        .post(app.url("/import"))
+        .body(zip)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 413, "{}", res.text().await.unwrap());
+    assert_eq!(app.get_json("/objects").await, json!([]));
+    assert_eq!(count_files(&app).await, 0);
+    assert!(!app.state.storage.blob_path(&sha).exists(), "the refused blob reached the disk");
 }

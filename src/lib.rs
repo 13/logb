@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod domain;
 pub mod error;
 pub mod files;
+pub mod files_gc;
 pub mod notify;
 pub mod object_type;
 pub mod pointer;
@@ -184,8 +185,9 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         tracing::info!(
             "LOGB_DATABASE_URL points at PostgreSQL: a supported configuration, with two \
              properties worth reading once. Writes serialise under a global advisory lock, \
-             exactly as they already do on SQLite, and an upload holds that lock while it writes \
-             its thumbnail -- so a large upload or import blocks other writes while it runs. \
+             exactly as they already do on SQLite, and an import holds that lock while it \
+             inserts its rows -- so a large import blocks other writes while it runs (files and \
+             thumbnails are written before the lock is taken). \
              Backups here are yours: `--backup` and `--restore` refuse on purpose, \
              LOGB_BACKUP_DIR is ignored, and Settings -> Backup says so on the screen. Neither is \
              unfinished work; SQLite is still the default, and the more exercised path"
@@ -241,6 +243,18 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         backup_verified: Mutex::new(None),
         shutdown: tokio_util::sync::CancellationToken::new(),
     });
+    // Once per start, and a directory read once there is nothing left to move. A failure is
+    // logged rather than fatal: an unmoved thumbnail costs a 404 on one /thumb, while refusing
+    // to start costs the whole instance.
+    match files_gc::migrate_legacy_thumbs(&state).await {
+        Ok(r) if r.moved + r.deleted > 0 => tracing::info!(
+            moved = r.moved,
+            deleted = r.deleted,
+            "renamed id-named thumbnails to their content hash"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "moving id-named thumbnails failed; will retry at next start"),
+    }
     // Off unless configured: the bundled SPA is same-origin and needs none of this. It exists
     // for a SEPARATE web client -- another origin in development, say -- which cannot call the
     // API at all without it.

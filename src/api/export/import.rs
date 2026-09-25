@@ -12,7 +12,7 @@ use crate::files;
 use crate::object_type::{self, Legacy};
 use crate::state::App;
 use crate::sync::{record, Entity};
-use axum::body::Bytes;
+use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::State;
 use axum::Json;
 use chrono::NaiveDate;
@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::json;
 use sqlx::Any;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Read;
 
 use super::*;
 
@@ -105,75 +105,135 @@ fn resolve_type(o: &ObjectExport, types: &HashMap<String, String>) -> (String, S
     }
 }
 
-/// Reads one archive entry into `out`, drawing from a decompression budget shared by the whole
-/// archive and failing with 413 the moment it would be exceeded.
+/// Inflates the entry `name` into memory, failing with 413 the moment it would produce more
+/// than `limit` bytes. `None` when the archive has no such entry.
 ///
 /// The cap is applied to the bytes actually produced, not to the entry's declared uncompressed
 /// size: that header is written by whoever built the archive, so a "zip bomb" can advertise a
 /// few kilobytes and still inflate to gigabytes. `take(limit + 1)` lets exactly one byte past
-/// the budget through, which is enough to detect the overrun without buffering it.
-fn read_capped<R: Read>(
-    r: &mut R,
-    out: &mut Vec<u8>,
-    remaining: &mut usize,
-) -> Result<(), AppError> {
-    let limit = *remaining;
-    let n = r.take(limit as u64 + 1).read_to_end(out)?;
+/// the cap through, which is enough to detect the overrun without buffering it.
+fn read_entry(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+    limit: usize,
+) -> Result<Option<Vec<u8>>, AppError> {
+    let mut f = match zip.by_name(name) {
+        Ok(f) => f,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => return Err(AppError::BadRequest(format!("{name}: {e}"))),
+    };
+    let mut out = Vec::new();
+    let n = (&mut f).take(limit as u64 + 1).read_to_end(&mut out)?;
     if n > limit {
         return Err(AppError::TooLarge);
     }
-    *remaining -= n;
-    Ok(())
+    Ok(Some(out))
+}
+
+/// The uploaded archive, read from the scratch file it was spooled to, and what is left of the
+/// decompression budget every entry the import inflates draws from.
+struct Archive {
+    /// `None` only while an entry is being read on a blocking thread.
+    zip: Option<zip::ZipArchive<std::fs::File>>,
+    remaining: usize,
+}
+
+impl Archive {
+    /// `read_entry` on a blocking thread: inflating is CPU and file I/O, not something to do on
+    /// the async runtime. The archive travels to that thread and back.
+    async fn read(&mut self, name: String, limit: usize) -> Result<Option<Vec<u8>>, AppError> {
+        let mut zip = self.zip.take().expect("an archive is read one entry at a time");
+        let (zip, read) = tokio::task::spawn_blocking(move || {
+            let read = read_entry(&mut zip, &name, limit);
+            (zip, read)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        self.zip = Some(zip);
+        read
+    }
+
+    /// The blob `files/<sha>`, capped by the upload limit -- an archive is not a way around it --
+    /// and paid for from the shared budget. A 413 for either, as an upload of it would get.
+    async fn read_blob(&mut self, sha: &str, max_upload: usize) -> Result<Option<Vec<u8>>, AppError> {
+        let read = self
+            .read(format!("files/{sha}"), self.remaining.min(max_upload))
+            .await?;
+        if let Some(bytes) = &read {
+            self.remaining -= bytes.len();
+        }
+        Ok(read)
+    }
+}
+
+/// Streams the request body into a scratch file and hands it back, open and rewound, instead of
+/// buffering the archive in memory -- where it used to sit twice, once as the body and once as
+/// the `to_vec` copy the zip reader was given.
+///
+/// The file is unlinked as soon as it is created: the open handle is all the import needs, and
+/// the space comes back when the handle closes, however the request ends -- finished, failed or
+/// cancelled mid-upload. `max` is enforced here, on the bytes that arrive: `DefaultBodyLimit`
+/// only binds extractors that buffer, which this deliberately is not.
+async fn spool(body: Body, storage: &files::Storage, max: usize) -> Result<std::fs::File, AppError> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+    let path = storage.scratch_path("import");
+    let mut file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await?;
+    let _ = tokio::fs::remove_file(&path).await;
+    let mut body = body;
+    let mut total = 0usize;
+    while let Some(frame) =
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await
+    {
+        let frame = frame.map_err(|e| AppError::BadRequest(e.to_string()))?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        total += data.len();
+        if total > max {
+            return Err(AppError::TooLarge);
+        }
+        file.write_all(&data).await?;
+    }
+    file.flush().await?;
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    Ok(file.into_std().await)
 }
 
 pub(super) async fn import(
     user: AuthUser,
     State(state): State<App>,
-    body: Bytes,
+    body: Body,
 ) -> Result<Json<ImportCounts>, AppError> {
+    let file = spool(body, &state.storage, state.config.max_import_bytes()).await?;
     let budget = state.config.max_import_inflated_bytes();
-    let (data, blobs) = tokio::task::spawn_blocking(
-        move || -> Result<(Export, HashMap<String, Vec<u8>>), AppError> {
-            let mut z = zip::ZipArchive::new(Cursor::new(body.to_vec()))
-                .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
-            let mut remaining = budget;
-            let mut json = Vec::new();
-            {
-                let mut f = z
-                    .by_name("data.json")
-                    .map_err(|_| AppError::BadRequest("data.json missing".into()))?;
-                read_capped(&mut f, &mut json, &mut remaining)?;
-            }
-            let data: Export = serde_json::from_slice(&json)
-                .map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
-            if data.version != 1 {
-                return Err(AppError::BadRequest(format!(
-                    "unsupported export version {}",
-                    data.version
-                )));
-            }
-            let mut blobs = HashMap::new();
-            for i in 0..z.len() {
-                let mut f = z
-                    .by_index(i)
-                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
-                let name = f.name().to_string();
-                if let Some(sha) = name.strip_prefix("files/") {
-                    let mut b = Vec::new();
-                    read_capped(&mut f, &mut b, &mut remaining)?;
-                    if files::sha256_hex(&b) == sha {
-                        blobs.insert(sha.to_string(), b);
-                    }
-                }
-            }
-            Ok((data, blobs))
-        },
-    )
+    let (zip, data, remaining) = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
+        let mut z = zip::ZipArchive::new(file)
+            .map_err(|_| AppError::BadRequest("not a zip archive".into()))?;
+        let json = read_entry(&mut z, "data.json", budget)?
+            .ok_or_else(|| AppError::BadRequest("data.json missing".into()))?;
+        let data: Export = serde_json::from_slice(&json)
+            .map_err(|e| AppError::BadRequest(format!("invalid data.json: {e}")))?;
+        if data.version != 1 {
+            return Err(AppError::BadRequest(format!(
+                "unsupported export version {}",
+                data.version
+            )));
+        }
+        Ok((z, data, budget - json.len()))
+    })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
+    let mut archive = Archive { zip: Some(zip), remaining };
 
     validate_import(&data, user.today())?;
     let archive_types = archive_types(&data)?;
+    let blobs = store_blobs(&state, &data, &mut archive).await?;
+    let mut stored = StoredFiles { state: &state, archive, blobs };
 
     let mut counts = ImportCounts {
         objects: 0,
@@ -286,12 +346,11 @@ pub(super) async fn import(
             counts.activities += 1;
             for x in &a.attachments {
                 if import_attachment(
-                    &state,
                     &mut tx,
+                    &mut stored,
                     user.id,
                     (object_id, Some(aid)),
                     x,
-                    &blobs,
                     &edited_at,
                 )
                 .await?
@@ -304,12 +363,11 @@ pub(super) async fn import(
         let mut cover: Option<i64> = None;
         for x in &o.attachments {
             if let Some(att_id) = import_attachment(
-                &state,
                 &mut tx,
+                &mut stored,
                 user.id,
                 (object_id, None),
                 x,
-                &blobs,
                 &edited_at,
             )
             .await?
@@ -493,7 +551,7 @@ fn validate_import(data: &Export, today: NaiveDate) -> Result<(), AppError> {
                 )
             })?;
             for x in &a.attachments {
-                validate_attachment_kind(&x.kind).map_err(|e| {
+                validate_attachment(x).map_err(|e| {
                     tag(
                         e,
                         &format!("object {oi} ({}) activity {ai} attachment", o.name),
@@ -502,7 +560,7 @@ fn validate_import(data: &Export, today: NaiveDate) -> Result<(), AppError> {
             }
         }
         for x in &o.attachments {
-            validate_attachment_kind(&x.kind)
+            validate_attachment(x)
                 .map_err(|e| tag(e, &format!("object {oi} ({}) attachment", o.name)))?;
         }
         for (ri, r) in o.reminders.iter().enumerate() {
@@ -594,11 +652,22 @@ fn normalised_tags(input: &[String]) -> Result<String, AppError> {
         .map_err(AppError::BadRequest)
 }
 
-/// Mirrors the `attachments` table's `CHECK (kind IN ('photo', 'document'))`.
-fn validate_attachment_kind(kind: &str) -> Result<(), AppError> {
+/// Mirrors the `attachments` table's `CHECK (kind IN ('photo', 'document'))`, and applies the
+/// upload's type rules (`files::is_allowed` on the type `files::resolve_mime` gives): an archive
+/// is not a way to store a file `POST .../attachments` would refuse. The upload's size limit is
+/// applied when the blob is read, in `Archive::read_blob`.
+fn validate_attachment(x: &AttachmentExport) -> Result<(), AppError> {
+    let kind = &x.kind;
     if kind != "photo" && kind != "document" {
         return Err(AppError::BadRequest(format!(
             "attachment kind must be photo or document, got '{kind}'"
+        )));
+    }
+    let mime = attachment_mime(x);
+    if !files::is_allowed(&mime, &x.original_name) {
+        return Err(AppError::BadRequest(format!(
+            "file type not allowed: {mime} ({})",
+            x.original_name
         )));
     }
     Ok(())
@@ -613,17 +682,144 @@ fn tag(e: AppError, location: &str) -> AppError {
     }
 }
 
+/// Every attachment in the archive, object-level and activity-level alike.
+fn archive_attachments(data: &Export) -> impl Iterator<Item = &AttachmentExport> {
+    data.objects.iter().flat_map(|o| {
+        o.attachments
+            .iter()
+            .chain(o.activities.iter().flat_map(|a| a.attachments.iter()))
+    })
+}
+
+/// The type an attachment's blob is stored and checked as: the same resolution an upload of it
+/// would get, extension first, then the declared type.
+fn attachment_mime(x: &AttachmentExport) -> String {
+    files::resolve_mime(&x.original_name, Some(&x.mime))
+}
+
+/// What the import still needs to know about a blob once its bytes are on disk.
+struct StoredBlob {
+    size: i64,
+    width: Option<i64>,
+    height: Option<i64>,
+    taken_at: Option<String>,
+    /// Whether a thumbnail was written for it, so a restore knows to write one again.
+    thumb: bool,
+}
+
+/// Everything `import_attachment` needs beyond the transaction: the blobs `store_blobs` put on
+/// disk, and the archive they came from, in case one has to be put back (see `restore`).
+struct StoredFiles<'a> {
+    state: &'a App,
+    archive: Archive,
+    blobs: HashMap<String, StoredBlob>,
+}
+
+impl StoredFiles<'_> {
+    /// Called holding the write lock, just before a new `files` row names `sha`: a discard of
+    /// the same hash may have deleted the blob or thumbnail since `store_blobs` wrote them (see
+    /// `api::attachments::discard_blob`). Almost always two stats; in the rare case, the entry
+    /// is read out of the archive again and the files rewritten.
+    async fn restore(&mut self, sha: &str) -> Result<(), AppError> {
+        let storage = &self.state.storage;
+        let thumb = self.blobs.get(sha).is_some_and(|b| b.thumb);
+        let blob_there = tokio::fs::try_exists(storage.blob_path(sha)).await?;
+        let thumb_there = !thumb || tokio::fs::try_exists(storage.thumb_path(sha)).await?;
+        if blob_there && thumb_there {
+            return Ok(());
+        }
+        let max = self.state.config.max_upload_bytes();
+        let Some(bytes) = self.archive.read(format!("files/{sha}"), max).await? else {
+            return Err(AppError::Internal(format!("files/{sha} left the archive")));
+        };
+        let bytes = Bytes::from(bytes);
+        let image = if thumb {
+            files::process_image_queued(bytes.clone())
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+        } else {
+            None
+        };
+        storage
+            .restore_if_missing(sha, &bytes, image.as_ref().map(|i| i.thumb_jpeg.as_slice()))
+            .await?;
+        Ok(())
+    }
+}
+
+/// Reads every blob an attachment in the archive names out of it, one at a time, and writes it
+/// -- and the thumbnail of every one an attachment calls an image -- to disk, before the
+/// import's write transaction opens.
+///
+/// Before, not inside: a thumbnail used to be named after the `files` row's id and written
+/// within the transaction, and a rolled-back import on SQLite then left it behind for the next
+/// file to be handed the same id (see `Storage::thumb_path`). Content-named files written up
+/// front are at worst orphans for `files_gc::sweep` if the transaction fails; and inflating,
+/// decoding, hashing and fsyncing no longer happen while every other writer queues behind this
+/// one. Inside the transaction the import only inserts rows.
+///
+/// One blob is in memory at a time, and none is larger than the upload limit. A blob no
+/// attachment names is never read, and one whose bytes do not hash to its name is ignored, so
+/// the attachments naming it are skipped later -- exactly as a missing blob always was.
+async fn store_blobs(
+    state: &App,
+    data: &Export,
+    archive: &mut Archive,
+) -> Result<HashMap<String, StoredBlob>, AppError> {
+    let max_upload = state.config.max_upload_bytes();
+    let images: std::collections::HashSet<&str> = archive_attachments(data)
+        .filter(|x| attachment_mime(x).starts_with("image/"))
+        .map(|x| x.sha256.as_str())
+        .collect();
+    let mut stored = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for x in archive_attachments(data) {
+        if !seen.insert(x.sha256.as_str()) {
+            continue;
+        }
+        let Some(bytes) = archive.read_blob(&x.sha256, max_upload).await? else {
+            continue;
+        };
+        if files::sha256_hex(&bytes) != x.sha256 {
+            continue;
+        }
+        // `Bytes` so the decode can share the buffer rather than copy it.
+        let bytes = Bytes::from(bytes);
+        let image = if images.contains(x.sha256.as_str()) {
+            files::process_image_queued(bytes.clone())
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+        } else {
+            None
+        };
+        state.storage.write_blob(&x.sha256, &bytes).await?;
+        if let Some(img) = &image {
+            state.storage.write_thumb(&x.sha256, &img.thumb_jpeg).await?;
+        }
+        stored.insert(
+            x.sha256.clone(),
+            StoredBlob {
+                size: bytes.len() as i64,
+                width: image.as_ref().map(|i| i.width as i64),
+                height: image.as_ref().map(|i| i.height as i64),
+                thumb: image.is_some(),
+                taken_at: image.and_then(|i| i.taken_at),
+            },
+        );
+    }
+    Ok(stored)
+}
+
 /// Returns the new attachment id, or None when the blob is missing from the archive.
 ///
 /// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
 /// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
 async fn import_attachment(
-    state: &App,
     tx: &mut sqlx::Transaction<'_, Any>,
+    stored: &mut StoredFiles<'_>,
     user_id: i64,
     parent: (i64, Option<i64>),
     x: &AttachmentExport,
-    blobs: &HashMap<String, Vec<u8>>,
     edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
     let (object_id, activity_id) = parent;
@@ -636,18 +832,11 @@ async fn import_attachment(
     let file_id = match existing {
         Some((id,)) => id,
         None => {
-            let Some(bytes) = blobs.get(&x.sha256) else {
+            if !stored.blobs.contains_key(&x.sha256) {
                 return Ok(None);
-            };
-            let image = if x.mime.starts_with("image/") {
-                let b = bytes.clone();
-                tokio::task::spawn_blocking(move || files::process_image(&b))
-                    .await
-                    .map_err(|e| AppError::Internal(e.to_string()))?
-            } else {
-                None
-            };
-            state.storage.write_blob(&x.sha256, bytes).await?;
+            }
+            stored.restore(&x.sha256).await?;
+            let blob = &stored.blobs[&x.sha256];
             let file_uuid = uuid::Uuid::new_v4().to_string();
             // The insert rides its own savepoint for the same reason `apply.rs`'s `set` arm
             // does: PostgreSQL aborts the whole transaction on any error, so the re-query below
@@ -670,9 +859,9 @@ async fn import_attachment(
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
-                .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
-                .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
-                .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
+                .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(attachment_mime(x)).bind(blob.size)
+                .bind(blob.width).bind(blob.height)
+                .bind(x.taken_at.clone().or_else(|| blob.taken_at.clone())).bind(db::now())
                 .bind(&file_uuid)
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
@@ -680,9 +869,6 @@ async fn import_attachment(
                     sqlx::query("RELEASE SAVEPOINT logb_import_file")
                         .execute(&mut **tx)
                         .await?;
-                    if let Some(img) = &image {
-                        state.storage.write_thumb(id, &img.thumb_jpeg).await?;
-                    }
                     record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
                     id
                 }
