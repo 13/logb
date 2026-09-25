@@ -15,11 +15,27 @@ docker compose up -d --build
 Open http://localhost:8080, create the first (admin) user, add users under
 Settings.
 
-The container runs as uid 65532. A named volume inherits that ownership; chown
-a host directory to 65532 before bind-mounting one.
+Building the image needs BuildKit (`docker buildx`), which Docker Desktop and Docker's own
+packages include; some distributions package it separately (`docker-buildx` on Arch). The legacy
+builder fails on the Dockerfile's first `FROM`.
 
-Everything lives in `./data`: `logb.db` (SQLite), `files/` (originals,
-content-addressed), `thumbs/`.
+Everything lives in the `logb-data` volume, mounted at `/data`: `logb.db` (SQLite), `files/`
+(originals, content-addressed), `thumbs/`, and `backups/` with the nightly snapshots the compose
+file turns on.
+
+The container runs as uid 65532, which a named volume inherits. To keep the data in a host
+directory instead, chown it to that uid first, then replace `logb-data:/data` with a bind mount
+in `docker-compose.yml`:
+
+```bash
+mkdir -p data && sudo chown -R 65532:65532 data
+# volumes:
+#   - ./data:/data
+```
+
+An install from before 0.17.0 used `./data` from the compose file; keep that bind-mount line
+when you update the file, or the container starts on an empty volume. Nothing is lost — the old
+directory is still there — but it looks like a fresh install until the line is put back.
 
 ### Released images
 
@@ -196,7 +212,7 @@ to read a source the server is still holding open.
 `--copy-to` does not touch `files/`.** Only the database moves to PostgreSQL; photos,
 documents and thumbnails stay on disk under `LOGB_DATA_DIR`, and the server keeps
 reading them from there. With the compose file in this repository that is the same
-`./data` directory before and after, so there is nothing to copy. **If the new
+`/data` volume before and after, so there is nothing to copy. **If the new
 instance runs on another host, or from another volume, copy `data/files/` (and
 `data/thumbs/`) across as well** — skip that and the new instance looks completely
 healthy until someone opens a photo.
@@ -290,6 +306,9 @@ until it is started by hand.
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
 | `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is a supported configuration with two properties worth reading once, which the server also logs once at every start. LogB takes no backups of a PostgreSQL database: `--backup` and `--restore` refuse on purpose, `LOGB_BACKUP_DIR` is ignored, and backing it up is PostgreSQL's own tooling's job -- Settings -> Backup reports which of those applies to the running instance. Every write also takes a global advisory lock, serialising writers -- which is what SQLite does too, there by handing every write transaction one shared connection -- and an upload writes its thumbnail to disk inside that lock, so a large upload or import blocks other writes while it runs. On SQLite a write waits up to five seconds for the single writer connection and is then answered with 503 and a `Retry-After`; on PostgreSQL it waits on the advisory lock until its turn comes, with no such deadline. Neither is unfinished work; SQLite is still the default, and the more exercised path. Use `logb --copy-to`, or Settings, to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql) |
+| `LOGB_DB_POOL_SIZE`  | `4` on SQLite, `16` on PostgreSQL | most connections the main database pool opens. On SQLite that pool serves reads; write transactions always queue for one separate writer connection, which this does not change (so a SQLite instance opens this many plus one), and raising it buys read concurrency, not write throughput. On PostgreSQL the one pool serves reads and writes alike, writers still taking turns on the advisory lock; keep it well below the server's `max_connections`. Rarely worth setting |
+| `LOGB_BACKUP_DIR`    | unset     | directory for a nightly SQLite snapshot, verified before it counts; the newest 14 are kept. Unset takes none; the compose file sets `/data/backups`. Ignored on PostgreSQL -- see [Backup](#backup) |
+| `LOGB_BACKUP_HOUR`   | `3`       | hour (0-23, in the instance timezone) from which the nightly snapshot is written                                             |
 | `LOGB_BIND`          | `0.0.0.0` |                                                                                                                              |
 | `LOGB_PORT`          | `8080`    |                                                                                                                              |
 | `LOGB_MAX_UPLOAD_MB` | `50`      | per file                                                                                                                     |
@@ -306,6 +325,7 @@ until it is started by hand.
 | `LOGB_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP; enable only behind a reverse proxy that overwrites the header |
 | `LOGB_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address. QR sign-in's redeem step (a phone swapping a pairing code for a token) shares this same limit and counter, by the same IP — it is not a separate budget |
 | `LOGB_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
+| `LOGB_BUILD_COMMIT`  | unset     | **read at build time, not at run time**: the commit Settings → About shows. A build in a git checkout asks git; `docker build` copies no `.git`, so pass `--build-arg LOGB_BUILD_COMMIT=$(git rev-parse HEAD)` (CI and the released images do). Without either, About shows no commit |
 
 Put LogB behind a reverse proxy with HTTPS when exposing it beyond your LAN.
 
