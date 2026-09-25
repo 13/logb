@@ -375,3 +375,67 @@ async fn the_digest_covers_the_recipients_own_day() {
         .bind(format!("webhook:{}", 1)).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(day.0, user_today.to_string());
 }
+
+/// Once today's digest has reached every destination a recipient has, the tick does not build
+/// it again.
+///
+/// The loop wakes every minute, and from the delivery hour to midnight each wake used to query
+/// every recipient's reminders and assemble their digest before `claim_delivery` threw it away
+/// as already sent. The proof: with collection broken after the delivery, a tick that still
+/// built the digest would fail; one that asks "already delivered today?" first has nothing to do.
+#[tokio::test]
+async fn a_delivered_digest_is_not_built_again_the_same_day() {
+    let (url, inbox) = webhook().await;
+    let app = common::spawn_with(|c| c.notify_hour = 8).await;
+    seed_overdue(&app).await;
+    app.client.put(app.url("/me/notifications")).json(&json!({"url": url, "format": "text"})).send().await.unwrap();
+
+    logb::notify::tick(&app.state, 9).await.unwrap();
+    assert_eq!(inbox.received().len(), 1);
+
+    sqlx::query("ALTER TABLE reminders RENAME TO reminders_hidden").execute(&app.state.db).await.unwrap();
+    let again = logb::notify::tick(&app.state, 10).await;
+    sqlx::query("ALTER TABLE reminders_hidden RENAME TO reminders").execute(&app.state.db).await.unwrap();
+    assert!(again.expect("nothing left to build today").is_none());
+    assert_eq!(inbox.received().len(), 1, "and nothing sent twice");
+}
+
+/// Why the per-recipient failure test does not run on PostgreSQL: it breaks one user's
+/// reminders by storing text in an INTEGER column, which SQLite's type affinity allows and
+/// PostgreSQL rightly refuses. What it proves -- the loop skips a recipient whose digest could
+/// not be built -- is the same code on both backends.
+const TEXT_IN_AN_INTEGER_COLUMN_IS_SQLITE: &str =
+    "breaking a single user's reminders relies on SQLite storing text in an INTEGER column";
+
+/// One recipient whose digest cannot be built must not cost everybody after them theirs.
+///
+/// The build loop used `?` on each recipient's reminder query, so a row that would not decode
+/// for one user ended the tick before any destination -- anyone's -- was claimed. The failure
+/// still reports, so the loop's log line says so, but the others are delivered first.
+#[tokio::test]
+async fn one_recipient_failing_to_build_does_not_stop_the_others() {
+    if common::skipped_on_postgres("one_recipient_failing_to_build_does_not_stop_the_others", TEXT_IN_AN_INTEGER_COLUMN_IS_SQLITE) {
+        return;
+    }
+    let (ben_url, ben_inbox) = webhook().await;
+    let (anna_url, anna_inbox) = webhook().await;
+    let app = common::spawn_with(|c| c.notify_hour = 8).await;
+    seed_overdue(&app).await;
+    app.client.put(app.url("/me/notifications")).json(&json!({"url": ben_url, "format": "text"})).send().await.unwrap();
+
+    // Anna sorts first, so her failure comes before ben's digest is even built.
+    let anna = app.create_user_client("anna", "password123").await;
+    anna.put(app.url("/me/notifications")).json(&json!({"url": anna_url, "format": "text"})).send().await.unwrap();
+    let bike = app.create_object(&anna, "Bike", Some("km")).await;
+    let res = anna.post(app.url(&format!("/objects/{}/reminders", bike["id"])))
+        .json(&json!({ "title": "Chain", "due_date": "2020-01-01" })).send().await.unwrap();
+    assert_eq!(res.status(), 201);
+    sqlx::query("UPDATE reminders SET due_counter = 'not a number' WHERE object_id = $1")
+        .bind(bike["id"].as_i64().unwrap()).execute(&app.state.db).await.unwrap();
+
+    assert!(logb::notify::tick(&app.state, 9).await.is_err(), "the failure is still reported");
+    assert!(anna_inbox.received().is_empty(), "anna's digest could not be built");
+    let got = ben_inbox.received();
+    assert_eq!(got.len(), 1, "ben's digest went out regardless");
+    assert!(got[0].2.contains("Oil change"), "{}", got[0].2);
+}

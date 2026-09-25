@@ -302,28 +302,56 @@ pub(crate) async fn push_to(
     Ok((sent, failed))
 }
 
+/// A destination's delivery row for its current day: the day, attempts so far, when the last
+/// attempt started, and when one last succeeded.
+type Previous = (String, i64, Option<String>, Option<String>);
+
+/// Whether a destination is finished with `day`, or must wait before trying it again: delivered
+/// already, out of attempts, or inside the back-off after a failure. One rule, shared by the
+/// claim that decides under the write lock and the read-only check that decides whether a
+/// digest is worth building at all, so the two cannot drift apart.
+fn not_due(previous: Option<&Previous>, day: &str) -> bool {
+    let Some((old_day, count, attempted, success)) = previous else {
+        return false;
+    };
+    if old_day != day {
+        return false;
+    }
+    if *count >= 3 || success.as_ref().zip(attempted.as_ref()).is_some_and(|(s, a)| s >= a) {
+        return true;
+    }
+    if let Some(at) = attempted.as_deref().and_then(|a| chrono::DateTime::parse_from_rfc3339(a).ok()) {
+        let delay = if *count < 2 { 300 } else { 1800 };
+        if chrono::Utc::now().signed_duration_since(at).num_seconds() < delay {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `target` has nothing to do for `day` -- asked before a digest is built, without
+/// taking the write lock. `claim_delivery` asks again under the lock and is what actually
+/// decides; this only saves building a digest nobody is going to be sent.
+async fn settled(state: &App, target: &str, day: &str) -> Result<bool, AppError> {
+    let previous: Option<Previous> = sqlx::query_as(
+        "SELECT day, attempts, attempted_at, last_success FROM notification_deliveries WHERE target = $1"
+    ).bind(target).fetch_optional(&state.db).await?;
+    Ok(not_due(previous.as_ref(), day))
+}
+
 /// Claim a destination before sending. The durable attempt also acts as a lease after a crash.
 /// Retries wait five minutes, then thirty minutes; successful destinations are not resent.
 async fn claim_delivery(state: &App, target: &str, user_id: Option<i64>, day: &str) -> Result<bool, AppError> {
     let now = db::now();
     let mut tx = db::begin_write(state).await?;
-    type Previous = (String, i64, Option<String>, Option<String>);
     let previous: Option<Previous> = sqlx::query_as(
         "SELECT day, attempts, attempted_at, last_success FROM notification_deliveries WHERE target = $1"
     ).bind(target).fetch_optional(&mut *tx).await?;
-    let mut attempts = 0;
-    if let Some((old_day, count, attempted, success)) = previous {
-        if old_day == day {
-            attempts = count;
-            if count >= 3 || success.as_ref().zip(attempted.as_ref()).is_some_and(|(s, a)| s >= a) {
-                return Ok(false);
-            }
-            if let Some(at) = attempted.and_then(|a| chrono::DateTime::parse_from_rfc3339(&a).ok()) {
-                let delay = if count < 2 { 300 } else { 1800 };
-                if chrono::Utc::now().signed_duration_since(at).num_seconds() < delay { return Ok(false); }
-            }
-        }
+    if not_due(previous.as_ref(), day) {
+        return Ok(false);
     }
+    // Attempts count within a day; a row left from an earlier day starts over.
+    let attempts = previous.filter(|p| p.0 == day).map_or(0, |p| p.1);
     sqlx::query("INSERT INTO notification_deliveries (target, user_id, day, attempts, attempted_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (target) DO UPDATE SET day = excluded.day, attempts = excluded.attempts, attempted_at = excluded.attempted_at")
         .bind(target).bind(user_id).bind(day).bind(attempts + 1).bind(now).execute(&mut *tx).await?;
     tx.commit().await?;
@@ -405,66 +433,131 @@ async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
     Ok(())
 }
 
+/// One destination's share of a tick: its delivery-row key, owner, day, where it goes, and the
+/// digest it gets (`None` when nothing is due).
+type Plan = (String, Option<i64>, String, Destination, Option<Digest>);
+
+/// What one recipient is owed this tick, built only when something is.
+///
+/// Their destinations are listed first and each is asked whether today is already settled for
+/// it; only if one is not does the digest get built. From the delivery hour to midnight the
+/// loop calls this every minute, and building means querying all of the recipient's reminders
+/// -- work `claim_delivery` would then throw away for a destination that was served hours ago.
+async fn plan_for(state: &App, r: &Recipient) -> Result<Vec<Plan>, AppError> {
+    let day = crate::db::today_in(r.notify_tz.as_deref()).to_string();
+    let mut destinations = Vec::new();
+    if let Some(url) = &r.notify_url {
+        destinations.push((format!("webhook:{}", r.id), Destination::Webhook(url.clone(), r.notify_format.clone())));
+    }
+    if crate::telegram::connected(state, r.id).await? {
+        destinations.push((format!("telegram:{}", r.id), Destination::Telegram(r.id)));
+    }
+    let subs: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1"
+    ).bind(r.id).fetch_all(&state.db).await?;
+    for (id, endpoint, p256dh, auth) in subs {
+        destinations.push((format!("push:{id}"), Destination::Push(id, Subscription { endpoint, p256dh, auth })));
+    }
+    let mut open = Vec::new();
+    for (target, destination) in destinations {
+        if !settled(state, &target, &day).await? {
+            open.push((target, destination));
+        }
+    }
+    if open.is_empty() {
+        return Ok(Vec::new());
+    }
+    let d = digest(items_for(state, r).await?, &r.lang);
+    Ok(open
+        .into_iter()
+        .map(|(target, destination)| (target, Some(r.id), day.clone(), destination, d.clone()))
+        .collect())
+}
+
+/// Claims one destination and sends it its digest. `Ok(true)` when something was delivered,
+/// `Ok(false)` when there was nothing to do (claimed elsewhere, or nothing due).
+async fn deliver(state: &App, target: &str, owner: Option<i64>, day: &str, destination: Destination, digest: Option<Digest>) -> Result<bool, AppError> {
+    if !claim_delivery(state, target, owner, day).await? {
+        return Ok(false);
+    }
+    let Some(d) = digest else {
+        finish_delivery(state, target, true, true).await?;
+        return Ok(false);
+    };
+    let result = match destination {
+        Destination::Instance => send(state, &d).await,
+        Destination::Webhook(url, format) => post(&url, &format, &d).await,
+        Destination::Telegram(id) => crate::telegram::send_user(state, id, &d).await,
+        Destination::Push(id, sub) => {
+            let kp = push::key_pair(state).await?;
+            let open = match d.reminders.as_slice() {
+                [only] => path(only.object_id, &only.kind, &only.object_type),
+                _ => "/".to_string(),
+            };
+            let payload = serde_json::json!({ "title": d.title, "body": d.message, "url": open }).to_string();
+            match push::send(&kp, &push::contact(state), &sub, payload.as_bytes()).await {
+                Delivery::Sent => Ok(()),
+                Delivery::Gone => {
+                    forget_subscription(state, id).await?;
+                    Ok(())
+                }
+                Delivery::Failed(_) => Err(AppError::Internal("push delivery failed".into())),
+            }
+        }
+    };
+    finish_delivery(state, target, result.is_ok(), false).await?;
+    result.map(|()| true)
+}
+
 /// Build first, then deliver independently. An unavailable target cannot suppress another.
+///
+/// Neither can a recipient: a digest that cannot be built, or a destination that fails, is
+/// logged with whose it was and skipped, and the tick goes on to everyone else. The tick still
+/// answers `Err` afterwards when anything failed, so the loop's own log line says the day was
+/// not clean -- but only after every other destination has had its turn.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
     prune_delivery_history(state).await?;
     let recipients = recipients(state).await?;
-    let mut plans = Vec::new();
+    let mut plans: Vec<Plan> = Vec::new();
+    let mut failed = false;
     if state.config.notify_url.is_some() && hour_now >= state.config.notify_hour {
-        plans.push(("instance".to_string(), None, db::today(), Destination::Instance, instance_digest(state, &recipients).await?));
+        let day = db::today();
+        if !settled(state, "instance", &day).await? {
+            // A failure here claims nothing, so the day is retried at the next tick rather than
+            // burned -- see `a_failure_while_collecting_does_not_burn_the_day`.
+            match instance_digest(state, &recipients).await {
+                Ok(d) => plans.push(("instance".to_string(), None, day, Destination::Instance, d)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not build the instance digest; skipped");
+                    failed = true;
+                }
+            }
+        }
     }
     for r in &recipients {
         if local_hour(r.notify_tz.as_deref(), hour_now) < r.notify_hour.map(|h| h as u32).unwrap_or(state.config.notify_hour) { continue; }
-        let d = digest(items_for(state, r).await?, &r.lang);
-        let day = crate::db::today_in(r.notify_tz.as_deref()).to_string();
-        if let Some(url) = &r.notify_url {
-            plans.push((format!("webhook:{}", r.id), Some(r.id), day.clone(), Destination::Webhook(url.clone(), r.notify_format.clone()), d.clone()));
-        }
-        if crate::telegram::connected(state, r.id).await? {
-            plans.push((format!("telegram:{}", r.id), Some(r.id), day.clone(), Destination::Telegram(r.id), d.clone()));
-        }
-        let subs: Vec<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1"
-        ).bind(r.id).fetch_all(&state.db).await?;
-        for (id, endpoint, p256dh, auth) in subs {
-            plans.push((format!("push:{id}"), Some(r.id), day.clone(), Destination::Push(id, Subscription { endpoint, p256dh, auth }), d.clone()));
+        match plan_for(state, r).await {
+            Ok(mut p) => plans.append(&mut p),
+            Err(e) => {
+                tracing::warn!(user_id = r.id, error = %e, "could not build this recipient's digest; skipped");
+                failed = true;
+            }
         }
     }
     let mut instance = None;
-    let mut failed = false;
     for (target, owner, day, destination, digest) in plans {
-        if !claim_delivery(state, &target, owner, &day).await? { continue; }
-        let Some(d) = digest else {
-            finish_delivery(state, &target, true, true).await?;
-            continue;
-        };
-        let result = match destination {
-            Destination::Instance => {
-                let result = send(state, &d).await;
-                if result.is_ok() { instance = Some(d.clone()); }
-                result
+        let is_instance = matches!(destination, Destination::Instance);
+        let sent = if is_instance { digest.clone() } else { None };
+        match deliver(state, &target, owner, &day, destination, digest).await {
+            Ok(true) if is_instance => instance = sent,
+            Ok(_) => {}
+            Err(e) => {
+                // The target alone, never the URL: a personal webhook is often an unguessable
+                // ntfy topic, which is to say a secret.
+                tracing::warn!(target = %target, error = %e, "notification delivery failed; retry scheduled");
+                failed = true;
             }
-            Destination::Webhook(url, format) => post(&url, &format, &d).await,
-            Destination::Telegram(id) => crate::telegram::send_user(state, id, &d).await,
-            Destination::Push(id, sub) => {
-                let kp = push::key_pair(state).await?;
-                let open = match d.reminders.as_slice() {
-                    [only] => path(only.object_id, &only.kind, &only.object_type),
-                    _ => "/".to_string(),
-                };
-                let payload = serde_json::json!({ "title": d.title, "body": d.message, "url": open }).to_string();
-                match push::send(&kp, &push::contact(state), &sub, payload.as_bytes()).await {
-                    Delivery::Sent => Ok(()),
-                    Delivery::Gone => {
-                        forget_subscription(state, id).await?;
-                        Ok(())
-                    }
-                    Delivery::Failed(_) => Err(AppError::Internal("push delivery failed".into())),
-                }
-            }
-        };
-        failed |= result.is_err();
-        finish_delivery(state, &target, result.is_ok(), false).await?;
+        }
     }
     if failed { return Err(AppError::Internal("notification delivery failed; retry scheduled".into())); }
     Ok(instance)
