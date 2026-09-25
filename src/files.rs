@@ -94,6 +94,24 @@ impl Storage {
         write_durably(&self.thumb_path(sha), jpeg).await
     }
 
+    /// Writes the blob, and the thumbnail if there is one, again if either is missing from disk.
+    ///
+    /// For a writer that stored both before taking the write lock and now holds it: a
+    /// concurrent `discard_blob` may have deleted them in between, having seen no row naming
+    /// the hash -- this writer's row was not committed yet. Only a stat each in the common case,
+    /// which is what makes it cheap enough to run inside the write transaction.
+    pub async fn restore_if_missing(&self, sha: &str, bytes: &[u8], thumb: Option<&[u8]>) -> std::io::Result<()> {
+        if !tokio::fs::try_exists(self.blob_path(sha)).await? {
+            write_durably(&self.blob_path(sha), bytes).await?;
+        }
+        if let Some(jpeg) = thumb {
+            if !tokio::fs::try_exists(self.thumb_path(sha)).await? {
+                self.write_thumb(sha, jpeg).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Removes the blob and the thumbnail of the content hashing to `sha`. The caller decides
     /// that nothing references them any more -- see `api::attachments::discard_blob`.
     pub async fn remove(&self, sha: &str) {

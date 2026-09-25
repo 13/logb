@@ -85,22 +85,28 @@ async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut,
 /// error. So this only ever fires for a file no attachment has ever pointed at -- the orphan a
 /// lost upload race leaves behind. Files whose attachments were merely tombstoned are freed
 /// when the retention purge finally removes those rows.
+///
+/// Check and delete run in one write transaction, so no attachment can be inserted against a
+/// candidate between the two. The caller must not be holding a write transaction of its own:
+/// on SQLite the write pool has one connection, and this would wait for it forever.
 pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), AppError> {
     if candidates.is_empty() {
         return Ok(());
     }
-    let mut orphans: Vec<(i64, String)> = Vec::new();
+    let mut orphans: Vec<String> = Vec::new();
+    let mut tx = db::begin_write(state).await?;
     for &file_id in candidates {
-        let row: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
         )
-        .bind(file_id).fetch_optional(&state.db).await?;
-        if let Some(r) = row {
-            orphans.push(r);
+        .bind(file_id).fetch_optional(&mut *tx).await?;
+        if let Some((sha,)) = row {
+            sqlx::query("DELETE FROM files WHERE id = $1").bind(file_id).execute(&mut *tx).await?;
+            orphans.push(sha);
         }
     }
-    for (id, sha) in orphans {
-        sqlx::query("DELETE FROM files WHERE id = $1").bind(id).execute(&state.db).await?;
+    tx.commit().await?;
+    for sha in orphans {
         discard_blob(state, &sha).await?;
     }
     Ok(())
@@ -110,12 +116,23 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
 /// thumbnail both, since both are named after the content -- once no other row still points at
 /// that content hash (two users uploading the same photo share one blob and one thumbnail, and
 /// each has their own `files` row).
+///
+/// The check and the unlink happen while this holds the write connection. Otherwise an upload
+/// of the same bytes could commit its `files` row between the two -- having found the blob on
+/// disk a moment earlier -- and be left naming a blob this then deletes. Under the lock the
+/// upload either commits first, and this sees its row and keeps the blob, or commits after, and
+/// `restore_if_missing` inside its own transaction finds the blob gone and writes it back.
+///
+/// The transaction writes nothing; it is only the turn at the lock. Like `purge_orphan_files`,
+/// this must not be called while the caller holds a write transaction.
 pub async fn discard_blob(state: &App, sha: &str) -> Result<(), AppError> {
+    let mut tx = db::begin_write(state).await?;
     let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = $1 LIMIT 1")
-        .bind(sha).fetch_optional(&state.db).await?;
+        .bind(sha).fetch_optional(&mut *tx).await?;
     if still_used.is_none() {
         state.storage.remove(sha).await;
     }
+    tx.rollback().await?;
     Ok(())
 }
 
@@ -260,6 +277,10 @@ async fn upload(
             let file_uuid = uuid::Uuid::new_v4().to_string();
             let edited_at = record::edited_at_now();
             let mut tx = db::begin_write(&state).await?;
+            // A discard of the same hash may have run between the writes above and this lock
+            // (see `discard_blob`). Now that no discard can run until this commits, put back
+            // whatever it took.
+            state.storage.restore_if_missing(&sha, &bytes, image.as_ref().map(|i| i.thumb_jpeg.as_slice())).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",

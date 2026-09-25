@@ -639,3 +639,60 @@ async fn id_named_thumbnails_move_to_their_content_name_once() {
     assert_eq!(again, logb::files_gc::LegacyThumbs::default());
     assert_eq!(std::fs::read(storage.thumb_path(&sha)).unwrap(), jpeg);
 }
+
+/// Runs `work` while a write transaction is held open, and says whether it finished before that
+/// transaction ended -- i.e. whether it ran without the write lock.
+async fn finishes_while_a_writer_holds_the_lock<F>(app: &common::TestApp, work: F) -> bool
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let tx = logb::db::begin_write(&app.state).await.unwrap();
+    let task = tokio::spawn(work);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let finished_early = task.is_finished();
+    tx.rollback().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), task).await
+        .expect("still waiting after the writer let go").unwrap();
+    finished_early
+}
+
+/// Discarding a blob is a check ("no row names this hash") followed by an unlink. Run outside
+/// the write lock, an upload of the same bytes could commit its row between the two and be left
+/// pointing at nothing. Both halves now happen under the write connection, so a writer holding
+/// it keeps the discard waiting.
+#[tokio::test]
+async fn discarding_a_blob_waits_for_the_write_lock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let bytes = b"%PDF-1.4 nobody's".to_vec();
+    let sha = logb::files::sha256_hex(&bytes);
+    app.state.storage.write_blob(&sha, &bytes).await.unwrap();
+    let blob = app.state.storage.blob_path(&sha);
+
+    let (state, s) = (app.state.clone(), sha.clone());
+    let early = finishes_while_a_writer_holds_the_lock(&app, async move {
+        logb::api::attachments::discard_blob(&state, &s).await.unwrap();
+    }).await;
+    assert!(!early, "the discard ran without the write lock");
+    assert!(!blob.exists(), "an unreferenced blob survived the discard");
+}
+
+/// The same for the orphan purge: its "no attachment references this file" check and the
+/// delete belong to one writer's turn.
+#[tokio::test]
+async fn purging_orphan_files_waits_for_the_write_lock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (user_id,): (i64,) = sqlx::query_as("SELECT id FROM users LIMIT 1").fetch_one(&app.state.db).await.unwrap();
+    let (file_id,): (i64,) = sqlx::query_as(
+        "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at, client_uuid) \
+         VALUES ($1, $2, 'o.pdf', 'application/pdf', 1, '2024-01-01T00:00:00Z', 'orphan-file-uuid') RETURNING id")
+        .bind(user_id).bind("ab".repeat(32)).fetch_one(&app.state.write_db).await.unwrap();
+
+    let state = app.state.clone();
+    let early = finishes_while_a_writer_holds_the_lock(&app, async move {
+        logb::api::attachments::purge_orphan_files(&state, &[file_id]).await.unwrap();
+    }).await;
+    assert!(!early, "the purge ran without the write lock");
+    assert_eq!(file_row_count(&app).await, 0, "the orphan row survived the purge");
+}
