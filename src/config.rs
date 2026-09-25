@@ -74,8 +74,9 @@ pub struct Config {
     /// This is what the container's HEALTHCHECK runs -- the image has no shell or curl.
     #[arg(long)]
     pub healthcheck: bool,
-    /// Trust `X-Forwarded-For` for the client IP. Enable only behind a reverse
-    /// proxy that overwrites the header; otherwise clients can spoof it.
+    /// Trust `X-Forwarded-For` for the client IP (its rightmost entry, the one the proxy
+    /// appended). Enable only behind a reverse proxy that sets or appends the header;
+    /// otherwise clients can spoof it.
     #[arg(long, env = "LOGB_TRUST_PROXY", default_value_t = false)]
     pub trust_proxy: bool,
     /// Failed-or-successful login attempts allowed from one IP per minute, before further

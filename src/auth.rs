@@ -222,19 +222,38 @@ pub fn removal_cookie(secure: bool) -> Cookie<'static> {
         .build()
 }
 
-/// The socket peer address, or the first `X-Forwarded-For` hop when the
-/// deployment is configured to trust a proxy. Without that flag the header is
-/// ignored, so a client cannot spoof its way past the login rate limit.
+/// The socket peer address, or the rightmost `X-Forwarded-For` hop when the deployment is
+/// configured to trust a proxy. Without that flag the header is ignored, so a client cannot
+/// spoof its way past the login rate limit.
+///
+/// Rightmost, not first: a proxy that appends (nginx's `$proxy_add_x_forwarded_for`, Traefik,
+/// Caddy) adds the address it saw to the END of whatever the client sent, so every entry to the
+/// left of the last one is client-supplied. Reading the first hop let a client put a fresh
+/// made-up address at the front of each request and never meet the login limit. A proxy that
+/// overwrites the header leaves one entry, which is both first and last, so nothing changes for
+/// it. When the header arrives as several lines rather than one comma-separated value, the last
+/// line is the last hop for the same reason.
 pub fn client_ip(state: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
     if !state.config.trust_proxy {
         return peer.ip();
     }
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .and_then(|v| v.trim().parse().ok())
+    last_forwarded(headers, "x-forwarded-for")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(peer.ip())
+}
+
+/// The last comma-separated entry of the last `name` header line, trimmed: the one hop a
+/// trusted proxy wrote itself (see `client_ip`). `None` when the header is absent, not text, or
+/// its last entry is blank.
+pub fn last_forwarded<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get_all(name)
+        .iter()
+        .next_back()
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
 }
 
 /// Returns Err(TooManyRequests) once an IP exceeds `login_max_attempts` inside LOGIN_WINDOW.
@@ -488,14 +507,33 @@ mod tests {
         assert_eq!(client_ip(&state, &headers, peer()), peer().ip());
     }
 
+    /// The trusted proxy APPENDS the address it saw to whatever `X-Forwarded-For` the client
+    /// sent, so the rightmost entry is the only one the proxy vouches for. Everything to its left
+    /// is client-supplied.
     #[tokio::test]
-    async fn client_ip_uses_first_hop_when_trust_proxy_is_on() {
+    async fn client_ip_uses_the_rightmost_hop_when_trust_proxy_is_on() {
         let state = test_state(true).await;
         let headers = headers_with_xff("198.51.100.7, 10.0.0.1");
         assert_eq!(
             client_ip(&state, &headers, peer()),
-            "198.51.100.7".parse::<IpAddr>().unwrap()
+            "10.0.0.1".parse::<IpAddr>().unwrap()
         );
+    }
+
+    /// Regression: `client_ip` used to read the FIRST hop, so a client behind a trusted proxy
+    /// could put a fresh made-up address at the front of `X-Forwarded-For` on every attempt and
+    /// never meet the login limit. Rotating the leading hop must not reset anything.
+    #[tokio::test]
+    async fn a_spoofed_leading_hop_does_not_escape_the_login_limit() {
+        let state = test_state(true).await;
+        let max = state.config.login_max_attempts;
+        let mut results = Vec::new();
+        for i in 0..=max {
+            let headers = headers_with_xff(&format!("192.0.2.{i}, 198.51.100.7"));
+            results.push(check_login_rate(&state, client_ip(&state, &headers, peer())).is_ok());
+        }
+        assert!(results[..max as usize].iter().all(|ok| *ok), "{results:?}");
+        assert!(!results[max as usize], "attempt {} must be refused", max + 1);
     }
 
     #[tokio::test]

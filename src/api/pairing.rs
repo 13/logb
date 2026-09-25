@@ -50,8 +50,9 @@ fn no_store() -> [(HeaderName, HeaderValue); 1] {
 /// on a deployment that never promised to rewrite one.
 ///
 /// A proxy is free to append to `X-Forwarded-Host` rather than replace it, so -- exactly as
-/// `auth::client_ip` does for `X-Forwarded-For` -- only the first comma-separated entry is
-/// read, trimmed. Whichever header ends up supplying the host, its value is checked against
+/// `auth::client_ip` does for `X-Forwarded-For` -- only the LAST comma-separated entry is read,
+/// trimmed: that is the one the trusted proxy wrote, and everything before it came from the
+/// client. Whichever header ends up supplying the host, its value is checked against
 /// `http::uri::Authority` syntax before it is glued into a URI this browser will render as a
 /// link and a QR code: a value that is not valid `host[:port]` (an embedded `/` or `?` that
 /// would smuggle extra path or query into the pairing URI, say) is a 400 rather than a broken
@@ -65,11 +66,8 @@ fn public_base_url(state: &App, headers: &HeaderMap) -> Result<String, AppError>
     let forwarded_host = state
         .config
         .trust_proxy
-        .then(|| headers.get("x-forwarded-host"))
-        .flatten()
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').next().unwrap_or("").trim())
-        .filter(|v| !v.is_empty());
+        .then(|| auth::last_forwarded(headers, "x-forwarded-host"))
+        .flatten();
     let host_header =
         headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()).map(str::trim);
     for candidate in [forwarded_host, host_header].into_iter().flatten() {
