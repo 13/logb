@@ -25,7 +25,9 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // Prompt, not autoUpdate: an automatic reload landed mid-form and lost what was typed.
+      // src/lib/sw-update.ts offers the new build instead; the user decides when to reload.
+      registerType: 'prompt',
       manifest: {
         name: 'LogB',
         short_name: 'LogB',
@@ -38,6 +40,10 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        // Still claim the page on the FIRST install, as autoUpdate did, so offline works from the
+        // first visit. An update is unaffected: it waits until the user accepts it, and only
+        // then activates and claims.
+        clientsClaim: true,
         // Push notifications: showing one, and opening the app when it is tapped. A separate
         // file pulled into the generated worker, so the rest of it stays generated.
         importScripts: ['push-sw.js'],

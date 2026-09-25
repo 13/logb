@@ -77,6 +77,9 @@ export default {
   "weight.no-range": "Keine Messungen in diesem Zeitraum.",
 
   'app.name': 'LogB',
+  'app.update-ready': 'Eine neue Version von LogB ist bereit.',
+  'app.update-reload': 'Jetzt neu laden',
+  'app.update-later': 'Später',
   'nav.back': 'Zurück',
   'nav.settings': 'Einstellungen',
   'nav.objects': 'Objekte',
