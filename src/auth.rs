@@ -132,6 +132,20 @@ pub fn new_token() -> String {
     hex::encode(bytes)
 }
 
+/// What `sessions.token` holds for a session whose cookie carries `token`: its SHA-256, hex.
+///
+/// The database never sees the token itself, so a copy of it -- a nightly snapshot, a backup
+/// archive, a disk that walked off -- is not a stack of cookies anyone can replay. A fast hash
+/// rather than a password hash, for the reason `hash_api_token` gives: the token is 256 random
+/// bits nobody chose, so there is nothing for a dictionary to attack, and the lookup runs on
+/// every request. Existing plaintext rows were deleted by migration 0027 (SQLite) / 0018
+/// (PostgreSQL) rather than converted.
+pub fn hash_session_token(token: &str) -> String {
+    crate::files::sha256_hex(token.as_bytes())
+}
+
+/// Opens a session for `user_id` and returns the token for its cookie. Only
+/// `hash_session_token(token)` is stored.
 pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppError> {
     let token = new_token();
     let expires = (chrono::Utc::now() + chrono::Duration::days(SESSION_DAYS))
@@ -141,7 +155,7 @@ pub async fn create_session(state: &App, user_id: i64) -> Result<String, AppErro
         .execute(&state.db)
         .await?;
     sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token)
+        .bind(hash_session_token(&token))
         .bind(user_id)
         .bind(expires)
         .execute(&state.db)
@@ -169,7 +183,7 @@ pub async fn create_session_in(
         .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token)
+        .bind(hash_session_token(&token))
         .bind(user_id)
         .bind(expires)
         .execute(&mut **tx)
@@ -199,9 +213,10 @@ pub async fn delete_sessions_for_user(state: &App, user_id: i64) -> Result<(), A
     Ok(())
 }
 
+/// Ends the session whose cookie carries `token` (the plaintext, as the browser sent it).
 pub async fn delete_session(state: &App, token: &str) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE token = $1")
-        .bind(token)
+        .bind(hash_session_token(token))
         .execute(&state.db)
         .await?;
     Ok(())
@@ -440,7 +455,7 @@ impl FromRequestParts<App> for SessionUser {
             "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz FROM sessions s \
              JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
-        .bind(token)
+        .bind(hash_session_token(&token))
         .bind(db::now())
         .fetch_optional(&state.db)
         .await?
@@ -467,7 +482,7 @@ impl FromRequestParts<App> for AuthUser {
             "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz FROM sessions s \
              JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > $2",
         )
-        .bind(token)
+        .bind(hash_session_token(&token))
         .bind(db::now())
         .fetch_optional(&state.db)
         .await?

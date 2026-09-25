@@ -258,3 +258,38 @@ async fn expired_sessions_are_pruned() {
     // The live session still works.
     assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
 }
+
+/// The database holds a hash of each session token, never the token: a copy of the database
+/// -- a backup, a snapshot, a stolen disk -- must not be a stack of cookies anyone can replay.
+/// The row a sign-in writes is found only by hashing the cookie the browser was given, and the
+/// stored value itself does not work as a cookie.
+#[tokio::test]
+async fn session_tokens_are_stored_hashed() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.login(&common::new_client(), "ben", "correct horse").await;
+    assert_eq!(res.status(), 200);
+    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let token = cookie.split(';').next().unwrap().strip_prefix("logb_session=").unwrap().to_string();
+
+    let stored: Vec<(String,)> = sqlx::query_as("SELECT token FROM sessions").fetch_all(&app.state.db).await.unwrap();
+    assert!(stored.iter().all(|(t,)| *t != token), "the plaintext token is in the database");
+    let hashed = logb::files::sha256_hex(token.as_bytes());
+    assert!(stored.iter().any(|(t,)| *t == hashed), "no row holds sha256(token): {stored:?}");
+
+    // The hash is not itself a credential.
+    let replay = reqwest::Client::new()
+        .get(app.url("/auth/me"))
+        .header("cookie", format!("logb_session={hashed}"))
+        .send().await.unwrap();
+    assert_eq!(replay.status(), 401);
+    // The real token still is, and logging out with it removes its row.
+    let c = reqwest::Client::new();
+    let me = c.get(app.url("/auth/me")).header("cookie", format!("logb_session={token}")).send().await.unwrap();
+    assert_eq!(me.status(), 200);
+    let out = c.post(app.url("/auth/logout")).header("cookie", format!("logb_session={token}")).send().await.unwrap();
+    assert_eq!(out.status(), 204);
+    let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE token = $1")
+        .bind(&hashed).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(left, 0, "logout must delete the hashed row");
+}
