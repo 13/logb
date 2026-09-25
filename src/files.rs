@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 pub const THUMB_MAX: u32 = 400;
+pub const MAX_IMAGE_SIDE: u32 = 12_000;
 const DOC_EXTENSIONS: [&str; 6] = ["txt", "md", "doc", "docx", "xls", "xlsx"];
 
 #[derive(Clone, Debug)]
@@ -218,10 +219,41 @@ pub struct ImageInfo {
     pub thumb_jpeg: Vec<u8>,
 }
 
+/// How many images may be decoding at once, across every upload and import.
+const DECODE_SLOTS: usize = 2;
+static DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(DECODE_SLOTS);
+
+/// `process_image` on a blocking thread, at most `DECODE_SLOTS` at a time.
+///
+/// A decode holds the whole bitmap -- up to `MAX_DECODE_ALLOC` -- plus the rotated copy and the
+/// thumbnail. Ten photos uploaded at once from a phone used to mean ten of those in memory
+/// together, on a server sized for a household; waiting for a slot costs a moment instead.
+/// A task that panics while decoding surfaces as an error rather than taking the request down.
+pub async fn process_image_queued(
+    bytes: impl AsRef<[u8]> + Send + 'static,
+) -> Result<Option<ImageInfo>, tokio::task::JoinError> {
+    let _slot = DECODES.acquire().await.expect("the decode semaphore is never closed");
+    tokio::task::spawn_blocking(move || process_image(bytes.as_ref())).await
+}
+
+/// The most a decoder may allocate for one image. Generous for any camera -- a 12 000 x 12 000
+/// RGBA bitmap is 550 MiB, so the side limit usually binds first -- but a bound, where the
+/// default is double this.
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+
 /// Decode, apply EXIF orientation, extract DateTimeOriginal, build a JPEG thumbnail.
-/// Returns None when the bytes are not a decodable image.
+/// Returns None when the bytes are not a decodable image -- including one whose header promises
+/// more than `MAX_IMAGE_SIDE` pixels a side or needs more than `MAX_DECODE_ALLOC` to decode.
+/// A few kilobytes of PNG can declare a 100 000 x 100 000 canvas; without limits the decoder
+/// would try to allocate it. Such a file is still stored, as a document without a thumbnail.
 pub fn process_image(bytes: &[u8]) -> Option<ImageInfo> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let exif = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)).ok();
     let orientation = exif.as_ref()
         .and_then(|e| e.get_field(exif::Tag::Orientation, exif::In::PRIMARY))
@@ -293,6 +325,20 @@ mod tests {
         let t = image::load_from_memory(&info.thumb_jpeg).unwrap();
         assert_eq!((t.width(), t.height()), (400, 200));
         assert!(process_image(b"not an image").is_none());
+    }
+
+    /// A PNG header is a few bytes; the pixels it promises are what gets allocated. An image
+    /// past the side limit is not decoded, so it gets no thumbnail and is stored as a document.
+    #[test]
+    fn images_past_the_side_limit_are_not_decoded() {
+        let png = |w: u32, h: u32| {
+            let mut buf = Cursor::new(Vec::new());
+            DynamicImage::new_luma8(w, h).write_to(&mut buf, image::ImageFormat::Png).unwrap();
+            buf.into_inner()
+        };
+        assert!(process_image(&png(MAX_IMAGE_SIDE, 1)).is_some());
+        assert!(process_image(&png(MAX_IMAGE_SIDE + 1, 1)).is_none());
+        assert!(process_image(&png(1, MAX_IMAGE_SIDE + 1)).is_none());
     }
 
     #[test]

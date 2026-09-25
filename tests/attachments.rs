@@ -754,3 +754,19 @@ async fn the_sweep_collects_old_orphans_and_nothing_else() {
     let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
     assert_eq!(thumb.status(), 200);
 }
+
+/// The original is streamed from disk rather than read into memory first; what arrives must
+/// still be every byte, with a length the client can show progress against.
+#[tokio::test]
+async fn an_original_streams_back_whole_with_its_length() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let bytes = png(1200, 900);
+    let a: serde_json::Value = app.client.post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(form(bytes.clone(), "big.png", "image/png")).send().await.unwrap().json().await.unwrap();
+    let res = app.client.get(app.url(&format!("/files/{}", a["file_id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-length"], bytes.len().to_string().as_str());
+    assert_eq!(res.bytes().await.unwrap().to_vec(), bytes);
+}

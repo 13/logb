@@ -158,7 +158,9 @@ async fn upload(
 ) -> Result<(StatusCode, Json<AttachmentOut>), AppError> {
     load_owned_object(&state, user.id, object_id).await?;
     let max = state.config.max_upload_bytes();
-    let mut file: Option<(String, Option<String>, Vec<u8>)> = None;
+    // The body's own buffer, held once: `Bytes` clones share it, so handing it to the decoder
+    // below costs a reference count, not a second copy of the upload.
+    let mut file: Option<(String, Option<String>, axum::body::Bytes)> = None;
     let mut activity_id: Option<i64> = None;
     let mut kind: Option<String> = None;
     let mut caption = String::new();
@@ -180,7 +182,7 @@ async fn upload(
                     if e.status() == StatusCode::PAYLOAD_TOO_LARGE { AppError::TooLarge } else { AppError::BadRequest(e.body_text()) }
                 })?;
                 if bytes.len() > max { return Err(AppError::TooLarge); }
-                file = Some((name, declared, bytes.to_vec()));
+                file = Some((name, declared, bytes));
             }
             "activity_id" => {
                 let t = field.text().await.map_err(|e| AppError::BadRequest(e.body_text()))?;
@@ -249,8 +251,7 @@ async fn upload(
 
     let sha = files::sha256_hex(&bytes);
     let image = if mime.starts_with("image/") {
-        let b = bytes.clone();
-        tokio::task::spawn_blocking(move || files::process_image(&b)).await.map_err(|e| AppError::Internal(e.to_string()))?
+        files::process_image_queued(bytes.clone()).await.map_err(|e| AppError::Internal(e.to_string()))?
     } else { None };
     let kind = match kind.as_deref() {
         Some("photo") | Some("document") => kind.unwrap(),
@@ -459,7 +460,7 @@ async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, 
 /// same browser the previous person's bytes for `/api/files/N` without `load_owned_file` ever
 /// running. With `no-cache` every reuse is revalidated, and the 304 that makes that cheap is
 /// only ever answered after the ownership check (see `not_modified`).
-fn file_response(bytes: Vec<u8>, mime: &str, disposition: String, etag: &str) -> Response {
+fn file_response(body: Body, mime: &str, disposition: String, etag: &str) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
@@ -469,7 +470,7 @@ fn file_response(bytes: Vec<u8>, mime: &str, disposition: String, etag: &str) ->
             (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
             (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")),
         ],
-        Body::from(bytes),
+        body,
     ).into_response()
 }
 
@@ -549,9 +550,18 @@ async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path
     let f = load_owned_file(&state, user.id, id).await?;
     let etag = file_etag(&f.sha256, false);
     if if_none_match_hits(&headers, &etag) { return Ok(not_modified(&etag)); }
-    let bytes = tokio::fs::read(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    // Streamed from disk, not read whole: an original can be as large as the upload limit, and
+    // a gallery of them opened at once used to hold every one in memory for the length of its
+    // download.
+    let file = tokio::fs::File::open(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    let len = file.metadata().await?.len();
     let inline = may_render_inline(&f.mime);
-    Ok(file_response(bytes, &f.mime, content_disposition(inline, &f.original_name), &etag))
+    let mut res = file_response(
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        &f.mime, content_disposition(inline, &f.original_name), &etag,
+    );
+    res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    Ok(res)
 }
 
 async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, headers: HeaderMap) -> Result<Response, AppError> {
@@ -563,7 +573,7 @@ async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i6
         return Ok(not_modified(&etag));
     }
     let bytes = tokio::fs::read(path).await.map_err(|_| AppError::NotFound)?;
-    Ok(file_response(bytes, "image/jpeg", "inline".to_string(), &etag))
+    Ok(file_response(Body::from(bytes), "image/jpeg", "inline".to_string(), &etag))
 }
 
 #[cfg(test)]

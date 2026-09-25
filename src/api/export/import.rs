@@ -12,7 +12,7 @@ use crate::files;
 use crate::object_type::{self, Legacy};
 use crate::state::App;
 use crate::sync::{record, Entity};
-use axum::body::{Body, HttpBody};
+use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::State;
 use axum::Json;
 use chrono::NaiveDate;
@@ -732,9 +732,9 @@ impl StoredFiles<'_> {
         let Some(bytes) = self.archive.read(format!("files/{sha}"), max).await? else {
             return Err(AppError::Internal(format!("files/{sha} left the archive")));
         };
+        let bytes = Bytes::from(bytes);
         let image = if thumb {
-            let b = bytes.clone();
-            tokio::task::spawn_blocking(move || files::process_image(&b))
+            files::process_image_queued(bytes.clone())
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
         } else {
@@ -783,9 +783,10 @@ async fn store_blobs(
         if files::sha256_hex(&bytes) != x.sha256 {
             continue;
         }
+        // `Bytes` so the decode can share the buffer rather than copy it.
+        let bytes = Bytes::from(bytes);
         let image = if images.contains(x.sha256.as_str()) {
-            let b = bytes.clone();
-            tokio::task::spawn_blocking(move || files::process_image(&b))
+            files::process_image_queued(bytes.clone())
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
         } else {
