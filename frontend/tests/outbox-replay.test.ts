@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createObjectQueued, createQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, outboxDeadCount } from '../src/lib/api-outbox';
+import { cancelQueuedActivity, createObjectQueued, createQueued, createReminderQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, outboxDeadCount } from '../src/lib/api-outbox';
 import { setOutboxUser, setUnauthorizedHandler, ApiError } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
@@ -66,6 +66,21 @@ describe('createQueued + flushOutbox', () => {
     expect(calls).toHaveLength(2);
     const replayedOpId = calls[1].client_op_id;
     expect(replayedOpId).toBe(firstOpId);
+  });
+});
+
+describe('a write that reaches neither the server nor the queue', () => {
+  beforeEach(() => {
+    const broken = memoryStore();
+    broken.put = async () => { throw new DOMException('quota', 'QuotaExceededError'); };
+    setOutboxStoreForTesting(broken);
+    globalThis.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch;
+  });
+
+  it('says so for an activity, an object and a reminder alike', async () => {
+    await expect(createQueued('/objects/1/activities', { title: 'x' })).rejects.toThrow('outbox.queue-failed');
+    await expect(createObjectQueued({ name: 'x' }, -9)).rejects.toThrow('outbox.queue-failed');
+    await expect(createReminderQueued('/objects/1/reminders', { title: 'x' })).rejects.toThrow('outbox.queue-failed');
   });
 });
 

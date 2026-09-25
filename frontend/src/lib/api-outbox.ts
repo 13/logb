@@ -82,7 +82,12 @@ export async function createReminderQueued<T>(path: string, body: Record<string,
   try { return await api<T>('POST', path, { ...body, client_uuid: id }); }
   catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
-    await enqueue(store, { id, kind: 'reminder.create', path, body, attempts: 0, userId });
+    try {
+      await enqueue(store, { id, kind: 'reminder.create', path, body, attempts: 0, userId });
+    } catch {
+      // Same as its siblings: a raw IndexedDB error ("quota") told the user nothing useful.
+      throw new Error('outbox.queue-failed');
+    }
     return null;
   }
 }
