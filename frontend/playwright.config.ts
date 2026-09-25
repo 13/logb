@@ -14,6 +14,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: 'list',
+  // A `test.only` left in a commit would otherwise turn the CI run into a one-test run that
+  // passes. One retry on CI only: a flake still shows up as "flaky" in the output, but no longer
+  // fails an unrelated pull request; locally a failure should fail the first time.
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 1 : 0,
   // A trace and a screenshot on failure only. This suite has had a failure that reproduces on
   // CI and not locally, and a one-line "waiting for locator" message says nothing about what
   // the page was actually showing at the time -- which is the only question worth answering.

@@ -1,7 +1,20 @@
+# The build COPYs only Cargo.toml, Cargo.lock, src/, migrations/ and frontend/; everything below
+# is kept out of the context so it neither slows the upload nor invalidates the `COPY frontend`
+# layer. Patterns are relative to the context root, so `tests` and `docs` leave frontend/tests
+# alone. src/ embeds migrations/ at compile time, which is why that one is not listed.
 target
 data
 dist
+/node_modules
+.e2e-data-*
+graphify-out
+.superpowers
+.claude
+docs
+tests
+.github
 frontend/node_modules
 frontend/dist
 frontend/test-results
+frontend/playwright-report
 .git

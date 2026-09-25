@@ -7,7 +7,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/data
+      # A named volume, so a fresh `docker compose up` works with no setup: it starts out owned
+      # by the image's uid 65532. To keep the data in a host directory instead, see "Run with
+      # Docker" in the README -- the directory has to be chowned to 65532 first.
+      - logb-data:/data
     environment:
       LOGB_MAX_UPLOAD_MB: "50"
       LOGB_SECURE_COOKIE: "auto"
@@ -17,7 +20,12 @@ services:
       # moving to PostgreSQL means uncommenting this line and `docker compose up -d logb` --
       # see "Moving to PostgreSQL" in the README. Files and thumbnails stay in /data either way.
       # LOGB_DATABASE_URL: "postgres://user:pass@host/logb"
-      # Nightly snapshot of the database, kept beside it. Unset means no automatic backup at
-      # all, which is how this instance ran until now. Blobs under files/ are content-addressed
-      # and never rewritten, so a plain copy of that directory pairs with any snapshot.
+      # Nightly snapshot of the SQLite database, kept beside it in the same volume. The binary
+      # takes none unless this is set; this file sets it. Blobs under files/ are
+      # content-addressed and never rewritten, so a plain copy of that directory pairs with any
+      # snapshot. Copy both off the host too: a snapshot on the same disk guards against
+      # mistakes, not against losing the disk.
       LOGB_BACKUP_DIR: "/data/backups"
+
+volumes:
+  logb-data:

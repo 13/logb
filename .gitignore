@@ -1,6 +1,7 @@
 /target
 /data
 /dist
+/node_modules
 /.e2e-data-mobile
 /.e2e-data-desktop
 frontend/node_modules

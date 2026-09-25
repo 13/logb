@@ -5,10 +5,10 @@ cd "$(dirname "$0")"
 
 version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 echo "== LogB v$version — frontend"
-(cd frontend && npm ci --silent && npm run check && npm test -- --run && npm run build)
+(cd frontend && npm ci --silent && npm run check && npm test && npm run build)
 
 echo "== backend tests"
-cargo test --quiet
+cargo test --quiet --locked
 
 echo "== release build"
 cargo build --release --locked

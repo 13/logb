@@ -39,8 +39,9 @@ It also rotates the sync epoch, so every device does one full re-sync on its nex
 That is expected, not a fault — it is how each device learns the new field.
 
 **Take a backup before upgrading — this one is not optional.** The migration rebuilds two
-tables, and `LOGB_BACKUP_DIR` is unset on a default install, which means there is no automatic
-backup to fall back on unless you set it. Take one yourself first:
+tables, and the nightly snapshot exists only where `LOGB_BACKUP_DIR` is set: this repository's
+compose file sets it, the binary on its own and a bare `docker run` do not, and even where it is
+set the newest snapshot can be a day old. Take one yourself first:
 
 ```bash
 docker compose exec logb /logb --backup /data/snapshot.db

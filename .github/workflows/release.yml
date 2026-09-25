@@ -1,7 +1,8 @@
 name: Release
 
-# Deliberate releases only: nothing reaches the registry that was not named, and the tag is the
-# single source of the version. ci.yml still guards every commit.
+# Deliberate releases only: nothing is tagged in the registry that was not named, and the tag is
+# the single source of the version. ci.yml guards every commit, and runs again here against the
+# tagged one, because a tag can point at any commit -- including one CI never saw.
 on:
   push:
     # Matches any tag starting with "v", not only version tags — the version check below fails
@@ -9,23 +10,20 @@ on:
     # skipping them.
     tags: ['v*']
 
-jobs:
-  release:
-    name: publish image and release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # create the GitHub Release
-      packages: write   # push to ghcr.io
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0   # release notes are generated from the commits since the last tag
+permissions:
+  contents: read
 
-      # Before anything is built. An image whose /api/health reports a version it is not gets
-      # believed, and the tag would disagree with the binary inside it. Everything else in this
-      # workflow is recoverable by re-running; that is not.
-      - name: The tag must match Cargo.toml
-        run: |
+jobs:
+  # Before anything is built or tested. An image whose /api/health reports a version it is not
+  # gets believed, and the tag would disagree with the binary inside it. Everything else in this
+  # workflow is recoverable by re-running; that is not. Its own job, so a mistyped tag fails in
+  # seconds rather than after the whole CI run.
+  version:
+    name: the tag must match Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - run: |
           tag="${GITHUB_REF_NAME#v}"
           # ^version only matches a crate's own version key because dependency versions are
           # indented under [dependencies]. This would misbehave if Cargo.toml ever grew a
@@ -38,16 +36,44 @@ jobs:
           fi
           echo "version $crate"
 
-      - uses: docker/setup-buildx-action@v3
+  ci:
+    name: CI
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    # A called workflow can only narrow the caller's token, and ci.yml's audit job needs to
+    # create a check run.
+    permissions:
+      contents: read
+      checks: write
 
-      - uses: docker/login-action@v3
+  release:
+    name: publish image and release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+      packages: write   # push to ghcr.io
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0   # release notes are generated from the commits since the last tag
+
+      # Only for booting the arm64 image in the smoke test below. The build itself cross-compiles
+      # on the runner's own architecture (see the Dockerfile) and never runs under emulation.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}
           # 0.2.0 pins exactly, 0.2 follows patches without editing compose, latest is for
@@ -61,75 +87,86 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      # Built and loaded locally first: a tag can point at any commit, including one ci.yml
-      # never ran against, so the image is booted before anyone can pull it.
-      - name: Build
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          load: true
-          tags: logb:release-candidate
-          # The same labels the Push step applies. They land in the image config, which is what
-          # `imageid` hashes -- omitting them here made the two builds differ by construction,
-          # so the digest comparison below could never pass. It failed on the first real tag.
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # A registry reference must be lower-case; github.repository keeps the owner's casing.
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Boot the image
-        run: |
-          docker run -d --name logb-release -p 8080:8080 -v logb-release-data:/data logb:release-candidate
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/api/health; then echo; exit 0; fi
-            sleep 1
-          done
-          echo "health check never succeeded"; docker logs logb-release; exit 1
-
-      # Re-runs the build, but every layer is a cache hit from the step above, so this pushes
-      # the image that was just smoke-tested rather than building a second one. That is an
-      # assumption, not a guarantee — proven below by comparing image ids.
+      # Pushed by digest only, with no tag, so nobody can pull it by name yet. A multi-arch image
+      # cannot be loaded into the runner's docker to be tested first, and building it twice (once
+      # to test, once to push) would publish something other than what was tested whenever the
+      # second build missed the cache. Instead the one image is pushed untagged, booted from the
+      # registry below, and only then given its tags -- by digest, so the tagged image is the
+      # tested one by construction. If the smoke test fails, the untagged manifest stays behind
+      # in the package's versions; delete it there.
       #
       # provenance/sbom are explicitly disabled here on purpose, not left out by oversight:
       # setup-buildx-action defaults to the docker-container driver, and buildx defaults that
-      # driver to provenance=mode=min on any push:true build, which would attach an attestation
+      # driver to provenance=mode=min on any push build, which would attach an attestation
       # manifest this project deliberately does not want on the published image.
-      - name: Push
-        id: push
-        uses: docker/build-push-action@v6
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          build-args: LOGB_BUILD_COMMIT=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Prove the assumption above rather than trust it: the Build step's image id is the
-      # content-addressed id of the image that was actually booted and health-checked; the Push
-      # step reports the same "imageid" output (docker/build-push-action@v6 exposes imageid,
-      # digest and metadata — imageid is used here, not digest, because digest is the pushed
-      # manifest's digest and is not directly comparable to a load-only build that was never
-      # given a registry destination). If a cache miss or anything else caused the second build
-      # to diverge from the first, the ids differ and the job fails before anyone can pull the
-      # untested image.
-      - name: The pushed image must be the one that was tested
+      # Each architecture pulled from the registry by the digest just pushed, booted, and asked
+      # which version it is. arm64 runs under QEMU, hence the longer wait.
+      - name: Boot each architecture
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          if [ "${{ steps.build.outputs.imageid }}" != "${{ steps.push.outputs.imageid }}" ]; then
-            echo "built image ${{ steps.build.outputs.imageid }} but pushed ${{ steps.push.outputs.imageid }}" >&2
+          for arch in amd64 arm64; do
+            docker run -d --platform "linux/$arch" --name "logb-$arch" -p 8080:8080 \
+              -v "logb-release-$arch:/data" "$IMAGE"
+            ok=
+            for _ in $(seq 1 90); do
+              if health=$(curl -fsS http://127.0.0.1:8080/api/health); then ok=1; break; fi
+              sleep 1
+            done
+            if [ -z "$ok" ]; then
+              echo "$arch: health check never succeeded"; docker logs "logb-$arch"; exit 1
+            fi
+            echo "$arch: $health"
+            if ! jq -e --arg v "$VERSION" '.version == $v' <<<"$health" >/dev/null; then
+              echo "$arch: reports a version other than $VERSION" >&2; exit 1
+            fi
+            docker rm -f "logb-$arch"
+          done
+
+      # The tags point at the digest that was booted above. Given a single index and nothing to
+      # add, imagetools copies it rather than building a new one; the check after it proves that
+      # instead of trusting it, so a tag can never name an image that was not tested.
+      - name: Tag the tested image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          args=()
+          while read -r tag; do args+=(-t "$tag"); done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
+          tagged="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+          if [ "$tagged" != "$DIGEST" ]; then
+            echo "tested $DIGEST but $IMAGE:$VERSION is $tagged" >&2
             exit 1
           fi
-          echo "confirmed: pushed image matches the one that was health-checked"
+          echo "confirmed: $IMAGE:$VERSION is the image that was health-checked"
 
-      # If the Push above succeeded and this step then fails, the image is already live on
+      # If tagging above succeeded and this step then fails, the image is already live on
       # ghcr.io with no Release page describing it. That is recoverable, not a wedged state:
-      # re-running the job re-pushes identical cache-hit layers (a no-op) and this action is
-      # idempotent per tag (it updates the existing release rather than duplicating it), so
-      # just re-running the workflow run is the fix.
-      - uses: softprops/action-gh-release@v2
+      # re-running the job rebuilds from cache, re-tests, re-tags, and this action is idempotent
+      # per tag (it updates the existing release rather than duplicating it), so just re-running
+      # the workflow run is the fix.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           body: |

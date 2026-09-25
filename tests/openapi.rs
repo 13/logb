@@ -120,6 +120,20 @@ fn the_spec_describes_exactly_the_routes_the_api_serves() {
     }
 }
 
+/// A client compares `info.version` with what `/api/health` reports to know which document
+/// describes the server it is talking to. It sat at 0.1.0 long after the crate moved on, because
+/// nothing asked it to move; this does, so a release bump that forgets the spec fails the build.
+#[test]
+fn the_spec_version_is_the_crate_version() {
+    let raw = std::fs::read_to_string("docs/openapi.json").unwrap();
+    let spec: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        spec["info"]["version"],
+        env!("CARGO_PKG_VERSION"),
+        "docs/openapi.json info.version should be bumped together with Cargo.toml"
+    );
+}
+
 /// A client author reads the spec to find out how to authenticate; getting that wrong is the
 /// difference between an app that works and one that cannot log in at all.
 #[test]
