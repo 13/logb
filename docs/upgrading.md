@@ -28,6 +28,32 @@ longer returns why a webhook or Telegram delivery failed; the reason is in the s
 Webhook and push deliveries no longer follow redirects: a webhook that answers with one now
 counts as failed, so point it at the final address.
 
+Two proxies that both append (a CDN in front of nginx, say) make the rightmost entry the
+CDN's address for every client, so all logins share one limit. Have the outer proxy overwrite
+`X-Forwarded-For` rather than append, or leave `LOGB_TRUST_PROXY` off there.
+
+**Thumbnails move, and orphaned files are swept.** At the first start, thumbnails named after
+a file id move to a name derived from the image's content; ones no image row names are
+deleted, since they could only ever be shown for the wrong file. After that a daily sweep
+removes blobs and thumbnails no row names -- but only once two sweeps a day apart agree, and
+never when so many look orphaned that the database probably is not the one this data directory
+belongs to. Starting against an older snapshot with `--restore` therefore leaves a day before
+files only the replaced database named are removed: go back within that day if the restore was
+a mistake.
+
+**Stopping is orderly.** SIGTERM, ctrl-c and Settings → Restart now let requests in flight
+finish (up to ten seconds) instead of killing them; `docker stop` no longer waits out its
+timeout.
+
+**Building the image locally needs BuildKit.** The Dockerfile cross-compiles for arm64, which
+the legacy builder cannot parse. Docker Desktop and Docker's own packages include BuildKit;
+some distributions package it separately (`docker-buildx` on Arch). Pulling the published image
+is unaffected, and it is now published for `linux/arm64` as well as `linux/amd64`.
+
+**A fresh `./data` has to belong to uid 65532.** The compose file still bind-mounts `./data`;
+create and chown it before the first start (`sudo chown 65532:65532 data`). Existing installs
+already have it right.
+
 ## 0.16.1: writes queue instead of racing
 
 A write that cannot take the database's write lock now waits for it. Under heavy concurrent
