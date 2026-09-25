@@ -27,7 +27,7 @@ export interface NotificationSettings {
   telegram_display_name: string | null; telegram_last_error: string | null;
   telegram_bot_username: string | null; telegram_legacy: boolean;
 }
-export interface NotificationTest { webhook: string | null; push_sent: number; push_failed: number; telegram: string | null }
+export interface NotificationTest { webhook: 'sent' | 'failed' | null; push_sent: number; push_failed: number; telegram: 'sent' | 'failed' | null }
 export interface TelegramLink { url: string; qr_svg: string; expires_at: string }
 
 export interface ObjectStats {

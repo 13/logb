@@ -3,6 +3,31 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.17.0: hardening
+
+**Everyone is signed out once.** The database now stores a hash of each session token instead
+of the token itself, so a copy of the database -- a backup, a snapshot -- no longer holds
+cookies anyone could replay. Sessions from before the upgrade cannot be converted and are
+deleted when the migration runs: every browser shows the sign-in page once. API tokens are
+unaffected; they were already stored hashed.
+
+**Changing your own password asks for the current one.** `PATCH /api/users/{id}` with a new
+`password` for your own account now needs `current_password` as well, and answers `403` with
+`"error": "wrong_password"` when it is missing or wrong. Each such attempt counts against the
+login rate limit. An admin resetting *another* user's password is unchanged.
+
+**Behind a proxy, the last forwarded hop counts.** With `LOGB_TRUST_PROXY` set, the client
+address for the login limit is now the **rightmost** `X-Forwarded-For` entry -- the one your
+proxy appended -- and the pairing host the rightmost `X-Forwarded-Host` entry. Earlier entries
+come from the client and are ignored. A proxy that overwrites these headers behaves exactly as
+before; one that appends now works as intended. Logins are also limited per username, with the
+same window and `LOGB_LOGIN_MAX_ATTEMPTS`, whatever address they come from.
+
+**The notification test answers `sent` or `failed`.** `POST /api/me/notifications/test` no
+longer returns why a webhook or Telegram delivery failed; the reason is in the server log.
+Webhook and push deliveries no longer follow redirects: a webhook that answers with one now
+counts as failed, so point it at the final address.
+
 ## 0.16.1: writes queue instead of racing
 
 A write that cannot take the database's write lock now waits for it. Under heavy concurrent

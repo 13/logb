@@ -2,12 +2,13 @@ use crate::auth::{self, AdminUser, AuthUser};
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -63,7 +64,7 @@ async fn create(
         "INSERT INTO users (username, password_hash, is_admin, lang, created_at) VALUES ($1, $2, $3, 'en', $4) \
          RETURNING id, username, is_admin, lang, created_at",
     )
-    .bind(&body.username).bind(auth::hash_password(&body.password)?).bind(i64::from(body.is_admin)).bind(db::now())
+    .bind(&body.username).bind(auth::hash_password(&body.password).await?).bind(i64::from(body.is_admin)).bind(db::now())
     .fetch_one(&state.db).await
     .map_err(|e| match e.as_database_error().filter(|d| d.is_unique_violation()) {
         Some(_) => AppError::Conflict("username already taken".into()),
@@ -75,14 +76,33 @@ async fn create(
 #[derive(Deserialize)]
 pub struct UpdateUser {
     pub password: Option<String>,
+    /// The caller's present password. Required with `password` when the caller is changing
+    /// their own (see `update`); ignored otherwise.
+    pub current_password: Option<String>,
     pub is_admin: Option<bool>,
     pub lang: Option<String>,
 }
 
+/// Changes a user's password, admin role or language.
+///
+/// Changing your OWN password needs `current_password`. A session is a weaker credential than
+/// the password: it sits in a browser that may be left open on a shared computer, and an API
+/// token reaches this route too. Without the check, whoever holds either could set a password
+/// of their choosing -- which also ends every other session and token, locking the owner out of
+/// their own account. Missing and wrong are refused alike with `AppError::WrongPassword`.
+///
+/// Every such attempt spends the same allowance a login does, per address and per username:
+/// checking a guess here is checking a password, and without the limit a stolen session would
+/// be an unthrottled oracle for it. The attempt is counted before anything is verified, so the
+/// right answer is refused too once the allowance is spent -- exactly as at the login form.
+///
+/// An admin resetting SOMEONE ELSE's password is not asked for anything: the admin does not
+/// know it, and resetting it is the whole point.
 async fn update(
     me: AuthUser,
     State(state): State<App>,
     Path(id): Path<i64>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<UpdateUser>,
@@ -111,29 +131,61 @@ async fn update(
             return Err(AppError::BadRequest("lang must be en or de".into()));
         }
     }
+    if body.password.is_some() && me.id == id {
+        auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
+        auth::check_username_rate(&state, &me.username)?;
+        let current = body.current_password.as_deref().unwrap_or("");
+        if current.is_empty() {
+            return Err(AppError::WrongPassword);
+        }
+        let (stored,): (String,) = sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
+            .bind(id).fetch_one(&state.db).await?;
+        if !auth::verify_password(current, &stored).await {
+            return Err(AppError::WrongPassword);
+        }
+    }
 
-    let mut jar = jar;
-    if let Some(p) = &body.password {
+    // Hashed before the write transaction opens, as `setup` does: Argon2 takes long enough that
+    // holding the one writer connection (SQLite) or the advisory lock (PostgreSQL) through it
+    // would stall every other write in the app.
+    let new_hash = match &body.password {
+        Some(p) => Some(auth::hash_password(p).await?),
+        None => None,
+    };
+
+    // Every statement below runs in one write transaction, so a failure part-way can no longer
+    // leave, say, the new password committed while the sessions opened with the old one live
+    // on. Everything inside uses `tx` and nothing else: acquiring a second pooled connection
+    // between `begin_write` and `commit` would, on SQLite, wait on the very connection this
+    // transaction holds.
+    let mut tx = db::begin_write(&state).await?;
+    let mut new_token = None;
+    if let Some(hash) = &new_hash {
         sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-            .bind(auth::hash_password(p)?).bind(id).execute(&state.db).await?;
+            .bind(hash).bind(id).execute(&mut *tx).await?;
         // The new password only means anything if the sessions opened with the old one stop
         // working. Someone changing their own password keeps this browser signed in, on a
         // freshly issued session; every other session for that account is gone either way.
-        auth::delete_sessions_for_user(&state, id).await?;
+        auth::delete_sessions_for_user_in(&mut tx, id).await?;
         if me.id == id {
-            let token = auth::create_session(&state, id).await?;
-            jar = jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers)));
+            new_token = Some(auth::create_session_in(&mut tx, id).await?);
         }
     }
     if let Some(a) = body.is_admin {
         // An integer, for the same reason as the INSERT above.
-        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(i64::from(a)).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2").bind(i64::from(a)).bind(id).execute(&mut *tx).await?;
     }
     if let Some(l) = &body.lang {
-        sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE users SET lang = $1 WHERE id = $2").bind(l).bind(id).execute(&mut *tx).await?;
     }
     let user = sqlx::query_as::<_, UserOut>("SELECT id, username, is_admin, lang, created_at FROM users WHERE id = $1")
-        .bind(id).fetch_one(&state.db).await?;
+        .bind(id).fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    // The cookie only once the session it names has committed.
+    let jar = match new_token {
+        Some(token) => jar.add(auth::session_cookie(token, auth::wants_secure(&state, &headers))),
+        None => jar,
+    };
     Ok((jar, Json(user)))
 }
 

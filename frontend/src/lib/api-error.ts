@@ -85,6 +85,7 @@ const CODE_KEYS: Record<string, string> = {
   icon_invalid: 'types.error.icon_invalid',
   categories_invalid: 'types.error.categories_invalid',
   unit_invalid: 'types.error.unit_invalid',
+  wrong_password: 'settings.wrong-password',
 };
 
 /** The one `unavailable` answer with a fixed sentence: the writer (or the database) was busy and

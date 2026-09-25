@@ -15,6 +15,12 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    /// A change of the caller's own password whose `current_password` was missing or wrong. A
+    /// 403 of its own, with the stable code `wrong_password`, so a client can say "that is not
+    /// your current password" rather than a bare "forbidden" -- and so it cannot be confused
+    /// with a 401, which the bundled client treats as "signed out" (`isUnauthenticated`).
+    #[error("current password is missing or wrong")]
+    WrongPassword,
     #[error("not found")]
     NotFound,
     #[error("{0}")]
@@ -78,6 +84,7 @@ impl AppError {
             AppError::Invalid { code, .. } => (StatusCode::BAD_REQUEST, code),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            AppError::WrongPassword => (StatusCode::FORBIDDEN, "wrong_password"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             AppError::InUse(_) => (StatusCode::CONFLICT, "in_use"),

@@ -434,6 +434,8 @@ export default {
   'notify.test': 'Test-Benachrichtigung senden',
   'notify.test-push': 'An {n} deiner Geräte gesendet.',
   'notify.test-webhook': 'Webhook: {result}',
+  'notify.test-sent': 'gesendet',
+  'notify.test-failed': 'fehlgeschlagen',
   'notify.test-nowhere': 'Noch gibt es kein Ziel: schalte Benachrichtigungen ein oder trage erst einen Webhook ein.',
 
   'object.templates': 'Vorgeschlagene Erinnerungen',
@@ -480,6 +482,8 @@ export default {
   'settings.logout-all-hint': 'Ein Passwortwechsel beendet bereits alle anderen Sitzungen.',
   'settings.logout-all-confirm': 'Auf allen Geräten abmelden, dieses eingeschlossen?',
   'settings.change-password': 'Passwort ändern',
+  'settings.current-password': 'Aktuelles Passwort',
+  'settings.wrong-password': 'Das ist nicht dein aktuelles Passwort.',
   'settings.data': 'Daten',
   'settings.export': 'Alles exportieren (zip)',
   'settings.export-exclude-body': 'Körpergewicht ausschließen',

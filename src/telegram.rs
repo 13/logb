@@ -43,8 +43,12 @@ fn telegram_error(status: reqwest::StatusCode, value: &Value) -> AppError {
     ))
 }
 async fn call(state: &App, token: &str, method: &str, body: &Value) -> Result<Value, AppError> {
+    // No redirects, like every other outgoing notification client (`notify::post`): the Bot API
+    // answers every call itself, and the base URL is operator configuration a redirect should
+    // not be able to extend.
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::Internal(format!("telegram client: {e}")))?;
     for attempt in 0..2 {

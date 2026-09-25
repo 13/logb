@@ -40,7 +40,7 @@ async fn non_admin_is_limited_to_self() {
     let me: serde_json::Value = anna.get(app.url("/auth/me")).send().await.unwrap().json().await.unwrap();
     let res = anna.patch(app.url(&format!("/users/{}", me["id"]))).json(&json!({ "is_admin": true })).send().await.unwrap();
     assert_eq!(res.status(), 403, "cannot promote self");
-    let res = anna.patch(app.url(&format!("/users/{}", me["id"]))).json(&json!({ "lang": "de", "password": "newpassword1" })).send().await.unwrap();
+    let res = anna.patch(app.url(&format!("/users/{}", me["id"]))).json(&json!({ "lang": "de", "password": "newpassword1", "current_password": "password123" })).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let c = common::new_client();
     assert_eq!(app.login(&c, "anna", "newpassword1").await.status(), 200);
@@ -57,7 +57,7 @@ async fn rejected_field_does_not_leave_partial_write() {
     let res = app
         .client
         .patch(app.url(&format!("/users/{}", me["id"])))
-        .json(&json!({ "password": "newpass1", "is_admin": false }))
+        .json(&json!({ "password": "newpass1", "current_password": "correct horse", "is_admin": false }))
         .send()
         .await
         .unwrap();
@@ -157,7 +157,7 @@ async fn changing_a_password_invalidates_other_sessions() {
     let eve_id = users.as_array().unwrap().iter().find(|u| u["username"] == "eve").unwrap()["id"].as_i64().unwrap();
 
     let res = eve.patch(app.url(&format!("/users/{eve_id}")))
-        .json(&serde_json::json!({ "password": "a better password" })).send().await.unwrap();
+        .json(&serde_json::json!({ "password": "a better password", "current_password": "password123" })).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
     // The browser that made the change stays signed in, on a new session.
@@ -182,4 +182,71 @@ async fn an_admin_reset_ends_the_users_sessions() {
     assert_eq!(eve.get(app.url("/auth/me")).send().await.unwrap().status(), 401);
     // The admin's own session is untouched.
     assert_eq!(app.client.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+}
+
+async fn my_id(app: &common::TestApp, client: &reqwest::Client) -> i64 {
+    let me: serde_json::Value = client.get(app.url("/auth/me")).send().await.unwrap().json().await.unwrap();
+    me["id"].as_i64().unwrap()
+}
+
+/// A session left open on a shared computer must not be enough to take the account over: the
+/// person at the keyboard has to know the password they are replacing. Missing and wrong are
+/// refused alike, with a code a client can put into words, and the old password still works.
+#[tokio::test]
+async fn changing_your_own_password_needs_the_current_one() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let id = my_id(&app, &anna).await;
+
+    for body in [
+        json!({ "password": "new secret 1" }),
+        json!({ "password": "new secret 1", "current_password": "not it at all" }),
+    ] {
+        let res = anna.patch(app.url(&format!("/users/{id}"))).json(&body).send().await.unwrap();
+        assert_eq!(res.status(), 403, "{body}");
+        let err: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(err["error"], "wrong_password", "{err}");
+    }
+    assert_eq!(app.login(&common::new_client(), "anna", "password123").await.status(), 200);
+    // The session that asked is still signed in: a refusal ends nothing.
+    assert_eq!(anna.get(app.url("/auth/me")).send().await.unwrap().status(), 200);
+
+    // An admin is asked for their own current password too; being an admin is not knowing it.
+    let ben = my_id(&app, &app.client).await;
+    let res = app.client.patch(app.url(&format!("/users/{ben}"))).json(&json!({ "password": "new secret 1" })).send().await.unwrap();
+    assert_eq!(res.status(), 403);
+}
+
+/// A change that does not touch the password needs no password.
+#[tokio::test]
+async fn changing_only_your_language_needs_no_password() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let id = my_id(&app, &anna).await;
+    let res = anna.patch(app.url(&format!("/users/{id}"))).json(&json!({ "lang": "de" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+/// Guessing the current password through this route is guessing a password, so it spends the
+/// same allowance a login does: otherwise a stolen session would be an unlimited oracle for it.
+#[tokio::test]
+async fn wrong_current_passwords_count_against_the_login_limit() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let id = my_id(&app, &anna).await;
+    // `create_user_client` already spent one of this address's ten attempts on its login.
+    for i in 0..9 {
+        let res = anna.patch(app.url(&format!("/users/{id}")))
+            .json(&json!({ "password": "new secret 1", "current_password": format!("guess {i}") }))
+            .send().await.unwrap();
+        assert_eq!(res.status(), 403, "guess {i}");
+    }
+    let res = anna.patch(app.url(&format!("/users/{id}")))
+        .json(&json!({ "password": "new secret 1", "current_password": "password123" }))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 429, "the right answer is refused too once the allowance is spent");
+    assert_eq!(app.login(&common::new_client(), "anna", "password123").await.status(), 429);
 }

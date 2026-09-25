@@ -26,6 +26,9 @@ pub struct AppState {
     pub config: Config,
     /// login attempts per IP: (count, window start)
     pub login_attempts: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    /// login attempts per lower-cased username, same shape and window as `login_attempts`.
+    /// See `auth::check_username_rate`.
+    pub login_attempts_by_user: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
 pub type App = Arc<AppState>;

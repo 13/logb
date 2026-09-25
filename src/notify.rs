@@ -217,9 +217,14 @@ pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
 ///
 /// A text digest about exactly one reminder also sends a `Click` header naming its link, so
 /// tapping the notification opens the app where that reminder is dealt with.
+///
+/// Redirects are not followed. The address was validated when the user saved it; a redirect
+/// would let the far end send the server's POST somewhere that never was -- a service on the
+/// server's own network, say. A webhook that answers with one counts as failed.
 pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppError> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::Internal(format!("notify client: {e}")))?;
     let request = if format == "text" {

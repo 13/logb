@@ -2140,7 +2140,7 @@
     },
     "/users/{id}": {
       "patch": {
-        "summary": "Change a user's password or language. Anyone may change their own; only an admin may change anyone else's. A password change ends every session AND revokes every API token of that account.",
+        "summary": "Change a user's password or language. Anyone may change their own; only an admin may change anyone else's. Changing your OWN password needs `current_password`; an admin resetting someone else's does not. A password change ends every session AND revokes every API token of that account.",
         "parameters": [
           {
             "name": "id",
@@ -2172,6 +2172,19 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Not allowed to change this user, or `wrong_password`: a change of your own password whose `current_password` was missing or wrong. Each such attempt counts against the login rate limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many password attempts from this address or for this account; try again in a minute"
           }
         }
       },
@@ -2680,6 +2693,10 @@
           "password": {
             "type": "string",
             "minLength": 8
+          },
+          "current_password": {
+            "type": "string",
+            "description": "The caller's present password. Required when `password` is set on the caller's own account; ignored otherwise."
           },
           "lang": {
             "type": "string"
@@ -5520,7 +5537,8 @@
               "string",
               "null"
             ],
-            "description": "`sent`, why it failed, or null without a webhook of this user's own"
+            "enum": ["sent", "failed", null],
+            "description": "`sent`, `failed`, or null without a webhook of this user's own. Why it failed is logged on the server, never returned."
           },
           "push_sent": {
             "type": "integer"
@@ -5530,7 +5548,8 @@
           },
           "telegram": {
             "type": ["string", "null"],
-            "description": "`sent`, why it failed, or null without a Telegram connection"
+            "enum": ["sent", "failed", null],
+            "description": "`sent`, `failed`, or null without a Telegram connection. Why it failed is logged on the server, never returned."
           }
         }
       },

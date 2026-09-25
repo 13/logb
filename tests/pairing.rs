@@ -34,21 +34,23 @@ async fn creating_a_pair_code_with_a_password_session_returns_code_uri_qr_and_ex
 }
 
 /// A reverse proxy may append to `X-Forwarded-Host` rather than replace it -- the same shape
-/// `X-Forwarded-For` can take -- so only the first, trimmed entry must end up in the pairing
-/// URI, exactly as `auth::client_ip` already does for the forwarded client address.
+/// `X-Forwarded-For` can take. Only the LAST, trimmed entry is the one the trusted proxy wrote;
+/// anything to its left arrived from the client and is whatever the client chose to send. So
+/// the last entry, and only it, must end up in the pairing URI, exactly as `auth::client_ip`
+/// reads the forwarded client address.
 #[tokio::test]
-async fn x_forwarded_host_takes_only_the_first_of_a_comma_separated_list() {
+async fn x_forwarded_host_takes_only_the_last_of_a_comma_separated_list() {
     let app = common::spawn_with(|c| c.trust_proxy = true).await;
     app.setup("ben", "correct horse").await;
 
     let res = app.client.post(app.url("/auth/pair"))
-        .header("x-forwarded-host", "first.example.com, second.example.com")
+        .header("x-forwarded-host", "spoofed.example.com, proxy-written.example.com")
         .send().await.unwrap();
     assert_eq!(res.status(), 201);
     let body: serde_json::Value = res.json().await.unwrap();
     let uri = body["uri"].as_str().unwrap();
-    assert!(uri.contains("first.example.com"), "{uri}");
-    assert!(!uri.contains("second.example.com"), "{uri}");
+    assert!(uri.contains("proxy-written.example.com"), "{uri}");
+    assert!(!uri.contains("spoofed.example.com"), "{uri}");
 }
 
 /// Whichever header supplies the host that lands in the pairing URI, it must first parse as a
