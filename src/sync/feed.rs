@@ -19,6 +19,21 @@ pub struct ChangeRow {
     pub entity_id: Option<i64>,
 }
 
+/// The changes after `since`, in `seq` order.
+///
+/// A correction to `migrations/sqlite/0007_sync.sql`, which says a rolled-back insert "burns"
+/// its `AUTOINCREMENT` number. On SQLite it does not: the counter lives in `sqlite_sequence`, an
+/// ordinary table that the rollback restores along with everything else, so the next insert is
+/// handed the very same `seq` (PostgreSQL's identity sequence is the one that really burns
+/// numbers). The comment stays wrong in the migration because sqlx checksums every applied
+/// migration file and refuses to start against a database whose recorded checksum no longer
+/// matches -- editing it would break every existing instance.
+///
+/// Nothing here depends on either behaviour. A reused number was never visible to any reader --
+/// the transaction that took it first never committed -- so `seq > since` still never revisits
+/// a change a device has already passed. What the reuse *does* break is anything that names an
+/// on-disk artefact after an autoincrement id and writes it inside the transaction: see
+/// `files::Storage::thumb_path` for the thumbnail that did exactly that.
 pub async fn pull(
     db: &sqlx::AnyPool,
     user_id: i64,

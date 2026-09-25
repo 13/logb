@@ -101,21 +101,20 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
     }
     for (id, sha) in orphans {
         sqlx::query("DELETE FROM files WHERE id = $1").bind(id).execute(&state.db).await?;
-        discard_blob(state, id, &sha).await?;
+        discard_blob(state, &sha).await?;
     }
     Ok(())
 }
 
-/// Drops the on-disk artefacts of a `files` row that has already been deleted: the thumbnail
-/// always, and the blob only once no other row still points at that content hash (two users
-/// uploading the same photo share one blob, and each has their own `files` row).
-pub async fn discard_blob(state: &App, file_id: i64, sha: &str) -> Result<(), AppError> {
+/// Drops the on-disk artefacts of a `files` row that has already been deleted -- blob and
+/// thumbnail both, since both are named after the content -- once no other row still points at
+/// that content hash (two users uploading the same photo share one blob and one thumbnail, and
+/// each has their own `files` row).
+pub async fn discard_blob(state: &App, sha: &str) -> Result<(), AppError> {
     let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = $1 LIMIT 1")
         .bind(sha).fetch_optional(&state.db).await?;
     if still_used.is_none() {
-        state.storage.remove(sha, file_id).await;
-    } else {
-        let _ = tokio::fs::remove_file(state.storage.thumb_path(file_id)).await;
+        state.storage.remove(sha).await;
     }
     Ok(())
 }
@@ -247,14 +246,19 @@ async fn upload(
     let file_id = match existing {
         Some((id,)) => id,
         None => {
+            // Blob and thumbnail both go to disk before the transaction opens, so the row can
+            // never become visible ahead of either -- a client that sees the new file may ask
+            // for its /thumb at once. Both are named after the content hash, so if the insert
+            // below then fails they are orphans for `files_gc::sweep`, never files some later
+            // row with a reused id would serve as its own (see `Storage::thumb_path`). It also
+            // keeps disk writes out of the write transaction, which every other writer queues
+            // behind.
             state.storage.write_blob(&sha, &bytes).await?;
+            if let Some(img) = &image {
+                state.storage.write_thumb(&sha, &img.thumb_jpeg).await?;
+            }
             let file_uuid = uuid::Uuid::new_v4().to_string();
             let edited_at = record::edited_at_now();
-            // The thumbnail is named after the file id, so it can only be written once the
-            // row exists -- but the row must not become visible before the thumbnail does, or
-            // a client that sees the new file can ask for a /thumb that is not on disk yet.
-            // Writing both inside one transaction closes that window: other connections see
-            // the row only at commit, by which point the JPEG is already written.
             let mut tx = db::begin_write(&state).await?;
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
@@ -267,9 +271,6 @@ async fn upload(
             .fetch_one(&mut *tx).await;
             match inserted {
                 Ok((id,)) => {
-                    if let Some(img) = &image {
-                        state.storage.write_thumb(id, &img.thumb_jpeg).await?;
-                    }
                     record::record_create(&mut tx, user.id, Entity::File, &file_uuid, &edited_at).await?;
                     tx.commit().await?;
                     id
@@ -406,7 +407,6 @@ async fn delete(user: AuthUser, State(state): State<App>, Path(id): Path<i64>) -
 
 #[derive(sqlx::FromRow)]
 struct FileRow {
-    id: i64,
     sha256: String,
     original_name: String,
     mime: String,
@@ -418,7 +418,7 @@ struct FileRow {
 /// read as absent even though the row and blob survive for the sync window.
 async fn load_owned_file(state: &App, user_id: i64, id: i64) -> Result<FileRow, AppError> {
     sqlx::query_as::<_, FileRow>(
-        "SELECT f.id, f.sha256, f.original_name, f.mime FROM files f \
+        "SELECT f.sha256, f.original_name, f.mime FROM files f \
          WHERE f.id = $1 AND f.user_id = $2 AND EXISTS ( \
            SELECT 1 FROM attachments a JOIN objects o ON o.id = a.object_id \
            WHERE a.file_id = f.id AND a.deleted_at IS NULL AND o.deleted_at IS NULL)",
@@ -537,7 +537,7 @@ async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i6
     let f = load_owned_file(&state, user.id, id).await?;
     let etag = file_etag(&f.sha256, true);
     // A thumbnail only exists for images; the 304 must not claim one that was never made.
-    let path = state.storage.thumb_path(f.id);
+    let path = state.storage.thumb_path(&f.sha256);
     if if_none_match_hits(&headers, &etag) && tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return Ok(not_modified(&etag));
     }

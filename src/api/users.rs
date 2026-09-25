@@ -165,8 +165,8 @@ async fn delete(AdminUser(me): AdminUser, State(state): State<App>, Path(id): Pa
     sqlx::query("DELETE FROM users WHERE id = $1").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
 
-    for (file_id, sha) in blobs {
-        super::attachments::discard_blob(&state, file_id, &sha).await?;
+    for (_, sha) in blobs {
+        super::attachments::discard_blob(&state, &sha).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

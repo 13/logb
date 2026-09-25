@@ -1704,3 +1704,96 @@ async fn an_archive_with_one_uuid_on_two_types_is_refused() {
     assert_eq!(app.get_json("/types").await, json!([]));
     assert_eq!(app.get_json("/objects").await, json!([]));
 }
+
+/// Zips `data` as `data.json` plus each `(name, bytes)` as `files/<name>`, the way an export
+/// carries its blobs. The name is normally the bytes' own sha256; a test may lie about it.
+fn zip_with_files(data: &serde_json::Value, blobs: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut cursor);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("data.json", opts).unwrap();
+        std::io::Write::write_all(&mut w, &serde_json::to_vec(data).unwrap()).unwrap();
+        for (name, bytes) in blobs {
+            w.start_file(format!("files/{name}"), opts).unwrap();
+            std::io::Write::write_all(&mut w, bytes).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+/// One object carrying one attachment of `bytes`, named `name` and declared as `mime`.
+fn archive_with_attachment(name: &str, mime: &str, bytes: Vec<u8>) -> (Vec<u8>, String) {
+    let sha = logb::files::sha256_hex(&bytes);
+    let mut object = base_object();
+    object["attachments"] = json!([{
+        "sha256": sha, "original_name": name, "mime": mime, "kind": "document",
+        "caption": "", "taken_at": null, "created_at": "2024-01-01T00:00:00Z"
+    }]);
+    (zip_with_files(&export_shell(object), &[(sha.clone(), bytes)]), sha)
+}
+
+async fn count_files(app: &common::TestApp) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM files")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+/// The import twin of the upload test of the same name in `tests/attachments.rs`: an import
+/// that rolls back after writing a file row must not leave a thumbnail behind for the next file
+/// SQLite hands the same id to.
+#[tokio::test]
+async fn a_rolled_back_import_leaves_no_thumbnail_a_later_file_serves() {
+    if common::skipped_on_postgres(
+        "a_rolled_back_import_leaves_no_thumbnail_a_later_file_serves",
+        "PostgreSQL sequences never hand a rolled-back id out again, and the trigger is SQLite's",
+    ) {
+        return;
+    }
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (zip, _) = archive_with_attachment("front.png", "image/png", png());
+
+    // The file row and its thumbnail are written; the attachment after it is what fails.
+    app.fail_changes_for("attachment").await;
+    let res = app
+        .client
+        .post(app.url("/import"))
+        .body(zip)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 500, "{}", res.text().await.unwrap());
+    app.stop_failing_changes_for("attachment").await;
+    assert_eq!(count_files(&app).await, 0, "the failed import committed a file row");
+
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(
+            Form::new().part(
+                "file",
+                Part::bytes(b"%PDF-1.4 manual".to_vec())
+                    .file_name("manual.pdf")
+                    .mime_str("application/pdf")
+                    .unwrap(),
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let pdf: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(pdf["file_id"], 1, "the precondition: the rolled-back id was handed out again");
+    let thumb = app
+        .client
+        .get(app.url(&format!("/files/{}/thumb", pdf["file_id"])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(thumb.status(), 404, "a PDF was served the failed import's thumbnail");
+}

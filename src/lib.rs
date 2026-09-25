@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod domain;
 pub mod error;
 pub mod files;
+pub mod files_gc;
 pub mod notify;
 pub mod object_type;
 pub mod pointer;
@@ -219,6 +220,18 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         config,
         login_attempts: Mutex::new(HashMap::new()),
     });
+    // Once per start, and a directory read once there is nothing left to move. A failure is
+    // logged rather than fatal: an unmoved thumbnail costs a 404 on one /thumb, while refusing
+    // to start costs the whole instance.
+    match files_gc::migrate_legacy_thumbs(&state).await {
+        Ok(r) if r.moved + r.deleted > 0 => tracing::info!(
+            moved = r.moved,
+            deleted = r.deleted,
+            "renamed id-named thumbnails to their content hash"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "moving id-named thumbnails failed; will retry at next start"),
+    }
     // Off unless configured: the bundled SPA is same-origin and needs none of this. It exists
     // for a SEPARATE web client -- another origin in development, say -- which cannot call the
     // API at all without it.

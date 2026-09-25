@@ -174,6 +174,7 @@ pub(super) async fn import(
 
     validate_import(&data, user.today())?;
     let archive_types = archive_types(&data)?;
+    let blobs = store_blobs(&state, &data, blobs).await?;
 
     let mut counts = ImportCounts {
         objects: 0,
@@ -286,7 +287,6 @@ pub(super) async fn import(
             counts.activities += 1;
             for x in &a.attachments {
                 if import_attachment(
-                    &state,
                     &mut tx,
                     user.id,
                     (object_id, Some(aid)),
@@ -304,7 +304,6 @@ pub(super) async fn import(
         let mut cover: Option<i64> = None;
         for x in &o.attachments {
             if let Some(att_id) = import_attachment(
-                &state,
                 &mut tx,
                 user.id,
                 (object_id, None),
@@ -613,17 +612,84 @@ fn tag(e: AppError, location: &str) -> AppError {
     }
 }
 
+/// Every attachment in the archive, object-level and activity-level alike.
+fn archive_attachments(data: &Export) -> impl Iterator<Item = &AttachmentExport> {
+    data.objects.iter().flat_map(|o| {
+        o.attachments
+            .iter()
+            .chain(o.activities.iter().flat_map(|a| a.attachments.iter()))
+    })
+}
+
+/// What the import still needs to know about a blob once its bytes are on disk.
+struct StoredBlob {
+    size: i64,
+    width: Option<i64>,
+    height: Option<i64>,
+    taken_at: Option<String>,
+}
+
+/// Writes every blob an attachment in the archive names -- and the thumbnail of every one an
+/// attachment calls an image -- to disk, before the import's write transaction opens.
+///
+/// Before, not inside: a thumbnail used to be named after the `files` row's id and written
+/// within the transaction, and a rolled-back import on SQLite then left it behind for the next
+/// file to be handed the same id (see `Storage::thumb_path`). Content-named files written up
+/// front are at worst orphans for `files_gc::sweep` if the transaction fails; and decoding
+/// images, hashing and fsyncing no longer happen while every other writer queues behind this
+/// one. Inside the transaction the import only inserts rows.
+///
+/// A blob no attachment names is not written at all, and an attachment whose blob the archive
+/// lacks is skipped later, exactly as before.
+async fn store_blobs(
+    state: &App,
+    data: &Export,
+    mut blobs: HashMap<String, Vec<u8>>,
+) -> Result<HashMap<String, StoredBlob>, AppError> {
+    let images: std::collections::HashSet<&str> = archive_attachments(data)
+        .filter(|x| x.mime.starts_with("image/"))
+        .map(|x| x.sha256.as_str())
+        .collect();
+    let mut stored = HashMap::new();
+    for x in archive_attachments(data) {
+        let Some(bytes) = blobs.remove(&x.sha256) else {
+            continue;
+        };
+        let image = if images.contains(x.sha256.as_str()) {
+            let b = bytes.clone();
+            tokio::task::spawn_blocking(move || files::process_image(&b))
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+        } else {
+            None
+        };
+        state.storage.write_blob(&x.sha256, &bytes).await?;
+        if let Some(img) = &image {
+            state.storage.write_thumb(&x.sha256, &img.thumb_jpeg).await?;
+        }
+        stored.insert(
+            x.sha256.clone(),
+            StoredBlob {
+                size: bytes.len() as i64,
+                width: image.as_ref().map(|i| i.width as i64),
+                height: image.as_ref().map(|i| i.height as i64),
+                taken_at: image.and_then(|i| i.taken_at),
+            },
+        );
+    }
+    Ok(stored)
+}
+
 /// Returns the new attachment id, or None when the blob is missing from the archive.
 ///
 /// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
 /// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
 async fn import_attachment(
-    state: &App,
     tx: &mut sqlx::Transaction<'_, Any>,
     user_id: i64,
     parent: (i64, Option<i64>),
     x: &AttachmentExport,
-    blobs: &HashMap<String, Vec<u8>>,
+    blobs: &HashMap<String, StoredBlob>,
     edited_at: &str,
 ) -> Result<Option<i64>, AppError> {
     let (object_id, activity_id) = parent;
@@ -636,18 +702,9 @@ async fn import_attachment(
     let file_id = match existing {
         Some((id,)) => id,
         None => {
-            let Some(bytes) = blobs.get(&x.sha256) else {
+            let Some(blob) = blobs.get(&x.sha256) else {
                 return Ok(None);
             };
-            let image = if x.mime.starts_with("image/") {
-                let b = bytes.clone();
-                tokio::task::spawn_blocking(move || files::process_image(&b))
-                    .await
-                    .map_err(|e| AppError::Internal(e.to_string()))?
-            } else {
-                None
-            };
-            state.storage.write_blob(&x.sha256, bytes).await?;
             let file_uuid = uuid::Uuid::new_v4().to_string();
             // The insert rides its own savepoint for the same reason `apply.rs`'s `set` arm
             // does: PostgreSQL aborts the whole transaction on any error, so the re-query below
@@ -670,9 +727,9 @@ async fn import_attachment(
             let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
                 "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
-                .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(bytes.len() as i64)
-                .bind(image.as_ref().map(|i| i.width as i64)).bind(image.as_ref().map(|i| i.height as i64))
-                .bind(x.taken_at.clone().or_else(|| image.as_ref().and_then(|i| i.taken_at.clone()))).bind(db::now())
+                .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(&x.mime).bind(blob.size)
+                .bind(blob.width).bind(blob.height)
+                .bind(x.taken_at.clone().or_else(|| blob.taken_at.clone())).bind(db::now())
                 .bind(&file_uuid)
                 .fetch_one(&mut **tx).await;
             let id = match inserted {
@@ -680,9 +737,6 @@ async fn import_attachment(
                     sqlx::query("RELEASE SAVEPOINT logb_import_file")
                         .execute(&mut **tx)
                         .await?;
-                    if let Some(img) = &image {
-                        state.storage.write_thumb(id, &img.thumb_jpeg).await?;
-                    }
                     record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
                     id
                 }

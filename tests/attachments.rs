@@ -565,3 +565,77 @@ async fn file_responses_are_revalidated_and_a_304_needs_ownership() {
     }
     assert_ne!(etags[0], etags[1], "the thumbnail is different bytes, so a different validator");
 }
+
+/// SQLite hands a rolled-back `AUTOINCREMENT` id straight to the next insert: the counter lives
+/// in `sqlite_sequence`, an ordinary table the rollback restores. A thumbnail named after the
+/// file id and written inside the failed transaction therefore used to outlive it and be served
+/// as the thumbnail of whatever unrelated file got that id next -- here a PDF, which has no
+/// thumbnail at all.
+#[tokio::test]
+async fn a_rolled_back_upload_leaves_no_thumbnail_a_later_file_serves() {
+    if common::skipped_on_postgres(
+        "a_rolled_back_upload_leaves_no_thumbnail_a_later_file_serves",
+        "PostgreSQL sequences never hand a rolled-back id out again, and the trigger is SQLite's",
+    ) {
+        return;
+    }
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+
+    app.fail_changes_for("file").await;
+    let res = app.client.post(&base).multipart(form(png(800, 600), "front.png", "image/png")).send().await.unwrap();
+    assert_eq!(res.status(), 500, "{}", res.text().await.unwrap());
+    app.stop_failing_changes_for("file").await;
+    assert_eq!(file_row_count(&app).await, 0, "the failed upload committed its row");
+
+    let res = app.client.post(&base).multipart(form(b"%PDF-1.4 manual".to_vec(), "manual.pdf", "application/pdf")).send().await.unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    let pdf: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(pdf["file_id"], 1, "the precondition: the rolled-back id was handed out again");
+
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", pdf["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 404, "a PDF was served the failed upload's thumbnail");
+}
+
+/// An instance upgraded from the id-named layout keeps every thumbnail a live image row owns,
+/// loses the ones nothing could rightly serve, and running the move again changes nothing.
+#[tokio::test]
+async fn id_named_thumbnails_move_to_their_content_name_once() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let base = app.url(&format!("/objects/{}/attachments", car["id"]));
+    let photo: serde_json::Value = app.client.post(&base).multipart(form(png(800, 600), "front.png", "image/png"))
+        .send().await.unwrap().json().await.unwrap();
+    let pdf: serde_json::Value = app.client.post(&base).multipart(form(b"%PDF-1.4 m".to_vec(), "m.pdf", "application/pdf"))
+        .send().await.unwrap().json().await.unwrap();
+    let (sha,): (String,) = sqlx::query_as("SELECT sha256 FROM files WHERE id = $1")
+        .bind(photo["file_id"].as_i64().unwrap()).fetch_one(&app.state.db).await.unwrap();
+
+    // Put the disk back the way the old layout had it: the photo's thumbnail under its id, a
+    // stray under the document's id (a rolled-back upload's), and one under an id nobody has.
+    let storage = &app.state.storage;
+    let jpeg = std::fs::read(storage.thumb_path(&sha)).unwrap();
+    std::fs::remove_file(storage.thumb_path(&sha)).unwrap();
+    let legacy = |id: &serde_json::Value| storage.thumbs_dir().join(format!("{id}.jpg"));
+    std::fs::write(legacy(&photo["file_id"]), &jpeg).unwrap();
+    std::fs::write(legacy(&pdf["file_id"]), b"stray").unwrap();
+    std::fs::write(legacy(&json!(9999)), b"stray").unwrap();
+
+    let report = logb::files_gc::migrate_legacy_thumbs(&app.state).await.unwrap();
+    assert_eq!(report, logb::files_gc::LegacyThumbs { moved: 1, deleted: 2 });
+    assert_eq!(std::fs::read(storage.thumb_path(&sha)).unwrap(), jpeg);
+    for id in [&photo["file_id"], &pdf["file_id"], &json!(9999)] {
+        assert!(!legacy(id).exists(), "{id}.jpg is still there");
+    }
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 200);
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", pdf["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 404);
+
+    let again = logb::files_gc::migrate_legacy_thumbs(&app.state).await.unwrap();
+    assert_eq!(again, logb::files_gc::LegacyThumbs::default());
+    assert_eq!(std::fs::read(storage.thumb_path(&sha)).unwrap(), jpeg);
+}

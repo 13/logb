@@ -23,8 +23,30 @@ impl Storage {
         self.root.join("files").join(&sha[..2]).join(sha)
     }
 
-    pub fn thumb_path(&self, file_id: i64) -> PathBuf {
-        self.root.join("thumbs").join(format!("{file_id}.jpg"))
+    /// Where the thumbnail of the content hashing to `sha` lives: `thumbs/ab/<sha>.jpg`, sharded
+    /// like the blobs.
+    ///
+    /// Named after the content, not the `files` row, and that is the point. It used to be
+    /// `thumbs/<file_id>.jpg`, written inside the transaction that inserted the row -- and SQLite
+    /// hands a rolled-back `AUTOINCREMENT` id straight to the next insert, so a failed upload
+    /// left a thumbnail on disk that the next, unrelated file with the same id then served as its
+    /// own. A hash names exactly one picture, whichever row points at it and whenever it was
+    /// written, so a thumbnail written by a request that later failed is at worst an orphan the
+    /// sweep collects, never someone else's image. It also means two rows with the same bytes --
+    /// two users uploading one photo -- share one thumbnail, as they already share one blob.
+    pub fn thumb_path(&self, sha: &str) -> PathBuf {
+        self.thumbs_dir().join(&sha[..2]).join(format!("{sha}.jpg"))
+    }
+
+    /// The directory holding the blob shards (and scratch files).
+    pub fn files_dir(&self) -> PathBuf {
+        self.root.join("files")
+    }
+
+    /// The directory holding the thumbnail shards -- and, until `files_gc::migrate_legacy_thumbs`
+    /// has run once, the old id-named thumbnails directly inside it.
+    pub fn thumbs_dir(&self) -> PathBuf {
+        self.root.join("thumbs")
     }
 
     /// Write the blob unless an identical one already exists.
@@ -68,13 +90,34 @@ impl Storage {
         self.root.join("files").join(format!(".{prefix}-{}.tmp", hex::encode(token)))
     }
 
-    pub async fn write_thumb(&self, file_id: i64, jpeg: &[u8]) -> std::io::Result<()> {
-        tokio::fs::write(self.thumb_path(file_id), jpeg).await
+    /// Writes the thumbnail of the content hashing to `sha`. Callers write it before the
+    /// transaction that inserts the `files` row opens, so the row never becomes visible ahead of
+    /// its thumbnail -- and since the name is the content's, a transaction that then fails leaves
+    /// an orphan, not a wrong picture (see `thumb_path`).
+    ///
+    /// Through a temporary file and a rename, so a reader never sees half a JPEG, and always
+    /// written rather than skipped when one exists: the bytes are a pure function of the content,
+    /// so replacing an identical file changes nothing, while trusting a torn one would serve it
+    /// forever.
+    pub async fn write_thumb(&self, sha: &str, jpeg: &[u8]) -> std::io::Result<()> {
+        let path = self.thumb_path(sha);
+        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+        let mut token = [0u8; 16];
+        rand::rng().fill(&mut token);
+        let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
+        tokio::fs::write(&tmp, jpeg).await?;
+        if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
+        }
+        Ok(())
     }
 
-    pub async fn remove(&self, sha: &str, file_id: i64) {
+    /// Removes the blob and the thumbnail of the content hashing to `sha`. The caller decides
+    /// that nothing references them any more -- see `api::attachments::discard_blob`.
+    pub async fn remove(&self, sha: &str) {
         let _ = tokio::fs::remove_file(self.blob_path(sha)).await;
-        let _ = tokio::fs::remove_file(self.thumb_path(file_id)).await;
+        let _ = tokio::fs::remove_file(self.thumb_path(sha)).await;
     }
 }
 
@@ -186,7 +229,7 @@ mod tests {
     fn blob_paths_are_sharded() {
         let s = Storage { root: PathBuf::from("/data") };
         assert_eq!(s.blob_path("abcdef"), PathBuf::from("/data/files/ab/abcdef"));
-        assert_eq!(s.thumb_path(7), PathBuf::from("/data/thumbs/7.jpg"));
+        assert_eq!(s.thumb_path("abcdef"), PathBuf::from("/data/thumbs/ab/abcdef.jpg"));
         assert_eq!(sha256_hex(b"").len(), 64);
     }
 

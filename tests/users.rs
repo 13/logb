@@ -102,7 +102,9 @@ async fn deleting_a_user_takes_their_objects_files_and_blobs() {
     let att: serde_json::Value = eve.post(app.url(&format!("/objects/{oid}/attachments")))
         .multipart(Form::new().part("file", Part::bytes(png).file_name("p.png").mime_str("image/png").unwrap()))
         .send().await.unwrap().json().await.unwrap();
-    let fid = att["file_id"].as_i64().unwrap();
+    let (sha,): (String,) = sqlx::query_as("SELECT sha256 FROM files WHERE id = $1")
+        .bind(att["file_id"].as_i64().unwrap()).fetch_one(&app.state.db).await.unwrap();
+    assert!(app.state.storage.thumb_path(&sha).exists(), "the precondition: a thumbnail was written");
 
     let users: serde_json::Value = app.client.get(app.url("/users")).send().await.unwrap().json().await.unwrap();
     let eve_id = users.as_array().unwrap().iter().find(|u| u["username"] == "eve").unwrap()["id"].as_i64().unwrap();
@@ -124,7 +126,7 @@ async fn deleting_a_user_takes_their_objects_files_and_blobs() {
         assert_eq!(count, n, "{table} rows left");
     }
     // The blob and its thumbnail left the disk with the rows.
-    assert!(!app.state.storage.thumb_path(fid).exists(), "thumbnail survived the user");
+    assert!(!app.state.storage.thumb_path(&sha).exists(), "thumbnail survived the user");
     // `blob_path` shards on the first two hex characters, so its grandparent is `data/files`.
     let files_dir = app.state.storage.blob_path(&"0".repeat(64)).parent().unwrap().parent().unwrap().to_path_buf();
     let remaining: Vec<_> = walkdir(&files_dir);

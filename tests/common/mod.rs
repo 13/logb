@@ -1149,4 +1149,28 @@ impl TestApp {
             .map(|o| o["name"].as_str().unwrap().to_string())
             .collect()
     }
+
+    /// Makes every `changes` insert for `entity` fail, so a write transaction that gets as far
+    /// as logging such a row rolls back after everything before it in that transaction has run.
+    /// SQLite only: the trigger is spelled in SQLite's dialect, and the tests that use it are
+    /// about SQLite handing a rolled-back `AUTOINCREMENT` id out again.
+    pub async fn fail_changes_for(&self, entity: &str) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE TRIGGER fail_{entity}_changes BEFORE INSERT ON changes \
+             WHEN NEW.entity = '{entity}' BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
+        )))
+        .execute(&self.state.write_db)
+        .await
+        .unwrap();
+    }
+
+    /// Undoes `fail_changes_for`.
+    pub async fn stop_failing_changes_for(&self, entity: &str) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP TRIGGER fail_{entity}_changes"
+        )))
+        .execute(&self.state.write_db)
+        .await
+        .unwrap();
+    }
 }
