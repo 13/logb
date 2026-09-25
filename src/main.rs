@@ -1,5 +1,6 @@
 use clap::Parser;
 use logb::config::Config;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
@@ -37,15 +38,100 @@ async fn main() -> Result<(), logb::db::BoxError> {
     }
     let addr = format!("{}:{}", config.bind, config.port);
     let (app, state) = logb::build_with_state(config).await?;
-    logb::tasks::spawn(state);
+    let tasks = logb::tasks::spawn(state.clone());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("LogB listening on http://{addr}");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
+    tokio::spawn(cancel_on_signal(state.shutdown.clone()));
+    let shutdown = state.shutdown.clone();
+    let mut serving = tokio::spawn(
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+        .into_future(),
+    );
+    // Biased, cancellation first: once the token is cancelled the graceful server can finish
+    // at the same moment, and an unbiased pick would sometimes take that branch and skip the
+    // drain below. The server ending while nobody asked it to is a failure to report.
+    tokio::select! {
+        biased;
+        () = shutdown.cancelled() => {}
+        ended = &mut serving => {
+            ended??;
+            return Err("the server stopped without being asked to".into());
+        }
+    }
+
+    // From here on everything shares one deadline: what is still running when it passes is
+    // abandoned, because whoever sent the signal will not wait forever either (`docker stop`
+    // sends SIGKILL ten seconds after SIGTERM).
+    let deadline = tokio::time::Instant::now() + DRAIN;
+    tracing::info!(drain_secs = DRAIN.as_secs(), "shutting down: no new connections; letting requests in flight finish");
+    let drained = match tokio::time::timeout_at(deadline, &mut serving).await {
+        Ok(ended) => {
+            ended??;
+            true
+        }
+        Err(_) => {
+            tracing::warn!("requests still running after the drain deadline; stopping anyway");
+            serving.abort();
+            false
+        }
+    };
+    if tokio::time::timeout_at(deadline, tasks).await.is_err() {
+        tracing::warn!("the background loop was still busy at the drain deadline; stopping anyway");
+    }
+    // Closing waits for every connection to come back to its pool, which a request abandoned
+    // above never does -- so only after a clean drain. A clean close is what lets SQLite fold
+    // its WAL back into the database file before the process goes.
+    if drained {
+        state.write_db.close().await;
+        state.db.close().await;
+    }
+    tracing::info!("stopped");
     Ok(())
+}
+
+/// How long a shutdown waits for requests in flight and the background loop, together.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Cancels `shutdown` on SIGTERM or ctrl-c.
+///
+/// SIGTERM is what `docker stop`, systemd and Kubernetes send. This matters more than it looks
+/// in the container: the binary is PID 1 in a scratch image, and PID 1 has no default action
+/// for SIGTERM -- without a handler the signal was ignored and every `docker stop` waited out
+/// its ten seconds and ended in SIGKILL, mid-request or mid-snapshot.
+///
+/// A handler that cannot be installed is logged and waited on forever rather than treated as a
+/// signal: an instance that cannot hear SIGTERM is no worse off than before, while one that
+/// shut itself down at startup would be down.
+async fn cancel_on_signal(shutdown: tokio_util::sync::CancellationToken) {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!(error = %e, "cannot listen for ctrl-c");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => tracing::info!("ctrl-c received"),
+        () = terminate => tracing::info!("SIGTERM received"),
+    }
+    shutdown.cancel();
 }
 
 /// Probes a running instance over loopback. Used as the container HEALTHCHECK, where there is

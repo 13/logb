@@ -540,15 +540,29 @@ pub async fn poll_once(state: &App) -> Result<(), AppError> {
     }
     Ok(())
 }
+/// Polls until `state.shutdown` is cancelled.
+///
+/// Unlike the main loop, a poll in progress is dropped rather than waited for: it can sit in a
+/// 429 back-off for half a minute, and nothing it does is lost by stopping -- an update not
+/// yet acknowledged is simply read again after the restart, and `link_update` runs in one
+/// transaction that a drop rolls back.
 pub fn spawn(state: App) {
+    let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         loop {
-            match poll_once(&state).await {
-                Ok(()) => tokio::time::sleep(Duration::from_secs(2)).await,
-                Err(e) => {
-                    tracing::warn!(error=%e,"telegram polling failed");
-                    tokio::time::sleep(Duration::from_secs(5)).await
-                }
+            let pause = tokio::select! {
+                result = poll_once(&state) => match result {
+                    Ok(()) => Duration::from_secs(2),
+                    Err(e) => {
+                        tracing::warn!(error=%e,"telegram polling failed");
+                        Duration::from_secs(5)
+                    }
+                },
+                () = shutdown.cancelled() => break,
+            };
+            tokio::select! {
+                () = tokio::time::sleep(pause) => {}
+                () = shutdown.cancelled() => break,
             }
         }
     });

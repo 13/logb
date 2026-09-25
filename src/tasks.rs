@@ -28,7 +28,13 @@ pub async fn prune_sessions(state: &App) -> Result<u64, crate::error::AppError> 
     Ok(n)
 }
 
-pub fn spawn(state: App) {
+/// Starts the loop (and Telegram's, beside it) and hands back the loop's handle.
+///
+/// The loop ends when `state.shutdown` is cancelled, and only at its wait between ticks: a
+/// tick already running -- a snapshot half-written, a digest half-sent -- finishes first. `main`
+/// awaits the handle, inside the same drain deadline as the server, so a shutdown does not cut
+/// a `VACUUM INTO` off partway.
+pub fn spawn(state: App) -> tokio::task::JoinHandle<()> {
     tracing::info!(hour = state.config.notify_hour, timezone = %crate::db::timezone(), "reminder digest scheduler enabled");
     // `backup::tick` is `VACUUM INTO`, a SQLite mechanism -- calling it every tick against
     // PostgreSQL would mean running and failing every night instead of never running. Decided
@@ -42,10 +48,14 @@ pub fn spawn(state: App) {
         );
     }
     crate::telegram::spawn(state.clone());
+    let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         let mut since_prune = PRUNE_EVERY;
         loop {
-            tokio::time::sleep(TICK).await;
+            tokio::select! {
+                () = tokio::time::sleep(TICK) => {}
+                () = shutdown.cancelled() => break,
+            }
             since_prune += TICK;
             if since_prune >= PRUNE_EVERY {
                 since_prune = Duration::ZERO;
@@ -77,5 +87,6 @@ pub fn spawn(state: App) {
                 }
             }
         }
-    });
+        tracing::debug!("background loop stopped");
+    })
 }
