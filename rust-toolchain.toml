@@ -1,0 +1,7 @@
+# The compiler CI and the release image use. Keep the `rust:` image tag in the Dockerfile on the
+# same version, so a clippy lint or a codegen change arrives in one reviewed commit rather than
+# whenever a runner or a base image happens to update.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
