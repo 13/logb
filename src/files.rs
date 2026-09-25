@@ -49,36 +49,27 @@ impl Storage {
         self.root.join("thumbs")
     }
 
-    /// Write the blob unless an identical one already exists.
+    /// Writes the blob, unless an intact one is already there.
+    ///
+    /// "Intact" is checked, not assumed: an existing file under this name is hashed, and only a
+    /// match is kept. The name promises the content, but a write torn by a crash before this
+    /// function fsynced, or a disk that rotted a sector, breaks that promise silently -- and
+    /// every later upload of the same bytes used to find the file "already there" and leave the
+    /// damage in place for good. A mismatch is rewritten from the bytes in hand.
+    ///
+    /// The write itself is durable before this returns: see `write_durably`.
     pub async fn write_blob(&self, sha: &str, bytes: &[u8]) -> std::io::Result<()> {
         let path = self.blob_path(sha);
         if tokio::fs::try_exists(&path).await? {
-            return Ok(());
-        }
-        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        let mut token = [0u8; 16];
-        rand::rng().fill(&mut token);
-        let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
-        tokio::fs::write(&tmp, bytes).await?;
-        match tokio::fs::rename(&tmp, &path).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Another concurrent writer for the same content hash may have won the
-                // race and already produced the destination file. Since the path is
-                // derived from the content hash, that file has identical bytes to ours.
-                //
-                // Unreachable on Linux, where POSIX rename() replaces an existing
-                // destination atomically; this arm is here for platforms whose rename
-                // fails when the destination exists.
-                if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    Ok(())
-                } else {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    Err(e)
-                }
+            match hash_file(&path).await {
+                Ok(on_disk) if on_disk == sha => return Ok(()),
+                Ok(on_disk) => tracing::warn!(
+                    sha, on_disk = %on_disk, "a stored blob does not match its name; rewriting it"
+                ),
+                Err(e) => tracing::warn!(sha, error = %e, "a stored blob cannot be read; rewriting it"),
             }
         }
+        write_durably(&path, bytes).await
     }
 
     /// A unique path in the data directory for a temporary working file (a whole export
@@ -100,17 +91,7 @@ impl Storage {
     /// so replacing an identical file changes nothing, while trusting a torn one would serve it
     /// forever.
     pub async fn write_thumb(&self, sha: &str, jpeg: &[u8]) -> std::io::Result<()> {
-        let path = self.thumb_path(sha);
-        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        let mut token = [0u8; 16];
-        rand::rng().fill(&mut token);
-        let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
-        tokio::fs::write(&tmp, jpeg).await?;
-        if let Err(e) = tokio::fs::rename(&tmp, &path).await {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            return Err(e);
-        }
-        Ok(())
+        write_durably(&self.thumb_path(sha), jpeg).await
     }
 
     /// Removes the blob and the thumbnail of the content hashing to `sha`. The caller decides
@@ -119,6 +100,77 @@ impl Storage {
         let _ = tokio::fs::remove_file(self.blob_path(sha)).await;
         let _ = tokio::fs::remove_file(self.thumb_path(sha)).await;
     }
+}
+
+/// Puts `bytes` at `path` so that, once this returns, a crash cannot leave `path` holding
+/// anything but the whole of them.
+///
+/// Written to a uniquely named `.part` file beside the destination (same directory, so the same
+/// filesystem, so the rename is atomic), fsynced, renamed over the destination, and then the
+/// directory is fsynced too. The first fsync is what stops a crash from leaving a renamed but
+/// empty or partial file -- a rename can reach the disk before the data it points at does. The
+/// second makes the rename itself durable, so the file cannot vanish again after the caller has
+/// gone on to commit a row that names it. A `.part` file a crash strands is collected by
+/// `files_gc::sweep`.
+async fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let dir = path.parent().expect("a stored file always has a shard directory");
+    tokio::fs::create_dir_all(dir).await?;
+    let mut token = [0u8; 16];
+    rand::rng().fill(&mut token);
+    let tmp = path.with_extension(format!("{}.part", hex::encode(token)));
+    let written = async {
+        let mut f = tokio::fs::File::create(&tmp).await?;
+        f.write_all(bytes).await?;
+        f.sync_all().await
+    }
+    .await;
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        // Another concurrent writer of the same content may have won the race and already
+        // produced the destination; its name is derived from the content, so it is identical.
+        //
+        // Unreachable on Linux, where POSIX rename() replaces an existing destination
+        // atomically; this arm is here for platforms whose rename fails when the destination
+        // exists.
+        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Err(e);
+        }
+    }
+    sync_dir(dir).await
+}
+
+/// Flushes a directory's entries (a rename into it, say) to disk.
+#[cfg(unix)]
+async fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    tokio::fs::File::open(dir).await?.sync_all().await
+}
+
+/// Directories cannot be opened for fsync everywhere (Windows refuses); there the rename's own
+/// durability is what the platform gives.
+#[cfg(not(unix))]
+async fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// The sha256 of a file's contents, read in chunks rather than into memory whole.
+pub async fn hash_file(path: &Path) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt;
+    let mut f = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -231,6 +283,27 @@ mod tests {
         assert_eq!(s.blob_path("abcdef"), PathBuf::from("/data/files/ab/abcdef"));
         assert_eq!(s.thumb_path("abcdef"), PathBuf::from("/data/thumbs/ab/abcdef.jpg"));
         assert_eq!(sha256_hex(b"").len(), 64);
+    }
+
+    /// A blob that exists under its hash is not taken on trust: a torn write from before a
+    /// crash, or bit rot, would otherwise be served forever, since every later upload of the
+    /// same bytes would find the file "already there" and skip it.
+    #[tokio::test]
+    async fn write_blob_replaces_a_damaged_blob_under_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path()).unwrap();
+        let bytes = b"the real content".to_vec();
+        let sha = sha256_hex(&bytes);
+        let path = storage.blob_path(&sha);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"the real con").unwrap();
+
+        storage.write_blob(&sha, &bytes).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        // And an intact one is left exactly as it is.
+        storage.write_blob(&sha, &bytes).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     #[tokio::test]
