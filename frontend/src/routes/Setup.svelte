@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
   import Logo from '../lib/Logo.svelte';
@@ -25,7 +26,7 @@
       if (!(await loadSession())) throw new Error($t('setup.not-reachable'));
       go('/', true);
     } catch (err) {
-      error = (err as Error).message;
+      error = errorMessage(err, $t);
     } finally { busy = false; }
   }
 </script>

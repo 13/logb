@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
@@ -17,7 +18,7 @@
   });
 
   async function loadUsers() {
-    try { users = await api<User[]>('GET', '/users'); } catch (e) { error = (e as Error).message; }
+    try { users = await api<User[]>('GET', '/users'); } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function addUser() {
@@ -25,12 +26,12 @@
       await api('POST', '/users', { username: newName, password: newPass, is_admin: newAdmin });
       newName = ''; newPass = ''; newAdmin = false;
       await loadUsers();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function removeUser(u: User) {
     if (!confirm($t('nav.confirm-delete'))) return;
-    try { await api('DELETE', `/users/${u.id}`); await loadUsers(); } catch (e) { error = (e as Error).message; }
+    try { await api('DELETE', `/users/${u.id}`); await loadUsers(); } catch (e) { error = errorMessage(e, $t); }
   }
 </script>
 

@@ -1,3 +1,4 @@
+import { I18nError } from './api-error';
 import { parseMoney, parseQuantity } from './format';
 import type { ActivityInput, MeasurementMode } from './types';
 
@@ -15,17 +16,17 @@ function row(line: string, separator: string): string[] {
 
 export function parseResourceCsv(text: string, mode: MeasurementMode): ActivityInput[] {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim());
-  if (lines.length < 2) throw new Error('CSV needs a header and at least one row.');
+  if (lines.length < 2) throw new I18nError('resource.csv-too-short');
   const separator = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ';' : ',';
   const headers = row(lines[0], separator).map((h) => h.toLowerCase().replace(/\s+/g, '_'));
   const at = (...names: string[]) => names.map((name) => headers.indexOf(name)).find((i) => i >= 0) ?? -1;
   const dateAt = at('date'); const valueAt = mode === 'meter' ? at('reading', 'meter_reading') : at('amount', 'usage', 'value');
-  if (dateAt < 0 || valueAt < 0) throw new Error(mode === 'meter' ? 'CSV needs date and reading columns.' : 'CSV needs date and amount columns.');
+  if (dateAt < 0 || valueAt < 0) throw new I18nError(mode === 'meter' ? 'resource.csv-needs-reading' : 'resource.csv-needs-amount');
   return lines.slice(1).map((line, index) => {
     const values = row(line, separator); const date = values[dateAt] ?? '';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`Line ${index + 2}: date must be YYYY-MM-DD.`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new I18nError('resource.csv-bad-date', { line: index + 2 });
     const amount = parseQuantity(values[valueAt] ?? '');
-    if (amount === null || Number.isNaN(amount) || amount < 0) throw new Error(`Line ${index + 2}: invalid value.`);
+    if (amount === null || Number.isNaN(amount) || amount < 0) throw new I18nError('resource.csv-bad-value', { line: index + 2 });
     const costAt = at('cost'); const startAt = at('period_start'); const endAt = at('period_end'); const estimatedAt = at('estimated');
     const base: ActivityInput = { date, category: 'usage', title: '', notes: '', counter_value: null,
       cost_cents: costAt < 0 ? null : parseMoney(values[costAt] ?? ''), quantity_milli: mode === 'meter' ? null : amount,

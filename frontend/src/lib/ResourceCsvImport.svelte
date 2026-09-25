@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from './api-error';
   import { createQueued } from './api';
   import { parseResourceCsv } from './resource-csv';
   import { t } from '../i18n';
@@ -8,7 +9,7 @@
   async function selected(e: Event) {
     file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null; count = 0; error = '';
     if (!file) return;
-    try { count = parseResourceCsv(await file.text(), mode).length; } catch (e) { error = (e as Error).message; }
+    try { count = parseResourceCsv(await file.text(), mode).length; } catch (e) { error = errorMessage(e, $t); }
   }
   async function run() {
     if (!file) return; busy = true; error = '';
@@ -16,7 +17,7 @@
       const entries = parseResourceCsv(await file.text(), mode);
       for (const body of entries) await createQueued(`/objects/${objectId}/activities`, body as unknown as Record<string, unknown>);
       file = null; count = 0; onimported?.();
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 </script>
 <section>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import DateInput from '../lib/DateInput.svelte';
@@ -94,7 +95,7 @@
       if (rid) await api('PATCH', `/reminders/${rid}`, body);
       else await createReminderQueued(`/objects/${oid}/reminders`, body as unknown as Record<string, unknown>);
       go(`/objects/${oid}?tab=reminders`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) { error = errorMessage(err, $t); } finally { busy = false; }
   }
 
   async function remove() {

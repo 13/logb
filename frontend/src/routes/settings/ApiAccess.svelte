@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
@@ -21,7 +22,7 @@
   });
 
   async function loadTokens() {
-    try { tokens = await api<ApiToken[]>('GET', '/auth/tokens'); } catch (e) { error = (e as Error).message; }
+    try { tokens = await api<ApiToken[]>('GET', '/auth/tokens'); } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function createToken() {
@@ -31,7 +32,7 @@
       freshToken = made.token;
       tokenName = '';
       await loadTokens();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function copyToken() {
@@ -49,7 +50,7 @@
     try {
       await api('DELETE', `/auth/tokens/${tok.id}`);
       await loadTokens();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 </script>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from './api-error';
   import { api } from './api';
   import BarList from './BarList.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
@@ -34,7 +35,7 @@
     let current = true;
     api<Insights>('GET', p)
       .then((d) => { if (current) data = d; })
-      .catch((e) => { if (current) error = (e as Error).message; });
+      .catch((e) => { if (current) error = errorMessage(e, $t); });
     return () => { current = false; };
   });
 

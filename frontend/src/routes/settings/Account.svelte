@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onDestroy } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
@@ -28,11 +29,11 @@
     try {
       await api('PATCH', `/users/${$user.id}`, { password: ownPass });
       ownPass = ''; message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function requestPairCode() {
-    try { await pairing.request(); } catch (e) { error = (e as Error).message; }
+    try { await pairing.request(); } catch (e) { error = errorMessage(e, $t); }
   }
 </script>
 

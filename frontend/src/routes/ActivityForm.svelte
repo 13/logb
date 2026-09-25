@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { formatWeight } from '../lib/weight';
   import type { WeightUnit } from '../lib/types';
   import { onMount, untrack } from 'svelte';
@@ -105,7 +106,7 @@
       // server answering, possibly about an object that belongs to someone else entirely.
       const cached = isRejection(e) ? undefined : getCachedObject(oid);
       if (cached) object = cached;
-      else error = (e as Error).message;
+      else error = errorMessage(e, $t);
     }
     // A new entry's default category (`emptyActivity`'s 'maintenance') isn't offered by every
     // type -- a `body` object offers no `maintenance` at all -- so the select would silently
@@ -146,7 +147,7 @@
         // The row could not be loaded, so the form is showing empty defaults on an EDIT url.
         // Say so: `submit` refuses to save in this state, and silently rendering a blank form
         // is what let an offline edit become a brand-new second activity.
-        error = $t((e as Error).message);
+        error = errorMessage(e, $t);
       }
     } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
@@ -249,7 +250,7 @@
    *  otherwise leave two drafts behind for what the user experienced as one tap. */
   const ensureSaved = serialize(async (): Promise<Activity> => {
     if (saved) return saved;
-    if (!ready) throw new Error('not loaded yet');
+    if (!ready) throw new Error('activity.not-loaded');
     let body = buildInput();
     let bad = validateActivity(body);
     if (bad === 'activity.title') {
@@ -341,9 +342,9 @@
     } catch (err) {
       // `createQueued` throws an i18n key (rather than a message) when the write reached
       // neither the server nor the local outbox queue, so the entry is honestly reported as
-      // lost instead of navigating away as though it had been saved. `$t` on any other
-      // (plain-English, server-supplied) message just returns it unchanged.
-      error = $t((err as Error).message);
+      // lost instead of navigating away as though it had been saved. `errorMessage` translates
+      // that key and says any other failure in the reader's language too.
+      error = errorMessage(err, $t);
     } finally { busy = false; }
   }
 
@@ -368,7 +369,7 @@
         try {
           await api('DELETE', `/activities/${saved.id}`);
         } catch (e) {
-          error = $t((e as Error).message);
+          error = errorMessage(e, $t);
           return;
         }
         try { await cancelQueuedActivity(saved.id); } catch { /* best-effort cleanup; the row is already gone server-side */ }
@@ -384,7 +385,7 @@
     try {
       await api('DELETE', `/activities/${saved.id}`);
     } catch (e) {
-      error = $t((e as Error).message);
+      error = errorMessage(e, $t);
       return;
     }
     go(`/objects/${oid}`, true);
@@ -574,7 +575,7 @@
     {#if saved}
       <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
     {:else if ready}
-      <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); error = ''; } catch (e) { error = (e as Error).message; } }}>
+      <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); error = ''; } catch (e) { error = errorMessage(e, $t); } }}>
         + {$t('activity.add-files')}
       </button>
     {/if}

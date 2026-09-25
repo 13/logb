@@ -58,6 +58,14 @@ export function isUnauthenticated(e: unknown): boolean {
 /** The translate function, as the `t` store hands it out (`$t` in a component). */
 export type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
+/** A failure whose `message` is an i18n key and which needs placeholders filled in ("Line
+ *  {line}: …"). Thrown by pure modules that have no `t` of their own; `errorMessage` says it. */
+export class I18nError extends Error {
+  constructor(key: string, public vars?: Record<string, string | number>) {
+    super(key);
+  }
+}
+
 /**
  * Stable server codes (`src/error.rs`) whose MESSAGE says nothing the code does not: for these
  * the reader gets a sentence in their own language. Codes that carry the detail in the message
@@ -84,9 +92,10 @@ const CODE_KEYS: Record<string, string> = {
  *  token first") and keeps it. */
 const BUSY_MESSAGE = 'the database is busy, please retry';
 
-/** What each browser's `fetch` throws when the request never got an answer: Chromium's
- *  "Failed to fetch", Firefox's "NetworkError when attempting to fetch resource.", Safari's
- *  "Load failed". Any other `TypeError` is a bug, and must not be reported as "no connection". */
+/** What each browser's `fetch` throws (a `TypeError`) when the request never got an answer:
+ *  Chromium's "Failed to fetch", Firefox's "NetworkError when attempting to fetch resource.",
+ *  Safari's "Load failed". Any other `TypeError` is a bug, and must not be reported as "no
+ *  connection". */
 const NETWORK_FAILURE = /failed to fetch|networkerror|load failed|network request failed/i;
 
 /** Shaped like one of our own i18n keys (`outbox.queue-failed`, `types.error.name_taken`): a few
@@ -113,8 +122,19 @@ export function errorMessage(e: unknown, t: Translate): string {
     const key = CODE_KEYS[e.code];
     return key ? t(key) : e.message || t('error.generic');
   }
-  if ((e instanceof TypeError && NETWORK_FAILURE.test(e.message)) || browserOffline()) return t('error.offline');
-  const message = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  if (e instanceof I18nError) return t(e.message, e.vars);
+  if (browserOffline()) return t('error.offline');
+  return messageText(e instanceof Error ? e.message : typeof e === 'string' ? e : '', t);
+}
+
+/**
+ * `errorMessage` for a failure of which only the message survives (a dead outbox op's
+ * `lastError`): a network failure's text says "no connection", one of our own keys is
+ * translated, anything else is shown as it is. Deliberately blind to `navigator.onLine`: a
+ * failure recorded earlier says nothing about the connection now.
+ */
+export function messageText(message: string, t: Translate): string {
   if (!message) return t('error.generic');
+  if (NETWORK_FAILURE.test(message)) return t('error.offline');
   return KEY_SHAPE.test(message) ? t(message) : message;
 }

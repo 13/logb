@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import TagInput from '../lib/TagInput.svelte';
@@ -273,7 +274,7 @@
         } catch { /* the object is saved; its reminders tab offers the same */ }
       }
       go(`/objects/${saved.id}`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) { error = errorMessage(err, $t); } finally { busy = false; }
   }
 
   async function remove() {
