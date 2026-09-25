@@ -107,6 +107,7 @@ export default {
   'error.busy': 'Der Server ist ausgelastet – bitte gleich noch einmal versuchen.',
   'error.gone': 'Diese Daten sind veraltet – Seite neu laden.',
   'object.pending-lost': 'Dieses Objekt wurde bereits gesendet oder verworfen – neu laden und erneut versuchen.',
+  'object.not-loaded': 'Dieses Objekt konnte nicht geladen werden und lässt sich daher nicht speichern. Sobald du wieder online bist, öffne es erneut.',
   'date.pick': 'Datum wählen',
   'date.invalid': 'Datum wie {example} eingeben',
   'date.out-of-range': 'Datum zwischen {min} und {max} wählen',

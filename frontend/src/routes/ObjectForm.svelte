@@ -64,6 +64,9 @@
   }
   let error = $state('');
   let busy = $state(false);
+  /** The object being edited could not be loaded; the form holds defaults, not its data. */
+  let loadFailed = $state(false);
+  let deleteError = $state('');
 
   function mintTempId(): number {
     return hashToNegativeId(newOpId());
@@ -146,9 +149,16 @@
     if (draft) {
       fill(draft);
     } else if (id) {
-      const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
-      const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
-      fill(toInput(o));
+      // A failed load leaves empty defaults on an EDIT url: say so, and have `submit` refuse --
+      // saving that blank form would overwrite the real object with it.
+      try {
+        const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
+        const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
+        fill(toInput(o));
+      } catch (e) {
+        loadFailed = true;
+        error = errorMessage(e, $t);
+      }
     }
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
@@ -166,10 +176,16 @@
     // from it. The walk would then never reach that child, offer it as a parent, and the
     // server, which walks the real table, would refuse the save with a raw 400. Both halves,
     // merged, are the whole tree.
-    const [live, archived] = await Promise.all([
-      api<MemObject[]>('GET', '/objects?all=true&archived=false'),
-      api<MemObject[]>('GET', '/objects?all=true&archived=true'),
-    ]);
+    let live: MemObject[], archived: MemObject[];
+    try {
+      [live, archived] = await Promise.all([
+        api<MemObject[]>('GET', '/objects?all=true&archived=false'),
+        api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+      ]);
+    } catch (e) {
+      if (!error) error = errorMessage(e, $t);
+      return;
+    }
     const all = [...live, ...archived];
     nameById = new Map(all.map((o) => [o.id, o.name]));
     // What is *legal* is decided against that whole tree; what is *offered* is narrower on
@@ -201,6 +217,7 @@
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    if (loadFailed) { error = $t('object.not-loaded'); return; }
     input.purchase_price_cents = parseMoney(priceText);
     // Cents x1000, the same scale as `cost_per_counter_milli`; empty (or no fuel unit at all,
     // which hides the field) means no price. `Number.isNaN(cents) * 1000` stays `NaN`, so an
@@ -259,10 +276,15 @@
   }
 
   async function remove() {
-    if (!confirm($t('nav.confirm-delete'))) return;
-    if (Number(id) < 0) { await cancelQueuedObject(Number(id)); go('/', true); return; }
-    await api('DELETE', `/objects/${id}`);
-    go('/', true);
+    if (busy || !confirm($t('nav.confirm-delete'))) return;
+    busy = true; deleteError = '';
+    try {
+      if (Number(id) < 0) await cancelQueuedObject(Number(id));
+      else await api('DELETE', `/objects/${id}`);
+      go('/', true);
+    } catch (e) {
+      deleteError = errorMessage(e, $t);
+    } finally { busy = false; }
   }
 </script>
 
@@ -392,7 +414,7 @@
     {/if}
     <label class="row toggle"><input type="checkbox" bind:checked={input.private} /> {$t('object.private')}</label>
     <p class="hint">{$t('object.private-hint')}</p>
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row actions">
       {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate($state.snapshot(input)))}>{$t('template.save')}</button>{/if}
       <button type="button" class="ghost" onclick={() => back(editing ? `/objects/${id}` : '/')}>{$t('nav.cancel')}</button>
@@ -402,7 +424,8 @@
   {#if editing}
     <h2>{$t('object.delete')}</h2>
     <p class="hint">{$t('object.delete-hint')}</p>
-    <button class="danger" onclick={remove}>{$t('object.delete')}</button>
+    <button class="danger" disabled={busy} onclick={remove}>{$t('object.delete')}</button>
+    {#if deleteError}<p class="error" role="alert">{deleteError}</p>{/if}
   {/if}
 </main>
 

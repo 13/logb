@@ -107,6 +107,7 @@ export default {
   'error.busy': 'The server is busy — please try again in a moment.',
   'error.gone': 'This data is out of date — reload the page.',
   'object.pending-lost': 'This object was already sent or discarded — reload and try again.',
+  'object.not-loaded': "This object could not be loaded, so it can't be saved. Open it again once you're back online.",
   'date.pick': 'Choose date',
   'date.invalid': 'Enter a date like {example}',
   'date.out-of-range': 'Choose a date between {min} and {max}',
