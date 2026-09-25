@@ -554,7 +554,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError
             Err(e) => {
                 // The target alone, never the URL: a personal webhook is often an unguessable
                 // ntfy topic, which is to say a secret.
-                tracing::warn!(target = %target, error = %e, "notification delivery failed; retry scheduled");
+                tracing::warn!(destination = %target, error = %e, "notification delivery failed; retry scheduled");
                 failed = true;
             }
         }
