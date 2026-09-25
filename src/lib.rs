@@ -166,8 +166,9 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         tracing::info!(
             "LOGB_DATABASE_URL points at PostgreSQL: a supported configuration, with two \
              properties worth reading once. Writes serialise under a global advisory lock, \
-             exactly as they already do on SQLite, and an upload holds that lock while it writes \
-             its thumbnail -- so a large upload or import blocks other writes while it runs. \
+             exactly as they already do on SQLite, and an import holds that lock while it \
+             inserts its rows -- so a large import blocks other writes while it runs (files and \
+             thumbnails are written before the lock is taken). \
              Backups here are yours: `--backup` and `--restore` refuse on purpose, \
              LOGB_BACKUP_DIR is ignored, and Settings -> Backup says so on the screen. Neither is \
              unfinished work; SQLite is still the default, and the more exercised path"
