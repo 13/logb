@@ -51,13 +51,20 @@ frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
-/// Tags every request with an id, puts it on the tracing span the handler runs in, and echoes
-/// it back on the response.
+/// Tags every request with an id, puts it on the tracing span the handler runs in, echoes it
+/// back on the response, and logs one line for the request once it is answered.
 ///
-/// Without it a 500 in the log -- which deliberately says only "internal error" to the client
-/// -- cannot be tied to the request that produced it. An id supplied by a front proxy is kept
-/// so the two logs line up.
+/// Without the id a 500 in the log -- which deliberately says only "internal error" to the
+/// client -- cannot be tied to the request that produced it. An id supplied by a front proxy is
+/// kept so the two logs line up.
+///
+/// The line is at info, so the default `LOGB_LOG=info` shows traffic at all: `TraceLayer`'s own
+/// events are at debug. It names the path and never the query string, which is where a client
+/// would put anything it should not have (`?token=`), and the request id rides on the span.
 async fn request_id(mut req: Request<axum::body::Body>, next: Next) -> Response {
+    let started = std::time::Instant::now();
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
     let id = req
         .headers()
         .get(&REQUEST_ID)
@@ -73,14 +80,26 @@ async fn request_id(mut req: Request<axum::body::Body>, next: Next) -> Response 
             rand::rng().fill(&mut bytes);
             hex::encode(bytes)
         });
-    if let Ok(value) = HeaderValue::from_str(&id) {
-        req.headers_mut().insert(&REQUEST_ID, value.clone());
-        let span = tracing::info_span!("request", request_id = %id);
-        let mut res = next.run(req).instrument(span).await;
-        res.headers_mut().insert(&REQUEST_ID, value);
-        return res;
+    // The filter above admits only ASCII alphanumerics and '-', and the fallback is hex, so
+    // this cannot fail; the `else` is a guard, not a path anyone takes.
+    let Ok(value) = HeaderValue::from_str(&id) else {
+        return next.run(req).await;
+    };
+    req.headers_mut().insert(&REQUEST_ID, value.clone());
+    let span = tracing::info_span!("request", request_id = %id);
+    let mut res = next.run(req).instrument(span.clone()).await;
+    res.headers_mut().insert(&REQUEST_ID, value);
+    let status = res.status().as_u16();
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let _entered = span.enter();
+    // The container HEALTHCHECK asks every thirty seconds. A healthy answer is not news, and at
+    // info it would be most of the log; anything else about health is logged like any request.
+    if path == "/api/health" && res.status().is_success() {
+        tracing::debug!(%method, path = %path, status, latency_ms, "request finished");
+    } else {
+        tracing::info!(%method, path = %path, status, latency_ms, "request finished");
     }
-    next.run(req).await
+    res
 }
 
 /// Opens a single connection, purely so a pointer that names an unreachable database fails
