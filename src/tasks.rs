@@ -14,6 +14,9 @@ const PRUNE_EVERY: Duration = Duration::from_secs(3600);
 /// must re-bootstrap. Also how long a tombstone survives, since the two are the same guarantee
 /// seen from either end.
 const RETENTION_DAYS: i64 = 90;
+/// Orphaned blobs, thumbnails and scratch are swept this often -- and on the first tick, so an
+/// instance restarted more often than daily still gets swept. See `files_gc::sweep`.
+const SWEEP_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 /// Removes sessions whose expiry has passed. Returns how many went.
 ///
@@ -44,6 +47,7 @@ pub fn spawn(state: App) {
     crate::telegram::spawn(state.clone());
     tokio::spawn(async move {
         let mut since_prune = PRUNE_EVERY;
+        let mut since_sweep = SWEEP_EVERY;
         loop {
             tokio::time::sleep(TICK).await;
             since_prune += TICK;
@@ -58,6 +62,14 @@ pub fn spawn(state: App) {
                     Ok(n) if n > 0 => tracing::debug!(changes = n, "purged expired sync history"),
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "sync purge failed"),
+                }
+            }
+            since_sweep += TICK;
+            if since_sweep >= SWEEP_EVERY {
+                since_sweep = Duration::ZERO;
+                match crate::files_gc::sweep(&state, crate::files_gc::GRACE).await {
+                    Ok(s) => tracing::debug!(blobs = s.blobs, thumbs = s.thumbs, scratch = s.scratch, "swept orphaned files"),
+                    Err(e) => tracing::warn!(error = %e, "orphaned file sweep failed"),
                 }
             }
             match notify::tick(&state, db::local_hour()).await {

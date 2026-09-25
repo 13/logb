@@ -696,3 +696,61 @@ async fn purging_orphan_files_waits_for_the_write_lock() {
     assert!(!early, "the purge ran without the write lock");
     assert_eq!(file_row_count(&app).await, 0, "the orphan row survived the purge");
 }
+
+/// Backdates a file's modification time by `hours`.
+fn age(path: &std::path::Path, hours: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600);
+    std::fs::File::options().write(true).open(path).unwrap().set_modified(when).unwrap();
+}
+
+/// Plants `bytes` at `path`, creating its shard directory, aged by `hours`.
+fn plant(path: &std::path::Path, bytes: &[u8], hours: u64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+    age(path, hours);
+}
+
+/// Whatever a failed request, a crash or a lost race leaves on disk is collected once it is a
+/// day old: blobs and thumbnails no `files` row names, and stranded `.part`/`.tmp` scratch.
+/// Anything younger is left alone -- it may belong to a request still in flight -- and anything
+/// a row names is kept however old it is.
+#[tokio::test]
+async fn the_sweep_collects_old_orphans_and_nothing_else() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let photo: serde_json::Value = app.client.post(app.url(&format!("/objects/{}/attachments", car["id"])))
+        .multipart(form(png(800, 600), "front.png", "image/png")).send().await.unwrap().json().await.unwrap();
+    let (kept,): (String,) = sqlx::query_as("SELECT sha256 FROM files WHERE id = $1")
+        .bind(photo["file_id"].as_i64().unwrap()).fetch_one(&app.state.db).await.unwrap();
+    let storage = &app.state.storage;
+    age(&storage.blob_path(&kept), 48);
+    age(&storage.thumb_path(&kept), 48);
+
+    let old = "0a".repeat(32);
+    let young = "0b".repeat(32);
+    plant(&storage.blob_path(&old), b"old orphan", 25);
+    plant(&storage.thumb_path(&old), b"old orphan", 25);
+    plant(&storage.blob_path(&young), b"young orphan", 1);
+    plant(&storage.thumb_path(&young), b"young orphan", 1);
+    let old_part = storage.blob_path(&old).with_extension("deadbeef.part");
+    let old_thumb_part = storage.thumb_path(&old).with_extension("deadbeef.part");
+    let old_tmp = storage.files_dir().join(".export-deadbeef.tmp");
+    let young_tmp = storage.files_dir().join(".import-cafebabe.tmp");
+    plant(&old_part, b"torn", 25);
+    plant(&old_thumb_part, b"torn", 25);
+    plant(&old_tmp, b"stranded", 25);
+    plant(&young_tmp, b"in flight", 1);
+
+    let swept = logb::files_gc::sweep(&app.state, logb::files_gc::GRACE).await.unwrap();
+    assert_eq!(swept, logb::files_gc::Swept { blobs: 1, thumbs: 1, scratch: 3 });
+
+    for gone in [storage.blob_path(&old), storage.thumb_path(&old), old_part, old_thumb_part, old_tmp] {
+        assert!(!gone.exists(), "{} survived the sweep", gone.display());
+    }
+    for kept in [storage.blob_path(&kept), storage.thumb_path(&kept), storage.blob_path(&young), storage.thumb_path(&young), young_tmp] {
+        assert!(kept.exists(), "{} was swept", kept.display());
+    }
+    let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
+    assert_eq!(thumb.status(), 200);
+}
