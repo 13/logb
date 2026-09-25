@@ -54,3 +54,67 @@ export function isRejection(e: unknown): boolean {
 export function isUnauthenticated(e: unknown): boolean {
   return e instanceof ApiError && e.status === 401;
 }
+
+/** The translate function, as the `t` store hands it out (`$t` in a component). */
+export type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
+/**
+ * Stable server codes (`src/error.rs`) whose MESSAGE says nothing the code does not: for these
+ * the reader gets a sentence in their own language. Codes that carry the detail in the message
+ * instead -- `bad_request`, `conflict`, and `unavailable` in general -- are deliberately absent,
+ * so the server's own (more specific) sentence survives.
+ */
+const CODE_KEYS: Record<string, string> = {
+  unauthorized: 'error.unauthorized',
+  forbidden: 'error.forbidden',
+  not_found: 'error.not-found',
+  gone: 'error.gone',
+  too_large: 'error.too-large',
+  too_many_requests: 'error.too-many-requests',
+  internal: 'error.internal',
+  name_taken: 'types.error.name_taken',
+  name_invalid: 'types.error.name_invalid',
+  icon_invalid: 'types.error.icon_invalid',
+  categories_invalid: 'types.error.categories_invalid',
+  unit_invalid: 'types.error.unit_invalid',
+};
+
+/** The one `unavailable` answer with a fixed sentence: the writer (or the database) was busy and
+ *  the request never ran. Every other `unavailable` names its own cause ("save a Telegram bot
+ *  token first") and keeps it. */
+const BUSY_MESSAGE = 'the database is busy, please retry';
+
+/** What each browser's `fetch` throws when the request never got an answer: Chromium's
+ *  "Failed to fetch", Firefox's "NetworkError when attempting to fetch resource.", Safari's
+ *  "Load failed". Any other `TypeError` is a bug, and must not be reported as "no connection". */
+const NETWORK_FAILURE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+/** Shaped like one of our own i18n keys (`outbox.queue-failed`, `types.error.name_taken`): a few
+ *  lower-case dot-separated words and no spaces -- never a sentence. */
+const KEY_SHAPE = /^[a-z][a-z0-9-]*(\.[a-z0-9_-]+)+$/;
+
+function browserOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/**
+ * The one sentence to show a reader for a failed request or action, already translated.
+ *
+ * - The server answered (`ApiError`): a known stable code becomes its key; anything else keeps
+ *   the server's own sentence. What the server said always wins over `navigator.onLine`.
+ * - It never answered (a `fetch` network failure, or anything thrown while the browser says it
+ *   is offline): `error.offline`.
+ * - A message that is one of our own keys (thrown by e.g. `createObjectQueued`) is translated.
+ * - Anything else is shown as it is, and an empty one falls back to `error.generic`.
+ */
+export function errorMessage(e: unknown, t: Translate): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'unavailable' && e.message === BUSY_MESSAGE) return t('error.busy');
+    const key = CODE_KEYS[e.code];
+    return key ? t(key) : e.message || t('error.generic');
+  }
+  if ((e instanceof TypeError && NETWORK_FAILURE.test(e.message)) || browserOffline()) return t('error.offline');
+  const message = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  if (!message) return t('error.generic');
+  return KEY_SHAPE.test(message) ? t(message) : message;
+}
