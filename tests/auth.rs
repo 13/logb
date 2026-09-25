@@ -73,6 +73,48 @@ async fn login_is_rate_limited() {
     assert_eq!(app.login(&c, "ben", "correct horse").await.status(), 429);
 }
 
+/// Logs in from a proxy-reported address of the caller's choosing, so one test can play many
+/// different clients against a `trust_proxy` instance.
+async fn login_from(app: &common::TestApp, ip: &str, username: &str, password: &str) -> reqwest::StatusCode {
+    common::new_client()
+        .post(app.url("/auth/login"))
+        .header("x-forwarded-for", ip)
+        .json(&json!({ "username": username, "password": password }))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+/// The per-IP limit alone does nothing against guesses spread across many addresses -- a
+/// botnet, or anyone behind a proxy that reports a different hop per request. The same
+/// username is limited on its own, however its caller spells its case, and a different account
+/// is untouched by it.
+#[tokio::test]
+async fn login_is_rate_limited_per_username_across_addresses() {
+    let app = common::spawn_with(|c| c.trust_proxy = true).await;
+    app.setup("ben", "correct horse").await;
+    app.create_user_client("anna", "password123").await;
+    for i in 0..10 {
+        let name = if i % 2 == 0 { "ben" } else { "BEN" };
+        assert_eq!(login_from(&app, &format!("198.51.100.{i}"), name, "wrong").await, 401, "attempt {i}");
+    }
+    assert_eq!(login_from(&app, "198.51.100.200", "Ben", "correct horse").await, 429);
+    assert_eq!(login_from(&app, "198.51.100.201", "anna", "password123").await, 200);
+}
+
+/// An unknown username is limited exactly like a real one: if only real accounts ever
+/// answered 429, the limit itself would say which names exist.
+#[tokio::test]
+async fn an_unknown_username_is_rate_limited_like_a_real_one() {
+    let app = common::spawn_with(|c| c.trust_proxy = true).await;
+    app.setup("ben", "correct horse").await;
+    for i in 0..10 {
+        assert_eq!(login_from(&app, &format!("198.51.100.{i}"), "nobody", "wrong").await, 401);
+    }
+    assert_eq!(login_from(&app, "198.51.100.200", "nobody", "wrong").await, 429);
+}
+
 /// Two setup calls that race past the "is the database empty?" pre-check must not both
 /// create an admin: the conditional INSERT lets exactly one through.
 ///

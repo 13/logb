@@ -263,17 +263,57 @@ pub fn last_forwarded<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str>
 /// map grows once per distinct source address for the lifetime of the process — unbounded
 /// memory, and remotely driveable when `LOGB_TRUST_PROXY` makes the key attacker-chosen.
 pub fn check_login_rate(state: &App, ip: IpAddr) -> Result<(), AppError> {
-    let mut map = state.login_attempts.lock().unwrap();
+    count_attempt(
+        &mut state.login_attempts.lock().unwrap(),
+        ip,
+        state.config.login_max_attempts,
+    )
+}
+
+/// The longest username key the per-username limiter keeps. `validate_username` caps a real
+/// name at 32, and a login body can carry any string at all; without a cap, one request could
+/// park an arbitrarily large key in memory for a whole `LOGIN_WINDOW`.
+const USERNAME_KEY_MAX: usize = 64;
+
+/// As `check_login_rate`, keyed on the lower-cased username instead of the address.
+///
+/// The per-IP limit alone does nothing against guesses at one account spread across many
+/// addresses -- a botnet, or a client behind a proxy that reports a different hop each time.
+/// This one is keyed on the account being guessed at, with the same window and maximum, and is
+/// swept the same way. Lower-cased because sign-in is case-insensitive: "Ben" and "BEN" are
+/// the same account and must spend the same allowance.
+///
+/// A username that does not exist is counted exactly like one that does. If only real accounts
+/// could ever answer 429, the limiter itself would tell a caller which names are taken -- the
+/// same leak `verify_dummy_password` closes for timing.
+///
+/// The cost is that anyone can use up a named account's allowance for a minute. That is the
+/// trade every per-account limit makes, and a minute is short.
+pub fn check_username_rate(state: &App, username: &str) -> Result<(), AppError> {
+    let key: String = username.to_lowercase().chars().take(USERNAME_KEY_MAX).collect();
+    count_attempt(
+        &mut state.login_attempts_by_user.lock().unwrap(),
+        key,
+        state.config.login_max_attempts,
+    )
+}
+
+/// One attempt against `key` in a fixed-window limiter: sweep expired windows, count this
+/// attempt, and refuse it once the window holds more than `max`. Shared by both limiters so the
+/// per-IP and per-username rules cannot drift apart.
+fn count_attempt<K: Eq + std::hash::Hash>(
+    map: &mut std::collections::HashMap<K, (u32, Instant)>,
+    key: K,
+    max: u32,
+) -> Result<(), AppError> {
     let now = Instant::now();
-    map.retain(|&addr, &mut (_, started)| {
-        addr == ip || now.duration_since(started) <= LOGIN_WINDOW
-    });
-    let entry = map.entry(ip).or_insert((0, now));
+    map.retain(|k, &mut (_, started)| *k == key || now.duration_since(started) <= LOGIN_WINDOW);
+    let entry = map.entry(key).or_insert((0, now));
     if now.duration_since(entry.1) > LOGIN_WINDOW {
         *entry = (0, now);
     }
     entry.0 += 1;
-    if entry.0 > state.config.login_max_attempts {
+    if entry.0 > max {
         Err(AppError::TooManyRequests)
     } else {
         Ok(())
@@ -487,6 +527,7 @@ mod tests {
             storage,
             config,
             login_attempts: Mutex::new(HashMap::new()),
+            login_attempts_by_user: Mutex::new(HashMap::new()),
         })
     }
 
@@ -558,6 +599,26 @@ mod tests {
         check_login_rate(&state, "198.51.100.1".parse().unwrap()).unwrap();
         check_login_rate(&state, "198.51.100.2".parse().unwrap()).unwrap();
         assert_eq!(state.login_attempts.lock().unwrap().len(), 2);
+    }
+
+    /// The username map is swept exactly like the address map, and its keys are capped, so a
+    /// flood of made-up names cannot grow it past what one window holds.
+    #[tokio::test]
+    async fn username_rate_map_is_swept_and_its_keys_capped() {
+        let state = test_state(false).await;
+        {
+            let mut map = state.login_attempts_by_user.lock().unwrap();
+            let stale = Instant::now() - LOGIN_WINDOW * 3;
+            for i in 0..50 {
+                map.insert(format!("ghost{i}"), (1, stale));
+            }
+        }
+        check_username_rate(&state, &"X".repeat(10_000)).unwrap();
+        let map = state.login_attempts_by_user.lock().unwrap();
+        assert_eq!(map.len(), 1, "expired entries must not accumulate");
+        let key = map.keys().next().unwrap();
+        assert_eq!(key.len(), USERNAME_KEY_MAX);
+        assert!(key.chars().all(|c| c == 'x'), "keys are lower-cased");
     }
 
     #[tokio::test]

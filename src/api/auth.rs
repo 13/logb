@@ -255,6 +255,9 @@ async fn login(
     Json(body): Json<Credentials>,
 ) -> Result<([(HeaderName, HeaderValue); 1], CookieJar, Json<AuthUser>), AppError> {
     auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
+    // Before the lookup, so a name that does not exist spends its allowance exactly like one
+    // that does (see `check_username_rate`).
+    auth::check_username_rate(&state, &body.username)?;
     // Case-insensitive by `lower(...)` on both sides rather than by the column's collation:
     // SQLite declares `UNIQUE COLLATE NOCASE`, PostgreSQL carries a unique index on
     // `lower(username)`, and only this spelling signs "bEn" in as "Ben" on both.
