@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from './api-error';
   import { onDestroy } from 'svelte';
   import { uploadQueued } from './api';
   import { newOpId } from './outbox';
@@ -57,7 +58,7 @@
           });
         }
       }
-    } catch (e) { error = $t((e as Error).message); } finally { busy = false; el.value = ''; cam.value = ''; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; el.value = ''; cam.value = ''; }
   }
 </script>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from './api-error';
   import { untrack } from 'svelte';
   import { api, onOutboxFlushed, pendingOpsFor } from './api';
   import { createSeq } from './seq-guard';
@@ -52,7 +53,7 @@
     } catch (e) {
       if (!loadSeq.current(token)) return;
       items = [...queued, ...items.filter((r) => !r.pending)];
-      error = (e as Error).message;
+      error = errorMessage(e, $t);
     } finally {
       if (loadSeq.current(token)) loaded = true;
     }
@@ -82,7 +83,7 @@
       dialog?.close();
       await load();
       onchanged?.();
-    } catch (e) { doneError = (e as Error).message; }
+    } catch (e) { doneError = errorMessage(e, $t); }
     finally { doneBusy = false; }
   }
 
@@ -91,7 +92,7 @@
       await api<Reminder>('DELETE', `/reminders/${r.id}/snooze`);
       await load();
       onchanged?.();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   /** "Skip this one": a snooze one interval long, so the reading is asked for again next period
@@ -101,7 +102,7 @@
       await api<Reminder>('POST', `/reminders/${r.id}/snooze`, { skip: true });
       await load();
       onchanged?.();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   function when(r: Reminder): string {

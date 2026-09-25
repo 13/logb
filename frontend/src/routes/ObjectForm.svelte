@@ -13,7 +13,6 @@
   import { counter, parseMoney, parseQuantity } from '../lib/format';
   import { fuelUnitLabel } from '../lib/energy';
   import { clearsPriceOn, emptyInput, formText, pendingObject, toInput, validate } from '../lib/object-form';
-  import { hashToNegativeId } from '../lib/activity-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
   import { reminderBody } from '../lib/reminder-form';

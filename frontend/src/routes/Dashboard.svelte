@@ -10,6 +10,8 @@
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
+  import { pendingObject } from '../lib/object-form';
+  import { errorMessage } from '../lib/api-error';
   import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
   import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
@@ -24,25 +26,9 @@
   let error = $state('');
 
   async function pendingObjects(): Promise<MemObject[]> {
-    return (await pendingObjectOps()).map((op) => {
-      const body = op.body as unknown as ObjectInput;
-      const now = new Date().toISOString();
-      return {
-        id: op.tempId ?? -1, user_id: op.userId ?? 0, name: body.name, type: body.type,
-        counter_unit: body.counter_unit, fuel_unit: body.fuel_unit, description: body.description,
-        purchase_date: body.purchase_date, purchase_price_cents: body.purchase_price_cents,
-        archived_at: body.archived ? now : null, cover_attachment_id: null, cover_file_id: null,
-        parent_id: body.parent_id ?? null, created_at: now, updated_at: now, ancestors: [],
-        tags: [...(body.tags ?? [])], energy_price_milli: body.energy_price_milli ?? null,
-        fuel_capacity_milli: body.fuel_capacity_milli ?? null, weight_unit: body.weight_unit ?? 'kg',
-        resource_unit: body.resource_unit ?? body.fuel_unit, resource_kind: body.resource_kind ?? null,
-        measurement_mode: body.measurement_mode ?? null, monthly_target_milli: body.monthly_target_milli ?? null,
-        low_level_pct: body.low_level_pct ?? null, private: body.private ? 1 : 0,
-        stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0,
-          last_reading_date: null, last_activity_date: null, counter_per_day_milli: null },
-        pending: true,
-      };
-    });
+    const now = new Date().toISOString();
+    return (await pendingObjectOps()).map((op) =>
+      pendingObject(op.body as unknown as ObjectInput, { tempId: op.tempId ?? -1, userId: op.userId, now }));
   }
 
   /** Per device, like the other view preferences; the address wins when it names a sort. */
@@ -75,7 +61,7 @@
         api<MemObject[]>('GET', '/objects?all=true&archived=true'),
       ]);
       reminders = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
-    } catch (e) { failure = (e as Error).message; }
+    } catch (e) { failure = errorMessage(e, $t); }
     if (!loadSeq.current(token)) return;
     // A failed fetch keeps what is on screen, minus the queued rows it is about to re-add.
     if (fetched) [active, archived] = fetched;
@@ -111,7 +97,7 @@
 
   async function snooze(r: Reminder) {
     try { await api('POST', `/reminders/${r.id}/snooze`, { days: 7 }); await load(); }
-    catch (e) { error = (e as Error).message; }
+    catch (e) { error = errorMessage(e, $t); }
   }
 </script>
 

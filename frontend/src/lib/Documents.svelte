@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from './api-error';
   import { untrack } from 'svelte';
   import { createSeq } from './seq-guard';
   import { api, fileUrl } from './api';
@@ -35,7 +36,7 @@
       error = '';
     } catch (e) {
       if (!loadSeq.current(token)) return;
-      error = (e as Error).message;
+      error = errorMessage(e, $t);
     } finally {
       if (loadSeq.current(token)) loaded = true;
     }
@@ -52,7 +53,7 @@
     try {
       await api('DELETE', `/attachments/${a.id}`);
     } catch (e) {
-      error = (e as Error).message;
+      error = errorMessage(e, $t);
       return;
     }
     await load();
@@ -75,7 +76,7 @@
       await api('PATCH', `/objects/${objectId}`, body);
       error = '';
     } catch (e) {
-      error = (e as Error).message;
+      error = errorMessage(e, $t);
       return;
     }
     onchanged?.();

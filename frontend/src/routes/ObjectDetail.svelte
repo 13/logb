@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import WeightHistory from '../lib/WeightHistory.svelte';
   import { untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
@@ -101,7 +102,7 @@
       if (!objectSeq.current(token)) return;
       const cached = isRejection(e) ? undefined : getCachedObject(target);
       if (cached) object = cached;
-      else error = (e as Error).message;
+      else error = errorMessage(e, $t);
     }
   }
 
@@ -117,7 +118,7 @@
       const rows = await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=false`);
       if (childrenSeq.current(token)) children = rows;
     } catch (e) {
-      if (childrenSeq.current(token)) error = (e as Error).message;
+      if (childrenSeq.current(token)) error = errorMessage(e, $t);
     }
     try {
       const archived = (await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=true`)).length;
@@ -267,7 +268,7 @@
   async function loadMore() {
     loadingMore = true;
     try { await loadActivities('append'); }
-    catch (e) { error = (e as Error).message; }
+    catch (e) { error = errorMessage(e, $t); }
     finally { loadingMore = false; }
   }
 
@@ -381,10 +382,10 @@
     {/if}
 
     <nav class="tabs">
-      <button class:active={tab === 'timeline'} onclick={() => setTab('timeline')}>{$t('tab.timeline')}</button>
-      <button class:active={tab === 'documents'} onclick={() => setTab('documents')}>{$t('tab.documents')}</button>
-      <button class:active={tab === 'reminders'} onclick={() => setTab('reminders')}>{$t('tab.reminders')}{#if object.stats.due_reminder_count > 0}<span class="chip due">{object.stats.due_reminder_count}</span>{/if}</button>
-      <button class:active={tab === 'info'} onclick={() => setTab('info')}>{$t('tab.info')}</button>
+      <button class:active={tab === 'timeline'} aria-pressed={tab === 'timeline'} onclick={() => setTab('timeline')}>{$t('tab.timeline')}</button>
+      <button class:active={tab === 'documents'} aria-pressed={tab === 'documents'} onclick={() => setTab('documents')}>{$t('tab.documents')}</button>
+      <button class:active={tab === 'reminders'} aria-pressed={tab === 'reminders'} onclick={() => setTab('reminders')}>{$t('tab.reminders')}{#if object.stats.due_reminder_count > 0}<span class="chip due">{object.stats.due_reminder_count}</span>{/if}</button>
+      <button class:active={tab === 'info'} aria-pressed={tab === 'info'} onclick={() => setTab('info')}>{$t('tab.info')}</button>
     </nav>
 
     {#if tab === 'timeline'}
