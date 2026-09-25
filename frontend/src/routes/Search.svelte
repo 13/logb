@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
@@ -43,7 +44,7 @@
         if (generation !== requestGeneration) return;
         results = next; searched = term;
       } catch (e) {
-        if (generation === requestGeneration) error = (e as Error).message;
+        if (generation === requestGeneration) error = errorMessage(e, $t);
       } finally {
         if (generation === requestGeneration) loading = false;
       }
@@ -61,7 +62,7 @@
       if (generation !== requestGeneration || !results || searched === '') return;
       results = { objects: [...results.objects, ...next.objects], activities: [...results.activities, ...next.activities], has_more: next.has_more };
       offset = nextOffset;
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
     finally { loadingMore = false; }
   }
 
@@ -80,7 +81,7 @@
     bind:value={q}
   />
 
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if loading && !results}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if empty}

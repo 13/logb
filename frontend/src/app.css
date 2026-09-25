@@ -7,8 +7,15 @@
   --accent: #1f6f5f;
   --accent-text: #ffffff;
   --danger: #b3261e;
-  --warn: #b26a00;
+  /* Dark enough for warn TEXT on the page (5.5:1) as well as white text on it (5.9:1). */
+  --warn: #915700;
+  /* Text on a --danger / --warn fill, >= 4.5:1 in each theme (tests/theme-contrast.test.ts). */
+  --on-danger: #ffffff;
+  --on-warn: #ffffff;
   --border: #dddcd6;
+  /* A form control's own outline: the card --border is too faint (1.4:1) to show where a field
+     is, and WCAG's non-text contrast wants 3:1 against what it sits on. */
+  --control-border: #8a8a84;
   --shadow: 0 1px 2px rgba(0,0,0,.08);
   /* Type: six steps at roughly a 1.2 ratio, sized for UI density rather than editorial
      reading. Replaces nine improvised sizes (1.4/1.15/1.1/1.05/1/.9/.85/.8/.75rem). */
@@ -69,7 +76,11 @@
   --accent-text: #0b1f1a;
   --danger: #ff6b60;
   --warn: #f0a640;
+  /* The dark theme's fills are light, so the text on them is dark (white was 2.1-2.8:1). */
+  --on-danger: #121412;
+  --on-warn: #121412;
   --border: #33372f;
+  --control-border: #6e726b;
   --shadow: none;
   --focus: #ecebe6;
   color-scheme: dark;
@@ -127,7 +138,7 @@ button:disabled { opacity: .5; cursor: default; }
    browser's own look -- square corners and a blue clear button, in an app with neither. */
 input, select, textarea {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
   min-height: var(--control);
@@ -183,9 +194,9 @@ input[type='checkbox'], input[type='radio'] {
 .empty .empty-icon { display: flex; color: var(--muted); opacity: .4; }
 .chip { display: inline-block; padding: 2px var(--space-3); border-radius: var(--radius-full); background: var(--surface-2); font-size: var(--text-xs); }
 .chip.active { background: var(--accent); color: var(--accent-text); }
-.chip.due { background: var(--danger); color: #fff; }
-.chip.pending { background: var(--warn); color: #fff; flex: none; white-space: nowrap; }
-.chip.dead { background: var(--danger); color: #fff; flex: none; white-space: nowrap; }
+.chip.due { background: var(--danger); color: var(--on-danger); }
+.chip.pending { background: var(--warn); color: var(--on-warn); flex: none; white-space: nowrap; }
+.chip.dead { background: var(--danger); color: var(--on-danger); flex: none; white-space: nowrap; }
 .tag { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-full); padding: 2px var(--space-2); font-size: var(--text-xs); font-weight: 600; line-height: 1.4; border: 0; min-height: 0; }
 /* A 32px-tall hit area around the ~20px chip without changing how it looks -- short of WCAG 2.2
    AA's 24x24 minimum target size horizontally, since it must stay inside the chip's own row, but
@@ -262,8 +273,8 @@ img.thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(
    app is mostly costs, odometer readings and dates read down a list. Tabular figures are a
    property of the existing family, not a second typeface. */
 .stat b, .tnum { font-variant-numeric: tabular-nums; }
-.banner { background: var(--danger); color: #fff; padding: var(--space-3); border-radius: var(--radius-md); margin-bottom: var(--space-3); }
-.banner a { color: #fff; }
+.banner { background: var(--danger); color: var(--on-danger); padding: var(--space-3); border-radius: var(--radius-md); margin-bottom: var(--space-3); }
+.banner a { color: var(--on-danger); }
 dialog { border: none; border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface); color: var(--text); width: min(92vw, 420px); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
 .doc-icon { width: 100%; aspect-ratio: 1; display: grid; place-items: center; background: var(--surface-2); border-radius: var(--radius-sm); }

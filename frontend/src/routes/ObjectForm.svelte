@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { onMount, untrack } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import TagInput from '../lib/TagInput.svelte';
@@ -9,9 +10,10 @@
   import { hashToNegativeId } from '../lib/activity-form';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
-  import { centsToInput, counter, parseMoney, parseQuantity } from '../lib/format';
+  import { counter, parseMoney, parseQuantity } from '../lib/format';
   import { fuelUnitLabel } from '../lib/energy';
-  import { clearsPriceOn, emptyInput, toInput, validate } from '../lib/object-form';
+  import { clearsPriceOn, emptyInput, formText, pendingObject, toInput, validate } from '../lib/object-form';
+  import { hashToNegativeId } from '../lib/activity-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
   import { reminderBody } from '../lib/reminder-form';
@@ -22,6 +24,7 @@
   import { customTypes, defaultUnit, typesLoaded } from '../lib/type-registry';
   import { saveObjectDraft, takeObjectDraft } from '../lib/object-draft';
   import { getCachedObject, setCachedObject } from '../lib/object-cache';
+  import { user } from '../stores/session';
   import { loadObjectTemplates, removeObjectTemplate, saveObjectTemplate, type SavedObjectTemplate } from '../lib/object-templates';
 
   let { id }: { id?: string } = $props();
@@ -43,6 +46,8 @@
   let capacityText = $state('');
   let targetText = $state('');
   let savedTemplates = $state<SavedObjectTemplate[]>([]);
+  /** Whose templates these are: they are kept per user (see ../lib/object-templates.ts). */
+  const userId = () => $user?.id ?? null;
   /** Ticked template ids. Opt-in, never automatic: a reminder nobody asked for is the kind that
    *  gets muted. */
   let chosen = $state<string[]>([]);
@@ -63,6 +68,9 @@
   }
   let error = $state('');
   let busy = $state(false);
+  /** The object being edited could not be loaded; the form holds defaults, not its data. */
+  let loadFailed = $state(false);
+  let deleteError = $state('');
 
   function mintTempId(): number {
     return hashToNegativeId(newOpId());
@@ -128,7 +136,7 @@
   }
 
   onMount(async () => {
-    savedTemplates = loadObjectTemplates();
+    savedTemplates = loadObjectTemplates(userId());
     // Not awaited, and a failure is ignored: suggestions are a convenience, and the form must not
     // wait for them or lose its object load over them.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
@@ -140,27 +148,21 @@
     // to whoever mounts next -- see `takeObjectDraft`.
     const draftToken = params.get('draft');
     const draft = takeObjectDraft(currentPath, draftToken);
-    // `energy_price_milli` is cents x1000 -- sub-cent precision the *field* can carry (a price
-    // agreed to three decimal places) -- but this form's price input is deliberately the same
-    // whole-cent text field every other money amount here uses (`centsToInput`/`parseMoney`, per
-    // the design spec: "parsed like other money input"), so a price entered with a fractional
-    // cent is rounded to the nearest whole one on every load, same as `purchase_price_cents`
-    // already is. Consistent with the rest of the app rather than a precision loss unique to
-    // this field.
+    // The price fields round a sub-cent `energy_price_milli` to whole cents on load, like every
+    // other money amount here -- see `formText` (../lib/object-form.ts).
     if (draft) {
-      input = draft;
-      priceText = centsToInput(draft.purchase_price_cents);
-      energyPriceText = centsToInput(draft.energy_price_milli == null ? null : Math.round(draft.energy_price_milli / 1000));
-      capacityText = draft.fuel_capacity_milli == null ? '' : String(draft.fuel_capacity_milli / 1000);
-      targetText = draft.monthly_target_milli == null ? '' : String(draft.monthly_target_milli / 1000);
+      fill(draft);
     } else if (id) {
-      const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
-      const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
-      input = toInput(o);
-      priceText = centsToInput(o.purchase_price_cents);
-      energyPriceText = centsToInput(o.energy_price_milli === null ? null : Math.round(o.energy_price_milli / 1000));
-      capacityText = o.fuel_capacity_milli == null ? '' : String(o.fuel_capacity_milli / 1000);
-      targetText = o.monthly_target_milli == null ? '' : String(o.monthly_target_milli / 1000);
+      // A failed load leaves empty defaults on an EDIT url: say so, and have `submit` refuse --
+      // saving that blank form would overwrite the real object with it.
+      try {
+        const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
+        const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
+        fill(toInput(o));
+      } catch (e) {
+        loadFailed = true;
+        error = errorMessage(e, $t);
+      }
     }
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
@@ -178,10 +180,16 @@
     // from it. The walk would then never reach that child, offer it as a parent, and the
     // server, which walks the real table, would refuse the save with a raw 400. Both halves,
     // merged, are the whole tree.
-    const [live, archived] = await Promise.all([
-      api<MemObject[]>('GET', '/objects?all=true&archived=false'),
-      api<MemObject[]>('GET', '/objects?all=true&archived=true'),
-    ]);
+    let live: MemObject[], archived: MemObject[];
+    try {
+      [live, archived] = await Promise.all([
+        api<MemObject[]>('GET', '/objects?all=true&archived=false'),
+        api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+      ]);
+    } catch (e) {
+      if (!error) error = errorMessage(e, $t);
+      return;
+    }
     const all = [...live, ...archived];
     nameById = new Map(all.map((o) => [o.id, o.name]));
     // What is *legal* is decided against that whole tree; what is *offered* is narrower on
@@ -201,15 +209,19 @@
       .filter((o) => o.archived_at === null || o.id === alreadyInside);
   });
 
+  /** The whole form, from one input: the input itself and the text fields shown for it. */
+  function fill(next: ObjectInput) {
+    input = next;
+    ({ priceText, energyPriceText, capacityText, targetText } = formText(next));
+  }
+
   function applySavedTemplate(template: SavedObjectTemplate) {
-    input = structuredClone(template.input); input.name = template.name;
-    priceText = centsToInput(input.purchase_price_cents); energyPriceText = centsToInput(input.energy_price_milli == null ? null : Math.round(input.energy_price_milli / 1000));
-    capacityText = input.fuel_capacity_milli == null ? '' : String(input.fuel_capacity_milli / 1000);
-    targetText = input.monthly_target_milli == null ? '' : String(input.monthly_target_milli / 1000);
+    fill({ ...structuredClone(template.input), name: template.name });
   }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    if (loadFailed) { error = $t('object.not-loaded'); return; }
     input.purchase_price_cents = parseMoney(priceText);
     // Cents x1000, the same scale as `cost_per_counter_milli`; empty (or no fuel unit at all,
     // which hides the field) means no price. `Number.isNaN(cents) * 1000` stays `NaN`, so an
@@ -238,14 +250,7 @@
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
         : await createObjectQueued<MemObject>($state.snapshot(input) as unknown as Record<string, unknown>, tempId);
       if (!saved) {
-        const now = new Date().toISOString();
-        setCachedObject(tempId, {
-          id: tempId, user_id: 0, ...$state.snapshot(input), fuel_unit: input.fuel_unit,
-          archived_at: null, cover_attachment_id: null, cover_file_id: null, created_at: now, updated_at: now,
-          ancestors: [], tags: [...(input.tags ?? [])], private: input.private ? 1 : 0,
-          stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, latest_weight_grams: null, latest_weight_date: null,
-            due_reminder_count: 0, last_reading_date: null, last_activity_date: null, counter_per_day_milli: null }, pending: true,
-        } as MemObject);
+        setCachedObject(tempId, pendingObject($state.snapshot(input) as ObjectInput, { tempId, now: new Date().toISOString() }));
         go(`/objects/${tempId}`, true);
         return;
       }
@@ -271,14 +276,19 @@
         } catch { /* the object is saved; its reminders tab offers the same */ }
       }
       go(`/objects/${saved.id}`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) { error = errorMessage(err, $t); } finally { busy = false; }
   }
 
   async function remove() {
-    if (!confirm($t('nav.confirm-delete'))) return;
-    if (Number(id) < 0) { await cancelQueuedObject(Number(id)); go('/', true); return; }
-    await api('DELETE', `/objects/${id}`);
-    go('/', true);
+    if (busy || !confirm($t('nav.confirm-delete'))) return;
+    busy = true; deleteError = '';
+    try {
+      if (Number(id) < 0) await cancelQueuedObject(Number(id));
+      else await api('DELETE', `/objects/${id}`);
+      go('/', true);
+    } catch (e) {
+      deleteError = errorMessage(e, $t);
+    } finally { busy = false; }
   }
 </script>
 
@@ -292,7 +302,7 @@
       <button type="button" class="chip" onclick={() => applyObjectTemplate('water')}>{$t('template.object-water')}</button>
       {#each savedTemplates as template (template.id)}
         <button type="button" class="chip" onclick={() => applySavedTemplate(template)}>{template.name}</button>
-        <button type="button" class="chip" aria-label={$t('template.remove', { name: template.name })} onclick={() => (savedTemplates = removeObjectTemplate(template.id))}>×</button>
+        <button type="button" class="chip" aria-label={$t('template.remove', { name: template.name })} onclick={() => (savedTemplates = removeObjectTemplate(userId(), template.id))}>×</button>
       {/each}
     </div>
   {/if}
@@ -408,9 +418,9 @@
     {/if}
     <label class="row toggle"><input type="checkbox" bind:checked={input.private} /> {$t('object.private')}</label>
     <p class="hint">{$t('object.private-hint')}</p>
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row actions">
-      {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate($state.snapshot(input)))}>{$t('template.save')}</button>{/if}
+      {#if !editing && input.name.trim()}<button type="button" class="ghost" onclick={() => (savedTemplates = saveObjectTemplate(userId(), $state.snapshot(input)))}>{$t('template.save')}</button>{/if}
       <button type="button" class="ghost" onclick={() => back(editing ? `/objects/${id}` : '/')}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>
@@ -418,7 +428,8 @@
   {#if editing}
     <h2>{$t('object.delete')}</h2>
     <p class="hint">{$t('object.delete-hint')}</p>
-    <button class="danger" onclick={remove}>{$t('object.delete')}</button>
+    <button class="danger" disabled={busy} onclick={remove}>{$t('object.delete')}</button>
+    {#if deleteError}<p class="error" role="alert">{deleteError}</p>{/if}
   {/if}
 </main>
 

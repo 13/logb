@@ -463,11 +463,14 @@ describe('offline start and cache ownership', () => {
       await session.loadSession();
       expect(storage.getItem('logb.session.profile')).not.toBeNull();
       expect(storage.getItem('logb.cache.user')).toBe('7');
+      storage.setItem('logb.object-templates.7', '[]');
 
       await session[end]();
 
       expect(storage.getItem('logb.session.profile')).toBeNull();
       expect(storage.getItem('logb.cache.user')).toBeNull();
+      // Saved object templates are this person's, not the next one's on this device.
+      expect(storage.getItem('logb.object-templates.7')).toBeNull();
     }
   });
 

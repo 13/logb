@@ -3,6 +3,7 @@
   import TopBar from '../../lib/TopBar.svelte';
   import Icon, { type IconName } from '../../lib/Icon.svelte';
   import { api, ApiError } from '../../lib/api';
+  import { errorMessage } from '../../lib/api-error';
   import { newOpId } from '../../lib/outbox';
   import { t } from '../../i18n';
   import { go } from '../../lib/router';
@@ -116,13 +117,9 @@
     }
   }
 
-  /** The server's stable codes for a refused type, said in the reader's language. Anything else
-   *  (a code this page does not know, a dropped connection) keeps the server's own sentence. */
-  const TYPE_ERRORS = ['name_taken', 'name_invalid', 'icon_invalid', 'categories_invalid', 'unit_invalid'];
-  function errorText(e: unknown): string {
-    if (e instanceof ApiError && TYPE_ERRORS.includes(e.code)) return $t(`types.error.${e.code}`);
-    return (e as Error).message;
-  }
+  /** The server's stable codes for a refused type (`types.error.*`), said in the reader's
+   *  language -- `errorMessage` knows them along with every other stable code. */
+  const errorText = (e: unknown): string => errorMessage(e, $t);
 
   const summary = (ty: CustomType) =>
     [ty.counter_unit, ty.categories.map((c) => $t(`cat.${c}`)).join(', ')].filter(Boolean).join(' · ');

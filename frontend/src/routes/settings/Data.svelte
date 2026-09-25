@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import TopBar from '../../lib/TopBar.svelte';
   import { discardDeadOp, deadOps, outboxPending, retryDead, uploadRaw } from '../../lib/api';
   import type { QueuedOp } from '../../lib/outbox';
@@ -21,7 +22,7 @@
   async function retryFailed() {
     recoveryBusy = true;
     try { await retryDead(); await loadRecovery(); }
-    catch (e) { error = (e as Error).message; }
+    catch (e) { error = errorMessage(e, $t); }
     finally { recoveryBusy = false; }
   }
 
@@ -37,13 +38,13 @@
     try {
       const counts = await uploadRaw<ImportCounts>('/import', files[0], 'application/zip');
       message = $t('settings.import-done', counts as unknown as Record<string, number>);
-    } catch (e) { error = (e as Error).message; } finally { fileEl.value = ''; }
+    } catch (e) { error = errorMessage(e, $t); } finally { fileEl.value = ''; }
   }
 </script>
 
 <main>
   <TopBar title={$t('settings.data')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
 
   <div class="list">

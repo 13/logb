@@ -54,3 +54,87 @@ export function isRejection(e: unknown): boolean {
 export function isUnauthenticated(e: unknown): boolean {
   return e instanceof ApiError && e.status === 401;
 }
+
+/** The translate function, as the `t` store hands it out (`$t` in a component). */
+export type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
+/** A failure whose `message` is an i18n key and which needs placeholders filled in ("Line
+ *  {line}: …"). Thrown by pure modules that have no `t` of their own; `errorMessage` says it. */
+export class I18nError extends Error {
+  constructor(key: string, public vars?: Record<string, string | number>) {
+    super(key);
+  }
+}
+
+/**
+ * Stable server codes (`src/error.rs`) whose MESSAGE says nothing the code does not: for these
+ * the reader gets a sentence in their own language. Codes that carry the detail in the message
+ * instead -- `bad_request`, `conflict`, and `unavailable` in general -- are deliberately absent,
+ * so the server's own (more specific) sentence survives.
+ */
+const CODE_KEYS: Record<string, string> = {
+  unauthorized: 'error.unauthorized',
+  forbidden: 'error.forbidden',
+  not_found: 'error.not-found',
+  gone: 'error.gone',
+  too_large: 'error.too-large',
+  too_many_requests: 'error.too-many-requests',
+  internal: 'error.internal',
+  name_taken: 'types.error.name_taken',
+  name_invalid: 'types.error.name_invalid',
+  icon_invalid: 'types.error.icon_invalid',
+  categories_invalid: 'types.error.categories_invalid',
+  unit_invalid: 'types.error.unit_invalid',
+};
+
+/** The one `unavailable` answer with a fixed sentence: the writer (or the database) was busy and
+ *  the request never ran. Every other `unavailable` names its own cause ("save a Telegram bot
+ *  token first") and keeps it. */
+const BUSY_MESSAGE = 'the database is busy, please retry';
+
+/** What each browser's `fetch` throws (a `TypeError`) when the request never got an answer:
+ *  Chromium's "Failed to fetch", Firefox's "NetworkError when attempting to fetch resource.",
+ *  Safari's "Load failed". Any other `TypeError` is a bug, and must not be reported as "no
+ *  connection". */
+const NETWORK_FAILURE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+/** Shaped like one of our own i18n keys (`outbox.queue-failed`, `types.error.name_taken`): a few
+ *  lower-case dot-separated words and no spaces -- never a sentence. */
+const KEY_SHAPE = /^[a-z][a-z0-9-]*(\.[a-z0-9_-]+)+$/;
+
+function browserOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/**
+ * The one sentence to show a reader for a failed request or action, already translated.
+ *
+ * - The server answered (`ApiError`): a known stable code becomes its key; anything else keeps
+ *   the server's own sentence. What the server said always wins over `navigator.onLine`.
+ * - It never answered (a `fetch` network failure, or anything thrown while the browser says it
+ *   is offline): `error.offline`.
+ * - A message that is one of our own keys (thrown by e.g. `createObjectQueued`) is translated.
+ * - Anything else is shown as it is, and an empty one falls back to `error.generic`.
+ */
+export function errorMessage(e: unknown, t: Translate): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'unavailable' && e.message === BUSY_MESSAGE) return t('error.busy');
+    const key = CODE_KEYS[e.code];
+    return key ? t(key) : e.message || t('error.generic');
+  }
+  if (e instanceof I18nError) return t(e.message, e.vars);
+  if (browserOffline()) return t('error.offline');
+  return messageText(e instanceof Error ? e.message : typeof e === 'string' ? e : '', t);
+}
+
+/**
+ * `errorMessage` for a failure of which only the message survives (a dead outbox op's
+ * `lastError`): a network failure's text says "no connection", one of our own keys is
+ * translated, anything else is shown as it is. Deliberately blind to `navigator.onLine`: a
+ * failure recorded earlier says nothing about the connection now.
+ */
+export function messageText(message: string, t: Translate): string {
+  if (!message) return t('error.generic');
+  if (NETWORK_FAILURE.test(message)) return t('error.offline');
+  return KEY_SHAPE.test(message) ? t(message) : message;
+}

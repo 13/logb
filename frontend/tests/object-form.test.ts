@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearsPriceOn, emptyInput, toInput, validate } from '../src/lib/object-form';
+import { clearsPriceOn, emptyInput, formText, milliToText, pendingObject, toInput, validate } from '../src/lib/object-form';
 import type { MemObject } from '../src/lib/types';
 
 const obj = {
@@ -53,5 +53,36 @@ describe('object form', () => {
     // Re-selecting the same unit (or the field simply not having changed) keeps it.
     expect(clearsPriceOn('kwh', 'kwh')).toBe(false);
     expect(clearsPriceOn(null, null)).toBe(false);
+  });
+
+  it('shows a x1000 amount as plain text, and nothing as an empty field', () => {
+    expect(milliToText(null)).toBe('');
+    expect(milliToText(undefined)).toBe('');
+    expect(milliToText(50_000)).toBe('50');
+    expect(milliToText(1_500)).toBe('1.5');
+    expect(milliToText(0)).toBe('0');
+  });
+
+  it("fills the form's text fields from an input", () => {
+    expect(formText({ ...emptyInput(), purchase_price_cents: 1500000, energy_price_milli: 30_400, fuel_capacity_milli: 50_000, monthly_target_milli: 250_500 }))
+      .toEqual({ priceText: '15000.00', energyPriceText: '0.30', capacityText: '50', targetText: '250.5' });
+    expect(formText(emptyInput())).toEqual({ priceText: '', energyPriceText: '', capacityText: '', targetText: '' });
+  });
+
+  it('builds the placeholder shown for an object still waiting in the outbox', () => {
+    const now = '2026-09-25T10:00:00.000Z';
+    const input = { ...emptyInput(), name: 'Golf', type: 'car' as const, fuel_unit: 'l' as const, parent_id: 4, tags: ['Lease'], private: true };
+    const o = pendingObject(input, { tempId: -7, userId: 3, now });
+    expect(o).toMatchObject({
+      id: -7, user_id: 3, name: 'Golf', type: 'car', fuel_unit: 'l', resource_unit: 'l', parent_id: 4, tags: ['Lease'],
+      private: 1, archived_at: null, created_at: now, updated_at: now, ancestors: [], pending: true,
+      cover_attachment_id: null, cover_file_id: null,
+    });
+    expect(o.stats).toMatchObject({ total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0 });
+    // Its own copy of the tags: editing the form afterwards must not change the placeholder.
+    input.tags.push('Winter');
+    expect(o.tags).toEqual(['Lease']);
+    expect(pendingObject({ ...input, archived: true }, { tempId: -7, now }).archived_at).toBe(now);
+    expect(pendingObject(input, { tempId: -7, now }).user_id).toBe(0);
   });
 });

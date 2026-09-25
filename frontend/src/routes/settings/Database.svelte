@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api, ApiError } from '../../lib/api';
@@ -42,11 +43,11 @@
   });
 
   async function loadDatabase() {
-    try { db = await api<DbDescription>('GET', '/database'); } catch (e) { dbError = (e as Error).message; }
+    try { db = await api<DbDescription>('GET', '/database'); } catch (e) { dbError = errorMessage(e, $t); }
   }
 
   async function loadBackup() {
-    try { backup = await api<BackupStatus>('GET', '/database/backup'); } catch (e) { dbError = (e as Error).message; }
+    try { backup = await api<BackupStatus>('GET', '/database/backup'); } catch (e) { dbError = errorMessage(e, $t); }
   }
 
   /** The configured hour as a clock time. The server sends 0-23 in the instance's timezone, and
@@ -69,7 +70,7 @@
   async function testDatabase() {
     dbError = ''; probe = null; switched = null; probing = true;
     try { probe = await api<DbProbe>('POST', '/database/test', { url: dbUrl.trim() }); }
-    catch (e) { dbError = (e as Error).message; }
+    catch (e) { dbError = errorMessage(e, $t); }
     finally { probing = false; }
   }
 
@@ -86,7 +87,7 @@
       // showing. Anything else -- an aborted fetch, a proxy that closed the connection midway --
       // means this page does not know whether the copy finished, and saying "failed" would
       // invite a second migration on top of the first.
-      dbError = e instanceof ApiError ? e.message : $t('db.switch-interrupted');
+      dbError = e instanceof ApiError ? errorMessage(e, $t) : $t('db.switch-interrupted');
     } finally { switching = false; }
   }
 
@@ -94,13 +95,13 @@
     if (!confirm($t('db.restart-confirm'))) return;
     dbError = ''; restarting = true;
     try { await api('POST', '/database/restart'); restartNote = $t('db.restart-sent'); }
-    catch (e) { dbError = (e as Error).message; restarting = false; }
+    catch (e) { dbError = errorMessage(e, $t); restarting = false; }
   }
 </script>
 
 <main>
   <TopBar title={$t('db.title')} backTo="/settings" />
-  {#if dbError}<p class="error">{dbError}</p>{/if}
+  {#if dbError}<p class="error" role="alert">{dbError}</p>{/if}
   {#if db}
     <p class="muted">{$t('db.current')}</p>
     <div class="card stack">

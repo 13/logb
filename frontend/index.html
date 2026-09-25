@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <title>LogB</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#1f6f5f" />
+    <!-- The page background of each palette (app.css --bg), until the app applies the theme
+         actually chosen: see applyTheme in src/lib/theme.ts. -->
+    <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121412" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Complete history of your owned objects." />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />

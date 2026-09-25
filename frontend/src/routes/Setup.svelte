@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
   import Logo from '../lib/Logo.svelte';
@@ -25,7 +26,7 @@
       if (!(await loadSession())) throw new Error($t('setup.not-reachable'));
       go('/', true);
     } catch (err) {
-      error = (err as Error).message;
+      error = errorMessage(err, $t);
     } finally { busy = false; }
   }
 </script>
@@ -37,7 +38,7 @@
   <form onsubmit={submit}>
     <div class="field"><label for="u">{$t('login.username')}</label><input id="u" bind:value={username} autocomplete="username" required minlength="3" /></div>
     <div class="field"><label for="p">{$t('login.password')}</label><input id="p" type="password" bind:value={password} autocomplete="new-password" required minlength="8" /></div>
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <button class="primary" disabled={busy}>{$t('setup.submit')}</button>
   </form>
 </main>

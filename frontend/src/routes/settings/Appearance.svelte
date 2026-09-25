@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
@@ -41,7 +42,7 @@
         applyAccountAppearance($user.id, saved);
       }
       message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 
   const isAdmin = $derived($user?.is_admin === true);
@@ -70,13 +71,13 @@
       // knew before it, until the next successful /settings load remembers it again.
       rememberCurrentCurrency(s.currency);
       message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { error = errorMessage(e, $t); }
   }
 </script>
 
 <main>
   <TopBar title={$t('settings.appearance')} backTo="/settings" />
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if message}<p class="muted">{message}</p>{/if}
 
   <h2>{$t('settings.language')}</h2>

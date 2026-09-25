@@ -4,6 +4,7 @@ import { api, ApiError, clearServingSaved, flushOutbox, isRejection, persistStor
 import { cachesBelongTo, forgetCacheOwner, forgetProfile, recordCacheOwner, rememberedProfile, rememberProfile, userSwitchNeedsReload } from '../lib/cache-owner';
 import { clearObjectCache, clearObjectMemory } from '../lib/object-cache';
 import { forgetObjectDraft } from '../lib/object-draft';
+import { forgetObjectTemplates } from '../lib/object-templates';
 import { clearCustomTypes, clearStoredTypeLists, loadCustomTypes } from '../lib/type-registry';
 import type { Settings, User } from '../lib/types';
 import { go } from '../lib/router';
@@ -81,6 +82,9 @@ function endSession(): void {
   // form, not something the next person on this device -- or this same person signing back in --
   // should ever have restored into theirs.
   forgetObjectDraft();
+  // Saved object templates are kept per user, but a shared device's storage is not the place to
+  // leave one person's behind for whoever signs in next.
+  forgetObjectTemplates();
   setOutboxUser(null);
   forgetProfile();
   forgetCacheOwner();

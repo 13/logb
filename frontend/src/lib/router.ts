@@ -5,9 +5,30 @@ function currentPath(): string {
   return location.pathname;
 }
 
+/**
+ * Moves focus to the page's heading after a navigation, so a screen reader announces the new
+ * page and the next Tab starts from its top -- a SPA swap otherwise leaves focus on a control
+ * that no longer exists (the body, in practice), or on one the old page left behind. A field the
+ * new page focused itself (Search's `autofocus`) keeps it. The heading is TopBar's `h1`, which
+ * carries `tabindex="-1"` for this. True when it moved focus.
+ */
+export function focusPageHeading(doc: Document = document): boolean {
+  const heading = doc.querySelector<HTMLElement>('main h1');
+  if (!heading) return false;
+  const active = doc.activeElement as HTMLElement | null;
+  if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return false;
+  heading.focus({ preventScroll: true });
+  return true;
+}
+
 export const path = readable<string>(currentPath(), (set) => {
   if (typeof window === 'undefined') return;
-  const on = () => set(currentPath());
+  const on = () => {
+    set(currentPath());
+    // After the new route has rendered (Svelte flushes in a microtask) and applied any
+    // `autofocus` of its own. Both `go` and the browser's back/forward land here.
+    setTimeout(() => focusPageHeading(), 0);
+  };
   window.addEventListener('popstate', on);
   return () => window.removeEventListener('popstate', on);
 });

@@ -32,7 +32,7 @@
       <Icon name="logout" />{#if !compact}<span>{$t('login.logout')}</span>{/if}
     </button>
   </div>
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
 {/if}
 
 <style>

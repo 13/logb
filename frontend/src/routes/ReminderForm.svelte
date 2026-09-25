@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import DateInput from '../lib/DateInput.svelte';
@@ -94,13 +95,18 @@
       if (rid) await api('PATCH', `/reminders/${rid}`, body);
       else await createReminderQueued(`/objects/${oid}/reminders`, body as unknown as Record<string, unknown>);
       go(`/objects/${oid}?tab=reminders`, true);
-    } catch (err) { error = (err as Error).message; } finally { busy = false; }
+    } catch (err) { error = errorMessage(err, $t); } finally { busy = false; }
   }
 
   async function remove() {
-    if (!rid || !confirm($t('nav.confirm-delete'))) return;
-    await api('DELETE', `/reminders/${rid}`);
-    go(`/objects/${oid}?tab=reminders`, true);
+    if (!rid || busy || !confirm($t('nav.confirm-delete'))) return;
+    busy = true; error = '';
+    try {
+      await api('DELETE', `/reminders/${rid}`);
+      go(`/objects/${oid}?tab=reminders`, true);
+    } catch (e) {
+      error = errorMessage(e, $t);
+    } finally { busy = false; }
   }
 </script>
 
@@ -166,13 +172,13 @@
       </div>
     {/if}
     <div class="field"><label for="no">{$t('reminder.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row actions">
       <button type="button" class="ghost" onclick={() => back(`/objects/${oid}?tab=reminders`)}>{$t('nav.cancel')}</button>
       <button class="primary" disabled={busy}>{$t('nav.save')}</button>
     </div>
   </form>
-  {#if editing}<button class="danger" onclick={remove}>{$t('nav.delete')}</button>{/if}
+  {#if editing}<button class="danger" disabled={busy} onclick={remove}>{$t('nav.delete')}</button>{/if}
 </main>
 
 <style>

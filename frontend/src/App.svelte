@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { applyTheme, followTheme } from './lib/theme';
   import type { Component } from 'svelte';
   import { path, match, go } from './lib/router';
   import { user, setupRequired, loadSession } from './stores/session';
@@ -59,11 +60,8 @@
       })
       .catch(() => { /* the digest stays in the old language until the next load tries again */ });
   });
-  $effect(() => {
-    const pref = $settings.theme;
-    const dark = pref === 'dark' || (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  });
+  // "auto" keeps listening: a system switch to dark while the app is open follows at once.
+  $effect(() => followTheme($settings.theme, matchMedia('(prefers-color-scheme: dark)'), (dark) => applyTheme(document, dark)));
 
   // Route guards: setup first, then login, then the app.
   $effect(() => {

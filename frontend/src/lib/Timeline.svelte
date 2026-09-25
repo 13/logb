@@ -82,9 +82,9 @@
 {/snippet}
 
 <div class="chips">
-  <button class:active={category === ''} class="chip" onclick={() => (category = '')}>{$t('timeline.filter-all')}</button>
+  <button class:active={category === ''} class="chip" aria-pressed={category === ''} onclick={() => (category = '')}>{$t('timeline.filter-all')}</button>
   {#each chipCategories as c}
-    <button class:active={category === c} class="chip" onclick={() => (category = c)}>{$t(`cat.${c}`)}</button>
+    <button class:active={category === c} class="chip" aria-pressed={category === c} onclick={() => (category = c)}>{$t(`cat.${c}`)}</button>
   {/each}
 </div>
 

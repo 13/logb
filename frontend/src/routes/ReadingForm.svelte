@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import DateInput from '../lib/DateInput.svelte';
@@ -32,7 +33,7 @@
       // Offline, this form still works from the cached object: the reading goes to the outbox.
       const cached = isRejection(e) ? undefined : getCachedObject(oid);
       if (cached) object = cached;
-      else { error = (e as Error).message; return; }
+      else { error = errorMessage(e, $t); return; }
     }
     if (object.type === 'body') { go(`/objects/${oid}/activities/new?category=weight`, true); return; }
     if (object.stats.current_counter !== null) valueText = String(object.stats.current_counter);
@@ -64,7 +65,7 @@
       await createQueued(`/objects/${oid}/activities`, readingActivity(value, date, $t('reading.entry-title')));
       go(`/objects/${oid}`, true);
     } catch (err) {
-      error = $t((err as Error).message);
+      error = errorMessage(err, $t);
     } finally { busy = false; }
   }
 </script>
@@ -92,14 +93,14 @@
             : $t('reading.warn-implausible', { date: fmtDate(lastDate, $dateFormat) })}
         </p>
       {/if}
-      {#if error}<p class="error">{error}</p>{/if}
+      {#if error}<p class="error" role="alert">{error}</p>{/if}
       <div class="row actions">
         <button type="button" class="ghost" onclick={() => back(`/objects/${oid}`)}>{$t('nav.cancel')}</button>
         <button class="primary" disabled={busy}>{$t('nav.save')}</button>
       </div>
     </form>
   {:else if error}
-    <p class="error">{error}</p>
+    <p class="error" role="alert">{error}</p>
   {:else}
     <p class="muted">{$t('nav.loading')}</p>
   {/if}

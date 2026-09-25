@@ -11,6 +11,7 @@
   import { settingsRows } from '../lib/settings-rows';
   import type { ApiToken, DbDescription, NotificationSettings, User } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
+  import { describeFailedWrite } from '../lib/failed-write';
 
   let dead = $state<QueuedOp[]>([]);
   let tokenCount = $state<number | null>(null);
@@ -98,11 +99,11 @@
     </div>
     <div class="list">
       {#each dead as op (op.id)}
+        {@const d = describeFailedWrite(op, $t)}
         <div class="card row">
-          <span>
-            <b>{String(op.body.title || op.kind)}</b>
-            <span class="muted">{op.path}</span>
-            {#if op.lastError}<span class="error small">{op.lastError}</span>{/if}
+          <span class="failed">
+            <b>{d.what}{#if d.name}: {d.name}{/if}</b>
+            {#if d.reason}<span class="error small">{d.reason}</span>{/if}
           </span>
           <button class="ghost danger-text" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</button>
         </div>
@@ -142,6 +143,7 @@
 <style>
   .row > button { flex: none; }
   .danger-text { color: var(--danger); }
+  .failed { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
   .whoami { margin-top: var(--space-2); }
   .about { display: grid; gap: var(--space-2); margin: 0; }
   .about div { display: flex; justify-content: space-between; gap: var(--space-3); }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../../lib/api-error';
   import { onMount } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
@@ -19,7 +20,7 @@
     try {
       data = await api<NotificationSettings>('PUT', '/me/notifications/hour', { hour, timezone: timezone || null });
       message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
   let busy = $state(false);
   let message = $state('');
@@ -41,7 +42,7 @@
         format = data?.format ?? 'text';
         hour = data?.hour ?? 8;
         timezone = data?.timezone ?? '';
-      } catch (e) { error = (e as Error).message; }
+      } catch (e) { error = errorMessage(e, $t); }
       push = await pushState();
     })();
     const timer = setInterval(async () => {
@@ -62,7 +63,7 @@
     try {
       push = push === 'on' ? await disablePush() : await enablePush(data.vapid_public_key);
       await load();
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function saveWebhook() {
@@ -71,7 +72,7 @@
       data = await api<NotificationSettings>('PUT', '/me/notifications', { url: url.trim() || null, format });
       url = data.url ?? '';
       message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function sendTest() {
@@ -83,13 +84,13 @@
       if (r.webhook !== null) parts.push($t('notify.test-webhook', { result: r.webhook }));
       if (r.telegram !== null) parts.push($t('notify.test-telegram', { result: r.telegram }));
       message = parts.length > 0 ? parts.join(' ') : $t('notify.test-nowhere');
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function linkTelegram() {
     busy = true; error = ''; message = '';
     try { telegramLink = await api<TelegramLink>('POST', '/me/notifications/telegram/link'); now = Date.now(); }
-    catch (e) { error = (e as Error).message; } finally { busy = false; }
+    catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function saveTelegram() {
@@ -97,19 +98,19 @@
     try {
       data = await api<NotificationSettings>('PUT', '/me/notifications/telegram', { token: telegramToken.trim() });
       telegramToken = ''; telegramLink = null; message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; } finally { busy = false; }
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function removeTelegram() {
     busy = true; error = ''; message = '';
     try { await api('DELETE', '/me/notifications/telegram'); telegramToken = ''; telegramLink = null; await load(); }
-    catch (e) { error = (e as Error).message; } finally { busy = false; }
+    catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
   async function unlinkTelegram() {
     busy = true; error = ''; message = '';
     try { await api('POST', '/me/notifications/telegram/unlink'); telegramLink = null; await load(); }
-    catch (e) { error = (e as Error).message; } finally { busy = false; }
+    catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 </script>
 

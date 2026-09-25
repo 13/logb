@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
   import BarList, { type Bar } from '../lib/BarList.svelte';
   import { api } from '../lib/api';
@@ -49,7 +50,7 @@
     let current = true;
     api<Stats>('GET', path)
       .then((d) => { if (current) { data = d; years = d.years; } })
-      .catch((e) => { if (current) error = (e as Error).message; });
+      .catch((e) => { if (current) error = errorMessage(e, $t); });
     api<EnergyUsage>('GET', '/stats/energy').then((e) => { if (current) energy = e; }, () => {});
     api<FuelUsage>('GET', '/stats/fuel').then((f) => { if (current) fuel = f; }, () => {});
     api<WaterUsage>('GET', '/stats/water').then((w) => { if (current) water = w; }, () => {});
@@ -160,7 +161,7 @@
   {/if}
 
   {#if error}
-    <p class="error">{error}</p>
+    <p class="error" role="alert">{error}</p>
   {:else if !data}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if data.total_cents === 0}
