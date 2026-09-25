@@ -79,15 +79,23 @@ async fn main() -> Result<(), logb::db::BoxError> {
             false
         }
     };
-    if tokio::time::timeout_at(deadline, tasks).await.is_err() {
+    let settled = tokio::time::timeout_at(deadline, tasks).await.is_ok();
+    if !settled {
         tracing::warn!("the background loop was still busy at the drain deadline; stopping anyway");
     }
-    // Closing waits for every connection to come back to its pool, which a request abandoned
-    // above never does -- so only after a clean drain. A clean close is what lets SQLite fold
-    // its WAL back into the database file before the process goes.
-    if drained {
-        state.write_db.close().await;
-        state.db.close().await;
+    // Closing waits for every connection to come back to its pool, which a request or a tick
+    // abandoned above never does -- so only after both drained, and even then under the same
+    // deadline. A clean close is what lets SQLite fold its WAL back into the database file
+    // before the process goes.
+    if drained && settled {
+        let closed = tokio::time::timeout_at(deadline, async {
+            state.write_db.close().await;
+            state.db.close().await;
+        })
+        .await;
+        if closed.is_err() {
+            tracing::warn!("a connection was still in use at the drain deadline; stopping anyway");
+        }
     }
     tracing::info!("stopped");
     Ok(())

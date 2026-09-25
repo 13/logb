@@ -4,7 +4,7 @@
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -38,8 +38,16 @@ pub struct LegacyThumbs {
 /// thumbnail was overwritten by the new one in that case, so the file on disk is already the
 /// right one. The residual case is an image whose own thumbnail write failed after a stray one
 /// landed at its id; that stray is moved, as the old code would have served it anyway.
+///
+/// Against a `files` table with no rows at all it does nothing: that is an instance pointed at
+/// an empty or wrong database, not one whose thumbnails are all strays, and deleting them would
+/// be permanent. The move then happens at the first start against the right database.
 pub async fn migrate_legacy_thumbs(state: &App) -> Result<LegacyThumbs, AppError> {
     let mut report = LegacyThumbs::default();
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files").fetch_one(&state.db).await?;
+    if rows == 0 {
+        return Ok(report);
+    }
     let mut entries = tokio::fs::read_dir(state.storage.thumbs_dir()).await?;
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name();
@@ -97,92 +105,158 @@ struct Candidate {
     path: PathBuf,
 }
 
-/// Removes, from `files/` and `thumbs/`, everything older than `grace` that nothing needs:
-/// blobs and thumbnails whose hash no `files` row names, and `.part`/`.tmp` scratch.
+/// Unreferenced blobs and thumbnails at or above this many -- or a tenth of the hashes the
+/// `files` table names, whichever is larger -- make a sweep stand down instead of deleting.
 ///
-/// These are what the ordinary paths leave behind when they fail between steps: an upload whose
-/// transaction rolled back after its blob and thumbnail were written, a crash between a
-/// `.part` write and its rename, an import killed while its archive sat in scratch. None of
-/// them is ever served -- a thumbnail or blob is only reached through a row naming its hash --
-/// so this is about disk space, run daily from `tasks`.
-///
-/// The directories are listed outside any transaction. The decision "no row names this hash"
-/// and the unlink are then made under the write connection, for the same reason as
-/// `api::attachments::discard_blob`: a writer that has already stored the blob and is about to
-/// insert its row either commits first (and this sees the row) or restores the blob after (see
-/// `Storage::restore_if_missing`). The age check is what spares a writer that has not even
-/// reached the lock yet.
-pub async fn sweep(state: &App, grace: Duration) -> Result<Swept, AppError> {
-    let cutoff = SystemTime::now() - grace;
-    let mut swept = Swept::default();
-    let mut blobs = Vec::new();
-    let mut thumbs = Vec::new();
-    let mut scratch = Vec::new();
+/// The ordinary leftovers (a rolled-back upload, a lost race) come a few at a time. Hundreds of
+/// files no row names at once almost always mean the rows are what is missing: the instance was
+/// pointed at another database, an empty one, or an older snapshot restored over the live one.
+/// Deleting then would destroy the only copy of every attachment the rows forgot, and with it
+/// the way back to the database `--restore` set aside.
+pub const MISMATCH_FLOOR: usize = 10;
 
-    for entry in list(&state.storage.files_dir()).await? {
-        if entry.is_dir {
+/// The daily sweep, with what it remembers between runs.
+///
+/// A blob or thumbnail is removed only once *two* sweeps, at least `grace` apart, have both
+/// found no row naming it (and its file is older than `grace` too). The first sighting is only
+/// noted. Kept in memory on purpose: a restart forgets every sighting, so an instance that was
+/// just restored or repointed deletes nothing for at least `grace` of uptime -- time for an
+/// operator who restored the wrong snapshot to notice and go back.
+#[derive(Debug, Default)]
+pub struct Sweeper {
+    unreferenced_since: HashMap<PathBuf, SystemTime>,
+}
+
+impl Sweeper {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One sweep now. See `sweep_at`.
+    pub async fn sweep(&mut self, state: &App, grace: Duration) -> Result<Swept, AppError> {
+        self.sweep_at(state, grace, SystemTime::now()).await
+    }
+
+    /// Removes, from `files/` and `thumbs/`, what nothing needs: blobs and thumbnails whose hash
+    /// no `files` row names, once an earlier sweep at least `grace` before `now` found the same,
+    /// and `.part`/`.tmp` scratch older than `grace`. `now` is a parameter so tests can step a
+    /// day forward without waiting one.
+    ///
+    /// These are what the ordinary paths leave behind when they fail between steps: an upload
+    /// whose transaction rolled back after its blob and thumbnail were written, a crash between
+    /// a `.part` write and its rename, an import killed while its archive sat in scratch. None of
+    /// them is ever served -- a thumbnail or blob is only reached through a row naming its hash
+    /// -- so this is about disk space, run daily from `tasks`.
+    ///
+    /// The directories are listed outside any transaction. The decision "no row names this
+    /// hash" and the unlink are then made under the write connection, for the same reason as
+    /// `api::attachments::discard_blob`: a writer that has already stored the blob and is about
+    /// to insert its row either commits first (and this sees the row) or restores the blob after
+    /// (see `Storage::restore_if_missing`). The age check is what spares a writer that has not
+    /// even reached the lock yet.
+    ///
+    /// When the unreferenced files look like a database mismatch rather than leftovers (see
+    /// `MISMATCH_FLOOR`), nothing but scratch is removed, sightings are forgotten, and the
+    /// sweep says so in the log.
+    pub async fn sweep_at(&mut self, state: &App, grace: Duration, now: SystemTime) -> Result<Swept, AppError> {
+        let cutoff = now - grace;
+        let mut swept = Swept::default();
+        let mut blobs = Vec::new();
+        let mut thumbs = Vec::new();
+        let mut scratch = Vec::new();
+
+        for entry in list(&state.storage.files_dir()).await? {
+            if entry.is_dir {
+                for inner in list(&entry.path).await? {
+                    if inner.is_dir || !old(&inner.path, cutoff).await {
+                        continue;
+                    }
+                    if inner.name.ends_with(".part") {
+                        scratch.push(inner.path);
+                    } else if is_sha(&inner.name) {
+                        blobs.push(Candidate { sha: inner.name, path: inner.path });
+                    }
+                }
+            } else if entry.name.ends_with(".tmp") && old(&entry.path, cutoff).await {
+                scratch.push(entry.path);
+            }
+        }
+        for entry in list(&state.storage.thumbs_dir()).await? {
+            if !entry.is_dir {
+                continue;
+            }
             for inner in list(&entry.path).await? {
                 if inner.is_dir || !old(&inner.path, cutoff).await {
                     continue;
                 }
                 if inner.name.ends_with(".part") {
                     scratch.push(inner.path);
-                } else if is_sha(&inner.name) {
-                    blobs.push(Candidate { sha: inner.name, path: inner.path });
+                } else if let Some(sha) = inner.name.strip_suffix(".jpg").filter(|s| is_sha(s)) {
+                    thumbs.push(Candidate { sha: sha.to_string(), path: inner.path.clone() });
                 }
             }
-        } else if entry.name.ends_with(".tmp") && old(&entry.path, cutoff).await {
-            scratch.push(entry.path);
         }
-    }
-    for entry in list(&state.storage.thumbs_dir()).await? {
-        if !entry.is_dir {
-            continue;
-        }
-        for inner in list(&entry.path).await? {
-            if inner.is_dir || !old(&inner.path, cutoff).await {
-                continue;
-            }
-            if inner.name.ends_with(".part") {
-                scratch.push(inner.path);
-            } else if let Some(sha) = inner.name.strip_suffix(".jpg").filter(|s| is_sha(s)) {
-                thumbs.push(Candidate { sha: sha.to_string(), path: inner.path.clone() });
+
+        // Scratch is nobody's: no row ever names a `.part` or a `.tmp`.
+        for path in scratch {
+            if tokio::fs::remove_file(&path).await.is_ok() {
+                swept.scratch += 1;
             }
         }
-    }
-
-    // Scratch is nobody's: no row ever names a `.part` or a `.tmp`.
-    for path in scratch {
-        if tokio::fs::remove_file(&path).await.is_ok() {
-            swept.scratch += 1;
+        if blobs.is_empty() && thumbs.is_empty() {
+            self.unreferenced_since.clear();
+            return Ok(swept);
         }
-    }
-    if blobs.is_empty() && thumbs.is_empty() {
-        return Ok(swept);
-    }
 
-    let mut tx = db::begin_write(state).await?;
-    // One read of every hash rather than a lookup per candidate: every blob a day old is a
-    // candidate, and `files.sha256` on its own is not what the unique index leads with.
-    let named: HashSet<String> =
-        sqlx::query_scalar::<_, String>("SELECT DISTINCT sha256 FROM files")
-            .fetch_all(&mut *tx)
-            .await?
+        let mut tx = db::begin_write(state).await?;
+        // One read of every hash rather than a lookup per candidate: every blob a day old is a
+        // candidate, and `files.sha256` on its own is not what the unique index leads with.
+        let named: HashSet<String> =
+            sqlx::query_scalar::<_, String>("SELECT DISTINCT sha256 FROM files")
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .collect();
+        let unreferenced: Vec<Candidate> = blobs
             .into_iter()
+            .chain(thumbs)
+            .filter(|c| !named.contains(&c.sha))
             .collect();
-    for c in blobs {
-        if !named.contains(&c.sha) && tokio::fs::remove_file(&c.path).await.is_ok() {
-            swept.blobs += 1;
+        let orphan_blobs = unreferenced.iter().filter(|c| c.path.extension().is_none()).count();
+        if orphan_blobs >= MISMATCH_FLOOR.max(named.len() / 10) {
+            tx.rollback().await?;
+            self.unreferenced_since.clear();
+            tracing::warn!(
+                unreferenced_blobs = orphan_blobs,
+                named_hashes = named.len(),
+                "orphaned file sweep skipped: more files than a failed upload leaves behind have \
+                 no row naming them, which looks like the database does not belong to this data \
+                 directory; nothing was deleted"
+            );
+            return Ok(swept);
         }
-    }
-    for c in thumbs {
-        if !named.contains(&c.sha) && tokio::fs::remove_file(&c.path).await.is_ok() {
-            swept.thumbs += 1;
+        let mut seen = HashMap::new();
+        for c in unreferenced {
+            let first = self.unreferenced_since.get(&c.path).copied().unwrap_or(now);
+            if first <= cutoff {
+                if tokio::fs::remove_file(&c.path).await.is_ok() {
+                    if c.path.extension().is_none() {
+                        swept.blobs += 1;
+                    } else {
+                        swept.thumbs += 1;
+                    }
+                }
+            } else {
+                seen.insert(c.path, first);
+            }
         }
+        // Only what is still unreferenced carries its sighting forward: a file a row now names,
+        // or one already gone, starts over if it is ever orphaned again.
+        self.unreferenced_since = seen;
+        // Nothing was written; the transaction was only this sweep's turn at the lock.
+        tx.rollback().await?;
+        Ok(swept)
     }
-    // Nothing was written; the transaction was only this sweep's turn at the lock.
-    tx.rollback().await?;
-    Ok(swept)
 }
 
 struct Entry {

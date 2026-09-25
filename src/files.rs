@@ -130,7 +130,7 @@ impl Storage {
 /// empty or partial file -- a rename can reach the disk before the data it points at does. The
 /// second makes the rename itself durable, so the file cannot vanish again after the caller has
 /// gone on to commit a row that names it. A `.part` file a crash strands is collected by
-/// `files_gc::sweep`.
+/// `files_gc::Sweeper`.
 async fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
     let dir = path.parent().expect("a stored file always has a shard directory");

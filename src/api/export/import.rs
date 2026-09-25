@@ -754,7 +754,7 @@ impl StoredFiles<'_> {
 /// Before, not inside: a thumbnail used to be named after the `files` row's id and written
 /// within the transaction, and a rolled-back import on SQLite then left it behind for the next
 /// file to be handed the same id (see `Storage::thumb_path`). Content-named files written up
-/// front are at worst orphans for `files_gc::sweep` if the transaction fails; and inflating,
+/// front are at worst orphans for `files_gc::Sweeper` if the transaction fails; and inflating,
 /// decoding, hashing and fsyncing no longer happen while every other writer queues behind this
 /// one. Inside the transaction the import only inserts rows.
 ///

@@ -710,10 +710,10 @@ fn plant(path: &std::path::Path, bytes: &[u8], hours: u64) {
     age(path, hours);
 }
 
-/// Whatever a failed request, a crash or a lost race leaves on disk is collected once it is a
-/// day old: blobs and thumbnails no `files` row names, and stranded `.part`/`.tmp` scratch.
-/// Anything younger is left alone -- it may belong to a request still in flight -- and anything
-/// a row names is kept however old it is.
+/// Whatever a failed request, a crash or a lost race leaves on disk is collected once two sweeps
+/// a day apart have found nothing naming it: blobs and thumbnails no `files` row names. Stranded
+/// `.part`/`.tmp` scratch goes as soon as it is a day old. Anything younger is left alone -- it
+/// may belong to a request still in flight -- and anything a row names is kept however old it is.
 #[tokio::test]
 async fn the_sweep_collects_old_orphans_and_nothing_else() {
     let app = common::spawn().await;
@@ -742,17 +742,71 @@ async fn the_sweep_collects_old_orphans_and_nothing_else() {
     plant(&old_tmp, b"stranded", 25);
     plant(&young_tmp, b"in flight", 1);
 
-    let swept = logb::files_gc::sweep(&app.state, logb::files_gc::GRACE).await.unwrap();
-    assert_eq!(swept, logb::files_gc::Swept { blobs: 1, thumbs: 1, scratch: 3 });
+    let grace = logb::files_gc::GRACE;
+    let now = std::time::SystemTime::now();
+    let mut sweeper = logb::files_gc::Sweeper::new();
 
-    for gone in [storage.blob_path(&old), storage.thumb_path(&old), old_part, old_thumb_part, old_tmp] {
+    // The first sweep takes the old scratch and only notes the old orphans.
+    let first = sweeper.sweep_at(&app.state, grace, now).await.unwrap();
+    assert_eq!(first, logb::files_gc::Swept { blobs: 0, thumbs: 0, scratch: 3 });
+    for gone in [&old_part, &old_thumb_part, &old_tmp] {
         assert!(!gone.exists(), "{} survived the sweep", gone.display());
     }
-    for kept in [storage.blob_path(&kept), storage.thumb_path(&kept), storage.blob_path(&young), storage.thumb_path(&young), young_tmp] {
+    for kept in [storage.blob_path(&old), storage.thumb_path(&old), young_tmp.clone()] {
+        assert!(kept.exists(), "{} went on its first sighting", kept.display());
+    }
+
+    // A day later the old orphans go. The young ones are now old enough, but this is their
+    // first sighting; the young scratch is simply a day older.
+    let later = now + grace + std::time::Duration::from_secs(3600);
+    let second = sweeper.sweep_at(&app.state, grace, later).await.unwrap();
+    assert_eq!(second, logb::files_gc::Swept { blobs: 1, thumbs: 1, scratch: 1 });
+    for gone in [storage.blob_path(&old), storage.thumb_path(&old), young_tmp] {
+        assert!(!gone.exists(), "{} survived the sweep", gone.display());
+    }
+    for kept in [storage.blob_path(&kept), storage.thumb_path(&kept), storage.blob_path(&young), storage.thumb_path(&young)] {
         assert!(kept.exists(), "{} was swept", kept.display());
     }
     let thumb = app.client.get(app.url(&format!("/files/{}/thumb", photo["file_id"]))).send().await.unwrap();
     assert_eq!(thumb.status(), 200);
+}
+
+/// A data directory full of files no row names is a database that does not belong to it -- an
+/// empty one, the wrong URL, an older snapshot restored -- not a pile of failed uploads. The
+/// sweep deletes none of them, however many days it runs.
+#[tokio::test]
+async fn the_sweep_stands_down_when_the_database_does_not_match_the_files() {
+    let app = common::spawn().await;
+    let storage = &app.state.storage;
+    let shas: Vec<String> = (0..logb::files_gc::MISMATCH_FLOOR).map(|i| format!("{:064x}", i + 1)).collect();
+    for sha in &shas {
+        plant(&storage.blob_path(sha), b"someone's attachment", 72);
+        plant(&storage.thumb_path(sha), b"its thumbnail", 72);
+    }
+
+    let grace = logb::files_gc::GRACE;
+    let now = std::time::SystemTime::now();
+    let mut sweeper = logb::files_gc::Sweeper::new();
+    for day in 0..3u64 {
+        let at = now + std::time::Duration::from_secs(day * 25 * 3600);
+        let swept = sweeper.sweep_at(&app.state, grace, at).await.unwrap();
+        assert_eq!(swept, logb::files_gc::Swept::default(), "day {day}");
+    }
+    for sha in &shas {
+        assert!(storage.blob_path(sha).exists() && storage.thumb_path(sha).exists());
+    }
+}
+
+/// The one-time thumbnail move trusts the `files` table to say which id-named thumbnails are
+/// strays. Against a table with no rows at all it trusts nothing and deletes nothing.
+#[tokio::test]
+async fn the_thumbnail_move_leaves_everything_when_there_are_no_file_rows() {
+    let app = common::spawn().await;
+    let legacy = app.state.storage.thumbs_dir().join("7.jpg");
+    std::fs::write(&legacy, b"a thumbnail from before").unwrap();
+    let report = logb::files_gc::migrate_legacy_thumbs(&app.state).await.unwrap();
+    assert_eq!(report, logb::files_gc::LegacyThumbs::default());
+    assert!(legacy.exists());
 }
 
 /// The original is streamed from disk rather than read into memory first; what arrives must

@@ -267,7 +267,7 @@ async fn upload(
             // Blob and thumbnail both go to disk before the transaction opens, so the row can
             // never become visible ahead of either -- a client that sees the new file may ask
             // for its /thumb at once. Both are named after the content hash, so if the insert
-            // below then fails they are orphans for `files_gc::sweep`, never files some later
+            // below then fails they are orphans for `files_gc::Sweeper`, never files some later
             // row with a reused id would serve as its own (see `Storage::thumb_path`). It also
             // keeps disk writes out of the write transaction, which every other writer queues
             // behind.
