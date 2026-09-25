@@ -9,9 +9,10 @@
   import { newOpId } from '../lib/outbox';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
-  import { centsToInput, counter, parseMoney, parseQuantity } from '../lib/format';
+  import { counter, parseMoney, parseQuantity } from '../lib/format';
   import { fuelUnitLabel } from '../lib/energy';
-  import { clearsPriceOn, emptyInput, toInput, validate } from '../lib/object-form';
+  import { clearsPriceOn, emptyInput, formText, pendingObject, toInput, validate } from '../lib/object-form';
+  import { hashToNegativeId } from '../lib/activity-form';
   import { excludingDescendants } from '../lib/object-tree';
   import { fieldError } from '../lib/form-error';
   import { reminderBody } from '../lib/reminder-form';
@@ -65,10 +66,7 @@
   let busy = $state(false);
 
   function mintTempId(): number {
-    const value = newOpId();
-    let hash = 0;
-    for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) | 0;
-    return -(Math.abs(hash) || 1);
+    return hashToNegativeId(newOpId());
   }
 
   /** The type select's own last option: picking it does not choose a type at all, it detours to
@@ -143,27 +141,14 @@
     // to whoever mounts next -- see `takeObjectDraft`.
     const draftToken = params.get('draft');
     const draft = takeObjectDraft(currentPath, draftToken);
-    // `energy_price_milli` is cents x1000 -- sub-cent precision the *field* can carry (a price
-    // agreed to three decimal places) -- but this form's price input is deliberately the same
-    // whole-cent text field every other money amount here uses (`centsToInput`/`parseMoney`, per
-    // the design spec: "parsed like other money input"), so a price entered with a fractional
-    // cent is rounded to the nearest whole one on every load, same as `purchase_price_cents`
-    // already is. Consistent with the rest of the app rather than a precision loss unique to
-    // this field.
+    // The price fields round a sub-cent `energy_price_milli` to whole cents on load, like every
+    // other money amount here -- see `formText` (../lib/object-form.ts).
     if (draft) {
-      input = draft;
-      priceText = centsToInput(draft.purchase_price_cents);
-      energyPriceText = centsToInput(draft.energy_price_milli == null ? null : Math.round(draft.energy_price_milli / 1000));
-      capacityText = draft.fuel_capacity_milli == null ? '' : String(draft.fuel_capacity_milli / 1000);
-      targetText = draft.monthly_target_milli == null ? '' : String(draft.monthly_target_milli / 1000);
+      fill(draft);
     } else if (id) {
       const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
       const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
-      input = toInput(o);
-      priceText = centsToInput(o.purchase_price_cents);
-      energyPriceText = centsToInput(o.energy_price_milli === null ? null : Math.round(o.energy_price_milli / 1000));
-      capacityText = o.fuel_capacity_milli == null ? '' : String(o.fuel_capacity_milli / 1000);
-      targetText = o.monthly_target_milli == null ? '' : String(o.monthly_target_milli / 1000);
+      fill(toInput(o));
     }
     // A `type` in the query names the type just created on Types, straight from the shortcut --
     // selecting it here (through `setType`, so the counter-unit default still applies) is what
@@ -204,11 +189,14 @@
       .filter((o) => o.archived_at === null || o.id === alreadyInside);
   });
 
+  /** The whole form, from one input: the input itself and the text fields shown for it. */
+  function fill(next: ObjectInput) {
+    input = next;
+    ({ priceText, energyPriceText, capacityText, targetText } = formText(next));
+  }
+
   function applySavedTemplate(template: SavedObjectTemplate) {
-    input = structuredClone(template.input); input.name = template.name;
-    priceText = centsToInput(input.purchase_price_cents); energyPriceText = centsToInput(input.energy_price_milli == null ? null : Math.round(input.energy_price_milli / 1000));
-    capacityText = input.fuel_capacity_milli == null ? '' : String(input.fuel_capacity_milli / 1000);
-    targetText = input.monthly_target_milli == null ? '' : String(input.monthly_target_milli / 1000);
+    fill({ ...structuredClone(template.input), name: template.name });
   }
 
   async function submit(e: SubmitEvent) {
@@ -241,14 +229,7 @@
         ? await api<MemObject>('PATCH', `/objects/${id}`, input)
         : await createObjectQueued<MemObject>($state.snapshot(input) as unknown as Record<string, unknown>, tempId);
       if (!saved) {
-        const now = new Date().toISOString();
-        setCachedObject(tempId, {
-          id: tempId, user_id: 0, ...$state.snapshot(input), fuel_unit: input.fuel_unit,
-          archived_at: null, cover_attachment_id: null, cover_file_id: null, created_at: now, updated_at: now,
-          ancestors: [], tags: [...(input.tags ?? [])], private: input.private ? 1 : 0,
-          stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, latest_weight_grams: null, latest_weight_date: null,
-            due_reminder_count: 0, last_reading_date: null, last_activity_date: null, counter_per_day_milli: null }, pending: true,
-        } as MemObject);
+        setCachedObject(tempId, pendingObject($state.snapshot(input) as ObjectInput, { tempId, now: new Date().toISOString() }));
         go(`/objects/${tempId}`, true);
         return;
       }

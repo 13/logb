@@ -1,3 +1,4 @@
+import { centsToInput } from './format';
 import type { FuelUnit, MemObject, ObjectInput } from './types';
 
 export function emptyInput(): ObjectInput {
@@ -43,4 +44,53 @@ export function validate(input: ObjectInput): string | null {
  */
 export function clearsPriceOn(prev: FuelUnit, next: FuelUnit): boolean {
   return prev !== next;
+}
+
+/** A x1000 amount (tank capacity, monthly target) as the text its field shows: `50000` → `"50"`,
+ *  nothing → an empty field. */
+export function milliToText(milli: number | null | undefined): string {
+  return milli == null ? '' : String(milli / 1000);
+}
+
+export interface ObjectFormText { priceText: string; energyPriceText: string; capacityText: string; targetText: string }
+
+/**
+ * The object form's free-text fields, filled from an input (a loaded object, a kept draft, a
+ * saved template). `energy_price_milli` is cents x1000 -- sub-cent precision the field can carry
+ * -- but the form shows it as the same whole-cent money text every other amount uses
+ * (`centsToInput`/`parseMoney`), so a fractional cent rounds to the nearest whole one here, just
+ * as `purchase_price_cents` does.
+ */
+export function formText(input: ObjectInput): ObjectFormText {
+  return {
+    priceText: centsToInput(input.purchase_price_cents),
+    energyPriceText: centsToInput(input.energy_price_milli == null ? null : Math.round(input.energy_price_milli / 1000)),
+    capacityText: milliToText(input.fuel_capacity_milli),
+    targetText: milliToText(input.monthly_target_milli),
+  };
+}
+
+/**
+ * What an object that only reached the offline outbox looks like until the server answers: the
+ * create's body, under its negative temp id, flagged `pending`. One builder for everywhere a
+ * queued create has to be shown (the form that queued it, the dashboard listing the queue), so
+ * the two can never disagree about what such an object looks like.
+ */
+export function pendingObject(body: ObjectInput, opts: { tempId: number; userId?: number; now: string }): MemObject {
+  const { tempId, userId, now } = opts;
+  return {
+    id: tempId, user_id: userId ?? 0, name: body.name, type: body.type,
+    counter_unit: body.counter_unit, fuel_unit: body.fuel_unit, description: body.description,
+    purchase_date: body.purchase_date, purchase_price_cents: body.purchase_price_cents,
+    archived_at: body.archived ? now : null, cover_attachment_id: null, cover_file_id: null,
+    parent_id: body.parent_id ?? null, created_at: now, updated_at: now, ancestors: [],
+    tags: [...(body.tags ?? [])], energy_price_milli: body.energy_price_milli ?? null,
+    fuel_capacity_milli: body.fuel_capacity_milli ?? null, weight_unit: body.weight_unit ?? 'kg',
+    resource_unit: body.resource_unit ?? body.fuel_unit, resource_kind: body.resource_kind ?? null,
+    measurement_mode: body.measurement_mode ?? null, monthly_target_milli: body.monthly_target_milli ?? null,
+    low_level_pct: body.low_level_pct ?? null, private: body.private ? 1 : 0,
+    stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, latest_weight_grams: null, latest_weight_date: null,
+      due_reminder_count: 0, last_reading_date: null, last_activity_date: null, counter_per_day_milli: null },
+    pending: true,
+  };
 }
