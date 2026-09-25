@@ -230,9 +230,9 @@ export async function pendingCount(store: OutboxStore): Promise<number> {
  *
  * Any other failure (network drop, 5xx, ...) means we don't know whether the server saw this
  * op at all, so it stays queued and the pass stops right there: ops further back may depend on
- * this one (see the `activity_id` rewrite below) and must not be sent out of order ahead of it.
+ * this one (see the id rewrite below) and must not be sent out of order ahead of it.
  *
- * On EITHER failure branch, the op is written back with `body` -- the id-substituted body this
+ * On EITHER failure branch, the op is written back with `path` and `body` -- the id-substituted ones this
  * attempt actually sent -- rather than the original `op` from the top-of-pass snapshot. `body`
  * is what the caller's own dependent ops may have just been resolved onto (`persistResolvedId`
  * below writes the real id into the store the moment a create succeeds, but this op's own,
@@ -254,13 +254,15 @@ export async function replay(
   const resolved = new Map<number, number>();
   for (const op of await store.all()) {
     if (op.dead) continue;
-    const body = { ...op.body };
+    // The snapshot above was read before this pass resolved anything, so every id field that
+    // can name an earlier create -- not just `activity_id` -- is rewritten here too; otherwise a
+    // child object queued under an offline parent went out with the parent's negative temp id
+    // and was refused, even though `persistResolvedId` had already fixed the stored copy.
     let path = op.path;
+    let body = { ...op.body };
     for (const [temporary, real] of resolved) {
-      path = path.replace(`/objects/${temporary}/`, `/objects/${real}/`);
+      ({ path, body } = rewriteResolvedId(path, body, temporary, real));
     }
-    const ref = body.activity_id;
-    if (typeof ref === 'number' && resolved.has(ref)) body.activity_id = resolved.get(ref);
     try {
       const out = await send({ ...op, path, body });
       if (op.tempId !== undefined && out) {
@@ -288,11 +290,11 @@ export async function replay(
         return resolved;
       }
       if (isRejection(e)) {
-        await store.put({ ...op, body, dead: true, lastError: e instanceof Error ? e.message : String(e) });
+        await store.put({ ...op, path, body, dead: true, lastError: e instanceof Error ? e.message : String(e) });
         continue;
       }
       const attempts = op.attempts + 1;
-      await store.put({ ...op, body, attempts, dead: attempts >= MAX_ATTEMPTS,
+      await store.put({ ...op, path, body, attempts, dead: attempts >= MAX_ATTEMPTS,
         lastError: e instanceof Error ? e.message : String(e) });
       return resolved;
     }
@@ -319,14 +321,32 @@ export async function replay(
 async function persistResolvedId(store: OutboxStore, tempId: number, realId: number): Promise<void> {
   for (const other of await store.all()) {
     if (other.dead) continue;
-    const path = other.path.replace(`/objects/${tempId}/`, `/objects/${realId}/`);
-    const body = { ...other.body };
-    let changed = path !== other.path;
-    for (const field of ['activity_id', 'object_id', 'parent_id']) {
-      if (body[field] === tempId) { body[field] = realId; changed = true; }
-    }
+    const { path, body, changed } = rewriteResolvedId(other.path, other.body, tempId, realId);
     if (changed) await store.put({ ...other, path, body });
   }
+}
+
+/** The id fields in a queued body that can name another queued create by its temp id. */
+const ID_FIELDS = ['activity_id', 'object_id', 'parent_id'] as const;
+
+/**
+ * One temp id -> real id substitution over an op's path and body. The single definition both
+ * `replay` (for the op it is about to send) and `persistResolvedId` (for the stored copies) use,
+ * so the two can never again disagree about which fields get rewritten.
+ */
+export function rewriteResolvedId(
+  path: string,
+  body: Record<string, unknown>,
+  tempId: number,
+  realId: number,
+): { path: string; body: Record<string, unknown>; changed: boolean } {
+  const nextPath = path.replace(`/objects/${tempId}/`, `/objects/${realId}/`);
+  const nextBody = { ...body };
+  let changed = nextPath !== path;
+  for (const field of ID_FIELDS) {
+    if (nextBody[field] === tempId) { nextBody[field] = realId; changed = true; }
+  }
+  return { path: nextPath, body: nextBody, changed };
 }
 
 export async function updateQueuedObjectBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {

@@ -108,6 +108,97 @@ describe('offline object creation', () => {
     expect(urls.some((url) => url.endsWith('/objects/44/activities'))).toBe(true);
     expect(await store.all()).toEqual([]);
   });
+
+  it('sends a child object queued under an offline parent with the parent\'s real id', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'parent-op', kind: 'object.create', path: '/objects', body: { name: 'House', type: 'home' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'child-op', kind: 'object.create', path: '/objects', body: { name: 'Boiler', type: 'home', parent_id: -9 }, tempId: -10, attempts: 0, userId: 1 });
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init?.body as string));
+      return jsonResponse(201, { id: bodies.length === 1 ? 44 : 45 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].parent_id).toBe(44);
+    expect(await store.all()).toEqual([]);
+  });
+
+  it('rewrites object_id in the same pass as well', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'object-op', kind: 'object.create', path: '/objects', body: { name: 'Car', type: 'vehicle' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'reminder-op', kind: 'reminder.create', path: '/reminders', body: { object_id: -9, title: 'TÜV' }, attempts: 0, userId: 1 });
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init?.body as string));
+      return jsonResponse(201, { id: 44 });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    expect(bodies[1].object_id).toBe(44);
+  });
+
+  it('keeps the rewritten parent id when the child is then refused and parked dead', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'parent-op', kind: 'object.create', path: '/objects', body: { name: 'House', type: 'home' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'child-op', kind: 'object.create', path: '/objects', body: { name: 'Boiler', type: 'home', parent_id: -9 }, tempId: -10, attempts: 0, userId: 1 });
+    let n = 0;
+    globalThis.fetch = vi.fn(async () => {
+      n++;
+      return n === 1 ? jsonResponse(201, { id: 44 }) : jsonResponse(422, { error: 'invalid', message: 'nope' });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    const [child] = await store.all();
+    expect(child.id).toBe('child-op');
+    expect(child.dead).toBe(true);
+    expect(child.body.parent_id).toBe(44);
+  });
+
+  it('keeps the rewritten path when an activity under an offline object is parked dead', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'object-op', kind: 'object.create', path: '/objects', body: { name: 'Water meter', type: 'home' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'activity-op', kind: 'activity.create', path: '/objects/-9/activities', body: { date: '2026-09-20', category: 'usage' }, attempts: 0, userId: 1 });
+    let n = 0;
+    globalThis.fetch = vi.fn(async () => {
+      n++;
+      return n === 1 ? jsonResponse(201, { id: 44 }) : jsonResponse(422, { error: 'invalid', message: 'nope' });
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    const [activity] = await store.all();
+    expect(activity.dead).toBe(true);
+    expect(activity.path).toBe('/objects/44/activities');
+  });
+
+  it('keeps the rewritten parent id when the child fails to send and stays queued', async () => {
+    const store = memoryStore();
+    setOutboxStoreForTesting(store);
+    await enqueue(store, { id: 'parent-op', kind: 'object.create', path: '/objects', body: { name: 'House', type: 'home' }, tempId: -9, attempts: 0, userId: 1 });
+    await enqueue(store, { id: 'child-op', kind: 'object.create', path: '/objects', body: { name: 'Boiler', type: 'home', parent_id: -9 }, tempId: -10, attempts: 0, userId: 1 });
+    let n = 0;
+    globalThis.fetch = vi.fn(async () => {
+      n++;
+      if (n === 1) return jsonResponse(201, { id: 44 });
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+
+    await flushOutbox();
+
+    const [child] = await store.all();
+    expect(child.dead).toBeFalsy();
+    expect(child.attempts).toBe(1);
+    expect(child.body.parent_id).toBe(44);
+  });
 });
 
 /**
