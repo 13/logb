@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { uploadQueued } from './api';
+  import { newOpId } from './outbox';
+  import { hashToNegativeId } from './activity-form';
   import { t } from '../i18n';
   import Icon from './Icon.svelte';
   import type { Attachment, Kind } from './types';
@@ -17,13 +19,11 @@
   onDestroy(() => { for (const u of objectUrls) URL.revokeObjectURL(u); });
 
   /** A negative placeholder id for an attachment that only reached the outbox, so it can sit
-   *  in an `Attachment[]`-keyed list without colliding with a real (always positive) one --
-   *  same scheme as `hashToNegativeId` in ./activity-form.ts. */
+   *  in an `Attachment[]`-keyed list without colliding with a real (always positive) one.
+   *  `newOpId`, not `crypto.randomUUID`: the latter does not exist on a plain-http origin
+   *  (see ./outbox.ts), where it made every offline photo pick throw. */
   function pendingAttachmentId(): number {
-    const s = crypto.randomUUID();
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-    return -(Math.abs(h) || 1);
+    return hashToNegativeId(newOpId());
   }
 
   async function send(files: FileList | null) {

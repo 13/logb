@@ -158,6 +158,8 @@ export interface Reminder {
   estimated_due_date: string | null;
   /** The object's tags, so a reminder listed away from its object still says what it belongs to. */
   object_tags?: string[];
+  /** Client-side only: a create still waiting in the outbox (see ./reminder-pending.ts). */
+  pending?: boolean;
 }
 export interface ReminderInput {
   title: string; notes: string; due_date: string | null; due_counter: number | null; repeat_months: number | null; repeat_counter: number | null;

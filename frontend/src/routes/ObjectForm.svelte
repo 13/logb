@@ -6,6 +6,7 @@
   import { parseWeight } from '../lib/weight';
   import { api, cancelQueuedObject, createObjectQueued, createQueued, updateQueuedObject } from '../lib/api';
   import { newOpId } from '../lib/outbox';
+  import { hashToNegativeId } from '../lib/activity-form';
   import { go, back } from '../lib/router';
   import { locale, t } from '../i18n';
   import { centsToInput, counter, parseMoney, parseQuantity } from '../lib/format';
@@ -64,10 +65,7 @@
   let busy = $state(false);
 
   function mintTempId(): number {
-    const value = newOpId();
-    let hash = 0;
-    for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) | 0;
-    return -(Math.abs(hash) || 1);
+    return hashToNegativeId(newOpId());
   }
 
   /** The type select's own last option: picking it does not choose a type at all, it detours to

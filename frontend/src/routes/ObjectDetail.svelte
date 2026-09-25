@@ -16,7 +16,8 @@
   import { energyLabelKey } from '../lib/energy';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
   import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
-  import { getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
+  import { dropCachedObject, getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
+  import { createSeq } from '../lib/seq-guard';
   import { go } from '../lib/router';
   import { counter, fmtDate, money, todayIso } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
@@ -24,7 +25,7 @@
   import { locale, t } from '../i18n';
   import type { Activity, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
-  import { tagParam, offersTrip as offersTripFor, offersEnergy as offersEnergyFor, resourceCategory as resourceCategoryFor, pendingToActivity, filterPendingOps, nextUrl } from '../lib/object-detail';
+  import { tagParam, offersTrip as offersTripFor, offersEnergy as offersEnergyFor, resourceCategory as resourceCategoryFor, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath } from '../lib/object-detail';
 
   let { id }: { id: string } = $props();
   const oid = $derived(Number(id));
@@ -77,31 +78,53 @@
   let energyData = $state<EnergyOut | null>(null);
   let error = $state('');
 
+  /// Guards `loadObject` like `loadLastDone` below: a mount, an oid change and a flush can each
+  /// start one, and the object just left must not land over the one navigated to.
+  const objectSeq = createSeq();
+
   /** Only a genuine connectivity failure (see `isRejection`) may fall back to the cache — a
    *  401/403/404 is the server answering, and this object may simply belong to someone else. */
   async function loadObject() {
-    if (oid < 0) {
-      const pending = getCachedObject(oid);
+    const token = objectSeq.next();
+    const target = oid;
+    if (target < 0) {
+      const pending = getCachedObject(target);
       if (pending) { object = pending; error = ''; return; }
     }
     try {
-      object = await api<MemObject>('GET', `/objects/${oid}`);
-      setCachedObject(oid, object);
+      const loaded = await api<MemObject>('GET', `/objects/${target}`);
+      setCachedObject(target, loaded);
+      if (!objectSeq.current(token)) return;
+      object = loaded;
       error = '';
     } catch (e) {
-      const cached = isRejection(e) ? undefined : getCachedObject(oid);
+      if (!objectSeq.current(token)) return;
+      const cached = isRejection(e) ? undefined : getCachedObject(target);
       if (cached) object = cached;
       else error = (e as Error).message;
     }
   }
 
+  /// Guards `loadChildren` the same way; bumped on every navigation by the oid-reset effect.
+  const childrenSeq = createSeq();
+
   /** The object's direct children, for the Contents section on the Info tab. Loaded only while
    *  that tab is open -- the other tabs have no use for it. */
   async function loadChildren() {
-    try { children = await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=false`); }
-    catch (e) { error = (e as Error).message; }
-    try { archivedChildCount = (await api<MemObject[]>('GET', `/objects?parent_id=${oid}&archived=true`)).length; }
-    catch { archivedChildCount = 0; }
+    const token = childrenSeq.next();
+    const target = oid;
+    try {
+      const rows = await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=false`);
+      if (childrenSeq.current(token)) children = rows;
+    } catch (e) {
+      if (childrenSeq.current(token)) error = (e as Error).message;
+    }
+    try {
+      const archived = (await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=true`)).length;
+      if (childrenSeq.current(token)) archivedChildCount = archived;
+    } catch {
+      if (childrenSeq.current(token)) archivedChildCount = 0;
+    }
   }
 
   /// Guards a `loadLastDone` response against a since-superseded request, the same way
@@ -267,6 +290,9 @@
     tripSummarySeq++;
     energyData = null;
     energySeq++;
+    children = [];
+    archivedChildCount = 0;
+    childrenSeq.invalidate();
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
   $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); if (offersTrip) loadTripSummary(); } });
@@ -283,7 +309,16 @@
   // `visibilitychange`. Reloading unconditionally meant that switching away from the tab and
   // back re-fetched the timeline for no reason -- and, before `refresh` existed, threw away
   // every extra page the user had loaded.
-  $effect(() => onOutboxFlushed(async (_resolved, changed) => {
+  $effect(() => onOutboxFlushed(async (resolved, changed) => {
+    // An object created offline just reached the server: its temp id names nothing any more,
+    // and the cached snapshot served under it would never pick up the real row. Move to the
+    // real address in place (replace, so Back does not return to the dead temp page).
+    const target = resolvedObjectPath(oid, resolved, location.search);
+    if (target !== null) {
+      dropCachedObject(oid);
+      go(target, true);
+      return;
+    }
     const rendered = activities.filter((a) => a.pending).map((a) => a.id);
     const queued = (await pendingActivities()).map((a) => a.id);
     if (!shouldReload(changed, rendered, queued)) return;

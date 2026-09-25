@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { api } from './api';
+  import { untrack } from 'svelte';
+  import { api, onOutboxFlushed, pendingOpsFor } from './api';
+  import { createSeq } from './seq-guard';
+  import { pendingReminders } from './reminder-pending';
   import { go } from './router';
   import { counter, fmtDate } from './format';
   import { activityTitle } from './activity-form';
@@ -30,17 +33,48 @@
   // by the caller, since every consumer of this dropdown must exclude them the same way.
   const linkable = $derived(activities.filter((a) => !a.pending));
 
-  async function load() {
-    try { items = await api<Reminder[]>('GET', `/objects/${objectId}/reminders`); }
-    catch (e) { error = (e as Error).message; }
-    finally { loaded = true; }
-  }
-  $effect(() => { objectId; load(); });
+  /// ObjectDetail reuses this instance across objects (only `objectId` changes): only the
+  /// newest load may commit, so the object just left cannot land its reminders on this one.
+  const loadSeq = createSeq();
 
-  function openDone(r: Reminder) { target = r; linkId = ''; dialog?.showModal(); }
+  async function load() {
+    const token = loadSeq.next();
+    const oid = objectId;
+    // Queued creates are read first and apart: a blocked IndexedDB must not hide the server's
+    // list, and a dead connection must not hide what is waiting to be sent.
+    let queued: Reminder[] = [];
+    try { queued = pendingReminders(await pendingOpsFor(`/objects/${oid}/reminders`), oid); } catch { /* see above */ }
+    try {
+      const rows = await api<Reminder[]>('GET', `/objects/${oid}/reminders`);
+      if (!loadSeq.current(token)) return;
+      items = [...queued, ...rows];
+      error = '';
+    } catch (e) {
+      if (!loadSeq.current(token)) return;
+      items = [...queued, ...items.filter((r) => !r.pending)];
+      error = (e as Error).message;
+    } finally {
+      if (loadSeq.current(token)) loaded = true;
+    }
+  }
+  // A new object starts unknown, not with the last one's reminders, toast or error.
+  $effect(() => {
+    objectId;
+    untrack(() => { items = []; loaded = false; error = ''; toast = ''; void load(); });
+  });
+  // A queued reminder reaching the server turns from pending into real without a remount.
+  $effect(() => onOutboxFlushed((_resolved, changed) => { if (changed) void load(); }));
+
+  /** Mark-done's own state, shown inside the dialog: an error rendered behind a modal dialog
+   *  is one nobody sees until they cancel. */
+  let doneBusy = $state(false);
+  let doneError = $state('');
+
+  function openDone(r: Reminder) { target = r; linkId = ''; doneError = ''; dialog?.showModal(); }
 
   async function confirmDone() {
-    if (!target) return;
+    if (!target || doneBusy) return;
+    doneBusy = true; doneError = '';
     try {
       const body = linkId === '' ? {} : { activity_id: Number(linkId) };
       const res = await api<DoneOut>('POST', `/reminders/${target.id}/done`, body);
@@ -48,7 +82,8 @@
       dialog?.close();
       await load();
       onchanged?.();
-    } catch (e) { error = (e as Error).message; }
+    } catch (e) { doneError = (e as Error).message; }
+    finally { doneBusy = false; }
   }
 
   async function unsnooze(r: Reminder) {
@@ -100,7 +135,7 @@
   }
 </script>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<p class="error" role="alert">{error}</p>{/if}
 {#if toast}<p class="muted">{toast}</p>{/if}
 
 <!-- Not `items.length === 0`: an empty list before the first answer is what the component was
@@ -122,9 +157,14 @@
     <div class="card">
       <div class="row head">
         <b>{r.title}</b>
-        <span class="chip" class:due={r.due} class:snoozed={!r.due && r.snoozed_until}>
-          {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
-        </span>
+        {#if r.pending}
+          <!-- Only in the outbox so far: the server has not computed whether it is due. -->
+          <span class="chip pending-chip">{$t('timeline.pending')}</span>
+        {:else}
+          <span class="chip" class:due={r.due} class:snoozed={!r.due && r.snoozed_until}>
+            {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
+          </span>
+        {/if}
       </div>
       <TagChips tags={r.object_tags ?? []} />
       {#if r.kind === 'reading'}
@@ -146,6 +186,8 @@
         </div>
       {/if}
       {#if r.notes}<p class="notes">{r.notes}</p>{/if}
+      <!-- A pending reminder has no server row yet, so nothing here could address it. -->
+      {#if !r.pending}
       <div class="row actions">
         <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/${r.id}`)}>{$t('nav.edit')}</button>
         {#if r.kind === 'reading'}
@@ -156,6 +198,7 @@
           <button class="primary" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</button>
         {/if}
       </div>
+      {/if}
     </div>
   {/each}
 </div>
@@ -179,8 +222,9 @@
   <button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
 {/if}
 
-<dialog bind:this={dialog}>
-  <h2>{$t('reminder.done-title')}</h2>
+<dialog bind:this={dialog} aria-labelledby="reminder-done-title">
+  <h2 id="reminder-done-title">{$t('reminder.done-title')}</h2>
+  {#if doneError}<p class="error" role="alert">{doneError}</p>{/if}
   <div class="field">
     <label for="link">{$t('reminder.done-link')}</label>
     <select id="link" bind:value={linkId}>
@@ -192,7 +236,7 @@
   </div>
   <div class="row">
     <button class="ghost" onclick={() => dialog?.close()}>{$t('nav.cancel')}</button>
-    <button class="primary" onclick={confirmDone}>{$t('reminder.done')}</button>
+    <button class="primary" onclick={confirmDone} disabled={doneBusy}>{$t('reminder.done')}</button>
   </div>
 </dialog>
 

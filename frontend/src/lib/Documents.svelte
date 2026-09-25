@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
+  import { createSeq } from './seq-guard';
   import { api, fileUrl } from './api';
   import FilePicker from './FilePicker.svelte';
   import Icon from './Icon.svelte';
@@ -16,16 +17,44 @@
    *  true once the first answer is in: a later reload is a refresh of a known list, not another
    *  question about whether there is one. */
   let loaded = $state(false);
+  /** A failed load says so, instead of falling through to "no documents yet" -- which would
+   *  claim an answer nobody got. Also carries a failed delete or cover change. */
+  let error = $state('');
+
+  /// ObjectDetail reuses this instance when it moves to another object (only `objectId`
+  /// changes), so a list requested for the object just left must not land on the new one.
+  const loadSeq = createSeq();
 
   async function load() {
-    try { items = await api<Attachment[]>('GET', `/objects/${objectId}/attachments`); }
-    finally { loaded = true; }
+    const token = loadSeq.next();
+    const target = objectId;
+    try {
+      const rows = await api<Attachment[]>('GET', `/objects/${target}/attachments`);
+      if (!loadSeq.current(token)) return;
+      items = rows;
+      error = '';
+    } catch (e) {
+      if (!loadSeq.current(token)) return;
+      error = (e as Error).message;
+    } finally {
+      if (loadSeq.current(token)) loaded = true;
+    }
   }
-  onMount(load);
+
+  // Not `onMount`: see `loadSeq`. A new object starts unknown, not with the last one's files.
+  $effect(() => {
+    objectId;
+    untrack(() => { items = []; loaded = false; error = ''; void load(); });
+  });
 
   async function remove(a: Attachment) {
     if (!confirm($t('nav.confirm-delete'))) return;
-    await api('DELETE', `/attachments/${a.id}`);
+    try {
+      await api('DELETE', `/attachments/${a.id}`);
+    } catch (e) {
+      error = (e as Error).message;
+      return;
+    }
     await load();
     onchanged?.();
   }
@@ -40,24 +69,34 @@
    *  Hand-listing the fields inline is how setting a cover photo came to clear `fuel_unit`,
    *  quietly moving an e-bike's insights back from kWh to litres. */
   async function setCover(cover: number | null) {
-    const o = await api<MemObject>('GET', `/objects/${objectId}`);
-    const body: ObjectInput = { ...toInput(o), cover_attachment_id: cover };
-    await api('PATCH', `/objects/${objectId}`, body);
+    try {
+      const o = await api<MemObject>('GET', `/objects/${objectId}`);
+      const body: ObjectInput = { ...toInput(o), cover_attachment_id: cover };
+      await api('PATCH', `/objects/${objectId}`, body);
+      error = '';
+    } catch (e) {
+      error = (e as Error).message;
+      return;
+    }
     onchanged?.();
   }
 </script>
 
 <FilePicker {objectId} onuploaded={() => { load(); onchanged?.(); }} />
 
+{#if error}<p class="error" role="alert">{error}</p>{/if}
+
 {#if !loaded}
   <!-- Nothing: the request is still out. -->
 {:else if items.length === 0}
   <!-- The picker sits right above this, so the words only have to say what is worth putting
-       into it. -->
-  <div class="empty">
-    <span class="empty-icon"><Icon name="document" size={40} /></span>
-    <p>{$t('docs.empty')}</p>
-  </div>
+       into it. Not after a failed load: the error above already says why there is no list. -->
+  {#if !error}
+    <div class="empty">
+      <span class="empty-icon"><Icon name="document" size={40} /></span>
+      <p>{$t('docs.empty')}</p>
+    </div>
+  {/if}
 {:else}
   <div class="grid">
     {#each items as a (a.id)}

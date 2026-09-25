@@ -8,7 +8,8 @@
   import { fmtDate } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
   import { persisted } from '../stores/persisted';
-  import { SORT_KEYS, parseSort, parseTab, visibleRows, type ListTab, type SortKey } from '../lib/object-list';
+  import { SORT_KEYS, parseSort, parseTab, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
+  import { createSeq } from '../lib/seq-guard';
   import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
   import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
@@ -54,26 +55,37 @@
   /** Session-only too, and not in the address: set by tapping a chip on a card. */
   let tagFilter = $state<string | null>(null);
 
+  /// Mount and every flush that changed the queue each start a load, and they can overlap: only
+  /// the newest commits, or two of them each prepended the queued objects to the same list.
+  const loadSeq = createSeq();
+
   async function load() {
+    const token = loadSeq.next();
     loading = true; error = '';
-    active = active.filter((o) => !o.pending);
     let queued: MemObject[] = [];
     try { queued = await pendingObjects(); } catch { /* a blocked/full IndexedDB must not strand the dashboard loading */ }
+    let fetched: [MemObject[], MemObject[]] | null = null;
+    let reminders: Reminder[] | null = null;
+    let failure = '';
     try {
       // Both tabs at every depth, once: switching tabs, searching and sorting then need no
       // request, and a search can find an object inside another. A household has tens of objects.
-      [active, archived] = await Promise.all([
+      fetched = await Promise.all([
         api<MemObject[]>('GET', '/objects?all=true&archived=false'),
         api<MemObject[]>('GET', '/objects?all=true&archived=true'),
       ]);
-      const all = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
-      due = all.filter((r) => r.due);
-      soon = all.filter((r) => !r.due);
-    } catch (e) { error = (e as Error).message; }
-    finally {
-      active = [...queued, ...active];
-      loading = false;
+      reminders = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
+    } catch (e) { failure = (e as Error).message; }
+    if (!loadSeq.current(token)) return;
+    // A failed fetch keeps what is on screen, minus the queued rows it is about to re-add.
+    if (fetched) [active, archived] = fetched;
+    active = withPendingObjects(queued, active);
+    if (reminders) {
+      due = reminders.filter((r) => r.due);
+      soon = reminders.filter((r) => !r.due);
     }
+    error = failure;
+    loading = false;
   }
   onMount(() => {
     void load();

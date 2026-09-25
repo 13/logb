@@ -1,8 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearObjectCache, getCachedObject, setCachedObject } from '../src/lib/object-cache';
+import { clearObjectCache, dropCachedObject, getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../src/lib/object-cache';
 import type { MemObject } from '../src/lib/types';
 
 const obj = { id: 1, name: 'Golf' } as unknown as MemObject;
+
+describe('dropCachedObject', () => {
+  it('forgets one object and its activities page, and nothing else', () => {
+    setCachedObject(-9, obj);
+    setCachedActivities(-9, { items: [], total: 0 });
+    setCachedObject(2, obj);
+    dropCachedObject(-9);
+    expect(getCachedObject(-9)).toBeUndefined();
+    expect(getCachedActivities(-9)).toBeUndefined();
+    expect(getCachedObject(2)).toBe(obj);
+  });
+});
 
 describe('clearObjectCache', () => {
   afterEach(() => {
