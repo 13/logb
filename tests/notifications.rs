@@ -339,6 +339,76 @@ async fn a_push_endpoint_a_browser_would_never_hand_out_is_refused() {
     assert_eq!(res.status(), 204);
 }
 
+/// Plain-http loopback push endpoints exist for this suite's stand-in push service and nothing
+/// else. An instance that has not been told it is under test refuses them like any other
+/// address a browser would never hand out: otherwise any signed-in user could point the server
+/// at a service on its own loopback interface.
+#[tokio::test]
+async fn a_plain_http_loopback_push_endpoint_is_refused_outside_tests() {
+    let app = common::spawn_with(|c| c.allow_loopback_http_push = false).await;
+    app.setup("ben", "correct horse").await;
+    for endpoint in ["http://127.0.0.1:9/push", "http://localhost:9/push", "http://[::1]:9/push"] {
+        let res = app.client.post(app.url("/push/subscriptions"))
+            .json(&Browser::new().subscription(endpoint)).send().await.unwrap();
+        assert_eq!(res.status(), 400, "{endpoint}");
+    }
+}
+
+/// Sending a test notification answers `sent` or `failed` and nothing more. The reason a
+/// webhook failed -- a status code, a connection error naming a port -- is exactly what someone
+/// probing the server's network would want back from it, so it goes to the log instead.
+#[tokio::test]
+async fn a_failed_test_notification_says_only_that_it_failed() {
+    let (hook_url, hook) = receiver().await;
+    hook.status.store(500, Ordering::SeqCst);
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.put(app.url("/me/notifications")).json(&json!({ "url": hook_url, "format": "json" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let out: serde_json::Value = app.client.post(app.url("/me/notifications/test")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(out["webhook"], "failed", "{out}");
+
+    // Nothing listening at all reads the same: no connection error text, no port.
+    let res = app.client.put(app.url("/me/notifications")).json(&json!({ "url": "http://127.0.0.1:1/hook", "format": "json" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let out: serde_json::Value = app.client.post(app.url("/me/notifications/test")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(out["webhook"], "failed", "{out}");
+
+    hook.status.store(200, Ordering::SeqCst);
+    let res = app.client.put(app.url("/me/notifications")).json(&json!({ "url": hook_url, "format": "json" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let out: serde_json::Value = app.client.post(app.url("/me/notifications/test")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(out["webhook"], "sent", "{out}");
+}
+
+/// A webhook that answers with a redirect is not followed. Validation looked at the address
+/// the user typed, not wherever that address later points the server, so following would be a
+/// way around it -- to a service on the server's own network, for one.
+#[tokio::test]
+async fn a_webhook_redirect_is_not_followed() {
+    let (target_url, target) = receiver().await;
+    let location = target_url.clone();
+    let redirector = Router::new().route(
+        "/hook",
+        post(move || {
+            let location = location.clone();
+            async move { (StatusCode::TEMPORARY_REDIRECT, [(axum::http::header::LOCATION, location)]) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, redirector).await.unwrap(); });
+
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let res = app.client.put(app.url("/me/notifications"))
+        .json(&json!({ "url": format!("http://{addr}/hook"), "format": "json" })).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let out: serde_json::Value = app.client.post(app.url("/me/notifications/test")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(out["webhook"], "failed", "{out}");
+    assert!(target.received().is_empty(), "the redirect was followed");
+}
+
 #[tokio::test]
 async fn first_run_setup_takes_the_browsers_timezone_and_an_admin_can_change_it() {
     let app = common::spawn().await;

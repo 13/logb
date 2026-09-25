@@ -424,6 +424,8 @@ export default {
   'notify.test': 'Send a test notification',
   'notify.test-push': 'Sent to {n} of your devices.',
   'notify.test-webhook': 'Webhook: {result}',
+  'notify.test-sent': 'sent',
+  'notify.test-failed': 'failed',
   'notify.test-nowhere': 'There is nowhere to send one yet: turn on notifications or add a webhook first.',
 
   'object.templates': 'Suggested reminders',

@@ -80,8 +80,10 @@
       const r = await api<NotificationTest>('POST', '/me/notifications/test');
       const parts: string[] = [];
       if (r.push_sent + r.push_failed > 0) parts.push($t('notify.test-push', { n: r.push_sent }));
-      if (r.webhook !== null) parts.push($t('notify.test-webhook', { result: r.webhook }));
-      if (r.telegram !== null) parts.push($t('notify.test-telegram', { result: r.telegram }));
+      // The server answers only `sent` or `failed` for each (the reason stays in its log).
+      const outcome = (s: 'sent' | 'failed') => $t(s === 'sent' ? 'notify.test-sent' : 'notify.test-failed');
+      if (r.webhook !== null) parts.push($t('notify.test-webhook', { result: outcome(r.webhook) }));
+      if (r.telegram !== null) parts.push($t('notify.test-telegram', { result: outcome(r.telegram) }));
       message = parts.length > 0 ? parts.join(' ') : $t('notify.test-nowhere');
     } catch (e) { error = (e as Error).message; } finally { busy = false; }
   }

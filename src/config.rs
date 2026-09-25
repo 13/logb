@@ -105,6 +105,16 @@ pub struct Config {
     /// a stock PostgreSQL server's `max_connections`.
     #[arg(long, env = "LOGB_DB_POOL_SIZE")]
     pub db_pool_size: Option<u32>,
+    /// Accept plain-http push subscription endpoints on the loopback address.
+    ///
+    /// Only for the integration tests, whose stand-in push service listens on `127.0.0.1` over
+    /// plain http. `#[arg(skip)]` keeps it off the command line and out of the environment
+    /// altogether, so it is `false` on every real instance and only code that builds a `Config`
+    /// by hand -- the test harness -- can turn it on. A browser's push service is always https;
+    /// accepting plain http to loopback elsewhere would let any signed-in user aim the server's
+    /// daily POST at a service on its own loopback interface.
+    #[arg(skip)]
+    pub allow_loopback_http_push: bool,
 }
 
 impl Config {
@@ -204,6 +214,7 @@ mod tests {
             cors_origins: String::new(),
             database_url: None,
             db_pool_size: None,
+            allow_loopback_http_push: false,
         }
     }
 

@@ -5537,7 +5537,8 @@
               "string",
               "null"
             ],
-            "description": "`sent`, why it failed, or null without a webhook of this user's own"
+            "enum": ["sent", "failed", null],
+            "description": "`sent`, `failed`, or null without a webhook of this user's own. Why it failed is logged on the server, never returned."
           },
           "push_sent": {
             "type": "integer"
@@ -5547,7 +5548,8 @@
           },
           "telegram": {
             "type": ["string", "null"],
-            "description": "`sent`, why it failed, or null without a Telegram connection"
+            "enum": ["sent", "failed", null],
+            "description": "`sent`, `failed`, or null without a Telegram connection. Why it failed is logged on the server, never returned."
           }
         }
       },

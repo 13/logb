@@ -128,13 +128,14 @@ pub fn contact(state: &App) -> String {
 ///
 /// Every real push endpoint is https. Accepting any URL would let a signed-in user make the
 /// server POST to an arbitrary address -- inside the network it runs in, for instance -- once
-/// a day. Plain http is allowed only to the loopback address, which is what the tests' stand-in
-/// push service listens on.
-pub fn validate(sub: &Subscription) -> Result<(), AppError> {
+/// a day. Plain http to the loopback address is allowed only when `allow_loopback_http` says so,
+/// which is `Config::allow_loopback_http_push`: set by the test harness for its stand-in push
+/// service, and never on a real instance, where it would aim the server at its own loopback.
+pub fn validate(sub: &Subscription, allow_loopback_http: bool) -> Result<(), AppError> {
     let bad = |m: &str| AppError::BadRequest(m.to_string());
     let url = reqwest::Url::parse(&sub.endpoint).map_err(|_| bad("endpoint must be a URL"))?;
     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
-    if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
+    if !(url.scheme() == "https" || (allow_loopback_http && url.scheme() == "http" && loopback)) {
         return Err(bad("endpoint must be an https URL"));
     }
     let p256dh = Base64UrlUnpadded::decode_vec(&sub.p256dh)
@@ -217,8 +218,14 @@ fn vapid_authorization(
     ))
 }
 
+/// Redirects are not followed: a push service answers the POST itself, and following one would
+/// send the server wherever a validated endpoint chose to point it (see `validate`).
 async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
-    let client = match reqwest::Client::builder().timeout(HTTP_TIMEOUT).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
         Ok(c) => c,
         Err(e) => return Delivery::Failed(format!("client: {e}")),
     };
@@ -256,11 +263,18 @@ mod tests {
 
     #[test]
     fn a_real_push_endpoint_is_accepted() {
-        assert!(validate(&sub("https://fcm.googleapis.com/fcm/send/abc")).is_ok());
+        assert!(validate(&sub("https://fcm.googleapis.com/fcm/send/abc"), false).is_ok());
         assert!(
-            validate(&sub("http://127.0.0.1:9999/push")).is_ok(),
-            "loopback, for tests"
+            validate(&sub("http://127.0.0.1:9999/push"), true).is_ok(),
+            "loopback, when the test harness asks for it"
         );
+    }
+
+    #[test]
+    fn plain_http_loopback_is_refused_unless_asked_for() {
+        for endpoint in ["http://127.0.0.1:9999/push", "http://localhost/", "http://[::1]/"] {
+            assert!(validate(&sub(endpoint), false).is_err(), "{endpoint}");
+        }
     }
 
     #[test]
@@ -271,17 +285,17 @@ mod tests {
             "ftp://example.com/",
             "not a url",
         ] {
-            assert!(validate(&sub(endpoint)).is_err(), "{endpoint}");
+            assert!(validate(&sub(endpoint), true).is_err(), "{endpoint}");
         }
         assert!(validate(&Subscription {
             auth: "AAAA".into(),
             ..sub("https://push.example/")
-        })
+        }, true)
         .is_err());
         assert!(validate(&Subscription {
             p256dh: "AAAA".into(),
             ..sub("https://push.example/")
-        })
+        }, true)
         .is_err());
     }
 

@@ -138,8 +138,9 @@ fn text_format() -> String {
 ///
 /// Plain http and private addresses are allowed on purpose: a self-hosted ntfy on the home
 /// network is the likeliest target of all. The request is a fixed digest body and nothing it
-/// answers is shown back to anyone, which is what keeps this from being a way to read internal
-/// services.
+/// answers is shown back to anyone -- the test endpoint says only `sent` or `failed` -- which is
+/// what keeps this from being a way to read internal services. Redirects are not followed
+/// (`notify::post`), so the address checked here is the only one the server ever posts to.
 pub(crate) fn validate_webhook(raw: Option<&str>) -> Result<Option<String>, AppError> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
@@ -175,11 +176,29 @@ async fn write(
 
 #[derive(Serialize)]
 pub struct TestOut {
-    /// `sent`, the reason it failed, or null when this user has no webhook of their own.
-    pub webhook: Option<String>,
+    /// `sent`, `failed`, or null when this user has no webhook of their own.
+    pub webhook: Option<&'static str>,
     pub push_sent: usize,
     pub push_failed: usize,
-    pub telegram: Option<String>,
+    /// `sent`, `failed`, or null without a Telegram connection.
+    pub telegram: Option<&'static str>,
+}
+
+/// `sent` or `failed`, and nothing more; the reason goes to the log.
+///
+/// The webhook is an address the user typed, and private addresses are allowed on purpose (see
+/// `validate_webhook`). Echoing why a POST there failed -- "connection refused", a status code,
+/// a TLS error -- would turn this button into a probe of whatever the server can reach, one
+/// port at a time. The owner of the webhook can still find out: the reason is logged with their
+/// user id.
+fn outcome(user_id: i64, channel: &'static str, result: Result<(), AppError>) -> &'static str {
+    match result {
+        Ok(()) => "sent",
+        Err(e) => {
+            tracing::warn!(user_id, channel, error = %e, "test notification failed");
+            "failed"
+        }
+    }
 }
 
 /// Sends a test notification, now, to everywhere this user's own notifications go -- so they
@@ -192,10 +211,7 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
             .await?;
     let digest = notify::test_digest(&user.lang);
     let webhook = match url {
-        Some(url) => Some(match notify::post(&url, &format, &digest).await {
-            Ok(()) => "sent".to_string(),
-            Err(e) => e.to_string(),
-        }),
+        Some(url) => Some(outcome(user.id, "webhook", notify::post(&url, &format, &digest).await)),
         None => None,
     };
     let (push_sent, push_failed) = notify::push_to(
@@ -207,10 +223,7 @@ async fn test(user: AuthUser, State(state): State<App>) -> Result<Json<TestOut>,
     )
     .await?;
     let telegram = if crate::telegram::connected(&state, user.id).await? {
-        Some(match crate::telegram::send_user(&state, user.id, &digest).await {
-            Ok(()) => "sent".to_string(),
-            Err(e) => e.to_string(),
-        })
+        Some(outcome(user.id, "telegram", crate::telegram::send_user(&state, user.id, &digest).await))
     } else { None };
     Ok(Json(TestOut {
         webhook,
@@ -268,7 +281,7 @@ async fn subscribe(
         p256dh: body.keys.p256dh.trim().to_string(),
         auth: body.keys.auth.trim().to_string(),
     };
-    push::validate(&sub)?;
+    push::validate(&sub, state.config.allow_loopback_http_push)?;
     // An endpoint names one browser profile. Subscribing it again refreshes its keys, and
     // another account signing in on that browser takes it over -- a browser only ever shows one
     // person's notifications, and it should be the person using it now.

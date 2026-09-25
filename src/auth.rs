@@ -573,6 +573,7 @@ mod tests {
             cors_origins: String::new(),
             database_url: None,
             db_pool_size: None,
+            allow_loopback_http_push: false,
         };
         Arc::new(AppState {
             write_db: db.clone(),
