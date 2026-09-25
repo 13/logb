@@ -7,10 +7,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # A named volume, so a fresh `docker compose up` works with no setup: it starts out owned
-      # by the image's uid 65532. To keep the data in a host directory instead, see "Run with
-      # Docker" in the README -- the directory has to be chowned to 65532 first.
-      - logb-data:/data
+      # The image runs as uid 65532, so ./data has to belong to it before the first start
+      # (`sudo chown 65532:65532 data`), or Docker creates it owned by root and LogB cannot
+      # write. "Run with Docker" in the README has the named-volume alternative.
+      - ./data:/data
     environment:
       LOGB_MAX_UPLOAD_MB: "50"
       LOGB_SECURE_COOKIE: "auto"
@@ -26,6 +26,3 @@ services:
       # snapshot. Copy both off the host too: a snapshot on the same disk guards against
       # mistakes, not against losing the disk.
       LOGB_BACKUP_DIR: "/data/backups"
-
-volumes:
-  logb-data:

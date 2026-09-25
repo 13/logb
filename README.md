@@ -9,6 +9,7 @@ Self-hosted, single binary, one data folder. Mobile-first PWA.
 ## Run with Docker
 
 ```bash
+mkdir -p data && sudo chown 65532:65532 data
 docker compose up -d --build
 ```
 
@@ -19,23 +20,14 @@ Building the image needs BuildKit (`docker buildx`), which Docker Desktop and Do
 packages include; some distributions package it separately (`docker-buildx` on Arch). The legacy
 builder fails on the Dockerfile's first `FROM`.
 
-Everything lives in the `logb-data` volume, mounted at `/data`: `logb.db` (SQLite), `files/`
-(originals, content-addressed), `thumbs/`, and `backups/` with the nightly snapshots the compose
-file turns on.
+Everything lives in `./data`, mounted at `/data`: `logb.db` (SQLite), `files/` (originals,
+content-addressed), `thumbs/`, and `backups/` with the nightly snapshots the compose file turns
+on.
 
-The container runs as uid 65532, which a named volume inherits. To keep the data in a host
-directory instead, chown it to that uid first, then replace `logb-data:/data` with a bind mount
-in `docker-compose.yml`:
-
-```bash
-mkdir -p data && sudo chown -R 65532:65532 data
-# volumes:
-#   - ./data:/data
-```
-
-An install from before 0.17.0 used `./data` from the compose file; keep that bind-mount line
-when you update the file, or the container starts on an empty volume. Nothing is lost — the old
-directory is still there — but it looks like a fresh install until the line is put back.
+The container runs as uid 65532, so the directory has to belong to that uid before the first
+start; the `chown` above does that. Without it Docker creates `./data` owned by root and LogB
+cannot write its database. A named volume needs no chown, since it inherits the image's owner:
+replace `./data:/data` with `logb-data:/data` and add a top-level `volumes: {logb-data: {}}`.
 
 ### Released images
 
