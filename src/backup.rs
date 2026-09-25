@@ -117,10 +117,20 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(format!("logb-{}.db", db::today()));
 
+    // Verified once, then remembered. The loop calls this every minute from the backup hour to
+    // midnight, and verifying means opening the file twice and reading all of it for
+    // `integrity_check` -- hundreds of whole-file reads a day to re-answer a question settled
+    // by the first. The existence check stays: a stat is cheap, and a snapshot someone deleted
+    // is a day with no backup, which is worth a rewrite.
+    if dest.exists() && remembered(state, &dest) {
+        return Ok(None);
+    }
+
     // An existing file only counts as done if it verifies. One that does not is worse than
     // nothing -- it occupies today's slot while being unrestorable -- so it is replaced.
     if dest.exists() {
         if verify(&dest).await.is_ok() {
+            remember(state, &dest);
             return Ok(None);
         }
         tracing::warn!(path = %dest.display(), "replacing an unverifiable snapshot");
@@ -142,11 +152,31 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
             "snapshot failed verification: {e}"
         )));
     }
+    remember(state, &dest);
 
     // A prune problem must never be reported as a backup failure: the snapshot above is already
     // written and verified, so `prune` handles its own errors internally rather than via `?`.
     prune(&dir);
     Ok(Some(dest))
+}
+
+/// Whether `dest` is the snapshot this process last verified. Keyed by the whole path, so a new
+/// day's name -- or a backup directory that changed under a restart-free config -- is never
+/// mistaken for one already checked.
+fn remembered(state: &App, dest: &Path) -> bool {
+    state
+        .backup_verified
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_deref()
+        == Some(dest)
+}
+
+fn remember(state: &App, dest: &Path) {
+    *state
+        .backup_verified
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(dest.to_path_buf());
 }
 
 /// Deletes all but the newest `KEEP` snapshots.

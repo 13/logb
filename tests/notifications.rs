@@ -13,7 +13,7 @@ use axum::Router;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use web_push_native::p256::elliptic_curve::sec1::ToEncodedPoint;
 use web_push_native::p256::SecretKey;
@@ -58,16 +58,20 @@ async fn receiver() -> (String, Receiver) {
 struct TelegramStub {
     updates: Arc<Mutex<Vec<serde_json::Value>>>,
     sent: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// How many times `getUpdates` was asked, so a test can tell polling from not polling.
+    polls: Arc<AtomicUsize>,
 }
 
 async fn telegram_stub() -> (String, TelegramStub) {
     let stub = TelegramStub::default();
     let updates = stub.updates.clone();
     let sent = stub.sent.clone();
+    let polls = stub.polls.clone();
     let app = Router::new()
         .route("/bot123:secret/getMe", post(|| async { axum::Json(json!({"ok":true,"result":{"username":"logb_test_bot"}})) }))
         .route("/bot123:secret/getUpdates", post(move || {
             let updates = updates.clone();
+            polls.fetch_add(1, Ordering::SeqCst);
             async move { axum::Json(json!({"ok":true,"result":updates.lock().unwrap().clone()})) }
         }))
         .route("/bot123:secret/sendMessage", post(move |axum::Json(body): axum::Json<serde_json::Value>| {
@@ -251,6 +255,78 @@ async fn telegram_chat_cannot_be_stolen_by_another_account() {
     let anna_settings: serde_json::Value = anna.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
     assert_eq!(ben_settings["telegram_connected"], true);
     assert_eq!(anna_settings["telegram_connected"], false);
+}
+
+/// The bot is asked for updates only while someone is waiting to link a chat.
+///
+/// A `/start <code>` is the only update LogB acts on, and it can only mean something while a
+/// code is outstanding. Polling every saved bot every two seconds regardless was a request to
+/// Telegram per bot, around the clock, for an event that happens once per person.
+#[tokio::test]
+async fn telegram_is_polled_only_while_a_link_code_is_pending() {
+    let (api_url, telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
+    app.setup("ben", "correct horse").await;
+    save_telegram(&app, &app.client).await;
+
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    assert_eq!(telegram.polls.load(Ordering::SeqCst), 0, "a saved bot with no link code pending");
+
+    let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    assert_eq!(telegram.polls.load(Ordering::SeqCst), 1, "a code is pending: poll");
+
+    let code = link["url"].as_str().unwrap().split("start=").nth(1).unwrap();
+    telegram.updates.lock().unwrap().push(json!({
+        "update_id":1,"message":{"text":format!("/start {code}"),"chat":{"id":42,"type":"private"},"from":{"first_name":"Ada"}}
+    }));
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    assert_eq!(telegram.polls.load(Ordering::SeqCst), 2);
+    let settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["telegram_connected"], true);
+
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    assert_eq!(telegram.polls.load(Ordering::SeqCst), 2, "the code is used: nothing left to wait for");
+
+    // An expired code is not pending either.
+    sqlx::query("UPDATE telegram_link_codes SET used_at = NULL, expires_at = '2000-01-01T00:00:00+00:00'")
+        .execute(&app.state.db).await.unwrap();
+    logb::telegram::poll_once(&app.state).await.unwrap();
+    assert_eq!(telegram.polls.load(Ordering::SeqCst), 2, "an expired code");
+}
+
+/// One user's broken credential must not stop everyone else's bot from being polled.
+///
+/// A credential that no longer decrypts -- the key file restored from a different backup than
+/// the database, say -- used to fail the whole poll with `?`, so every other user's pending link
+/// waited behind it forever.
+#[tokio::test]
+async fn one_broken_telegram_credential_does_not_stop_the_others() {
+    let (api_url, telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let anna_id = me(&app, &anna).await["id"].as_i64().unwrap();
+    save_telegram(&app, &app.client).await;
+    let link: serde_json::Value = app.client.post(app.url("/me/notifications/telegram/link"))
+        .send().await.unwrap().json().await.unwrap();
+
+    // Anna's bot: a row whose ciphertext cannot be decrypted, with a link of her own pending.
+    let now = logb::db::now();
+    let later = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    sqlx::query("INSERT INTO telegram_credentials (user_id,token_cipher,token_nonce,token_hash,bot_username,created_at,updated_at) VALUES ($1,'00','000000000000000000000000','anna-hash','anna_bot',$2,$2)")
+        .bind(anna_id).bind(&now).execute(&app.state.db).await.unwrap();
+    sqlx::query("INSERT INTO telegram_link_codes (user_id,code_hash,expires_at) VALUES ($1,'anna-code',$2)")
+        .bind(anna_id).bind(&later).execute(&app.state.db).await.unwrap();
+
+    let code = link["url"].as_str().unwrap().split("start=").nth(1).unwrap();
+    telegram.updates.lock().unwrap().push(json!({
+        "update_id":1,"message":{"text":format!("/start {code}"),"chat":{"id":42,"type":"private"},"from":{"first_name":"Ben"}}
+    }));
+    logb::telegram::poll_once(&app.state).await.expect("a broken credential is logged and skipped");
+    let settings: serde_json::Value = app.client.get(app.url("/me/notifications")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(settings["telegram_connected"], true, "ben's bot was still polled");
 }
 
 /// A browser's side of a subscription, with keys this test holds so it can read what arrives.

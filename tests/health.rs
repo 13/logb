@@ -132,3 +132,74 @@ async fn health_turns_503_when_the_database_is_unreachable() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "unavailable");
 }
+
+/// Health judges the database this instance is *serving*, not the one the pointer file names.
+///
+/// Settings writes the pointer the moment a move is copied, and the process goes on serving
+/// the old database until it restarts. Reading `config.database_url()` in between answered for
+/// the destination: a SQLite instance whose pointer named PostgreSQL was compared against
+/// PostgreSQL's handful of migrations, and a schema several migrations behind reported itself
+/// healthy. The pointer here names a PostgreSQL server that does not exist -- health must not
+/// care, since nothing is connected to it.
+///
+/// On PostgreSQL the harness sets `LOGB_DATABASE_URL`, which wins over the pointer file, so
+/// this is a plain behind-schema check there; the SQLite run is the one that proves the point.
+#[tokio::test]
+async fn health_judges_the_database_it_serves_not_the_pointer() {
+    let app = common::spawn().await;
+    logb::pointer::write(&app.state.config.data_dir, "postgres://nobody:nothing@127.0.0.1:1/elsewhere").unwrap();
+
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 200, "an intact schema is healthy whatever the pointer says");
+
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = (SELECT max(version) FROM _sqlx_migrations)")
+        .execute(&app.state.db).await.unwrap();
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(
+        res.status(),
+        503,
+        "one migration behind the database being served is behind, even with a pointer to a \
+         backend that carries fewer migrations"
+    );
+}
+
+/// Every request leaves one line at info: what was asked, what was answered, how long it took,
+/// and the request id that ties it to anything else the handler logged.
+///
+/// Before this, the only per-request record was `TraceLayer`'s, at debug -- below the default
+/// `LOGB_LOG=info` -- so a production log said nothing about traffic at all, and a 500 could be
+/// matched to its request only by the id the client happened to keep.
+#[tokio::test]
+async fn every_request_is_logged_at_info_with_its_id() {
+    let app = common::spawn().await;
+    let id = format!("log-probe-{}", std::process::id());
+    let res = app.client.get(app.url("/auth/me")).header("x-request-id", &id).send().await.unwrap();
+    assert_eq!(res.status(), 401);
+
+    let logs = common::captured_logs();
+    let line = logs
+        .lines()
+        .find(|l| l.contains(&id) && l.contains("request finished"))
+        .unwrap_or_else(|| panic!("no request line for {id}"));
+    assert!(line.contains(" INFO "), "{line}");
+    for expected in ["method=GET", "path=/api/auth/me", "status=401", "latency_ms="] {
+        assert!(line.contains(expected), "missing {expected}: {line}");
+    }
+}
+
+/// The container probes `/api/health` every thirty seconds. A healthy answer is not news, and
+/// at info it would be most of the log; it stays at debug. An unhealthy one is logged like any
+/// other request.
+#[tokio::test]
+async fn a_healthy_probe_is_not_logged_at_info() {
+    let app = common::spawn().await;
+    let id = format!("health-probe-{}", std::process::id());
+    let res = app.client.get(app.url("/health")).header("x-request-id", &id).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let logs = common::captured_logs();
+    let line = logs
+        .lines()
+        .find(|l| l.contains(&id) && l.contains("request finished"))
+        .unwrap_or_else(|| panic!("no request line for {id}"));
+    assert!(line.contains(" DEBUG "), "{line}");
+}

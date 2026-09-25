@@ -38,7 +38,8 @@ pub fn router() -> Router<App> {
         .route("/database/backup", get(backup_status))
 }
 
-/// How long the process waits before exiting, so the 202 is on the wire first. See `restart`.
+/// How long the process waits before it starts shutting down, so the 202 is on the wire
+/// first. See `restart`.
 const RESTART_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// A database, said in a way that can be shown to somebody: no user, no password, no query
@@ -325,7 +326,7 @@ async fn switch(
     }))
 }
 
-/// Exits the process, so the next start opens whatever the pointer file names.
+/// Stops the process, so the next start opens whatever the pointer file names.
 ///
 /// There is no way to swap the pool underneath a running instance: half the application holds
 /// `state.db` and a backend it decided once from the URL, background tasks included. A restart
@@ -334,15 +335,19 @@ async fn switch(
 /// check that something does, so the answer says so plainly rather than implying the process
 /// brings itself back.
 ///
-/// 202 and not 200: the work is accepted, not done. The exit waits `RESTART_GRACE` so the
-/// response is written and flushed first -- exiting from inside the handler would drop the
-/// connection, and the client would see a transport error where it should see an
-/// acknowledgement.
-async fn restart(AdminUser(_): AdminUser) -> (StatusCode, Json<serde_json::Value>) {
+/// It stops the way a SIGTERM does -- `state.shutdown`, see `main` -- rather than calling
+/// `exit` from here: other requests in flight finish, the background loop is not cut off in the
+/// middle of a snapshot, the pools close, and `main` returns. The status is 0, as the old
+/// `exit(0)` was, which is what `restart: unless-stopped` and `Restart=always` start again on.
+///
+/// 202 and not 200: the work is accepted, not done. The shutdown waits `RESTART_GRACE` so this
+/// response is written first; a graceful shutdown would let it finish anyway, but the pause
+/// costs nothing and keeps the answer from racing the listener closing.
+async fn restart(AdminUser(_): AdminUser, State(state): State<App>) -> (StatusCode, Json<serde_json::Value>) {
     tokio::spawn(async move {
         tokio::time::sleep(RESTART_GRACE).await;
-        tracing::info!("exiting on request from Settings; whatever supervises LogB starts it again");
-        std::process::exit(0);
+        tracing::info!("stopping on request from Settings; whatever supervises LogB starts it again");
+        state.shutdown.cancel();
     });
     (
         StatusCode::ACCEPTED,

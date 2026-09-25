@@ -116,6 +116,26 @@ async fn none_of_the_database_routes_answer_a_plain_user() {
     }
 }
 
+/// Restarting from Settings is the same shutdown a SIGTERM starts, not an exit from inside a
+/// handler: the server stops taking connections, lets the ones in flight finish, stops the
+/// background loop, and only then does the process end -- with the same status 0 the old
+/// `exit(0)` gave whatever supervises it.
+///
+/// Which is also what makes it testable at all. `exit(0)` would have ended this test binary,
+/// every other test in it included, and reported success.
+#[tokio::test]
+async fn restart_asks_for_the_same_shutdown_a_signal_does() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    assert!(!app.state.shutdown.is_cancelled());
+
+    let res = app.client.post(app.url("/database/restart")).send().await.unwrap();
+    assert_eq!(res.status(), 202);
+    tokio::time::timeout(std::time::Duration::from_secs(5), app.state.shutdown.cancelled())
+        .await
+        .expect("the restart asked the process to shut down");
+}
+
 /// Testing a destination is the first thing the screen does with a URL somebody typed, which
 /// makes the driver's own error text the first thing that can carry a password back out.
 #[tokio::test]

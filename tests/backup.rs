@@ -465,3 +465,42 @@ async fn backup_and_restore_refuse_on_postgresql() {
         "restore's refusal must point at the tool that will move data between databases: {err}"
     );
 }
+
+/// Today's snapshot is verified once, right after it is written -- not again on every tick for
+/// the rest of the day.
+///
+/// The loop wakes every minute, and from the backup hour until midnight each wake used to open
+/// today's file twice and run a full `integrity_check` over it: hundreds of whole-file reads a
+/// day, all answering a question settled at the first one. The proof here is that a file
+/// spoiled *after* the verified write is left alone by the next tick: had `tick` verified it
+/// again, it would have replaced it.
+///
+/// What still triggers a verify is a file this process did not write and check itself: after a
+/// restart the memory is empty, which `a_zero_length_file_in_todays_slot_is_replaced` covers.
+#[tokio::test]
+async fn the_snapshot_is_verified_once_not_every_tick() {
+    if common::skipped_on_postgres("the_snapshot_is_verified_once_not_every_tick", VACUUM_INTO_IS_SQLITE) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    let app = common::spawn_with(|c| {
+        c.backup_dir = Some(backups.clone());
+        c.backup_hour = 0;
+    }).await;
+    app.setup("ben", "correct horse").await;
+
+    let made = logb::backup::tick(&app.state, 1).await.unwrap().expect("today's snapshot");
+    std::fs::write(&made, b"").unwrap();
+    assert!(
+        logb::backup::tick(&app.state, 2).await.unwrap().is_none(),
+        "the snapshot was verified when it was written; the next tick must not check it again"
+    );
+    assert_eq!(std::fs::metadata(&made).unwrap().len(), 0, "the file was not touched");
+
+    // A missing file is not remembered away: a stat is cheap, and a deleted snapshot is a day
+    // with no backup.
+    std::fs::remove_file(&made).unwrap();
+    let again = logb::backup::tick(&app.state, 3).await.unwrap().expect("a deleted snapshot is rewritten");
+    logb::backup::verify(&again).await.expect("the rewrite is sound");
+}

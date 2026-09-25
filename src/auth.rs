@@ -584,6 +584,8 @@ mod tests {
             config,
             login_attempts: Mutex::new(HashMap::new()),
             login_attempts_by_user: Mutex::new(HashMap::new()),
+            backup_verified: Mutex::new(None),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         })
     }
 

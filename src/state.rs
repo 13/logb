@@ -29,6 +29,17 @@ pub struct AppState {
     /// login attempts per lower-cased username, same shape and window as `login_attempts`.
     /// See `auth::check_username_rate`.
     pub login_attempts_by_user: Mutex<HashMap<String, (u32, Instant)>>,
+    /// The snapshot `backup::tick` last wrote-and-verified, or found and verified, in this
+    /// process. Today's file, once it is in here, is not opened again until tomorrow's name
+    /// replaces it -- see `backup::tick`. In memory on purpose: after a restart nothing is
+    /// remembered, so a file this process never checked is checked once.
+    pub backup_verified: Mutex<Option<std::path::PathBuf>>,
+    /// Cancelled once, when the process should stop: SIGTERM or ctrl-c (see `main`), or
+    /// Settings -> Restart (`api::database::restart`). The server stops accepting connections
+    /// and drains, and the background loops (`tasks`, `telegram`) end at their next wait.
+    /// One token for every reason to stop, so a restart is exactly as orderly as a
+    /// `docker stop`.
+    pub shutdown: tokio_util::sync::CancellationToken,
 }
 
 pub type App = Arc<AppState>;

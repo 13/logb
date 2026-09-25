@@ -286,7 +286,8 @@ looking healthy with every photo and document 404ing.
 
 Switching only chooses the database for the *next* start — nothing about a running instance can
 be swapped out from under it. Settings shows a "Restart now" button once a switch is pending; it
-exits the process and nothing more. It comes back only if something is watching for that and
+stops the process the same way SIGTERM does — requests in flight get up to ten seconds to finish,
+then it exits with status 0 — and nothing more. It comes back only if something is watching for that and
 starts it again — `restart: unless-stopped` in this repository's compose file is that something.
 LogB has no way to confirm one exists, so it says exactly that rather than implying the app
 restarts itself: if nothing supervises the process, "Restart now" is "stop now" and it stays down

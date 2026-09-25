@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::RngExt;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
-use std::{fs::OpenOptions, io::Write, path::PathBuf, time::Duration};
+use std::{collections::HashSet, fs::OpenOptions, io::Write, path::PathBuf, time::Duration};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(35);
 const CODE_LIFETIME_MINUTES: i64 = 10;
@@ -451,28 +451,86 @@ async fn poll_bot(
     }
     Ok(next)
 }
+/// The users waiting to link a chat right now: an unused code that has not expired.
+///
+/// Expiry is compared here rather than in SQL because `expires_at` is written by
+/// `create_link` as RFC 3339 with an offset and fractional seconds, which does not sort as a
+/// string against `db::now()`'s shape; `link_update` parses it the same way. The table holds at
+/// most one row per user, so reading it whole is nothing.
+async fn pending_links(state: &App) -> Result<HashSet<i64>, AppError> {
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT user_id,expires_at FROM telegram_link_codes WHERE used_at IS NULL")
+            .fetch_all(&state.db)
+            .await?;
+    let now = Utc::now();
+    Ok(rows
+        .into_iter()
+        .filter(|(_, expires_at)| {
+            DateTime::parse_from_rfc3339(expires_at).is_ok_and(|v| v.with_timezone(&Utc) > now)
+        })
+        .map(|(user_id, _)| user_id)
+        .collect())
+}
+
+/// Polls one user's own bot and stores how far it read.
+async fn poll_credential(
+    state: &App,
+    user_id: i64,
+    data: &str,
+    nonce: &str,
+    raw_offset: &str,
+) -> Result<(), AppError> {
+    let token = decrypt(state, data, nonce)?;
+    let old = raw_offset.parse().unwrap_or(0);
+    let next = poll_bot(state, Some(user_id), &token, old).await?;
+    if next != old {
+        sqlx::query(
+            "UPDATE telegram_credentials SET update_offset=$1,updated_at=$2 WHERE user_id=$3",
+        )
+        .bind(next.to_string())
+        .bind(db::now())
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Reads new messages from every bot someone is waiting to link a chat through.
+///
+/// Only those: a `/start <code>` is the one update LogB acts on, and it can only mean something
+/// while a code is outstanding (`pending_links`). Asking every saved bot every two seconds
+/// regardless was a request to Telegram per bot, around the clock, for an event that happens
+/// once per person. Anything a bot receives meanwhile waits at Telegram and is read -- and
+/// ignored, its code long gone -- the next time a link is pending.
+///
+/// Each user's bot is polled on its own: a credential that no longer decrypts, or a bot
+/// Telegram has revoked, is logged and skipped, so one person's broken setup cannot keep
+/// everyone else's link waiting. The instance-wide legacy bot goes last and its failure is the
+/// caller's to log, since nothing is left behind it to skip to.
 pub async fn poll_once(state: &App) -> Result<(), AppError> {
+    let pending = pending_links(state).await?;
+    if pending.is_empty() {
+        return Ok(());
+    }
     let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT user_id,token_cipher,token_nonce,update_offset FROM telegram_credentials",
+        "SELECT user_id,token_cipher,token_nonce,update_offset FROM telegram_credentials ORDER BY user_id",
     )
     .fetch_all(&state.db)
     .await?;
+    let mut own_bot = HashSet::new();
     for (user_id, data, nonce, raw) in rows {
-        let token = decrypt(state, &data, &nonce)?;
-        let old = raw.parse().unwrap_or(0);
-        let next = poll_bot(state, Some(user_id), &token, old).await?;
-        if next != old {
-            sqlx::query(
-                "UPDATE telegram_credentials SET update_offset=$1,updated_at=$2 WHERE user_id=$3",
-            )
-            .bind(next.to_string())
-            .bind(db::now())
-            .bind(user_id)
-            .execute(&state.db)
-            .await?;
+        own_bot.insert(user_id);
+        if !pending.contains(&user_id) {
+            continue;
+        }
+        if let Err(e) = poll_credential(state, user_id, &data, &nonce, &raw).await {
+            tracing::warn!(user_id, error = %e, "telegram polling failed for this user's bot; skipped");
         }
     }
-    if let Some(token) = legacy_token(state) {
+    // The legacy bot links whoever has no bot of their own, so it is only worth asking while
+    // one of them has a code out.
+    if let Some(token) = legacy_token(state).filter(|_| pending.iter().any(|id| !own_bot.contains(id))) {
         let raw: String = sqlx::query_scalar(
             "SELECT COALESCE((SELECT value FROM settings WHERE key='telegram_update_offset'),'0')",
         )
@@ -486,15 +544,29 @@ pub async fn poll_once(state: &App) -> Result<(), AppError> {
     }
     Ok(())
 }
+/// Polls until `state.shutdown` is cancelled.
+///
+/// Unlike the main loop, a poll in progress is dropped rather than waited for: it can sit in a
+/// 429 back-off for half a minute, and nothing it does is lost by stopping -- an update not
+/// yet acknowledged is simply read again after the restart, and `link_update` runs in one
+/// transaction that a drop rolls back.
 pub fn spawn(state: App) {
+    let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         loop {
-            match poll_once(&state).await {
-                Ok(()) => tokio::time::sleep(Duration::from_secs(2)).await,
-                Err(e) => {
-                    tracing::warn!(error=%e,"telegram polling failed");
-                    tokio::time::sleep(Duration::from_secs(5)).await
-                }
+            let pause = tokio::select! {
+                result = poll_once(&state) => match result {
+                    Ok(()) => Duration::from_secs(2),
+                    Err(e) => {
+                        tracing::warn!(error=%e,"telegram polling failed");
+                        Duration::from_secs(5)
+                    }
+                },
+                () = shutdown.cancelled() => break,
+            };
+            tokio::select! {
+                () = tokio::time::sleep(pause) => {}
+                () = shutdown.cancelled() => break,
             }
         }
     });
