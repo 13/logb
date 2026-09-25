@@ -75,16 +75,16 @@ async fn health(State(state): State<App>) -> Result<Json<serde_json::Value>, App
             tracing::error!(error = %e, "health check: database query failed");
             AppError::Unavailable("database unavailable".into())
         })?;
-    // The count to compare against is the one for *this* database's backend: SQLite carries
-    // nine migrations and PostgreSQL one, so counting the wrong set would report a healthy
-    // PostgreSQL instance as eight migrations behind. A URL this instance could not resolve
-    // is not something health can diagnose, so fall back to the applied count and let the
-    // check pass rather than fail an otherwise working instance on a config error.
-    let expected = state
-        .config
-        .database_url()
-        .map(|url| crate::db::expected_migrations(&url) as i64)
-        .unwrap_or(applied);
+    // The count to compare against is the one for *this* database's backend: the two sets
+    // have different lengths, so counting the wrong one would report a healthy PostgreSQL
+    // instance as behind, or a behind SQLite one as healthy.
+    //
+    // "This database" is `state.database_url`, the URL the pool was opened from -- not
+    // `config.database_url()`, which reads the pointer file and so answers for the database a
+    // *restart* would open. Between Settings writing the pointer and that restart the two
+    // differ, and asking the config compared the database being served against the other
+    // backend's migration count.
+    let expected = crate::db::expected_migrations(&state.database_url) as i64;
     if applied < expected {
         return Err(AppError::Unavailable(format!(
             "schema is behind: {applied} of {expected} migrations applied"

@@ -132,3 +132,33 @@ async fn health_turns_503_when_the_database_is_unreachable() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["error"], "unavailable");
 }
+
+/// Health judges the database this instance is *serving*, not the one the pointer file names.
+///
+/// Settings writes the pointer the moment a move is copied, and the process goes on serving
+/// the old database until it restarts. Reading `config.database_url()` in between answered for
+/// the destination: a SQLite instance whose pointer named PostgreSQL was compared against
+/// PostgreSQL's handful of migrations, and a schema several migrations behind reported itself
+/// healthy. The pointer here names a PostgreSQL server that does not exist -- health must not
+/// care, since nothing is connected to it.
+///
+/// On PostgreSQL the harness sets `LOGB_DATABASE_URL`, which wins over the pointer file, so
+/// this is a plain behind-schema check there; the SQLite run is the one that proves the point.
+#[tokio::test]
+async fn health_judges_the_database_it_serves_not_the_pointer() {
+    let app = common::spawn().await;
+    logb::pointer::write(&app.state.config.data_dir, "postgres://nobody:nothing@127.0.0.1:1/elsewhere").unwrap();
+
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 200, "an intact schema is healthy whatever the pointer says");
+
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = (SELECT max(version) FROM _sqlx_migrations)")
+        .execute(&app.state.db).await.unwrap();
+    let res = app.client.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(
+        res.status(),
+        503,
+        "one migration behind the database being served is behind, even with a pointer to a \
+         backend that carries fewer migrations"
+    );
+}
