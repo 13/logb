@@ -471,6 +471,8 @@ export default {
   'settings.logout-all-hint': 'Changing your password already ends every other session.',
   'settings.logout-all-confirm': 'Sign out of every device, including this one?',
   'settings.change-password': 'Change password',
+  'settings.current-password': 'Current password',
+  'settings.wrong-password': 'That is not your current password.',
   'settings.data': 'Data',
   'settings.export': 'Export everything (zip)',
   'settings.export-exclude-body': 'Exclude body weight data',

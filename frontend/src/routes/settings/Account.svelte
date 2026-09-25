@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
-  import { api } from '../../lib/api';
+  import { api, ApiError } from '../../lib/api';
   import { t } from '../../i18n';
   import { user, logout, logoutEverywhere, signOutErrorMessage } from '../../stores/session';
   import { createPairing } from '../../lib/pairing';
 
+  let currentPass = $state('');
   let ownPass = $state('');
   let message = $state('');
   let error = $state('');
@@ -23,12 +24,20 @@
     try { await logoutEverywhere(); } catch (e) { error = signOutErrorMessage(e, $t); }
   }
 
+  // The server wants the password being replaced (`current_password`), so a session left open
+  // on a shared computer is not enough to take the account over. A wrong or missing one comes
+  // back as a 403 `wrong_password`, said here in the reader's language.
   async function changeOwnPassword() {
     if (!$user) return;
+    error = ''; message = '';
     try {
-      await api('PATCH', `/users/${$user.id}`, { password: ownPass });
-      ownPass = ''; message = $t('object.saved');
-    } catch (e) { error = (e as Error).message; }
+      await api('PATCH', `/users/${$user.id}`, { password: ownPass, current_password: currentPass });
+      currentPass = ''; ownPass = ''; message = $t('object.saved');
+    } catch (e) {
+      error = e instanceof ApiError && e.code === 'wrong_password'
+        ? $t('settings.wrong-password')
+        : (e as Error).message;
+    }
   }
 
   async function requestPairCode() {
@@ -42,9 +51,10 @@
   {#if message}<p class="muted">{message}</p>{/if}
 
   <p class="muted">{$user?.username}</p>
+  <div class="field"><label for="cp">{$t('settings.current-password')}</label><input id="cp" type="password" bind:value={currentPass} autocomplete="current-password" /></div>
   <div class="row">
     <div class="field"><label for="op">{$t('settings.change-password')}</label><input id="op" type="password" bind:value={ownPass} autocomplete="new-password" /></div>
-    <button onclick={changeOwnPassword} disabled={ownPass.length < 8}>{$t('nav.save')}</button>
+    <button onclick={changeOwnPassword} disabled={ownPass.length < 8 || currentPass.length === 0}>{$t('nav.save')}</button>
   </div>
   <button class="ghost" onclick={signOut}>{$t('login.logout')}</button>
   <button class="ghost" onclick={signOutEverywhere}>{$t('settings.logout-all')}</button>

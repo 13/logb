@@ -2,12 +2,13 @@ use crate::auth::{self, AdminUser, AuthUser};
 use crate::db;
 use crate::error::AppError;
 use crate::state::App;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -75,14 +76,33 @@ async fn create(
 #[derive(Deserialize)]
 pub struct UpdateUser {
     pub password: Option<String>,
+    /// The caller's present password. Required with `password` when the caller is changing
+    /// their own (see `update`); ignored otherwise.
+    pub current_password: Option<String>,
     pub is_admin: Option<bool>,
     pub lang: Option<String>,
 }
 
+/// Changes a user's password, admin role or language.
+///
+/// Changing your OWN password needs `current_password`. A session is a weaker credential than
+/// the password: it sits in a browser that may be left open on a shared computer, and an API
+/// token reaches this route too. Without the check, whoever holds either could set a password
+/// of their choosing -- which also ends every other session and token, locking the owner out of
+/// their own account. Missing and wrong are refused alike with `AppError::WrongPassword`.
+///
+/// Every such attempt spends the same allowance a login does, per address and per username:
+/// checking a guess here is checking a password, and without the limit a stolen session would
+/// be an unthrottled oracle for it. The attempt is counted before anything is verified, so the
+/// right answer is refused too once the allowance is spent -- exactly as at the login form.
+///
+/// An admin resetting SOMEONE ELSE's password is not asked for anything: the admin does not
+/// know it, and resetting it is the whole point.
 async fn update(
     me: AuthUser,
     State(state): State<App>,
     Path(id): Path<i64>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     jar: CookieJar,
     Json(body): Json<UpdateUser>,
@@ -109,6 +129,19 @@ async fn update(
     if let Some(l) = &body.lang {
         if !matches!(l.as_str(), "en" | "de") {
             return Err(AppError::BadRequest("lang must be en or de".into()));
+        }
+    }
+    if body.password.is_some() && me.id == id {
+        auth::check_login_rate(&state, auth::client_ip(&state, &headers, peer))?;
+        auth::check_username_rate(&state, &me.username)?;
+        let current = body.current_password.as_deref().unwrap_or("");
+        if current.is_empty() {
+            return Err(AppError::WrongPassword);
+        }
+        let (stored,): (String,) = sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
+            .bind(id).fetch_one(&state.db).await?;
+        if !auth::verify_password(current, &stored).await {
+            return Err(AppError::WrongPassword);
         }
     }
 

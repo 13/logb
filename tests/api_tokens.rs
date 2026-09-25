@@ -248,7 +248,7 @@ async fn changing_a_password_revokes_every_token() {
 
     let me: serde_json::Value = app.client.get(app.url("/auth/me")).send().await.unwrap().json().await.unwrap();
     let res = app.client.patch(app.url(&format!("/users/{}", me["id"].as_i64().unwrap())))
-        .json(&json!({ "password": "a different horse" })).send().await.unwrap();
+        .json(&json!({ "password": "a different horse", "current_password": "correct horse" })).send().await.unwrap();
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
 
     assert_eq!(

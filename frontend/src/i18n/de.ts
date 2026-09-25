@@ -471,6 +471,8 @@ export default {
   'settings.logout-all-hint': 'Ein Passwortwechsel beendet bereits alle anderen Sitzungen.',
   'settings.logout-all-confirm': 'Auf allen Geräten abmelden, dieses eingeschlossen?',
   'settings.change-password': 'Passwort ändern',
+  'settings.current-password': 'Aktuelles Passwort',
+  'settings.wrong-password': 'Das ist nicht dein aktuelles Passwort.',
   'settings.data': 'Daten',
   'settings.export': 'Alles exportieren (zip)',
   'settings.export-exclude-body': 'Körpergewicht ausschließen',
