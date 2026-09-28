@@ -7,7 +7,7 @@
 import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, removeQueuedObject, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
-import { api, isOurs, outboxUser, sendGateOpen, upload } from './api';
+import { api, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
 
 let store: OutboxStore = idbStore();
 
@@ -37,7 +37,10 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   // claim. The op belongs to whoever was signed in when the user made it.
   const userId = outboxUser() ?? undefined;
   try {
-    return await api<T>('POST', path, { ...body, client_op_id: id });
+    // A timeout lands in the catch below like a dropped connection and queues the op. The
+    // request may still have reached the server; the replay carries the same `client_op_id`, and
+    // the server answers a repeat with the row the first one made (src/api/activities/write.rs).
+    return await api<T>('POST', path, { ...body, client_op_id: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     // A 401 is a rejection the user can undo by logging back in, so the write is queued rather
     // than thrown away -- the same reasoning `replay` applies to an op that meets an expired
@@ -64,7 +67,8 @@ export async function createObjectQueued<T>(body: Record<string, unknown>, tempI
   const id = newOpId();
   const userId = outboxUser() ?? undefined;
   try {
-    return await api<T>('POST', '/objects', { ...body, client_uuid: id });
+    // Timeout: see createQueued. A repeated `client_uuid` answers with the first attempt's row.
+    return await api<T>('POST', '/objects', { ...body, client_uuid: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
@@ -79,7 +83,8 @@ export async function createObjectQueued<T>(body: Record<string, unknown>, tempI
 export async function createReminderQueued<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
   const id = newOpId();
   const userId = outboxUser() ?? undefined;
-  try { return await api<T>('POST', path, { ...body, client_uuid: id }); }
+  // Timeout: see createQueued. A repeated `client_uuid` answers with the first attempt's row.
+  try { return await api<T>('POST', path, { ...body, client_uuid: id }, SAVE_TIMEOUT_MS); }
   catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
@@ -108,7 +113,9 @@ export async function updateQueued(path: string, body: Record<string, unknown>):
   // Before the request, for the same reason as in `createQueued`.
   const userId = outboxUser() ?? undefined;
   try {
-    await api('PATCH', path, body);
+    // Timeout: see createQueued. If the timed-out PATCH did land, the server stamped it with its
+    // own later clock, so the replay's older `edited_at` loses to it and changes nothing.
+    await api('PATCH', path, body, SAVE_TIMEOUT_MS);
     return true;
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
@@ -300,22 +307,26 @@ async function doFlushOutbox(): Promise<void> {
         const out = await upload<{ id: number }>(op.path, form);
         return out ?? null;
       }
+      // The JSON sends below get the same deadline as a first attempt (see `SAVE_TIMEOUT_MS`):
+      // a request that never answers would otherwise hold this pass, and every flush that joins
+      // it, for as long as the connection takes to die. A timeout is an ordinary retryable
+      // failure, and each of these is safe to repeat for the reasons given where it was queued.
       if (op.kind === 'activity.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id }, SAVE_TIMEOUT_MS);
         return out ?? null;
       }
       if (op.kind === 'object.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
         return out ?? null;
       }
       if (op.kind === 'reminder.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
         return out ?? null;
       }
       if (op.kind === 'activity.update') {
         // Replaying it twice is harmless: the second arrives with the same `edited_at`, which
         // does not beat the clock the first one left behind, so nothing changes.
-        await api('PATCH', op.path, op.body);
+        await api('PATCH', op.path, op.body, SAVE_TIMEOUT_MS);
         return null;
       }
       // A kind this function has no send path for at all (e.g. a queued 'reminder.done',
