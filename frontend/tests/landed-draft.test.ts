@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cancelQueuedActivity, cancelQueuedObject, createObjectQueued, createQueued, flushOutbox, pendingActivityOps, pendingObjectOps, setOutboxStoreForTesting, updateQueuedActivity, updateQueuedObject } from '../src/lib/api-outbox';
+import { cancelQueuedActivity, cancelQueuedObject, createObjectQueued, createQueued, flushOutbox, pendingActivityOps, pendingObjectOps, setOutboxStoreForTesting, updateQueuedActivity, updateQueuedObject, uploadQueued } from '../src/lib/api-outbox';
 import { setOutboxUser } from '../src/lib/api';
 import { enqueue, memoryStore, type OutboxStore } from '../src/lib/outbox';
 
@@ -176,5 +176,65 @@ describe('a draft whose create may have landed before it was queued', () => {
     expect((await pendingObjectOps()).map((o) => o.tempId)).toEqual([]);
     await flushOutbox();
     expect([...server.rows.values()].map((r) => r.name)).toEqual(['Road bike']);
+  });
+});
+
+/**
+ * A pass lands the draft's create but tells the form only when the pass ends, which can be a
+ * long upload later. A photo picked in between still names the draft by its temp id: it was
+ * queued without trying the network, and -- the create's rewrite of its children having
+ * already run -- the next pass parked it dead as an orphan.
+ */
+describe('a photo picked after its draft landed but before the form heard', () => {
+  let store: OutboxStore;
+  let releaseUpload: () => void;
+  let sent: Array<{ url: string; activityId: string | null }>;
+
+  beforeEach(() => {
+    setOutboxUser(1);
+    store = memoryStore();
+    setOutboxStoreForTesting(store);
+    sent = [];
+    let uploads = 0;
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.body instanceof FormData) {
+        sent.push({ url, activityId: init.body.get('activity_id') as string | null });
+        // The first upload is the slow one that keeps the pass open; later ones answer at once.
+        if (uploads++ === 0) return new Promise<Response>((resolve) => { releaseUpload = () => resolve(jsonResponse(201, { id: 500 })); });
+        return jsonResponse(201, { id: 501 });
+      }
+      return jsonResponse(201, { id: 55, created_at: '2026-09-28T10:00:00Z' });
+    }) as unknown as typeof fetch;
+  });
+
+  async function landDraftAndHoldPass(tempId: number): Promise<{ pass: Promise<void> }> {
+    await enqueue(store, { id: 'draft', kind: 'activity.create', path: '/objects/2/activities', tempId, body: { title: 'x' }, attempts: 0 });
+    await enqueue(store, { id: 'photo', kind: 'attachment.upload', path: '/objects/2/attachments', body: { activity_id: tempId }, blob: new Blob(['x']), filename: 'a.jpg', attempts: 0 });
+    const pass = flushOutbox();
+    await vi.waitFor(() => expect(sent).toHaveLength(1)); // the draft landed; its photo is going up
+    return { pass }; // wrapped: an async function returning the promise itself would wait for it
+  }
+
+  it('sends it straight to the landed row', async () => {
+    const { pass } = await landDraftAndHoldPass(-201);
+
+    const out = await uploadQueued<{ id: number }>('/objects/2/attachments', new Blob(['y']), 'b.jpg', -201);
+    expect(out).toEqual({ id: 501 });
+    expect(sent[1]).toEqual({ url: '/api/objects/2/attachments', activityId: '55' });
+
+    releaseUpload();
+    await pass;
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('sends one queued under the temp id anyway to the landed row, rather than parking it dead', async () => {
+    const { pass } = await landDraftAndHoldPass(-202);
+    await enqueue(store, { id: 'late', kind: 'attachment.upload', path: '/objects/2/attachments', body: { activity_id: -202 }, blob: new Blob(['y']), filename: 'b.jpg', attempts: 0 });
+
+    releaseUpload();
+    await pass;
+    await flushOutbox();
+    expect(sent.at(-1)).toEqual({ url: '/api/objects/2/attachments', activityId: '55' });
+    expect(await store.all()).toHaveLength(0);
   });
 });

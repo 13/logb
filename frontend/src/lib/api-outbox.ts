@@ -156,6 +156,9 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
   const id = newOpId();
   const userId = outboxUser() ?? undefined; // see createQueued: read before the request, not after
 
+  // A pass in this tab may have landed the parent already without the form having heard yet
+  // (see `landedDrafts`); the temp id's children were rewritten then, so this one must be too.
+  if (activityId !== undefined && activityId < 0) activityId = landedDrafts.get(activityId) ?? activityId;
   const body: Record<string, unknown> = activityId === undefined ? {} : { activity_id: activityId };
   const activityIsReal = activityId === undefined || activityId >= 0;
   if (activityIsReal) {
@@ -171,7 +174,13 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
     }
   }
   try {
-    await enqueue(store, { id, kind: 'attachment.upload', path, body, blob: file, filename, attempts: 0, userId });
+    // Under the store lock, and checked again in there: a pass landing the parent between the
+    // check above and this write has either rewritten the queued upload by now, or not yet
+    // taken the lock for that -- and then `landedDrafts` already has it (see `sendCreate`).
+    await outboxLock.run(async () => {
+      const real = typeof body.activity_id === 'number' ? landedDrafts.get(body.activity_id) : undefined;
+      await enqueue(store, { id, kind: 'attachment.upload', path, body: real === undefined ? body : { activity_id: real }, blob: file, filename, attempts: 0, userId });
+    });
   } catch {
     // See the matching comment in createQueued: neither the server nor the local queue has
     // this write, so the caller must be told rather than treating the file as saved.
@@ -280,7 +289,8 @@ async function underOpLocks<T>(touches: (op: QueuedOp) => boolean, fn: () => Pro
  * Temp id -> real id for every draft create this tab's passes have landed. A pass reports its
  * resolutions to `onOutboxFlushed` only when it ends, which can be a long upload later; a Save
  * in the meantime still names the draft by its temp id, finds no queued create left to fold
- * into, and looks the real row up here instead (see `updateQueuedActivity`).
+ * into, and looks the real row up here instead (see `updateQueuedActivity`). So does a photo
+ * picked meanwhile (`uploadQueued`).
  */
 const landedDrafts = new Map<number, number>();
 
@@ -382,7 +392,10 @@ async function doFlushOutbox(): Promise<void> {
           // stopping every healthy op behind it.
           throw new ApiError(422, 'outbox_missing_file', 'queued upload has no file');
         }
-        const activityId = op.body.activity_id;
+        let activityId = op.body.activity_id;
+        // Queued under a temp id that a pass in this tab has since landed, after that pass had
+        // rewritten the create's children (see `landedDrafts`): the row is there to attach to.
+        if (typeof activityId === 'number' && activityId < 0) activityId = landedDrafts.get(activityId) ?? activityId;
         if (typeof activityId === 'number' && activityId < 0) {
           // A negative id is a placeholder for an `activity.create` that has never reached the
           // server -- sending it verbatim is a guaranteed 404. `replay` processes ops in queue
