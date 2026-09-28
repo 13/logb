@@ -235,6 +235,11 @@ impl Sweeper {
             );
             return Ok(swept);
         }
+        // Whatever commit stopped naming these files has to be on disk before they go: see
+        // `db::sync_committed`. On a quiet instance a day-old commit can still be unsynced.
+        if !unreferenced.is_empty() {
+            db::sync_committed(&mut tx, state.backend).await?;
+        }
         let mut seen = HashMap::new();
         for c in unreferenced {
             let first = self.unreferenced_since.get(&c.path).copied().unwrap_or(now);

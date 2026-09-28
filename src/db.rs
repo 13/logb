@@ -114,13 +114,19 @@ pub(crate) const WRITE_WAIT: std::time::Duration = std::time::Duration::from_sec
 /// simply stops happening, and the first sign is an attachment that outlived its object.
 /// PostgreSQL enforces foreign keys always and has no equivalent to set.
 ///
+/// `synchronous = NORMAL` is SQLite's own recommendation under WAL. The FULL default fsyncs the
+/// WAL on every commit, which on slow storage (an SD card, a NAS, a network volume) is most of
+/// what a save costs. NORMAL syncs at checkpoints instead: the database cannot be corrupted
+/// either way, and the most a power cut can lose is the last few commits before it.
+///
 /// The busy timeout is a parameter only because the two callers have always differed: the
 /// server waits five seconds for a writer, while the one-shot `--backup` connection waits
 /// thirty, since it is competing with a live instance and has nothing else to do.
 fn after_connect(url: &str, busy_timeout_ms: u32) -> Option<String> {
     url.starts_with("sqlite:").then(|| {
         format!(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = {busy_timeout_ms}"
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; \
+             PRAGMA busy_timeout = {busy_timeout_ms}"
         )
     })
 }
@@ -242,6 +248,38 @@ pub async fn begin_write_on(
         sqlx::query(lock).execute(&mut *tx).await?;
     }
     Ok(tx)
+}
+
+/// Puts every commit made so far on disk, before the caller deletes a file because a committed
+/// row stopped naming it.
+///
+/// Under `synchronous = NORMAL` (see `after_connect`) a commit reaches the WAL but is only
+/// synced at the next checkpoint, which on a quiet instance can be days away. Deleting a blob
+/// first and losing power second would bring back a row naming a blob that is gone. Syncing the
+/// WAL file persists every frame in it, so every earlier commit, whatever the checkpoint state.
+///
+/// Called with the caller's write transaction, so no new commit can slip in between this and
+/// the delete it guards. PostgreSQL makes each commit durable itself and needs nothing.
+pub async fn sync_committed(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    backend: crate::dialect::Backend,
+) -> Result<(), crate::error::AppError> {
+    if backend != crate::dialect::Backend::Sqlite {
+        return Ok(());
+    }
+    let (file,): (String,) = sqlx::query_as("SELECT file FROM pragma_database_list WHERE name = 'main'")
+        .fetch_one(&mut **tx)
+        .await?;
+    let wal = PathBuf::from(format!("{file}-wal"));
+    tokio::task::spawn_blocking(move || match std::fs::File::open(&wal) {
+        Ok(f) => f.sync_data(),
+        // No WAL means nothing is waiting in one: everything is in the database file.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    Ok(())
 }
 
 /// The two `settings` rows the app cannot run without, written on first start if absent.

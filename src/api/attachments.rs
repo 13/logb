@@ -130,6 +130,9 @@ pub async fn discard_blob(state: &App, sha: &str) -> Result<(), AppError> {
     let still_used: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE sha256 = $1 LIMIT 1")
         .bind(sha).fetch_optional(&mut *tx).await?;
     if still_used.is_none() {
+        // The commit that deleted the last row naming this hash must not be lost after the
+        // blob is: see `db::sync_committed`.
+        db::sync_committed(&mut tx, state.backend).await?;
         state.storage.remove(sha).await;
     }
     tx.rollback().await?;

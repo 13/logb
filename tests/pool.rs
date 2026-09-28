@@ -43,6 +43,9 @@ async fn the_after_connect_hook_runs_on_every_pooled_connection() {
 
         let on: i64 = sqlx::query_scalar("PRAGMA foreign_keys").fetch_one(&mut **conn).await.unwrap();
         assert_eq!(on, 1, "foreign keys are off on a pooled connection");
+
+        let sync: i64 = sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut **conn).await.unwrap();
+        assert_eq!(sync, 1, "synchronous is not NORMAL on a pooled connection");
     }
 }
 
@@ -88,10 +91,37 @@ async fn the_writer_pool_is_one_configured_connection() {
     let timeout: i64 =
         sqlx::query_scalar("PRAGMA busy_timeout").fetch_one(&mut *held).await.unwrap();
     assert_eq!(timeout, 5000, "the writer connection has no busy timeout");
+    // NORMAL, not the FULL default: every save commits on this connection, and under WAL FULL
+    // costs an fsync per commit that NORMAL defers to the checkpoint.
+    let sync: i64 =
+        sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut *held).await.unwrap();
+    assert_eq!(sync, 1, "the writer connection syncs every commit to disk");
 
     // The second acquire cannot be served while the first is held: one connection is the queue.
     let second = tokio::time::timeout(std::time::Duration::from_millis(300), writer.acquire()).await;
     assert!(second.is_err(), "a second writer connection was handed out; writes would race");
     drop(held);
     assert!(writer.acquire().await.is_ok(), "the writer connection was not returned to the pool");
+}
+
+/// Under `synchronous = NORMAL` a commit is in the WAL but not yet on disk. Code about to delete
+/// a file because a committed row no longer names it has to put that commit on disk first, or a
+/// power cut brings the row back naming a file that is gone. `sync_committed` is that step; it
+/// has to find the WAL from the connection it is given, while that connection holds the lock.
+#[tokio::test]
+async fn sync_committed_reaches_the_wal_from_inside_a_write_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}/logb.db?mode=rwc", dir.path().display());
+    let pool = logb::db::connect(&url).await.unwrap();
+    let writer = logb::db::connect_writer(&url, &pool).await.unwrap();
+    let backend = logb::dialect::Backend::of(&url);
+
+    let mut tx = logb::db::begin_write_on(&writer, backend).await.unwrap();
+    sqlx::query("INSERT INTO settings (key, value) VALUES ('probe', 'x')").execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(dir.path().join("logb.db-wal").exists(), "the commit should have gone to the WAL");
+
+    let mut tx = logb::db::begin_write_on(&writer, backend).await.unwrap();
+    logb::db::sync_committed(&mut tx, backend).await.unwrap();
+    tx.rollback().await.unwrap();
 }
