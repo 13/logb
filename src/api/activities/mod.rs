@@ -457,7 +457,8 @@ pub async fn with_attachments(
 }
 
 async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError> {
-    Ok(with_attachments(state, vec![row]).await?.pop().unwrap())
+    let attachments = attachments::for_activity(state, row.id).await?;
+    Ok(ActivityOut { activity: row, attachments })
 }
 
 pub async fn load_owned_activity(

@@ -62,6 +62,22 @@ pub async fn for_object(state: &App, object_id: i64) -> Result<Vec<AttachmentOut
     .bind(object_id).fetch_all(&state.db).await?)
 }
 
+/// One activity's attachments, for answering with that activity alone -- after a save, most
+/// often. `for_object` would read every attachment the object has to keep a handful.
+///
+/// Same INVARIANT as `for_object`: the caller has already loaded the activity through a query
+/// that filters tombstoned rows.
+pub async fn for_activity(state: &App, activity_id: i64) -> Result<Vec<AttachmentOut>, AppError> {
+    Ok(sqlx::query_as::<_, AttachmentOut>(
+        "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id, \
+         a.client_uuid, f.client_uuid AS file_uuid \
+         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.activity_id = $1 AND a.deleted_at IS NULL \
+         ORDER BY a.created_at DESC, a.id DESC",
+    )
+    .bind(activity_id).fetch_all(&state.db).await?)
+}
+
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut, AppError> {
     sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \

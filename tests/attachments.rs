@@ -91,6 +91,23 @@ async fn documents_and_activity_attachments() {
     assert_eq!(acts[0]["attachments"].as_array().unwrap().len(), 1);
     assert_eq!(acts[0]["attachments"][0]["original_name"], "invoice.pdf");
 
+    // A single activity -- read, or answered after a save -- carries its own attachment and not
+    // the object's document.
+    for res in [
+        app.client.get(app.url(&format!("/activities/{}", act["id"]))).send().await.unwrap(),
+        app.client.patch(app.url(&format!("/activities/{}", act["id"])))
+            .json(&json!({ "date": "2024-01-01", "category": "repair", "title": "Brake pads" }))
+            .send().await.unwrap(),
+    ] {
+        let status = res.status();
+        let body = res.text().await.unwrap();
+        assert_eq!(status, 200, "{body}");
+        let one: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let names: Vec<&str> = one["attachments"].as_array().unwrap().iter()
+            .map(|a| a["original_name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["invoice.pdf"]);
+    }
+
     let dl = app.client.get(app.url(&format!("/files/{}", inv["file_id"]))).send().await.unwrap();
     assert!(dl.headers()["content-disposition"].to_str().unwrap().contains("invoice.pdf"));
     assert_eq!(app.client.get(app.url(&format!("/files/{}/thumb", inv["file_id"]))).send().await.unwrap().status(), 404);
