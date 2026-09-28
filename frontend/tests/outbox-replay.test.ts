@@ -429,9 +429,10 @@ describe('flushOutbox and an unsupported op kind', () => {
  * directly against the pre-fix code: a pass's retry write-back (using the body/id it captured
  * at the TOP of the pass, before the UI write happened) landed AFTER the UI write and clobbered
  * it -- reverting an edited title back to the original on Save, and resurrecting an op Cancel
- * had already removed. `outboxLock` (`./outbox.ts`'s `createLock`, held by `doFlushOutbox` for
- * the whole pass and by `updateQueuedActivity`/`cancelQueuedActivity`) makes the two mutually
- * exclusive: a UI write can only run either fully before or fully after the pass, never interleaved.
+ * had already removed. The op's own lock (`opLocks` in ../src/lib/api-outbox.ts, held by
+ * `doFlushOutbox` across that op's send and by `updateQueuedActivity`/`cancelQueuedActivity`)
+ * makes the two mutually exclusive: a UI write runs either fully before or fully after that
+ * op's attempt, never interleaved.
  */
 describe('IMPORTANT 1: a UI write must not interleave with an in-flight replay pass', () => {
   beforeEach(() => {
@@ -962,5 +963,74 @@ describe('what a flush pass reports when it does not finish cleanly', () => {
     off();
 
     expect(seen).toEqual([true]);
+  });
+});
+
+/**
+ * Saving a draft whose create is still queued used to wait for the whole flush pass, because
+ * the pass held the outbox lock from its first send to its last -- full-size photo uploads
+ * included. Returning from the camera fires `visibilitychange`, which starts exactly such a
+ * pass, so Save routinely sat behind an upload. The pass now holds a lock per op, and only
+ * across that op's own send: a write to a DIFFERENT op goes straight through.
+ */
+describe('a save while an unrelated upload is being sent', () => {
+  let store: ReturnType<typeof memoryStore>;
+  let releaseUpload: () => void;
+  let urls: string[];
+  let jsonBodies: Array<{ url: string; body: Record<string, unknown> }>;
+
+  beforeEach(() => {
+    store = memoryStore();
+    setOutboxStoreForTesting(store);
+    urls = [];
+    jsonBodies = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      urls.push(url);
+      if (init?.body instanceof FormData) {
+        return new Promise<Response>((resolve) => { releaseUpload = () => resolve(jsonResponse(201, { id: 500 })); });
+      }
+      jsonBodies.push({ url, body: JSON.parse(init?.body as string) });
+      return jsonResponse(201, { id: 55 });
+    }) as unknown as typeof fetch;
+  });
+
+  function settles<T>(p: Promise<T>): Promise<T | 'still waiting'> {
+    return Promise.race([p, new Promise<'still waiting'>((r) => setTimeout(() => r('still waiting'), 50))]);
+  }
+
+  it('folds the edit into its own queued create without waiting for the upload', async () => {
+    await enqueue(store, { id: 'photo', kind: 'attachment.upload', path: '/objects/1/attachments', body: { activity_id: 7 }, blob: new Blob(['x']), filename: 'a.jpg', attempts: 0 });
+    await enqueue(store, { id: 'draft', kind: 'activity.create', path: '/objects/2/activities', tempId: -1, body: { title: 'old' }, attempts: 0 });
+
+    const pass = flushOutbox();
+    await vi.waitFor(() => expect(urls).toEqual(['/api/objects/1/attachments'])); // the upload is in flight
+
+    expect(await settles(updateQueuedActivity(-1, { title: 'new' }))).toBe(true);
+    expect(await settles(cancelQueuedActivity(-9))).toBe(false); // nothing to cancel, and no wait either
+
+    releaseUpload();
+    await pass;
+    // The pass reached the create after the save, and sent what the save left there.
+    expect(jsonBodies).toHaveLength(1);
+    expect(jsonBodies[0].body.title).toBe('new');
+    expect(await store.all()).toHaveLength(0);
+  });
+
+  it('sends the edit to the real row when this very pass already landed the draft', async () => {
+    // The ordinary camera case: the draft's create goes first and lands, and its photo is then
+    // the slow upload. The form still knows the draft by its temp id -- the pass reports the
+    // resolution only when it ends -- so the save has to find the real row on its own.
+    await enqueue(store, { id: 'draft', kind: 'activity.create', path: '/objects/2/activities', tempId: -1, body: { title: 'old' }, attempts: 0 });
+    await enqueue(store, { id: 'photo', kind: 'attachment.upload', path: '/objects/2/attachments', body: { activity_id: -1 }, blob: new Blob(['x']), filename: 'a.jpg', attempts: 0 });
+
+    const pass = flushOutbox();
+    await vi.waitFor(() => expect(urls).toEqual(['/api/objects/2/activities', '/api/objects/2/attachments']));
+
+    expect(await settles(updateQueuedActivity(-1, { title: 'new' }))).toBe(true);
+    expect(jsonBodies[1]).toEqual({ url: '/api/activities/55', body: { title: 'new' } });
+
+    releaseUpload();
+    await pass;
+    expect(await store.all()).toHaveLength(0);
   });
 });

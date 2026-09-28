@@ -4,10 +4,10 @@
  * stale-response tracking and the session hooks. Everything here is re-exported from `api.ts`,
  * so callers import from there as before.
  */
-import { createLock, enqueue, newOpId, pendingCount, removeQueuedActivity, removeQueuedObject, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
+import { createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, newOpId, pendingCount, removeQueuedActivity, removeQueuedObject, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
-import { api, isOurs, outboxUser, sendGateOpen, upload } from './api';
+import { api, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
 
 let store: OutboxStore = idbStore();
 
@@ -37,7 +37,10 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   // claim. The op belongs to whoever was signed in when the user made it.
   const userId = outboxUser() ?? undefined;
   try {
-    return await api<T>('POST', path, { ...body, client_op_id: id });
+    // A timeout lands in the catch below like a dropped connection and queues the op. The
+    // request may still have reached the server; the replay carries the same `client_op_id`, and
+    // the server answers a repeat with the row the first one made (src/api/activities/write.rs).
+    return await api<T>('POST', path, { ...body, client_op_id: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     // A 401 is a rejection the user can undo by logging back in, so the write is queued rather
     // than thrown away -- the same reasoning `replay` applies to an op that meets an expired
@@ -64,7 +67,8 @@ export async function createObjectQueued<T>(body: Record<string, unknown>, tempI
   const id = newOpId();
   const userId = outboxUser() ?? undefined;
   try {
-    return await api<T>('POST', '/objects', { ...body, client_uuid: id });
+    // Timeout: see createQueued. A repeated `client_uuid` answers with the first attempt's row.
+    return await api<T>('POST', '/objects', { ...body, client_uuid: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
@@ -79,7 +83,8 @@ export async function createObjectQueued<T>(body: Record<string, unknown>, tempI
 export async function createReminderQueued<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
   const id = newOpId();
   const userId = outboxUser() ?? undefined;
-  try { return await api<T>('POST', path, { ...body, client_uuid: id }); }
+  // Timeout: see createQueued. A repeated `client_uuid` answers with the first attempt's row.
+  try { return await api<T>('POST', path, { ...body, client_uuid: id }, SAVE_TIMEOUT_MS); }
   catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
@@ -108,7 +113,9 @@ export async function updateQueued(path: string, body: Record<string, unknown>):
   // Before the request, for the same reason as in `createQueued`.
   const userId = outboxUser() ?? undefined;
   try {
-    await api('PATCH', path, body);
+    // Timeout: see createQueued. If the timed-out PATCH did land, the server stamped it with its
+    // own later clock, so the replay's older `edited_at` loses to it and changes nothing.
+    await api('PATCH', path, body, SAVE_TIMEOUT_MS);
     return true;
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
@@ -218,17 +225,54 @@ async function queueSnapshot(): Promise<string> {
  * Shared with `updateQueuedActivity` and `cancelQueuedActivity` below (see `createLock` in
  * `./outbox.ts`) so a replay pass and a UI write against the SAME queued op can never
  * interleave: whichever gets there first runs to completion -- read, act, write back -- before
- * the other is allowed to touch the store at all. IMPORTANT 1: without this, a Save or Cancel
- * fired while a pass's `send()` is in flight raced the pass's own eventual write-back and lost
- * -- the pass, snapshotting the op before the UI write happened, would win by writing back
- * exactly what the user had just changed or removed, moments after telling them it worked.
+ * the other is allowed to touch it at all. IMPORTANT 1: without this, a Save or Cancel fired
+ * while a pass's `send()` is in flight raced the pass's own eventual write-back and lost -- the
+ * pass, snapshotting the op before the UI write happened, would win by writing back exactly
+ * what the user had just changed or removed, moments after telling them it worked.
  *
- * Named, so the lock spans TABS as well as callers: the store it guards is IndexedDB, which
+ * Two locks, not one (see `ReplayLocks` in `./outbox.ts`): `outboxLock` for each short
+ * read-act-write of the store, and `opLocks` per op, held across that op's send. The pass used
+ * to hold a single lock from its first send to its last, so a Save waited behind every
+ * full-size photo upload in the queue -- and returning from the camera starts exactly such a
+ * pass. Now a UI write waits only while the pass is sending the very op it touches.
+ *
+ * Named, so the locks span TABS as well as callers: the store they guard is IndexedDB, which
  * every same-origin tab shares, so a second tab replaying the same queue reproduces the same
- * interleaving between tabs that this lock closes within one. On a browser with no Web Locks
- * API the name is inert and the exclusion stays tab-local, as it was before (see `createLock`).
+ * interleaving between tabs that these close within one. On a browser with no Web Locks API the
+ * names are inert and the exclusion stays tab-local, as it was before (see `createLock`).
  */
 const outboxLock = createLock('logb-outbox');
+const opLocks = createKeyedLock('logb-outbox-op');
+
+/**
+ * Runs a UI write to queued ops holding the lock of every op it `touches`, then the store lock
+ * -- the same order `replay` takes them in. The ops are found first and locked second, so an op
+ * that starts matching in between (queued meanwhile) sends the whole thing round again rather
+ * than being written unlocked.
+ */
+async function underOpLocks<T>(touches: (op: QueuedOp) => boolean, fn: () => Promise<T>): Promise<T> {
+  for (;;) {
+    const ids = (await outboxLock.run(() => store.all())).filter(touches).map((o) => o.id).sort();
+    type Outcome = { done: true; value: T } | { done: false };
+    const locked = ids.reduceRight<() => Promise<Outcome>>(
+      (inner, id) => () => opLocks.run(id, inner),
+      () => outboxLock.run(async (): Promise<Outcome> => {
+        if ((await store.all()).some((o) => touches(o) && !ids.includes(o.id))) return { done: false };
+        return { done: true, value: await fn() };
+      }),
+    );
+    const outcome = await locked();
+    if (outcome.done) return outcome.value;
+  }
+}
+
+/**
+ * Temp id -> real id for every draft create this tab's passes have landed. A pass reports its
+ * resolutions to `onOutboxFlushed` only when it ends, which can be a long upload later; a Save
+ * in the meantime still names the draft by its temp id, finds no queued create left to fold
+ * into, and looks the real row up here instead (see `updateQueuedActivity`).
+ */
+const landedDrafts = new Map<number, number>();
 
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
@@ -254,7 +298,7 @@ async function doFlushOutbox(): Promise<void> {
     // is the one `loadSession` fires once the real session check succeeds.
     if (outboxUser() === null || !sendGateOpen()) { completed = true; changed = false; return; }
     before = await queueSnapshot();
-    resolved = await outboxLock.run(() => replay(store, async (op: QueuedOp) => {
+    resolved = await replay(store, async (op: QueuedOp) => {
       if (!isOurs(op)) {
         // Someone else's queued write, waiting for them to sign back in on this device. Sending
         // it under the current session would get it refused on ownership and parked dead --
@@ -300,22 +344,27 @@ async function doFlushOutbox(): Promise<void> {
         const out = await upload<{ id: number }>(op.path, form);
         return out ?? null;
       }
+      // The JSON sends below get the same deadline as a first attempt (see `SAVE_TIMEOUT_MS`):
+      // a request that never answers would otherwise hold this pass, and every flush that joins
+      // it, for as long as the connection takes to die. A timeout is an ordinary retryable
+      // failure, and each of these is safe to repeat for the reasons given where it was queued.
       if (op.kind === 'activity.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id }, SAVE_TIMEOUT_MS);
+        if (op.tempId !== undefined && out) landedDrafts.set(op.tempId, out.id);
         return out ?? null;
       }
       if (op.kind === 'object.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
         return out ?? null;
       }
       if (op.kind === 'reminder.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id });
+        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
         return out ?? null;
       }
       if (op.kind === 'activity.update') {
         // Replaying it twice is harmless: the second arrives with the same `edited_at`, which
         // does not beat the clock the first one left behind, so nothing changes.
-        await api('PATCH', op.path, op.body);
+        await api('PATCH', op.path, op.body, SAVE_TIMEOUT_MS);
         return null;
       }
       // A kind this function has no send path for at all (e.g. a queued 'reminder.done',
@@ -323,7 +372,7 @@ async function doFlushOutbox(): Promise<void> {
       // it exactly like a permanent server rejection: park it dead and let the pass continue,
       // rather than head-of-line-blocking every op behind it (see `replay` in ./outbox.ts).
       throw new ApiError(422, 'outbox_unsupported_kind', `flushOutbox: op kind "${op.kind}" has no send path`);
-    }));
+    }, { store: outboxLock.run, op: opLocks.run });
     completed = true;
   } finally {
     // Computed here, not after `replay` returns: a pass can throw AFTER it has already sent and
@@ -404,11 +453,11 @@ export async function pendingObjectOps(): Promise<QueuedOp[]> {
 }
 
 export async function updateQueuedObject(tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  return outboxLock.run(() => updateQueuedObjectBody(store, tempId, body));
+  return underOpLocks(isQueuedObject(tempId), () => updateQueuedObjectBody(store, tempId, body));
 }
 
 export async function cancelQueuedObject(tempId: number): Promise<boolean> {
-  return outboxLock.run(() => removeQueuedObject(store, tempId));
+  return underOpLocks(isQueuedUnderObject(tempId), () => removeQueuedObject(store, tempId));
 }
 
 /**
@@ -421,31 +470,38 @@ export async function cancelQueuedObject(tempId: number): Promise<boolean> {
  * "drop any queued upload for this activity" when cancelling an already-synced row. Returns
  * whether anything was actually removed.
  *
- * Runs under `outboxLock` (IMPORTANT 1), the same lock `doFlushOutbox` holds for the whole of
- * its replay pass: without it, Cancel racing an in-flight `send()` could report the op removed
+ * Runs under the locks of the ops it removes (IMPORTANT 1), which `doFlushOutbox` holds while it
+ * sends each one: without them, Cancel racing an in-flight `send()` could report the op removed
  * and then have the pass's own retry write-back, moments later, RESURRECT it -- the exact stray
- * entry this function exists to prevent. Waiting for the pass to finish before this ever reads
+ * entry this function exists to prevent. Waiting for that send to finish before this ever reads
  * the store means it always removes whatever the pass actually left behind, never something the
  * pass is about to overwrite.
  */
 export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
-  return outboxLock.run(() => removeQueuedActivity(store, tempId));
+  return underOpLocks(isQueuedUnderActivity(tempId), () => removeQueuedActivity(store, tempId));
 }
 
 /**
  * Folds a further edit into a draft's still-queued `activity.create` (identified by its temp
  * id) instead of sending a PATCH the server has no row for yet. See `updateQueuedActivityBody`
- * in `./outbox.ts`. Returns whether a live op was actually found and rewritten.
+ * in `./outbox.ts`. If a pass in this tab has already landed that create, the edit goes to the
+ * real row through `updateQueued` instead. Returns whether the edit went anywhere at all:
+ * false only when there is neither a live op nor a known row to give it to.
  *
- * Runs under `outboxLock` (IMPORTANT 1), the same lock `doFlushOutbox` holds for the whole of
- * its replay pass: without it, Save racing an in-flight `send()` could report the edit folded
- * in and navigate away, and then have the pass's own retry write-back, moments later, overwrite
+ * Runs under the lock of the op it rewrites (IMPORTANT 1), which `doFlushOutbox` holds while it
+ * sends that op: without it, Save racing an in-flight `send()` could report the edit folded in
+ * and navigate away, and then have the pass's own retry write-back, moments later, overwrite
  * that edit with the stale body the in-flight request was actually sent with -- reverting a
- * save the user was just told succeeded. Waiting for the pass to finish before this ever writes
- * means it always lands on top of whatever the pass actually did, never underneath it.
+ * save the user was just told succeeded. Waiting for that send to finish before this ever
+ * writes means it always lands on top of whatever the pass actually did, never underneath it.
+ * The send of any OTHER op -- a photo upload, typically -- does not hold it up.
  */
 export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  return outboxLock.run(() => updateQueuedActivityBody(store, tempId, body));
+  if (await underOpLocks(isQueuedActivity(tempId), () => updateQueuedActivityBody(store, tempId, body))) return true;
+  const real = landedDrafts.get(tempId);
+  if (real === undefined) return false;
+  await updateQueued(`/activities/${real}`, body);
+  return true;
 }
 
 /**

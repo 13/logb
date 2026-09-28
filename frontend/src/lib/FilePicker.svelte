@@ -4,12 +4,14 @@
   import { uploadQueued } from './api';
   import { newOpId } from './outbox';
   import { hashToNegativeId } from './activity-form';
+  import { shrinkImage } from './downscale';
   import { t } from '../i18n';
   import Icon from './Icon.svelte';
   import type { Attachment, Kind } from './types';
 
-  let { objectId, activityId = null, onuploaded }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void } = $props();
-  let busy = $state(false);
+  /** `busy` is bindable so a form can hold its Save while the files picked here are still going
+   *  up: leaving the form mid-upload gave no sign of whether the photo ever made it. */
+  let { objectId, activityId = null, onuploaded, busy = $bindable(false) }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void; busy?: boolean } = $props();
   let error = $state('');
   let el: HTMLInputElement;
   let cam: HTMLInputElement;
@@ -31,8 +33,11 @@
     if (!files || files.length === 0) return;
     busy = true; error = '';
     try {
-      for (const f of Array.from(files)) {
-        const kind: Kind = f.type.startsWith('image/') ? 'photo' : 'document';
+      for (const picked of Array.from(files)) {
+        const kind: Kind = picked.type.startsWith('image/') ? 'photo' : 'document';
+        // A full-size phone photo was most of what Save waited on; see ./downscale.ts. Before
+        // the outbox, so a queued photo is the small one too.
+        const f = await shrinkImage(picked);
         // `uploadQueued` mints its own `client_op_id` per call (see ./api.ts), so each file in
         // a multi-file selection still gets its own -- unchanged from before this switched
         // from the plain `upload()`.

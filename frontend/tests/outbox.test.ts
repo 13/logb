@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compareQueueOrder, createLock, memoryStore, newOpId, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
+import { compareQueueOrder, createKeyedLock, createLock, memoryStore, newOpId, enqueue, removeQueuedActivity, replay, pendingCount, serialize, updateQueuedActivityBody, type QueuedOp } from '../src/lib/outbox';
 import { ApiError } from '../src/lib/api-error';
 
 const op = (id: string, over: Partial<QueuedOp> = {}): QueuedOp =>
@@ -461,6 +461,30 @@ describe('createLock across tabs', () => {
     releaseFirst();
     await waiting;
     expect(order[0]).toBe('waiting');
+  });
+});
+
+describe('createKeyedLock', () => {
+  it('lets different keys run at once but never two holders of one key, even across tabs', async () => {
+    const manager = fakeLockManager();
+    const tabA = createKeyedLock('logb-outbox-op', manager);
+    const tabB = createKeyedLock('logb-outbox-op', manager);
+    const order: string[] = [];
+    let releaseUpload!: () => void;
+
+    const upload = tabA.run('photo', () => new Promise<void>((resolve) => {
+      order.push('photo-start');
+      releaseUpload = () => { order.push('photo-end'); resolve(); };
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    await tabA.run('draft', async () => { order.push('draft'); }); // not behind the upload
+    const again = tabB.run('photo', async () => { order.push('photo-again'); });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['photo-start', 'draft']);
+    releaseUpload();
+    await Promise.all([upload, again]);
+    expect(order).toEqual(['photo-start', 'draft', 'photo-end', 'photo-again']);
   });
 });
 
