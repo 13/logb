@@ -4,10 +4,10 @@
  * stale-response tracking and the session hooks. Everything here is re-exported from `api.ts`,
  * so callers import from there as before.
  */
-import { createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, newOpId, pendingCount, removeQueuedActivity, removeQueuedObject, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
+import { cancelQueuedActivityOps, cancelQueuedObjectOps, createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, mayLeaveDevice, newOpId, pendingCount, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
-import { api, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
+import { api, apiWithStatus, editedAtNow, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
 
 let store: OutboxStore = idbStore();
 
@@ -36,10 +36,13 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   // the write would land in the queue untagged, free for the next person on the device to
   // claim. The op belongs to whoever was signed in when the user made it.
   const userId = outboxUser() ?? undefined;
+  const leaves = mayLeaveDevice();
   try {
     // A timeout lands in the catch below like a dropped connection and queues the op. The
     // request may still have reached the server; the replay carries the same `client_op_id`, and
-    // the server answers a repeat with the row the first one made (src/api/activities/write.rs).
+    // the server answers a repeat with the row the first one made (src/api/activities/write.rs)
+    // -- that row as it was, so the op records that it may exist (`maybeLanded`) for a later
+    // edit or cancel of the draft to reach it (see `doFlushOutbox`).
     return await api<T>('POST', path, { ...body, client_op_id: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     // A 401 is a rejection the user can undo by logging back in, so the write is queued rather
@@ -49,7 +52,7 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
     // handler navigates to /login, and the entry existed nowhere else.
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
-      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0, userId });
+      await enqueue(store, { id, kind: 'activity.create', path, body, tempId, attempts: 0, userId, ...landedIf(leaves, e) });
     } catch {
       // The write reached neither the server nor the local queue: nothing durable remembers
       // it any more, so the caller must be told rather than navigating away as though the
@@ -61,18 +64,25 @@ export async function createQueued<T>(path: string, body: Record<string, unknown
   }
 }
 
+/** A failed create may have landed unless the device had no network when it was sent, or the
+ *  server answered it with a refusal (a 401, queued all the same). See `QueuedOp.maybeLanded`. */
+function landedIf(leaves: boolean, e: unknown): { maybeLanded?: true } {
+  return leaves && !isRejection(e) ? { maybeLanded: true } : {};
+}
+
 /** Creates an object durably while offline. Objects use `client_uuid` for idempotency (activity
  * creates use `client_op_id`), so this has its own small wrapper and replay kind. */
 export async function createObjectQueued<T>(body: Record<string, unknown>, tempId: number): Promise<T | null> {
   const id = newOpId();
   const userId = outboxUser() ?? undefined;
+  const leaves = mayLeaveDevice();
   try {
     // Timeout: see createQueued. A repeated `client_uuid` answers with the first attempt's row.
     return await api<T>('POST', '/objects', { ...body, client_uuid: id }, SAVE_TIMEOUT_MS);
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
     try {
-      await enqueue(store, { id, kind: 'object.create', path: '/objects', body, tempId, attempts: 0, userId });
+      await enqueue(store, { id, kind: 'object.create', path: '/objects', body, tempId, attempts: 0, userId, ...landedIf(leaves, e) });
     } catch {
       throw new Error('outbox.queue-failed');
     }
@@ -274,6 +284,64 @@ async function underOpLocks<T>(touches: (op: QueuedOp) => boolean, fn: () => Pro
  */
 const landedDrafts = new Map<number, number>();
 
+type CreatedRow = { id: number; created_at?: string };
+
+/**
+ * Replays a draft's create, then whatever became of the draft since the create was first sent.
+ * That send may have landed (`QueuedOp.maybeLanded`), and the replay's repeated idempotency key
+ * is then answered with the row it made, as it was -- 200 rather than 201 (see `apiWithStatus`).
+ * So an edit folded into the queued body afterwards (`foldedAt`) goes to that row as a PATCH,
+ * and a cancelled draft (`cancelled`) is created only to learn its id and then deleted. Every
+ * step is safe to repeat, so a failure part-way through just leaves the op to be retried whole.
+ */
+async function sendCreate(
+  op: QueuedOp,
+  body: Record<string, unknown>,
+  rowPath: (id: number) => string,
+  editBody: (row: CreatedRow) => Record<string, unknown>,
+): Promise<CreatedRow | null> {
+  let answer: { status: number; body: CreatedRow };
+  try {
+    answer = await apiWithStatus<CreatedRow>('POST', op.path, body, SAVE_TIMEOUT_MS);
+  } catch (e) {
+    // Refused (a 409 because the row was since deleted, say): there is no row to take back.
+    if (op.cancelled && isRejection(e) && !isUnauthenticated(e)) return null;
+    throw e;
+  }
+  const row = answer.body;
+  if (!row) return null;
+  if (op.cancelled) {
+    await deleteRow(rowPath(row.id));
+    return null;
+  }
+  if (op.kind === 'activity.create' && op.tempId !== undefined) landedDrafts.set(op.tempId, row.id);
+  if (op.foldedAt !== undefined && answer.status === 200) {
+    await api('PATCH', rowPath(row.id), editBody(row), SAVE_TIMEOUT_MS);
+  }
+  return row;
+}
+
+/** DELETE that counts "already gone" as done. */
+async function deleteRow(path: string): Promise<void> {
+  try {
+    await api('DELETE', path, undefined, SAVE_TIMEOUT_MS);
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 404)) throw e;
+  }
+}
+
+/**
+ * The `edited_at` a folded edit is sent with: when the user made it, but never before the row
+ * it edits was made. The create stamps every field with the server's clock as it inserts (see
+ * `record_create` in src/sync/record.rs), and a create that timed out may have been inserted
+ * AFTER the edit -- a server slow enough to time out is one that can take that long. The
+ * margin is for `created_at`, which has whole seconds only; the server caps it at its own now.
+ */
+function foldStamp(foldedAt: string, createdAt: string | undefined): string {
+  const made = createdAt === undefined ? NaN : Date.parse(createdAt) + 2_000;
+  return Number.isNaN(made) || Date.parse(foldedAt) > made ? foldedAt : new Date(made).toISOString();
+}
+
 async function doFlushOutbox(): Promise<void> {
   let resolved = new Map<number, number>();
   let before: string | null = null;
@@ -349,13 +417,12 @@ async function doFlushOutbox(): Promise<void> {
       // it, for as long as the connection takes to die. A timeout is an ordinary retryable
       // failure, and each of these is safe to repeat for the reasons given where it was queued.
       if (op.kind === 'activity.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_op_id: op.id }, SAVE_TIMEOUT_MS);
-        if (op.tempId !== undefined && out) landedDrafts.set(op.tempId, out.id);
-        return out ?? null;
+        return sendCreate(op, { ...op.body, client_op_id: op.id }, (id) => `/activities/${id}`,
+          // An activity PATCH is a full body, and `edited_at` keeps it from beating a newer edit.
+          (row) => ({ ...op.body, edited_at: foldStamp(op.foldedAt!, row.created_at) }));
       }
       if (op.kind === 'object.create') {
-        const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
-        return out ?? null;
+        return sendCreate(op, { ...op.body, client_uuid: op.id }, (id) => `/objects/${id}`, () => op.body);
       }
       if (op.kind === 'reminder.create') {
         const out = await api<{ id: number }>('POST', op.path, { ...op.body, client_uuid: op.id }, SAVE_TIMEOUT_MS);
@@ -438,33 +505,35 @@ export async function outboxDeadCount(): Promise<number> {
 /** One owner-scoped queue read for a measurement history, independent of timeline filters. */
 export async function pendingActivityOps(objectId: number, activityIds: number[]): Promise<QueuedOp[]> {
   const paths = new Set(activityIds.map(id => `/activities/${id}`));
-  return (await store.all()).filter(o => !o.dead && isOurs(o) &&
+  return (await store.all()).filter(o => !o.dead && !o.cancelled && isOurs(o) &&
     ((o.kind === 'activity.create' && o.path === `/objects/${objectId}/activities`) ||
      (o.kind === 'activity.update' && paths.has(o.path))));
 }
 
 export async function pendingOpsFor(path: string): Promise<QueuedOp[]> {
-  return (await store.all()).filter((o) => !o.dead && o.path === path && isOurs(o));
+  return (await store.all()).filter((o) => !o.dead && !o.cancelled && o.path === path && isOurs(o));
 }
 
 /** Object creates waiting for this user's next successful connection, oldest first. */
 export async function pendingObjectOps(): Promise<QueuedOp[]> {
-  return (await ourStore().all()).filter((o) => !o.dead && o.kind === 'object.create');
+  return (await ourStore().all()).filter((o) => !o.dead && !o.cancelled && o.kind === 'object.create');
 }
 
 export async function updateQueuedObject(tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  return underOpLocks(isQueuedObject(tempId), () => updateQueuedObjectBody(store, tempId, body));
+  return underOpLocks(isQueuedObject(tempId), () => updateQueuedObjectBody(store, tempId, body, editedAtNow()));
 }
 
 export async function cancelQueuedObject(tempId: number): Promise<boolean> {
-  return underOpLocks(isQueuedUnderObject(tempId), () => removeQueuedObject(store, tempId));
+  return underOpLocks(isQueuedUnderObject(tempId), () => cancelQueuedObjectOps(store, tempId));
 }
 
 /**
  * Cancels a draft whose `activity.create` never reached the server -- only the outbox has it.
  * Removes that queued create and any upload still hanging off its temp id (see
- * `removeQueuedActivity` in `./outbox.ts`), so the cancel leaves nothing behind to replay
- * later. No component reaches into the store directly.
+ * `cancelQueuedActivityOps` in `./outbox.ts`), so the cancel leaves nothing behind to replay
+ * later -- except a create that may have landed after all (it timed out, say): that one stays,
+ * marked cancelled, until its replay has found the row and deleted it (see `sendCreate`). No
+ * component reaches into the store directly.
  *
  * `tempId` may also be a real activity id -- see `removeQueuedActivity` -- so this doubles as
  * "drop any queued upload for this activity" when cancelling an already-synced row. Returns
@@ -478,7 +547,7 @@ export async function cancelQueuedObject(tempId: number): Promise<boolean> {
  * pass is about to overwrite.
  */
 export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
-  return underOpLocks(isQueuedUnderActivity(tempId), () => removeQueuedActivity(store, tempId));
+  return underOpLocks(isQueuedUnderActivity(tempId), () => cancelQueuedActivityOps(store, tempId));
 }
 
 /**
@@ -497,7 +566,7 @@ export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
  * The send of any OTHER op -- a photo upload, typically -- does not hold it up.
  */
 export async function updateQueuedActivity(tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  if (await underOpLocks(isQueuedActivity(tempId), () => updateQueuedActivityBody(store, tempId, body))) return true;
+  if (await underOpLocks(isQueuedActivity(tempId), () => updateQueuedActivityBody(store, tempId, body, editedAtNow()))) return true;
   const real = landedDrafts.get(tempId);
   if (real === undefined) return false;
   await updateQueued(`/activities/${real}`, body);

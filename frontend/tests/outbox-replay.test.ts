@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { cancelQueuedActivity, createObjectQueued, createQueued, createReminderQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingObjectOps, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, outboxDeadCount } from '../src/lib/api-outbox';
+import { cancelQueuedActivity, createObjectQueued, createQueued, createReminderQueued, deadOps, flushOutbox, onOutboxFlushed, outboxPending, pendingActivityOps, pendingObjectOps, retryDead, setOutboxStoreForTesting, updateQueuedActivity, uploadQueued, outboxDeadCount } from '../src/lib/api-outbox';
 import { setOutboxUser, setUnauthorizedHandler, ApiError } from '../src/lib/api';
 import { memoryStore, enqueue } from '../src/lib/outbox';
 
@@ -503,7 +503,11 @@ describe('IMPORTANT 1: a UI write must not interleave with an in-flight replay p
     const [removed] = await Promise.all([cancelPromise, flushPromise]);
 
     expect(removed).toBe(true);
-    expect(await store.all()).toHaveLength(0); // must not come back
+    // That send may have landed, so the op stays -- but only as a cancelled one, which its
+    // replay deletes (see tests/landed-draft.test.ts), never again as the draft.
+    const left = await store.all();
+    expect(left.map((o) => o.cancelled)).toEqual([true]);
+    expect(await pendingActivityOps(1, [])).toEqual([]);
   });
 });
 

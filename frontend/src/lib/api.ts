@@ -265,6 +265,16 @@ export const SAVE_TIMEOUT_MS = 10_000;
  * succeeded.
  */
 export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+  return (await apiWithStatus<T>(method, path, body, timeoutMs)).body;
+}
+
+/**
+ * `api`, plus the status the server answered with. For a create that carries an idempotency key
+ * that is 201 when this request made the row and 200 when an earlier attempt already had (see
+ * `create` in src/api/activities/write.rs) -- which the outbox needs to tell whether an edit it
+ * folded into the queued body ever reached the row.
+ */
+export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; body: T }> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
   if (timeoutMs !== undefined) init.signal = AbortSignal.timeout(timeoutMs);
   if (body !== undefined) {
@@ -275,7 +285,17 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   const gen = routeGeneration;
   const seq = ++requestSeq;
   const res = await fetch(`/api${path}`, init);
-  return handle<T>(res, path, sentAt, gen, seq);
+  return { status: res.status, body: await handle<T>(res, path, sentAt, gen, seq) };
+}
+
+/**
+ * Now, as an `edited_at` for the server: this device's clock moved onto the server's by the
+ * skew `clockSkewMs` measured. The server compares it with stamps its own clock made (a create
+ * stamps every field), so on a device whose clock runs behind the server's, a raw `Date.now()`
+ * made an edit look older than the row it was editing -- and the server kept the row.
+ */
+export function editedAtNow(): string {
+  return new Date(Date.now() - clockSkewMs).toISOString();
 }
 
 /**

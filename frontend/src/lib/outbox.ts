@@ -46,6 +46,17 @@ export interface QueuedOp {
    *  the field `compareQueueOrder` actually sorts on; `queued_at` is only the fallback for a
    *  record written before this field existed. */
   seq?: number;
+  /** A create was sent for this op and got no answer -- a timeout, a dropped connection, a 5xx
+   *  -- so the server may hold its row already. A replay then learns only that row back (the
+   *  repeated idempotency key answers with it, unchanged), so what happens to the op afterwards
+   *  has to be sent on its own: see `foldedAt` and `cancelled`. */
+  maybeLanded?: boolean;
+  /** When a later edit was folded into this create's body (see `updateQueuedActivityBody`). A
+   *  replay that finds the row already there sends that body again as an edit. */
+  foldedAt?: string;
+  /** The draft was cancelled while its create may already have landed (`maybeLanded`): the op
+   *  stays only so its replay can find the row and delete it. Never shown as pending. */
+  cancelled?: boolean;
 }
 
 export interface OutboxStore {
@@ -133,6 +144,16 @@ export function compareQueueOrder(a: QueuedOp, b: QueuedOp): number {
  * the create it was waiting on was still live and had never even been attempted once.
  */
 export class SkipOp extends Error {}
+
+/**
+ * Whether a request about to be made could reach the server at all -- read BEFORE it is made.
+ * Only a browser that says it has no network for certain (`onLine === false`) keeps a request
+ * from leaving; a failure after that says nothing (see `isRejection` in `./api-error.ts`), so a
+ * create that fails anywhere else may have landed (see `QueuedOp.maybeLanded`).
+ */
+export function mayLeaveDevice(): boolean {
+  return globalThis.navigator?.onLine !== false;
+}
 
 /**
  * Wraps an async function so overlapping calls share one in-flight run instead of each
@@ -316,6 +337,7 @@ export async function replay(
     for (const [temporary, real] of resolved) {
       ({ path, body } = rewriteResolvedId(path, body, temporary, real));
     }
+    const leaves = mayLeaveDevice();
     try {
       const out = await send({ ...op, path, body });
       await locks.store(async () => {
@@ -349,7 +371,9 @@ export async function replay(
         return false;
       }
       const attempts = op.attempts + 1;
-      await locks.store(() => store.put({ ...op, path, body, attempts, dead: attempts >= MAX_ATTEMPTS,
+      // No answer is not "not sent": the server may have made the draft's row (see `maybeLanded`).
+      const landed = op.tempId !== undefined && leaves ? { maybeLanded: true } : {};
+      await locks.store(() => store.put({ ...op, ...landed, path, body, attempts, dead: attempts >= MAX_ATTEMPTS,
         lastError: e instanceof Error ? e.message : String(e) }));
       return true;
     }
@@ -413,13 +437,14 @@ export function rewriteResolvedId(
 /** The op `updateQueuedObjectBody` rewrites. Exported, like the three below, so a caller can
  *  lock exactly the ops a write will touch before making it (see `./api-outbox.ts`). */
 export function isQueuedObject(tempId: number): (op: QueuedOp) => boolean {
-  return (o) => !o.dead && o.kind === 'object.create' && o.tempId === tempId;
+  return (o) => !o.dead && !o.cancelled && o.kind === 'object.create' && o.tempId === tempId;
 }
 
-export async function updateQueuedObjectBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
+/** `foldedAt`: see `updateQueuedActivityBody`. */
+export async function updateQueuedObjectBody(store: OutboxStore, tempId: number, body: Record<string, unknown>, foldedAt = new Date().toISOString()): Promise<boolean> {
   const op = (await store.all()).find(isQueuedObject(tempId));
   if (!op) return false;
-  await store.put({ ...op, body });
+  await store.put({ ...op, body, foldedAt });
   return true;
 }
 
@@ -436,6 +461,28 @@ export async function removeQueuedObject(store: OutboxStore, tempId: number): Pr
     }
   }
   return removed;
+}
+
+/**
+ * What a cancelled draft's own create becomes: nothing, when it never left the device, or a
+ * `cancelled` op that replays only to delete the row, when it may have landed (`maybeLanded`). A
+ * dead one is revived for that: it died on a send the server may have taken all the same.
+ */
+async function cancelCreate(store: OutboxStore, op: QueuedOp): Promise<void> {
+  if (op.maybeLanded) await store.put({ ...op, cancelled: true, dead: false, attempts: 0 });
+  else await store.remove(op.id);
+}
+
+/** `removeQueuedObject` for a cancelled draft: its own create goes through `cancelCreate`. */
+export async function cancelQueuedObjectOps(store: OutboxStore, tempId: number): Promise<boolean> {
+  let found = false;
+  for (const op of await store.all()) {
+    if (!isQueuedUnderObject(tempId)(op)) continue;
+    found = true;
+    if (op.kind === 'object.create' && op.tempId === tempId) await cancelCreate(store, op);
+    else await store.remove(op.id);
+  }
+  return found;
 }
 
 /**
@@ -468,6 +515,18 @@ export async function removeQueuedActivity(store: OutboxStore, tempId: number): 
   return removed;
 }
 
+/** `removeQueuedActivity` for a cancelled draft: its own create goes through `cancelCreate`. */
+export async function cancelQueuedActivityOps(store: OutboxStore, tempId: number): Promise<boolean> {
+  let found = false;
+  for (const op of await store.all()) {
+    if (!isQueuedUnderActivity(tempId)(op)) continue;
+    found = true;
+    if (op.kind === 'activity.create' && op.tempId === tempId) await cancelCreate(store, op);
+    else await store.remove(op.id);
+  }
+  return found;
+}
+
 /**
  * Overwrites the body of a still-queued 'activity.create' op (identified by its `tempId`) with
  * a newer one. The outbox has no "edit" op kind (see `OpKind` above) -- an edit made to a draft
@@ -481,12 +540,14 @@ export async function removeQueuedActivity(store: OutboxStore, tempId: number): 
  */
 /** The op `updateQueuedActivityBody` rewrites. */
 export function isQueuedActivity(tempId: number): (op: QueuedOp) => boolean {
-  return (o) => !o.dead && o.tempId === tempId;
+  return (o) => !o.dead && !o.cancelled && o.tempId === tempId;
 }
 
-export async function updateQueuedActivityBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
+/** `foldedAt` is when the user made the edit, kept on the op: if its create turns out to have
+ *  landed already, the replay sends the edit as a PATCH stamped with it (see `QueuedOp`). */
+export async function updateQueuedActivityBody(store: OutboxStore, tempId: number, body: Record<string, unknown>, foldedAt = new Date().toISOString()): Promise<boolean> {
   const op = (await store.all()).find(isQueuedActivity(tempId));
   if (!op) return false;
-  await store.put({ ...op, body });
+  await store.put({ ...op, body, foldedAt });
   return true;
 }
