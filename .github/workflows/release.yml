@@ -121,12 +121,21 @@ jobs:
       # which version it is. arm64 runs under QEMU, hence the longer wait.
       - name: Boot each architecture
         env:
-          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          NAME: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          # Each architecture by its own manifest's digest, read from the pushed index. Running
+          # the index digest twice with two --platform values fails the second pull with
+          # "cannot overwrite digest": the runner already holds that digest for the first.
+          index=$(docker buildx imagetools inspect --raw "$NAME@$DIGEST")
           for arch in amd64 arm64; do
+            platform=$(jq -r --arg a "$arch" \
+              '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' \
+              <<<"$index")
+            if [ -z "$platform" ]; then echo "$arch: not in the pushed index" >&2; exit 1; fi
             docker run -d --platform "linux/$arch" --name "logb-$arch" -p 8080:8080 \
-              -v "logb-release-$arch:/data" "$IMAGE"
+              -v "logb-release-$arch:/data" "$NAME@$platform"
             ok=
             for _ in $(seq 1 90); do
               if health=$(curl -fsS http://127.0.0.1:8080/api/health); then ok=1; break; fi
