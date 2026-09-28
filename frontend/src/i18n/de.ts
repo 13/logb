@@ -246,6 +246,7 @@ export default {
   'activity.add-files': 'Fotos oder Dateien hinzufügen',
   'activity.use-exif-date': 'Fotodatum {date} übernehmen',
   'activity.uploading': 'Lädt hoch…',
+  'activity.save-after-upload': 'Speichern geht, sobald das Hochladen fertig ist.',
   'activity.repeat': 'Wiederholen',
   'activity.take-photo': 'Foto aufnehmen',
   'activity.discard-draft': 'Eintrag und hochgeladene Dateien verwerfen?',

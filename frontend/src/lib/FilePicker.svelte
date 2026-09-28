@@ -9,8 +9,9 @@
   import Icon from './Icon.svelte';
   import type { Attachment, Kind } from './types';
 
-  let { objectId, activityId = null, onuploaded }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void } = $props();
-  let busy = $state(false);
+  /** `busy` is bindable so a form can hold its Save while the files picked here are still going
+   *  up: leaving the form mid-upload gave no sign of whether the photo ever made it. */
+  let { objectId, activityId = null, onuploaded, busy = $bindable(false) }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void; busy?: boolean } = $props();
   let error = $state('');
   let el: HTMLInputElement;
   let cam: HTMLInputElement;

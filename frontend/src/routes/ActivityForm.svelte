@@ -59,6 +59,8 @@
   let saved = $state<Activity | null>(null);
   let error = $state('');
   let busy = $state(false);
+  /** A file picked below is still going up (see FilePicker's `busy`). */
+  let uploading = $state(false);
   let allSuggestions = $state<TitleSuggestion[]>([]);
   /** Tags already in use, offered while typing one. */
   let tagCounts = $state<TagCount[]>([]);
@@ -310,6 +312,8 @@
       error = $t('activity.not-loaded');
       return;
     }
+    // The disabled button already stops a click and Enter; this is for anything else that submits.
+    if (uploading) return;
     const body = buildInput();
     const bad = validateActivity(body);
     if (bad) { error = fieldError(bad, $t); return; }
@@ -573,7 +577,7 @@
       </div>
     {/if}
     {#if saved}
-      <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
+      <FilePicker objectId={oid} activityId={saved.id} bind:busy={uploading} onuploaded={(a) => (attachments = [...attachments, a])} />
     {:else if ready}
       <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); error = ''; } catch (e) { error = errorMessage(e, $t); } }}>
         + {$t('activity.add-files')}
@@ -581,9 +585,10 @@
     {/if}
 
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    <p id="save-after-upload" class="upload-wait" role="status">{uploading ? $t('activity.save-after-upload') : ''}</p>
     <div class="row actions">
       <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
-      <button class="primary" disabled={busy}>{$t('nav.save')}</button>
+      <button class="primary" disabled={busy || uploading} aria-describedby={uploading ? 'save-after-upload' : undefined}>{$t('nav.save')}</button>
     </div>
   </form>
   {#if editing}
@@ -596,6 +601,8 @@
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
   .actions { margin-top: var(--space-2); }
+  /* Always in the page, empty when idle, so a screen reader hears the note the moment it appears. */
+  .upload-wait { margin: 0; font-size: var(--text-sm); color: var(--muted); }
   .section-title { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-lg); }
   /* A positioning context for the pending badge, not a thumbnail. It was called `thumb`, which
      collided with the global grid-image rule in app.css and inflated it to a full-width square
