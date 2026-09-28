@@ -1031,7 +1031,7 @@ describe('a save while an unrelated upload is being sent', () => {
     await vi.waitFor(() => expect(urls).toEqual(['/api/objects/2/activities', '/api/objects/2/attachments']));
 
     expect(await settles(updateQueuedActivity(-1, { title: 'new' }))).toBe(true);
-    expect(jsonBodies[1]).toMatchObject({ url: '/api/activities/55', body: { title: 'new', edited_at: expect.any(String) } });
+    expect(jsonBodies[1]).toEqual({ url: '/api/activities/55', body: { title: 'new' } });
 
     releaseUpload();
     await pass;

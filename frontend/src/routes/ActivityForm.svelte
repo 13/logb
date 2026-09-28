@@ -332,9 +332,7 @@
       } else if (saved) {
         // Queued with the moment of the edit when the connection is gone; the server keeps each
         // field only if nothing newer changed it meanwhile (see `updateQueued` in ../lib/api.ts).
-        // `created_at`: an edit is never older than the row, whatever this device's clock says --
-        // the draft saved by "+ Add files" was stamped on the server's a moment ago.
-        await updateQueued(`/activities/${saved.id}`, body as unknown as Record<string, unknown>, saved.created_at);
+        await updateQueued(`/activities/${saved.id}`, body as unknown as Record<string, unknown>);
       } else {
         // null means "queued, not sent": the row exists locally and will be replayed.
         await createQueued<Activity>(`/objects/${oid}/activities`, body as unknown as Record<string, unknown>);

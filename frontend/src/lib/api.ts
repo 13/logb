@@ -289,20 +289,14 @@ export async function apiWithStatus<T = unknown>(method: string, path: string, b
 }
 
 /**
- * Now, as an `edited_at` for the server: this device's clock, moved onto the server's when the
- * two are clearly apart (see `clockSkewMs`). The server compares it with stamps its own clock
- * made (a create stamps every field), so on a device whose clock runs well behind the server's,
- * a raw `Date.now()` made an edit look older than the row it was editing -- and the server kept
- * the row. A small skew is left alone: the measurement rests on a `Date` header with whole
- * seconds only, so below a few seconds it is mostly that rounding, which always reads the
- * server as behind, and correcting for it made an edit a second after the create look older.
+ * Now, as an `edited_at` for the server: this device's clock moved onto the server's by the
+ * skew `clockSkewMs` measured. The server compares it with stamps its own clock made (a create
+ * stamps every field), so on a device whose clock runs behind the server's, a raw `Date.now()`
+ * made an edit look older than the row it was editing -- and the server kept the row.
  */
 export function editedAtNow(): string {
-  const skew = Math.abs(clockSkewMs) > EDIT_SKEW_THRESHOLD_MS ? clockSkewMs : 0;
-  return new Date(Date.now() - skew).toISOString();
+  return new Date(Date.now() - clockSkewMs).toISOString();
 }
-
-const EDIT_SKEW_THRESHOLD_MS = 5_000;
 
 /**
  * A GET whose response is a page of a longer list. `total` comes from `X-Total-Count` and
