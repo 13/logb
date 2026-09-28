@@ -114,18 +114,20 @@ export async function createReminderQueued<T>(path: string, body: Record<string,
  * The queued body carries `edited_at` -- the moment the person made the edit, not the moment
  * it is finally sent -- so the server can keep a newer change someone else made in the meantime
  * instead of overwriting it with an older one (see `edited_at` on `ActivityInput`,
- * src/api/activities.rs). An edit that goes straight through needs no such stamp: now is when
- * it was made.
+ * src/api/activities.rs). The first attempt carries the same stamp: it may time out and still
+ * land, later than the user's next edit even, and unstamped it would count as made the moment
+ * it arrived and overwrite that newer edit. `notBefore` is a row's `created_at`, for an edit to
+ * a row that may have been made only just now (see `foldStamp`).
  */
-export async function updateQueued(path: string, body: Record<string, unknown>): Promise<boolean> {
+export async function updateQueued(path: string, body: Record<string, unknown>, notBefore?: string): Promise<boolean> {
   const id = newOpId();
-  const editedAt = new Date().toISOString();
+  const editedAt = foldStamp(editedAtNow(), notBefore);
   // Before the request, for the same reason as in `createQueued`.
   const userId = outboxUser() ?? undefined;
   try {
-    // Timeout: see createQueued. If the timed-out PATCH did land, the server stamped it with its
-    // own later clock, so the replay's older `edited_at` loses to it and changes nothing.
-    await api('PATCH', path, body, SAVE_TIMEOUT_MS);
+    // Timeout: see createQueued. If the timed-out PATCH lands after all, it carries the same
+    // `edited_at` as its replay, so whichever arrives second changes nothing.
+    await api('PATCH', path, { ...body, edited_at: editedAt }, SAVE_TIMEOUT_MS);
     return true;
   } catch (e) {
     if (isRejection(e) && !isUnauthenticated(e)) throw e;
@@ -158,7 +160,7 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
 
   // A pass in this tab may have landed the parent already without the form having heard yet
   // (see `landedDrafts`); the temp id's children were rewritten then, so this one must be too.
-  if (activityId !== undefined && activityId < 0) activityId = landedDrafts.get(activityId) ?? activityId;
+  if (activityId !== undefined && activityId < 0) activityId = landedDrafts.get(activityId)?.id ?? activityId;
   const body: Record<string, unknown> = activityId === undefined ? {} : { activity_id: activityId };
   const activityIsReal = activityId === undefined || activityId >= 0;
   if (activityIsReal) {
@@ -178,7 +180,7 @@ export async function uploadQueued<T>(path: string, file: Blob, filename: string
     // check above and this write has either rewritten the queued upload by now, or not yet
     // taken the lock for that -- and then `landedDrafts` already has it (see `sendCreate`).
     await outboxLock.run(async () => {
-      const real = typeof body.activity_id === 'number' ? landedDrafts.get(body.activity_id) : undefined;
+      const real = typeof body.activity_id === 'number' ? landedDrafts.get(body.activity_id)?.id : undefined;
       await enqueue(store, { id, kind: 'attachment.upload', path, body: real === undefined ? body : { activity_id: real }, blob: file, filename, attempts: 0, userId });
     });
   } catch {
@@ -286,15 +288,14 @@ async function underOpLocks<T>(touches: (op: QueuedOp) => boolean, fn: () => Pro
 }
 
 /**
- * Temp id -> real id for every draft create this tab's passes have landed. A pass reports its
+ * Temp id -> real row for every draft create this tab's passes have landed. A pass reports its
  * resolutions to `onOutboxFlushed` only when it ends, which can be a long upload later; a Save
  * in the meantime still names the draft by its temp id, finds no queued create left to fold
  * into, and looks the real row up here instead (see `updateQueuedActivity`). So do a photo
  * picked meanwhile (`uploadQueued`) and a Cancel (`cancelQueuedActivity`).
  */
-const landedDrafts = new Map<number, number>();
-
 type CreatedRow = { id: number; created_at?: string };
+const landedDrafts = new Map<number, CreatedRow>();
 
 /**
  * Replays a draft's create, then whatever became of the draft since the create was first sent.
@@ -324,7 +325,7 @@ async function sendCreate(
     await deleteRow(rowPath(row.id));
     return null;
   }
-  if (op.kind === 'activity.create' && op.tempId !== undefined) landedDrafts.set(op.tempId, row.id);
+  if (op.kind === 'activity.create' && op.tempId !== undefined) landedDrafts.set(op.tempId, row);
   if (op.foldedAt !== undefined && answer.status === 200) {
     await api('PATCH', rowPath(row.id), editBody(row), SAVE_TIMEOUT_MS);
   }
@@ -341,8 +342,8 @@ async function deleteRow(path: string): Promise<void> {
 }
 
 /**
- * The `edited_at` a folded edit is sent with: when the user made it, but never before the row
- * it edits was made. The create stamps every field with the server's clock as it inserts (see
+ * The `edited_at` an edit to a draft's row is sent with: when the user made it, but never
+ * before the row was made. The create stamps every field with the server's clock as it inserts (see
  * `record_create` in src/sync/record.rs), and a create that timed out may have been inserted
  * AFTER the edit -- a server slow enough to time out is one that can take that long. The
  * margin is for `created_at`, which has whole seconds only; the server caps it at its own now.
@@ -395,7 +396,7 @@ async function doFlushOutbox(): Promise<void> {
         let activityId = op.body.activity_id;
         // Queued under a temp id that a pass in this tab has since landed, after that pass had
         // rewritten the create's children (see `landedDrafts`): the row is there to attach to.
-        if (typeof activityId === 'number' && activityId < 0) activityId = landedDrafts.get(activityId) ?? activityId;
+        if (typeof activityId === 'number' && activityId < 0) activityId = landedDrafts.get(activityId)?.id ?? activityId;
         if (typeof activityId === 'number' && activityId < 0) {
           // A negative id is a placeholder for an `activity.create` that has never reached the
           // server -- sending it verbatim is a guaranteed 404. `replay` processes ops in queue
@@ -564,7 +565,7 @@ export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
   // A pass in this tab has landed the draft already (see `landedDrafts`): the row is real, and
   // is deleted like one -- the DELETE first, so a failure leaves its queued photos in place
   // with the row, and is thrown for the form to show rather than leaving it behind in silence.
-  const real = landedDrafts.get(tempId);
+  const real = landedDrafts.get(tempId)?.id;
   if (real === undefined) return false;
   await deleteRow(`/activities/${real}`);
   landedDrafts.delete(tempId);
@@ -591,7 +592,8 @@ export async function updateQueuedActivity(tempId: number, body: Record<string, 
   if (await underOpLocks(isQueuedActivity(tempId), () => updateQueuedActivityBody(store, tempId, body, editedAtNow()))) return true;
   const real = landedDrafts.get(tempId);
   if (real === undefined) return false;
-  await updateQueued(`/activities/${real}`, body);
+  // Stamped no earlier than the row: it landed moments ago, perhaps (see `foldStamp`).
+  await updateQueued(`/activities/${real.id}`, body, real.created_at);
   return true;
 }
 

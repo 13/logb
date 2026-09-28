@@ -247,6 +247,27 @@ describe('a draft that landed before the form heard', () => {
     expect(await store.all()).toHaveLength(0);
   });
 
+  it('takes a Save moments after landing as newer than the row, whatever this clock says', async () => {
+    // The server stamped every field as it inserted, on its own clock; one this device reads
+    // as later still must not make the edit look older than the row and be dropped.
+    const fetchOne = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchOne.mockImplementationOnce(async (url: string) => {
+      json.push(`POST ${url}`);
+      return jsonResponse(201, { id: 55, created_at: '2099-01-01T00:00:00Z' });
+    });
+    const { pass } = await landDraftAndHoldPass(-205);
+    const bodies: Array<Record<string, unknown>> = [];
+    fetchOne.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(init?.body as string));
+      return jsonResponse(200, { id: 55 });
+    });
+
+    expect(await updateQueuedActivity(-205, { title: 'Chain' })).toBe(true);
+    expect(bodies[0]).toEqual({ title: 'Chain', edited_at: '2099-01-01T00:00:02.000Z' });
+    releaseUpload();
+    await pass;
+  });
+
   // Cancel found no queued create left to drop and reported nothing to do, and the row stayed.
   it('is deleted by Cancel, queued photo and all', async () => {
     const { pass } = await landDraftAndHoldPass(-203);

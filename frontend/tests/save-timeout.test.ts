@@ -61,6 +61,16 @@ describe('a save the network never answers', () => {
     expect((await store.all())[0]).toMatchObject({ kind: 'activity.update', path: '/activities/5' });
   });
 
+  it('stamps the edit it gives up on, so a late landing cannot beat a newer one', async () => {
+    // The abandoned PATCH may still land -- after the user's next edit, even. Without a stamp the
+    // server takes it as made the moment it arrives and it overwrites that newer edit.
+    const saving = updateQueued('/activities/5', { title: 'x' });
+    await expire();
+    await saving;
+    expect(typeof bodies[0].edited_at).toBe('string');
+    expect((await store.all())[0].body.edited_at).toBe(bodies[0].edited_at);
+  });
+
   it('queues an object create, under the client_uuid the timed-out attempt sent', async () => {
     const saving = createObjectQueued({ name: 'x' }, -3);
     await expire();
