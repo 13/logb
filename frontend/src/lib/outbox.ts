@@ -164,8 +164,9 @@ export function serialize<T>(fn: () => Promise<T>): () => Promise<T> {
  * a UI write from running mid-pass, reading the same op the pass is about to write back over
  * (a lost edit on Save, a resurrected op on Cancel -- see the comments on `doFlushOutbox`,
  * `updateQueuedActivity` and `cancelQueuedActivity` in `./api.ts`). Routing the replay pass AND
- * both UI writes through one shared lock makes that interleaving impossible: whichever one is
+ * both UI writes through shared locks makes that interleaving impossible: whichever one is
  * running has exclusive use of the store's read-act-write sequence, and everyone else queues.
+ * (Per op for the send itself -- see `createKeyedLock` and `ReplayLocks` below.)
  *
  * FIFO matters as much as exclusivity here: each `run()` call is chained onto the current tail
  * synchronously, in the order `run()` was CALLED, not the order its callback happens to start
@@ -212,6 +213,33 @@ export function createLock(
   return { run };
 }
 
+/**
+ * One `createLock` per key, for exclusion that only matters between callers touching the SAME
+ * thing -- the outbox's per-op send lock (see `replay`). Each key gets its own cross-tab name,
+ * `${prefix}:${key}`, so two tabs still never send one op at once while different ops proceed
+ * side by side. A key's lock is dropped once nobody holds or waits for it, so the map does not
+ * grow with every op ever sent.
+ */
+export function createKeyedLock(
+  prefix: string,
+  manager?: LockManagerLike,
+): { run: <T>(key: string, fn: () => Promise<T>) => Promise<T> } {
+  const locks = new Map<string, { lock: ReturnType<typeof createLock>; users: number }>();
+  function run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    let entry = locks.get(key);
+    if (!entry) {
+      entry = { lock: createLock(`${prefix}:${key}`, manager), users: 0 };
+      locks.set(key, entry);
+    }
+    const held = entry;
+    held.users++;
+    return held.lock.run(fn).finally(() => {
+      if (--held.users === 0) locks.delete(key);
+    });
+  }
+  return { run };
+}
+
 export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
   await store.put(op);
 }
@@ -219,6 +247,22 @@ export async function enqueue(store: OutboxStore, op: QueuedOp): Promise<void> {
 export async function pendingCount(store: OutboxStore): Promise<number> {
   return (await store.all()).filter((o) => !o.dead).length;
 }
+
+/**
+ * The two locks `replay` takes, so a UI write can run between its sends. `store` guards every
+ * read-act-write of the store, briefly; `op` is held, per op id, across that one op's whole
+ * attempt -- its send included. A UI write to a queued op (see `updateQueuedActivity` in
+ * `./api-outbox.ts`) takes that op's `op` lock, so it waits only when the pass is sending THAT
+ * op, never behind the upload of another one. Order is always `op` before `store`, on both
+ * sides, so the two can never deadlock. The defaults are no locks at all, for the unit tests
+ * that drive `replay` alone.
+ */
+export interface ReplayLocks {
+  store: <T>(fn: () => Promise<T>) => Promise<T>;
+  op: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
+}
+
+const NO_LOCKS: ReplayLocks = { store: (fn) => fn(), op: (_id, fn) => fn() };
 
 /**
  * Send every live op in order, oldest first.
@@ -243,6 +287,11 @@ export async function pendingCount(store: OutboxStore): Promise<number> {
  * megabyte one): the catch used to overwrite the just-resolved real id with the pass's stale
  * temp id, parking the op to retry a request that can now only ever 404.
  *
+ * The pass holds no lock between ops (see `ReplayLocks`), so the top-of-pass snapshot only says
+ * which ops to visit and in what order. Each op is read again under its own lock before it is
+ * sent: while the pass was busy with the ops ahead of it, a Save may have folded an edit into
+ * it, a Cancel removed it, or another tab sent it.
+ *
  * Returns the temp-id -> real-id resolutions made during this pass, so a caller that minted a
  * temp id (e.g. `ActivityForm.svelte`, via `mintTempId`) can learn its own draft resolved
  * without polling the store -- see `onOutboxFlushed` in `./api.ts`.
@@ -250,10 +299,14 @@ export async function pendingCount(store: OutboxStore): Promise<number> {
 export async function replay(
   store: OutboxStore,
   send: (op: QueuedOp) => Promise<{ id: number } | null>,
+  locks: ReplayLocks = NO_LOCKS,
 ): Promise<Map<number, number>> {
   const resolved = new Map<number, number>();
-  for (const op of await store.all()) {
-    if (op.dead) continue;
+
+  /** One op's attempt. True when the pass must stop here. */
+  async function attempt(id: string): Promise<boolean> {
+    const op = await locks.store(async () => (await store.all()).find((o) => o.id === id));
+    if (!op || op.dead) return false;
     // The snapshot above was read before this pass resolved anything, so every id field that
     // can name an earlier create -- not just `activity_id` -- is rewritten here too; otherwise a
     // child object queued under an offline parent went out with the parent's negative temp id
@@ -265,16 +318,18 @@ export async function replay(
     }
     try {
       const out = await send({ ...op, path, body });
-      if (op.tempId !== undefined && out) {
-        resolved.set(op.tempId, out.id);
-        await persistResolvedId(store, op.tempId, out.id);
-      }
-      await store.remove(op.id);
+      await locks.store(async () => {
+        if (op.tempId !== undefined && out) {
+          resolved.set(op.tempId, out.id);
+          await persistResolvedId(store, op.tempId, out.id);
+        }
+        await store.remove(op.id);
+      });
     } catch (e) {
       if (e instanceof SkipOp) {
         // Untouched on purpose -- see the class comment. The pass moves on to the next op
         // instead of stopping here, since nothing behind this one depends on it.
-        continue;
+        return false;
       }
       if (isUnauthenticated(e)) {
         // Not this op's fault and not permanent: the session expired (or a password change
@@ -287,17 +342,23 @@ export async function replay(
         // Nothing needs writing back here: any temp id this op still carried was already
         // substituted in the STORE by `persistResolvedId` when the create ahead of it
         // resolved, earlier in this same pass.
-        return resolved;
+        return true;
       }
       if (isRejection(e)) {
-        await store.put({ ...op, path, body, dead: true, lastError: e instanceof Error ? e.message : String(e) });
-        continue;
+        await locks.store(() => store.put({ ...op, path, body, dead: true, lastError: e instanceof Error ? e.message : String(e) }));
+        return false;
       }
       const attempts = op.attempts + 1;
-      await store.put({ ...op, path, body, attempts, dead: attempts >= MAX_ATTEMPTS,
-        lastError: e instanceof Error ? e.message : String(e) });
-      return resolved;
+      await locks.store(() => store.put({ ...op, path, body, attempts, dead: attempts >= MAX_ATTEMPTS,
+        lastError: e instanceof Error ? e.message : String(e) }));
+      return true;
     }
+    return false;
+  }
+
+  for (const op of await locks.store(() => store.all())) {
+    if (op.dead) continue;
+    if (await locks.op(op.id, () => attempt(op.id))) return resolved;
   }
   return resolved;
 }
@@ -349,17 +410,28 @@ export function rewriteResolvedId(
   return { path: nextPath, body: nextBody, changed };
 }
 
+/** The op `updateQueuedObjectBody` rewrites. Exported, like the three below, so a caller can
+ *  lock exactly the ops a write will touch before making it (see `./api-outbox.ts`). */
+export function isQueuedObject(tempId: number): (op: QueuedOp) => boolean {
+  return (o) => !o.dead && o.kind === 'object.create' && o.tempId === tempId;
+}
+
 export async function updateQueuedObjectBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  const op = (await store.all()).find((o) => !o.dead && o.kind === 'object.create' && o.tempId === tempId);
+  const op = (await store.all()).find(isQueuedObject(tempId));
   if (!op) return false;
   await store.put({ ...op, body });
   return true;
 }
 
+/** The ops `removeQueuedObject` removes. */
+export function isQueuedUnderObject(tempId: number): (op: QueuedOp) => boolean {
+  return (o) => o.tempId === tempId || o.path.includes(`/objects/${tempId}/`) || o.body.object_id === tempId || o.body.parent_id === tempId;
+}
+
 export async function removeQueuedObject(store: OutboxStore, tempId: number): Promise<boolean> {
   let removed = false;
   for (const op of await store.all()) {
-    if (op.tempId === tempId || op.path.includes(`/objects/${tempId}/`) || op.body.object_id === tempId || op.body.parent_id === tempId) {
+    if (isQueuedUnderObject(tempId)(op)) {
       await store.remove(op.id); removed = true;
     }
   }
@@ -380,10 +452,15 @@ export async function removeQueuedObject(store: OutboxStore, tempId: number): Pr
  * Returns whether anything was actually removed, so a caller can tell a genuine cleanup from a
  * no-op (e.g. the draft had already been replayed by a background flush).
  */
+/** The ops `removeQueuedActivity` removes. */
+export function isQueuedUnderActivity(tempId: number): (op: QueuedOp) => boolean {
+  return (o) => o.tempId === tempId || o.body.activity_id === tempId;
+}
+
 export async function removeQueuedActivity(store: OutboxStore, tempId: number): Promise<boolean> {
   let removed = false;
   for (const op of await store.all()) {
-    if (op.tempId === tempId || op.body.activity_id === tempId) {
+    if (isQueuedUnderActivity(tempId)(op)) {
       await store.remove(op.id);
       removed = true;
     }
@@ -402,8 +479,13 @@ export async function removeQueuedActivity(store: OutboxStore, tempId: number): 
  * "your edit was folded in" from "there was nothing left to fold it into" instead of assuming
  * success and navigating away with the edit silently discarded.
  */
+/** The op `updateQueuedActivityBody` rewrites. */
+export function isQueuedActivity(tempId: number): (op: QueuedOp) => boolean {
+  return (o) => !o.dead && o.tempId === tempId;
+}
+
 export async function updateQueuedActivityBody(store: OutboxStore, tempId: number, body: Record<string, unknown>): Promise<boolean> {
-  const op = (await store.all()).find((o) => !o.dead && o.tempId === tempId);
+  const op = (await store.all()).find(isQueuedActivity(tempId));
   if (!op) return false;
   await store.put({ ...op, body });
   return true;
