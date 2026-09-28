@@ -246,7 +246,6 @@ export default {
   'activity.add-files': 'Add photos or files',
   'activity.use-exif-date': 'Use photo date {date}',
   'activity.uploading': 'Uploading…',
-  'activity.save-after-upload': 'Save is available once the upload has finished.',
   'activity.repeat': 'Repeat',
   'activity.take-photo': 'Take photo',
   'activity.discard-draft': 'Discard this entry and its uploads?',

@@ -9,26 +9,35 @@ async function newActivity(page: Page, object: string) {
   await page.getByRole('button', { name: /Log activity/ }).click();
 }
 
-test('Save waits for a photo that is still uploading', async ({ page }) => {
+// An upload has no deadline, so a Save held until it finished was stuck for as long as the
+// upload hung. The photo keeps going up after the form has gone, to the entry it was picked for.
+test('Save does not wait for a photo that is still uploading, and the photo still lands', async ({ page }) => {
   await signInFresh(page, '34-upload-wait');
   await newActivity(page, 'Upload wait bike');
   await page.getByLabel('Title').fill('Chain');
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/objects\/\d+\/activities$/.test(r.url()));
   await page.getByRole('button', { name: /Add photos or files/ }).click();
+  const activity = await (await created).json();
 
   let release!: () => void;
   const held = new Promise<void>((r) => { release = r; });
   await page.route('**/api/objects/*/attachments', async (route) => { await held; await route.continue(); });
+  const sending = page.waitForRequest((r) => r.method() === 'POST' && /\/api\/objects\/\d+\/attachments$/.test(r.url()));
   await page.setInputFiles('input[type=file]', pngPayload());
+  await sending;
 
   const save = page.getByRole('button', { name: 'Save' });
-  await expect(save).toBeDisabled();
-  await expect(save).toHaveAccessibleDescription('Save is available once the upload has finished.');
-
-  release();
-  await expect(page.locator('.thumb-strip img')).toHaveCount(1);
   await expect(save).toBeEnabled();
   await save.click();
+  await expect(page.getByRole('heading', { name: 'Upload wait bike' })).toBeVisible();
   await expect(page.getByText('Chain').first()).toBeVisible();
+
+  const answered = page.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/objects\/\d+\/attachments$/.test(r.url()));
+  release();
+  expect((await answered).status()).toBe(201);
+  const saved = await (await page.request.get(`/api/activities/${activity.id}`)).json();
+  expect(saved.title).toBe('Chain');
+  expect(saved.attachments).toHaveLength(1);
 });
 
 test('a large photo goes up smaller and keeps its capture date', async ({ page }) => {

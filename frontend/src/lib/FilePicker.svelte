@@ -9,9 +9,8 @@
   import Icon from './Icon.svelte';
   import type { Attachment, Kind } from './types';
 
-  /** `busy` is bindable so a form can hold its Save while the files picked here are still going
-   *  up: leaving the form mid-upload gave no sign of whether the photo ever made it. */
-  let { objectId, activityId = null, onuploaded, busy = $bindable(false) }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void; busy?: boolean } = $props();
+  let { objectId, activityId = null, onuploaded }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void } = $props();
+  let busy = $state(false);
   let error = $state('');
   let el: HTMLInputElement;
   let cam: HTMLInputElement;
@@ -63,7 +62,9 @@
           });
         }
       }
-    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; el.value = ''; cam.value = ''; }
+    // Save does not wait for this: the form may be gone by now, with the inputs unbound, while
+    // the upload itself goes on to the activity it was picked for.
+    } catch (e) { error = errorMessage(e, $t); } finally { busy = false; if (el) el.value = ''; if (cam) cam.value = ''; }
   }
 </script>
 
