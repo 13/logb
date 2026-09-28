@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { api, ApiError, clearServingSaved, isRejection, resetClockSkewForTesting, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl, markServingSaved, supersedeStale } from '../src/lib/api';
+import { api, ApiError, clearServingSaved, editedAtNow, isRejection, resetClockSkewForTesting, servedFromCache, servingSaved, setUnauthorizedHandler, fileUrl, markServingSaved, supersedeStale } from '../src/lib/api';
 
 /** `dateHeader` defaults to absent, matching every existing call site of this helper: none of
  *  them cared about `servingSaved` before this response header existed. */
@@ -333,5 +333,23 @@ describe('servingSaved', () => {
     mockFetch(200, { items: [] }, new Date(Date.now() - 61_000).toUTCString());
     await api('GET', '/objects/5/activities?limit=20&offset=0&category=fuel');
     expect(get(servingSaved)).toBe(true);
+  });
+});
+
+describe('editedAtNow', () => {
+  beforeEach(() => resetClockSkewForTesting());
+
+  it('reads the server clock when this device is clearly off it', async () => {
+    mockFetch(200, { id: 1 }, new Date(Date.now() - 70_000).toUTCString()); // server 70s behind
+    await api('GET', '/auth/me');
+    expect(Math.abs(Date.parse(editedAtNow()) - (Date.now() - 70_000))).toBeLessThan(2_000);
+  });
+
+  it('leaves a skew within the Date header\'s rounding alone', async () => {
+    // A header has whole seconds only, so a server in step reads up to a second behind. Taking
+    // that for skew made an edit a moment after the create look older than it, and lost it.
+    mockFetch(200, { id: 1 }, new Date(Date.now() - 999).toUTCString());
+    await api('GET', '/auth/me');
+    expect(Math.abs(Date.parse(editedAtNow()) - Date.now())).toBeLessThan(50);
   });
 });
