@@ -4,7 +4,7 @@
  * stale-response tracking and the session hooks. Everything here is re-exported from `api.ts`,
  * so callers import from there as before.
  */
-import { cancelQueuedActivityOps, cancelQueuedObjectOps, createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, mayLeaveDevice, newOpId, pendingCount, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
+import { cancelQueuedActivityOps, cancelQueuedObjectOps, createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, mayLeaveDevice, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
 import { api, apiWithStatus, editedAtNow, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
@@ -289,8 +289,8 @@ async function underOpLocks<T>(touches: (op: QueuedOp) => boolean, fn: () => Pro
  * Temp id -> real id for every draft create this tab's passes have landed. A pass reports its
  * resolutions to `onOutboxFlushed` only when it ends, which can be a long upload later; a Save
  * in the meantime still names the draft by its temp id, finds no queued create left to fold
- * into, and looks the real row up here instead (see `updateQueuedActivity`). So does a photo
- * picked meanwhile (`uploadQueued`).
+ * into, and looks the real row up here instead (see `updateQueuedActivity`). So do a photo
+ * picked meanwhile (`uploadQueued`) and a Cancel (`cancelQueuedActivity`).
  */
 const landedDrafts = new Map<number, number>();
 
@@ -560,7 +560,16 @@ export async function cancelQueuedObject(tempId: number): Promise<boolean> {
  * pass is about to overwrite.
  */
 export async function cancelQueuedActivity(tempId: number): Promise<boolean> {
-  return underOpLocks(isQueuedUnderActivity(tempId), () => cancelQueuedActivityOps(store, tempId));
+  if (await underOpLocks(isQueuedUnderActivity(tempId), () => cancelQueuedActivityOps(store, tempId))) return true;
+  // A pass in this tab has landed the draft already (see `landedDrafts`): the row is real, and
+  // is deleted like one -- the DELETE first, so a failure leaves its queued photos in place
+  // with the row, and is thrown for the form to show rather than leaving it behind in silence.
+  const real = landedDrafts.get(tempId);
+  if (real === undefined) return false;
+  await deleteRow(`/activities/${real}`);
+  landedDrafts.delete(tempId);
+  await underOpLocks(isQueuedUnderActivity(real), () => removeQueuedActivity(store, real));
+  return true;
 }
 
 /**

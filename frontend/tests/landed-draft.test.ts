@@ -185,16 +185,20 @@ describe('a draft whose create may have landed before it was queued', () => {
  * queued without trying the network, and -- the create's rewrite of its children having
  * already run -- the next pass parked it dead as an orphan.
  */
-describe('a photo picked after its draft landed but before the form heard', () => {
+describe('a draft that landed before the form heard', () => {
   let store: OutboxStore;
   let releaseUpload: () => void;
   let sent: Array<{ url: string; activityId: string | null }>;
+  let json: string[];
+  let failDelete: boolean;
 
   beforeEach(() => {
     setOutboxUser(1);
     store = memoryStore();
     setOutboxStoreForTesting(store);
     sent = [];
+    json = [];
+    failDelete = false;
     let uploads = 0;
     globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.body instanceof FormData) {
@@ -202,6 +206,11 @@ describe('a photo picked after its draft landed but before the form heard', () =
         // The first upload is the slow one that keeps the pass open; later ones answer at once.
         if (uploads++ === 0) return new Promise<Response>((resolve) => { releaseUpload = () => resolve(jsonResponse(201, { id: 500 })); });
         return jsonResponse(201, { id: 501 });
+      }
+      json.push(`${init?.method} ${url}`);
+      if (init?.method === 'DELETE') {
+        if (failDelete) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 204, headers: { get: () => null } } as unknown as Response;
       }
       return jsonResponse(201, { id: 55, created_at: '2026-09-28T10:00:00Z' });
     }) as unknown as typeof fetch;
@@ -236,5 +245,29 @@ describe('a photo picked after its draft landed but before the form heard', () =
     await flushOutbox();
     expect(sent.at(-1)).toEqual({ url: '/api/objects/2/attachments', activityId: '55' });
     expect(await store.all()).toHaveLength(0);
+  });
+
+  // Cancel found no queued create left to drop and reported nothing to do, and the row stayed.
+  it('is deleted by Cancel, queued photo and all', async () => {
+    const { pass } = await landDraftAndHoldPass(-203);
+    await enqueue(store, { id: 'second', kind: 'attachment.upload', path: '/objects/2/attachments', body: { activity_id: 55 }, blob: new Blob(['y']), filename: 'b.jpg', attempts: 0 });
+
+    const cancelling = cancelQueuedActivity(-203);
+    await vi.waitFor(() => expect(json).toContain('DELETE /api/activities/55'));
+    releaseUpload();
+    expect(await cancelling).toBe(true);
+    await pass;
+    expect(await store.all()).toHaveLength(0);
+    expect(sent).toHaveLength(1); // the second photo never went up to a deleted row
+  });
+
+  it('says so when Cancel cannot delete it, and leaves its photos queued', async () => {
+    const { pass } = await landDraftAndHoldPass(-204);
+    await enqueue(store, { id: 'second', kind: 'attachment.upload', path: '/objects/2/attachments', body: { activity_id: 55 }, blob: new Blob(['y']), filename: 'b.jpg', attempts: 0 });
+    failDelete = true;
+    await expect(cancelQueuedActivity(-204)).rejects.toThrow();
+    expect((await store.all()).map((o) => o.id)).toContain('second');
+    releaseUpload();
+    await pass;
   });
 });

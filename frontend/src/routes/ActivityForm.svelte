@@ -360,7 +360,14 @@
         // Only the outbox has this draft -- there is no server row to DELETE (that would
         // 404), and leaving the queued create (or an upload still naming its temp id) behind
         // would replay it later, creating exactly the stray entry this cancel exists to avoid.
-        try { await cancelQueuedActivity(saved.id); } catch { /* leaving it is better than blocking the exit */ }
+        // A background pass may have landed the draft since, without this form hearing yet: the
+        // row is then DELETEd, and a failure to is shown, exactly as in the branch below.
+        try {
+          await cancelQueuedActivity(saved.id);
+        } catch (e) {
+          error = errorMessage(e, $t);
+          return;
+        }
       } else {
         // The create already reached the server (`saved.id` is a real id), so the row exists
         // and must be DELETEd -- but the network can still have died since, e.g. between the
