@@ -63,6 +63,9 @@
   /// How many activities match the current filter in total, page window aside.
   let activityTotal = $state(0);
   let loadingMore = $state(false);
+  /** Whether this object's timeline has answered once (from the server or the cache), so the
+   *  header "+ Log" hides only on a timeline known to be empty -- not while it is still loading. */
+  let timelineLoaded = $state(false);
   let category = $state<Category | ''>('');
   /** Session-only, like `category`: a tag tapped on an entry narrows the timeline to it. */
   let tagFilter = $state<string | null>(initialTag);
@@ -128,6 +131,13 @@
   }
   let error = $state('');
 
+  /** Whether the object's own reads (the Cost data, and the details' lists) may be asked for. Not
+   *  for a temporary (negative) id: the server has no such object yet, and the outbox moves this
+   *  page to the real id once it does. Nor before the object is known. A derived boolean, so a
+   *  later reload of the object does not ask again. */
+  const serverReady = $derived(oid > 0 && object !== null);
+  function refreshInsights() { if (serverReady) loadInsights(insightsUrl); }
+
   /// Guards `loadObject` like `loadLastDone` below: a mount, an oid change and a flush can each
   /// start one, and the object just left must not land over the one navigated to.
   const objectSeq = createSeq();
@@ -169,8 +179,11 @@
       api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=true`),
     ]);
     if (!childrenSeq.current(token)) return;
+    // Like Last done and Trips, a failed list is not worth a page error -- the details now load
+    // on every desktop visit, and an offline one (object served from the cache) would otherwise
+    // raise a banner over a page that is fine. Only the server answering no is said.
     if (live.status === 'fulfilled') children = live.value;
-    else error = errorMessage(live.reason, $t);
+    else if (isRejection(live.reason)) error = errorMessage(live.reason, $t);
     archivedChildCount = archived.status === 'fulfilled' ? archived.value.length : 0;
   }
 
@@ -314,6 +327,7 @@
     if (!append && fetched && !filtered) setCachedActivities(oid, { items, total });
     activities = mergeWindow(append, activities, pending, items);
     activityTotal = total + pending.length;
+    timelineLoaded = true;
   }
 
   async function loadMore() {
@@ -345,6 +359,7 @@
     children = [];
     archivedChildCount = 0;
     childrenSeq.invalidate();
+    timelineLoaded = false;
     insights = null;
     insightsError = '';
     insightsSeq.invalidate();
@@ -352,18 +367,17 @@
     dueSeq.invalidate();
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
-  $effect(() => { oid; if (detailsShown) { loadChildren(); loadLastDone(); if (offersTrip) loadTripSummary(); } });
+  // Two effects, each keyed on derived booleans only: `offersTrip` flipping true once the object
+  // loads must not ask for the children and Last done a second time. `serverReady` (below) keeps
+  // them off a temporary id and waits for the object, like the Cost data.
+  $effect(() => { oid; if (detailsShown && serverReady) { loadChildren(); loadLastDone(); } });
+  $effect(() => { oid; if (detailsShown && serverReady && offersTrip) loadTripSummary(); });
   // Unlike `loadTripSummary` above, not gated to the Info tab: the Timeline (the default tab)
   // needs `energyData.cost_per_counter_milli` for its own trip-cost estimate, so this loads as
   // soon as the object is known to have a fuel unit, whichever tab is open. `offersEnergy`
   // starts false (before `object` itself has loaded) and this effect re-runs once it flips true.
   $effect(() => { oid; if (offersEnergy) loadEnergy(); });
-  // Not for a temporary (negative) id: the server has no such object yet, and the outbox moves
-  // this page to the real id once it does. Nor before the object is known: a derived boolean,
-  // so a later reload of the object does not ask again.
-  const insightsReady = $derived(oid > 0 && object !== null);
-  function refreshInsights() { if (insightsReady) loadInsights(insightsUrl); }
-  $effect(() => { const path = insightsUrl; if (insightsReady) loadInsights(path); });
+  $effect(() => { const path = insightsUrl; if (serverReady) loadInsights(path); });
   // `dueCount` is derived, so a reload of the object that leaves the count alone does not ask again.
   $effect(() => { oid; if (dueCount > 0) loadDue(); else { dueSeq.invalidate(); dueReminders = []; } });
   // A background replay can succeed while this view is mounted; without this the synthetic
@@ -409,12 +423,20 @@
   });
 
   function setTab(x: Tab) { tab = x; }
+  /** The pane's skip link: to the selected tab, where the arrow keys take over. Not a hash
+   *  navigation, which the router would not know about. */
+  function skipToSections(e: MouseEvent) {
+    e.preventDefault();
+    document.querySelector<HTMLElement>('#object-sections [role="tab"][aria-selected="true"]')?.focus();
+  }
 
   /** The one layout switch read in script (the plan's Decision 2): from 1024 px the details sit
    *  in the left pane and there is no Info tab. It is structural -- which container owns the
    *  details, whether a tab exists, when their data loads -- so CSS cannot make it alone. The
    *  query text is exactly Tailwind's `wide:` variant (app.tw.css). Svelte's MediaQuery reads
-   *  matchMedia when this mounts, so the first paint is right, and follows resizes. */
+   *  matchMedia when this mounts, so the first paint is right, and follows resizes. Crossing
+   *  1024 px moves the details to the other container, which remounts ObjectDetails: a CSV import
+   *  in progress there is lost. Acceptable -- a window resized across it mid-import is rare. */
   const wide = new MediaQuery('(width >= 1024px)');
   /** An old `?tab=info` at desktop width shows the timeline: the details are already on screen. */
   const shownTab = $derived<Tab>(wide.current && tab === 'info' ? 'timeline' : tab);
@@ -424,13 +446,20 @@
   /** The empty, unfiltered timeline carries its own log buttons in the middle of the page; a
    *  second "+ Log" beside them would be two calls to one action. */
   const timelineHasEntries = $derived(activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null);
+  /** The header "+ Log" stays while the timeline loads and goes only once it is known to be
+   *  empty and unfiltered, so it does not pop in after the entries arrive. */
+  const headerLog = $derived(shownTab !== 'timeline' || !timelineLoaded || timelineHasEntries);
+  /** The Timeline draws its empty state (and its log buttons) before the first load answers;
+   *  while the header "+ Log" is up, the empty state leaves its buttons out, so one "+ Log" shows
+   *  at a time. */
+  const emptyStateLog = $derived(!(wide.current && headerLog));
 </script>
 
 <main>
   {#if error}<p class="error">{error}</p>{/if}
   {#if object}
     <TopBar title={object.name} icon={typeIcon(object.type, $customTypes)} backTo="/">
-      {#if wide.current && (shownTab !== 'timeline' || timelineHasEntries)}
+      {#if wide.current && headerLog}
         <LogAction options={logChoices} onpick={(o) => go(o.path)} placement="header" />
       {/if}
       <!-- Icon only on a phone, icon and word from 1024 px; the name is "Edit" either way. -->
@@ -457,12 +486,18 @@
          max-height shrinks its children to fit instead of scrolling, which squashed the cover. -->
     <div class="flex flex-col gap-4 wide:grid wide:grid-cols-[300px_minmax(0,1fr)] wide:items-start wide:gap-6">
       <section aria-label={$t('object.summary')}
-               class="flex flex-col gap-4 *:shrink-0 wide:sticky wide:top-20 wide:-mx-1 wide:max-h-[calc(100dvh-6rem)] wide:overflow-y-auto wide:overscroll-contain wide:px-1 wide:pb-4">
+               class="flex flex-col gap-4 *:shrink-0 wide:sticky wide:top-20 wide:-mx-1 wide:max-h-[calc(100dvh-6rem)] wide:overflow-y-auto wide:overscroll-contain wide:px-1 wide:pb-4 wide:[scrollbar-width:thin]
+                      wide:after:pointer-events-none wide:after:sticky wide:after:bottom-0 wide:after:-mt-4 wide:after:block wide:after:h-4 wide:after:shrink-0 wide:after:bg-linear-to-t wide:after:from-background wide:after:to-transparent wide:after:content-['']">
+        {#if wide.current}
+          <!-- The pane is long; a keyboard user can jump past it to the tabs. Hidden until focused. -->
+          <a href="#object-sections" onclick={skipToSections}
+             class="sr-only focus-visible:not-sr-only focus-visible:self-start focus-visible:rounded-md focus-visible:bg-card focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">{$t('object.skip-to-timeline')}</a>
+        {/if}
         <ObjectSummary {object} {insights} due={dueReminders} onreminders={() => setTab('reminders')} />
         {#if wide.current}{@render details()}{/if}
       </section>
 
-      <div class="flex min-w-0 flex-col gap-4">
+      <div id="object-sections" class="flex min-w-0 flex-col gap-4">
         {#if object.type === 'body'}
           <WeightHistory objectId={oid} unit={object.weight_unit ?? 'kg'} />
         {/if}
@@ -486,9 +521,9 @@
             {#if shownTab === 'timeline'}
               <Timeline
                 objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
-                onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
-                ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
-                onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
+                onmore={loadMore} onlog={emptyStateLog ? () => go(`/objects/${oid}/activities/new`) : undefined}
+                ontriplog={emptyStateLog && offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
+                onchargelog={emptyStateLog && offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
                 unit={object.counter_unit} fuelUnit={object.resource_unit ?? object.fuel_unit} resourceKind={object.resource_kind} energyRate={energyData?.cost_per_counter_milli ?? null}
                 bind:category bind:tagFilter bind:titleFilter
               />
@@ -527,7 +562,7 @@
     <ObjectDetails
       {object} {insights} {insightsError} {lastDone} {tripSummary} energy={energyData} inside={children}
       {hasContents} contents={$includeContents} {offersTrip} {offersEnergy}
-      oncontents={(on) => includeContents.set(on)} onlastdone={selectLastDone} onimported={() => loadActivities('refresh')}
+      oncontents={(on) => includeContents.set(on)} onlastdone={selectLastDone} onimported={() => { loadActivities('refresh'); refreshInsights(); }}
     />
   {/if}
 {/snippet}

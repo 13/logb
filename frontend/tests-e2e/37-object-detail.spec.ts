@@ -193,3 +193,61 @@ test('below 1024 px the summary sits above the tabs and the rest is under Info',
   await page.getByRole('tab', { name: 'Info', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Contents' })).toBeVisible();
 });
+
+test('a desktop visit asks for the contents, Last done and trips once each; a skip link jumps past the pane', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'the details load with the page only in the pane');
+  await signInFresh(page, '37-once');
+  const car = await object(page, { name: 'Once car', type: 'car', counter_unit: 'km', fuel_unit: 'l' });
+  await entry(page, car, { date: '2026-02-01', category: 'maintenance', title: 'Once entry' });
+  const seen: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/api/')) seen.push(new URL(r.url()).pathname + new URL(r.url()).search); });
+  await page.goto(`/objects/${car}`);
+  await expect(page.getByRole('region', { name: 'Summary' }).getByRole('heading', { name: 'Contents' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  const count = (needle: string) => seen.filter((u) => u.includes(needle)).length;
+  expect(count(`parent_id=${car}&archived=false`)).toBe(1);
+  expect(count(`/objects/${car}/last-done`)).toBe(1);
+  expect(count(`/objects/${car}/trips/summary`)).toBe(1);
+  expect(count(`/objects/${car}/insights`)).toBe(1);
+
+  const skip = page.getByRole('link', { name: 'Skip to timeline' });
+  await skip.focus();
+  await expect(skip).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('tab', { name: 'Timeline', exact: true })).toBeFocused();
+});
+
+/** These two hold or fail a request with `page.route`, which never sees a request the service
+ *  worker answers (see 11-controls), so the worker is kept out of them. */
+test.describe('with the service worker blocked', () => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('contents that cannot be fetched leave the page without an error banner', async ({ page }) => {
+    await signInFresh(page, '37-children-offline');
+    const car = await object(page, { name: 'Unfetched car', type: 'car', counter_unit: 'km' });
+    await page.route(/\/api\/objects\?parent_id=/, (route) => route.abort('internetdisconnected'));
+    await page.goto(`/objects/${car}`);
+    await openInfo(page);
+    await expect(page.getByRole('heading', { name: 'Contents' })).toBeVisible();
+    await expect(page.getByText('Nothing inside yet.')).toBeVisible();
+    await expect(page.locator('main > p.error')).toHaveCount(0);
+  });
+
+  test('one "+ Log" at a time on desktop, while the timeline loads and once it is empty', async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop', 'the header "+ Log" is desktop only');
+    await signInFresh(page, '37-one-log');
+    const drill = await object(page, { name: 'One log drill', type: 'tool' });
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route(new RegExp(`/api/objects/${drill}/activities\\?`), async (route) => { await held; await route.continue(); });
+    await page.goto(`/objects/${drill}`);
+    const log = page.getByRole('button', { name: /Log activity/ });
+    // Still loading: the header button, and no second one in the empty state.
+    await expect(page.getByRole('main').locator('header').first().getByRole('button', { name: /Log activity/ })).toBeVisible();
+    await expect(log).toHaveCount(1);
+    release();
+    // Known empty: the header button goes, the empty state's comes.
+    await expect(page.getByRole('tabpanel', { name: 'Timeline' }).getByRole('button', { name: /Log activity/ })).toBeVisible();
+    await expect(log).toHaveCount(1);
+  });
+});

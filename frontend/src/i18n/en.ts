@@ -215,6 +215,7 @@ export default {
   'object.per-month': 'Per month',
   'object.figures': 'Figures',
   'object.breadcrumb': 'Path',
+  'object.skip-to-timeline': 'Skip to timeline',
 
   'tab.timeline': 'Timeline',
   'tab.documents': 'Documents',
