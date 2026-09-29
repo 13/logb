@@ -178,6 +178,15 @@ already hides the section when there is nothing to show. No UI redesign in this 
 - Object form: type first as icon tiles, then name; templates shown after the type with a label.
 - Activity form: one "Notes" label (no heading duplicating it); section headings smaller than the
   page title.
+- Legacy pieces left inside the object page by round 3: `ResourceCsvImport` (h3, `.hint`,
+  `.ghost`, native file input); `EnergyFigures`, `Insights` and `TripTotals` (`.muted`,
+  `.row toggle`, `.tnum`); `ObjectDetail`'s `p.error`, `p.muted` and `.fab-row`.
+- Dashboard's grid uses `min-[1024px]:`; it should use the `wide:` variant.
+- Between 900 and 1023 px the sidebar shows while the object page stays single-column. That is
+  intentional; do not "fix" it.
+- Tag hues on the `destructive/10` due card need contrast tests.
+- `/objects/:id/reminders` is fetched twice on the Reminders tab (the page for the summary, the
+  tab itself).
 
 ## Round 5 — search, statistics, settings, auth (0.23.0)
 
@@ -194,6 +203,10 @@ already hides the section when there is nothing to show. No UI redesign in this 
   and the desktop gutter maths, into utilities or a component.
 - The app icon (`frontend/public/icon.svg` and the generated PNGs) is recoloured from teal to the
   amber palette.
+- `.fab` still drives `.fab-row`, Reminders' "+ New reminder" and `LogPicker`; all three move
+  off it before `app.css` goes.
+- `BarList` is shared with Statistics; round 3 kept it for "Per year" and "Per category", so
+  redoing Statistics decides its fate.
 
 ## Out of scope
 

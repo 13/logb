@@ -8,11 +8,11 @@ A new image applies any pending database migrations when it starts. Take a snaps
 **On a wide screen (1024 px and up) an object's page has two panes.** The left one holds the
 photo, the key figures, anything due, spend per month and everything the Info tab used to show,
 and it stays in view while the timeline scrolls. "+ Log" and Edit sit in the page header. There
-is no Info tab at that width; an old `?tab=info` link opens the timeline beside the pane.
+is no Info tab at that width; an old `?tab=info` link opens the timeline beside the pane. A
+"Skip to the tabs" link at the top of the pane jumps past it for keyboard users.
 
 **On a phone** the photo, a row of figures and anything due sit above the tabs. The tabs stay on
-one row, the Reminders count sits inside its tab, and Info holds the rest. A "Skip to timeline"
-link at the top of the page jumps past the summary for keyboard users.
+one row, the Reminders count sits inside its tab, and Info holds the rest.
 
 **Timeline entries** show a category icon, the amount on the right and their tags inside the
 entry, under year headings; the category chips scroll sideways. Charts leave out empty months.
