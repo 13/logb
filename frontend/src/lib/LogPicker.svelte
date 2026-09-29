@@ -26,6 +26,11 @@
     // after it opens; asking for it explicitly keeps that true if the order ever changes.
     search?.focus();
   }
+  /** Chrome's first Escape in a `type=search` field only clears the typed text and never reaches
+   *  the dialog's own close handling; closing explicitly makes one press always close it. */
+  function closeOnEscape(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); dialog?.close(); }
+  }
   function pick(o: MemObject) { dialog?.close(); onpick(o); }
   const focus = 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';
 </script>
@@ -35,18 +40,18 @@
 <button data-slot="dash-fab" onclick={open}
         class={`fab h-12 cursor-pointer rounded-full bg-primary px-5 text-base font-semibold text-primary-foreground shadow-lg ${focus}`}>+ {$t('dash.log')}</button>
 
-<dialog bind:this={dialog} aria-labelledby="log-picker-title" onclose={() => (isOpen = false)}
+<dialog bind:this={dialog} closedby="any" aria-labelledby="log-picker-title" onclose={() => (isOpen = false)}
         class="m-auto w-[min(92vw,28rem)] rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-xl backdrop:bg-black/45">
   {#if isOpen}
   <div class="flex flex-col gap-3 p-4">
     <h2 id="log-picker-title" class="m-0 text-lg font-semibold">{$t('dash.pick-title')}</h2>
     <input bind:this={search} bind:value={query} type="search" data-slot="dash-search"
-           onkeydown={(e) => { if (e.key === 'Escape') { e.preventDefault(); dialog?.close(); } }} aria-label={$t('dash.pick-search')} placeholder={$t('dash.pick-search')}
+           onkeydown={closeOnEscape} aria-label={$t('dash.pick-search')} placeholder={$t('dash.pick-search')}
            class={`h-11 rounded-md border border-input bg-card px-3 text-base text-foreground placeholder:text-muted-foreground ${focus}`} />
     <div class="flex max-h-[50vh] flex-col overflow-y-auto">
       {#each shown as o (o.id)}
         <button data-slot="dash-pick" onclick={() => pick(o)}
-                class={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md px-2 text-left text-foreground hover:bg-accent ${focus}`}>
+                class={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md px-2 text-left text-foreground hover:bg-accent ${focus} focus-visible:outline-offset-[-2px]`}>
           <Icon name={typeIcon(o.type, $customTypes)} size={18} />
           <span class="truncate">{o.name}</span>
         </button>
