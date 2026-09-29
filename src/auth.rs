@@ -449,19 +449,36 @@ async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>
     let Some(TokenOwner { user, last_used_at }) = row else {
         return Ok(None);
     };
-    let today = db::today();
+    // The UTC date, because `last_used_at` is a UTC timestamp: against the instance's local
+    // date, east of UTC yesterday evening's stamp read as older than "today" for hours every
+    // morning, and every request of those hours wrote again.
+    let today = chrono::Utc::now().date_naive().to_string();
     // The same comparison as the `UPDATE`'s own guard, which stays: two first requests of the
-    // day racing each other still write once.
+    // day racing each other still write once. The write goes through the write queue, as every
+    // write does, but in the background: it is bookkeeping, and the request it rides on should
+    // neither wait behind an import for it nor fail when it cannot be had.
     if last_used_at.is_none_or(|t| t.as_str() < today.as_str()) {
-        sqlx::query(
-            "UPDATE api_tokens SET last_used_at = $1 \
-             WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
-        )
-        .bind(db::now())
-        .bind(&hash)
-        .bind(&today)
-        .execute(&state.db)
-        .await?;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let written = async {
+                let mut tx = db::begin_write(&state).await?;
+                sqlx::query(
+                    "UPDATE api_tokens SET last_used_at = $1 \
+                     WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
+                )
+                .bind(db::now())
+                .bind(&hash)
+                .bind(&today)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok::<_, AppError>(())
+            }
+            .await;
+            if let Err(e) = written {
+                tracing::debug!(error = %e, "could not record an API token's use; the next request will");
+            }
+        });
     }
     Ok(Some(user))
 }

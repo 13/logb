@@ -301,9 +301,43 @@ async fn use_is_recorded_so_a_forgotten_token_can_be_recognised() {
 
     bare_client().get(app.url("/objects")).bearer_auth(&token).send().await.unwrap();
 
-    let (used,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
-        .bind(id).fetch_one(&app.state.db).await.unwrap();
-    assert!(used.is_some(), "using a token should record that it was used");
+    assert!(recorded_use(&app, id).await.is_some(), "using a token should record that it was used");
+}
+
+/// `last_used_at` once the background write a request starts has landed, or `None` if two
+/// seconds pass without it.
+async fn recorded_use(app: &common::TestApp, id: i64) -> Option<String> {
+    for _ in 0..200 {
+        let (used,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
+            .bind(id).fetch_one(&app.state.db).await.unwrap();
+        if used.is_some() {
+            return used;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    None
+}
+
+/// The day's first use is recorded in the background: the request itself does not wait for the
+/// write, so it is not held up behind an import (or anything else holding the write lock).
+#[tokio::test]
+async fn a_tokens_first_use_of_the_day_does_not_wait_to_be_recorded() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (id, token) = issue(&app, "phone").await;
+
+    let held = logb::db::begin_write(&app.state).await.unwrap();
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bare_client().get(app.url("/objects")).bearer_auth(&token).send(),
+    )
+    .await
+    .expect("the day's first request with a token waited on the write lock")
+    .unwrap();
+    assert_eq!(first.status(), 200);
+    held.rollback().await.unwrap();
+
+    assert!(recorded_use(&app, id).await.is_some(), "recorded once the lock was free");
 }
 
 /// Once today's use is recorded, a request with the token writes nothing at all -- not even an
@@ -317,8 +351,8 @@ async fn a_token_used_today_reads_without_writing() {
     let (id, token) = issue(&app, "phone").await;
     let first = bare_client().get(app.url("/objects")).bearer_auth(&token).send().await.unwrap();
     assert_eq!(first.status(), 200);
-    let (recorded,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
-        .bind(id).fetch_one(&app.state.db).await.unwrap();
+    let recorded = recorded_use(&app, id).await;
+    assert!(recorded.is_some());
 
     let mut held = logb::db::begin_write(&app.state).await.unwrap();
     if common::backend() == logb::dialect::Backend::Postgres {
@@ -335,6 +369,8 @@ async fn a_token_used_today_reads_without_writing() {
     assert_eq!(second.status(), 200);
     held.rollback().await.unwrap();
 
+    // Long enough for a background write the second request started, had it started one.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let (after,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
         .bind(id).fetch_one(&app.state.db).await.unwrap();
     assert_eq!(after, recorded, "the day's first use is the one kept");
