@@ -23,7 +23,8 @@ export const files: RouteMatch = ({ url, sameOrigin }) => sameOrigin && url.path
 /** What a household reads with no connection: objects, entries, reminders, types, tags. */
 export const householdData: RouteMatch = ({ url, sameOrigin }) =>
   sameOrigin &&
-  ['/api/objects', '/api/activities', '/api/reminders', '/api/types', '/api/tags', '/api/stats/energy', '/api/stats/fuel']
+  ['/api/objects', '/api/activities', '/api/reminders', '/api/types', '/api/tags', '/api/stats/energy', '/api/stats/fuel',
+    '/api/stats/water']
     .some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`));
 
 /** Anything else under /api: network only, so a new endpoint is never cached by accident. */

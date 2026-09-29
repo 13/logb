@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { numberFormat } from '../lib/intl-cache';
   import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
@@ -44,14 +45,18 @@
     const path = statsPath(year, $includePurchases);
     // Cleared first: a stale total under a new selection would be a wrong number on screen.
     data = null;
-    energy = null;
-    fuel = null;
-    water = null;
     error = '';
     let current = true;
     api<Stats>('GET', path)
       .then((d) => { if (current) { data = d; years = d.years; } })
       .catch((e) => { if (current) error = errorMessage(e, $t); });
+    return () => { current = false; };
+  });
+
+  // Energy, fuel and water take neither the year nor the purchases switch, so they are asked for
+  // once per visit, not again on every change of either.
+  onMount(() => {
+    let current = true;
     api<EnergyUsage>('GET', '/stats/energy').then((e) => { if (current) energy = e; }, () => {});
     api<FuelUsage>('GET', '/stats/fuel').then((f) => { if (current) fuel = f; }, () => {});
     api<WaterUsage>('GET', '/stats/water').then((w) => { if (current) water = w; }, () => {});

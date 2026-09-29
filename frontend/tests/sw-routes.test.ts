@@ -18,6 +18,7 @@ const CASES: Array<[string, number]> = [
   ['/api/objects', 2], ['/api/objects?all=true&archived=false', 2], ['/api/objects/7', 2],
   ['/api/objects/7/insights', 2], ['/api/objects/7/activities?limit=20', 2], ['/api/activities/9', 2],
   ['/api/objects/7/energy', 2],
+  ['/api/stats/energy', 2], ['/api/stats/fuel', 2], ['/api/stats/water', 2],
   ['/api/reminders/due?within_days=30', 2], ['/api/types', 2], ['/api/tags', 2],
   ['/api/something-new', 3],
 ];
