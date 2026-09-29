@@ -75,7 +75,10 @@ export default defineConfig({
             method: 'GET',
             options: {
               cacheName: 'logb-api',
-              networkTimeoutSeconds: 4,
+              // Two seconds: on a connection that is technically up but hopeless, every read
+              // waits the full timeout before falling back, and at 4s a start on one bar of
+              // signal took twice as long to show what was already saved.
+              networkTimeoutSeconds: 2,
               expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
               cacheableResponse: { statuses: [200] },
             },

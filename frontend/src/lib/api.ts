@@ -138,7 +138,7 @@ export function resetClockSkewForTesting(): void {
  * Pure so it can be unit-tested without a fetch: true only when `dateHeader` is far enough before
  * `sentAt` (the moment the request went out), once `skewMs` -- the server clock's known offset
  * from this device's, see `clockSkewMs` above -- is subtracted out, that ordinary latency cannot
- * explain it. Given the 4s `NetworkFirst` timeout, only a cache hit reads as over a minute stale
+ * explain it. Given the 2s `NetworkFirst` timeout, only a cache hit reads as over a minute stale
  * after that correction. A missing or unparsable header counts as fresh: there is nothing there to
  * prove otherwise, and treating "we don't know" as "cached" would show the note on every response
  * an unrelated proxy happened to strip the header from.

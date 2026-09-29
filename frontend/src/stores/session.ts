@@ -288,6 +288,13 @@ async function openOffline(): Promise<void> {
 }
 
 async function doLoadSession(): Promise<boolean> {
+  // Both questions at once: they are independent requests, and asking `/auth/me` only after
+  // `/auth/status` answered put a whole round trip in front of the first screen on every start.
+  // `/auth/me`'s answer is only used once the status says setup is done, exactly as before; its
+  // rejection is handled below (or deliberately dropped with the setup/offline answers), never
+  // left unhandled.
+  const meRequest = api<User>('GET', '/auth/me');
+  meRequest.catch(() => { /* read below, or not needed */ });
   let status: { setup_required: boolean };
   try {
     status = await api<{ setup_required: boolean }>('GET', '/auth/status');
@@ -315,7 +322,7 @@ async function doLoadSession(): Promise<boolean> {
   }
   let me: User;
   try {
-    me = await api<User>('GET', '/auth/me');
+    me = await meRequest;
   } catch (e) {
     // A 4xx is the server saying nobody is signed in: the session ends as a 401 anywhere else
     // would end it (`/auth/*` does not trigger the unauthorized handler). Anything else

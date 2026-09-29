@@ -48,20 +48,26 @@
   async function load() {
     const token = loadSeq.next();
     loading = true; error = '';
-    let queued: MemObject[] = [];
-    try { queued = await pendingObjects(); } catch { /* a blocked/full IndexedDB must not strand the dashboard loading */ }
+    // The queue read runs alongside the requests rather than in front of them: IndexedDB and
+    // the network do not wait on each other. A blocked/full IndexedDB must not strand the
+    // dashboard loading, so its failure is just an empty queue.
+    const queuedRead = pendingObjects().catch((): MemObject[] => []);
     let fetched: [MemObject[], MemObject[]] | null = null;
     let reminders: Reminder[] | null = null;
     let failure = '';
     try {
       // Both tabs at every depth, once: switching tabs, searching and sorting then need no
       // request, and a search can find an object inside another. A household has tens of objects.
-      fetched = await Promise.all([
+      // The reminders ride in the same batch: they never depended on the objects' answer.
+      const [activeRows, archivedRows, dueRows] = await Promise.all([
         api<MemObject[]>('GET', '/objects?all=true&archived=false'),
         api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+        api<Reminder[]>('GET', '/reminders/due?within_days=30'),
       ]);
-      reminders = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
+      fetched = [activeRows, archivedRows];
+      reminders = dueRows;
     } catch (e) { failure = errorMessage(e, $t); }
+    const queued = await queuedRead;
     if (!loadSeq.current(token)) return;
     // A failed fetch keeps what is on screen, minus the queued rows it is about to re-add.
     if (fetched) [active, archived] = fetched;
