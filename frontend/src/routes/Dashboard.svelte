@@ -6,7 +6,7 @@
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
   import { persisted } from '../stores/persisted';
-  import { SORT_KEYS, activeSpend, parseSort, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
+  import { SORT_KEYS, activeSpend, parseSort, pickerOrder, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
   import { debouncer } from '../lib/debounce';
   import { pendingObject } from '../lib/object-form';
@@ -16,6 +16,8 @@
   import { tagColorIndex } from '../lib/tags';
   import DashboardReminders from '../lib/DashboardReminders.svelte';
   import Icon from '../lib/Icon.svelte';
+  import LogPicker from '../lib/LogPicker.svelte';
+  import { quickLogPath } from '../lib/weight';
   import { money } from '../lib/format';
   import { currency } from '../stores/session';
 
@@ -235,5 +237,9 @@
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}
       </div>
     {/if}
+  {/if}
+
+  {#if !nothingYet}
+    <LogPicker objects={pickerOrder(active, $locale)} onpick={(o) => go(quickLogPath(o))} />
   {/if}
 </main>

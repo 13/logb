@@ -141,3 +141,13 @@ export function activeSpend(objects: MemObject[]): number {
   for (const o of objects) if (!o.pending) sum += o.stats.total_cost_cents;
   return sum;
 }
+
+/** The dashboard's "+ Log" list: what was used last is most likely what is logged next. An
+ *  object still in the outbox has no id to log against yet, so it is left out. */
+export function pickerOrder(objects: MemObject[], locale?: string): MemObject[] {
+  const compare = collator(locale, { sensitivity: 'base' }).compare;
+  return objects
+    .filter((o) => !o.pending)
+    .toSorted((a, b) => (b.stats.last_activity_date ?? '').localeCompare(a.stats.last_activity_date ?? '')
+      || compare(a.name, b.name));
+}

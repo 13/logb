@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeSpend, matchesQuery, parseSort, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
+import { activeSpend, matchesQuery, parseSort, pickerOrder, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
 import type { MemObject, ObjectType } from '../src/lib/types';
 
 let nextId = 1;
@@ -155,5 +155,17 @@ describe('activeSpend', () => {
 
   it('is zero for an empty list', () => {
     expect(activeSpend([])).toBe(0);
+  });
+});
+
+describe('pickerOrder', () => {
+  it('puts the most recently used objects first and leaves out queued ones', () => {
+    const rows = [
+      obj({ id: 1, name: 'Beta', stats: { last_activity_date: '2026-01-01' } }),
+      obj({ id: 2, name: 'Alpha', stats: { last_activity_date: null } }),
+      obj({ id: 3, name: 'Gamma', stats: { last_activity_date: '2026-09-01' } }),
+      obj({ id: -4, name: 'Queued', pending: true, stats: { last_activity_date: '2026-09-02' } }),
+    ];
+    expect(pickerOrder(rows).map((o) => o.name)).toEqual(['Gamma', 'Beta', 'Alpha']);
   });
 });

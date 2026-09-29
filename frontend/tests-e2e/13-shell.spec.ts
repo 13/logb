@@ -34,7 +34,9 @@ test('a drill-down three screens deep still shows which destination it belongs t
 
 test('the nav sits where the viewport can afford it, and never covers the main action', async ({ page }, testInfo) => {
   await signIn(page);
-  await page.getByRole('button', { name: /New object/ }).waitFor().catch(() => {});
+  // The floating "+ Log" button only exists once there is an object to log for; seed one.
+  expect((await page.request.post('/api/objects', { data: { name: 'Shell nav probe', type: 'tool' } })).ok()).toBe(true);
+  await page.reload();
 
   const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
   const navBox = await nav.boundingBox();
@@ -54,36 +56,49 @@ test('the nav sits where the viewport can afford it, and never covers the main a
   }
 
   // The FAB is this app's primary action. A nav that covers it is a nav that broke the app.
-  const fab = page.getByRole('button', { name: /New object/ });
-  if (await fab.isVisible()) {
-    const fabBox = await fab.boundingBox();
-    if (!fabBox) throw new Error('no FAB box');
-    const overlaps =
-      fabBox.x < navBox.x + navBox.width && fabBox.x + fabBox.width > navBox.x &&
-      fabBox.y < navBox.y + navBox.height && fabBox.y + fabBox.height > navBox.y;
-    expect(overlaps, 'the FAB must not sit underneath the nav').toBe(false);
-  }
+  const fab = page.getByRole('button', { name: /^\+ Log$/ });
+  await expect(fab).toBeVisible();
+  const fabBox = await fab.boundingBox();
+  if (!fabBox) throw new Error('no FAB box');
+  const overlaps =
+    fabBox.x < navBox.x + navBox.width && fabBox.x + fabBox.width > navBox.x &&
+    fabBox.y < navBox.y + navBox.height && fabBox.y + fabBox.height > navBox.y;
+  expect(overlaps, 'the FAB must not sit underneath the nav').toBe(false);
 });
 
-// The floating "+ New object" button left the dashboard for its header (Task 3 of UI round 2);
-// the floating spot is taken by "+ Log" later in that round, which brings the FAB-anchoring
-// check back. Until then this guards the same thing for the button that took over the action:
-// on a wide viewport it stays inside the content pane, not out in the gutter beside it.
-test('on a wide desktop viewport, the New object button stays inside the content pane', async ({ page }) => {
+test('on a wide desktop viewport, the FAB stays anchored to the content pane, not the bare viewport edge', async ({ page }) => {
   await signIn(page);
-  // With no object yet the invitation's own button stands in for the header's; seed one.
+  // The "+ Log" button only exists once there is an object to log for.
   expect((await page.request.post('/api/objects', { data: { name: 'Shell pane probe', type: 'tool' } })).ok()).toBe(true);
+  // Wide enough that `main`'s 1100px cap opens a gutter between it and the viewport edge (see
+  // the comment on `.fab` in app.css). `setViewportSize` overrides the project's own viewport
+  // for this one test.
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.reload();
 
-  const btn = page.getByRole('button', { name: /New object/ });
-  await expect(btn).toBeVisible();
-  const mainBox = await page.locator('main').boundingBox();
-  const box = await btn.boundingBox();
-  if (!mainBox || !box) throw new Error('no main or no button box');
-  const right = mainBox.x + mainBox.width;
-  expect(box.x + box.width).toBeLessThanOrEqual(right + 1);
-  expect(right - (box.x + box.width), 'the button should hug the pane, not float out in the gutter').toBeLessThan(80);
+  const main = page.locator('main');
+  const fab = page.getByRole('button', { name: /^\+ Log$/ });
+  await expect(fab).toBeVisible();
+
+  const mainBox = await main.boundingBox();
+  const fabBox = await fab.boundingBox();
+  if (!mainBox || !fabBox) throw new Error('no main or no FAB box');
+  // The FAB's usual clearance from whatever edge it hugs -- `--space-5` on desktop, the same
+  // value the un-gutted case already uses between the FAB and the bare viewport edge.
+  const clearance = await page.evaluate(() =>
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-5')),
+  );
+
+  // The design spec: the FAB sits at the bottom-right of the content pane, clear of the
+  // sidebar -- a constant `--space-5` from `main`'s right edge, not drifting further out in the
+  // gutter that opens once `main` hits its 1100px cap. A `position: fixed` FAB measures `right`
+  // from the viewport, so on a wide screen that constant gap has to be computed deliberately
+  // rather than falling out of a plain `right: var(--space-5)`.
+  const gap = mainBox.x + mainBox.width - clearance - (fabBox.x + fabBox.width);
+  expect(
+    Math.abs(gap),
+    "the FAB's right edge should sit one clearance inside main's right edge, not drift out into the gutter beyond it",
+  ).toBeLessThan(4);
 });
 
 test('who is signed in, and the way out, are one step away', async ({ page }, testInfo) => {

@@ -139,9 +139,9 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await expect(page.getByTestId('object-card').filter({ hasText: 'Chip gap probe' })).toBeVisible({ timeout: 20000 });
 
   // The dashboard re-runs its load whenever it (re)mounts, and while that is in flight
-  // `.controls`'s next element sibling is the "Loading..." paragraph, not the list -- reading
-  // `nextElementSibling` blind can measure that paragraph instead of the list. `.controls + [data-testid=object-list]`
-  // matches only once the list is actually the element right after the controls row, so a null
+  // the toolbar's next element sibling is the "Loading..." paragraph, not the list -- reading
+  // `nextElementSibling` blind can measure that paragraph instead of the list. `[data-testid=dash-toolbar] + [data-testid=object-list]`
+  // matches only once the list is actually the element right after the toolbar row, so a null
   // result here means the load has not settled yet and the measurement is retried rather than
   // taken against the wrong element.
   let gaps!: { above: number; below: number };

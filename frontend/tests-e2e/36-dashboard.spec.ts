@@ -88,3 +88,24 @@ test('the dashboard has a subtitle, one toolbar row, and a grid on wide screens'
   }
   await expect(tabs).toHaveAttribute('aria-pressed', 'true');
 });
+
+test('"+ Log" on the dashboard asks for the object, then opens its quick entry', async ({ page }) => {
+  await signInFresh(page, '36-dashboard-log');
+  const car = (await (await page.request.post('/api/objects', { data: { name: 'Picker car', type: 'car', counter_unit: 'km' } })).json()).id as number;
+  await page.request.post('/api/objects', { data: { name: 'Picker drill', type: 'tool' } });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /^\+ Log$/ }).click();
+  const dialog = page.getByRole('dialog', { name: /Log for which object/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Find an object')).toBeFocused();
+  await dialog.getByLabel('Find an object').fill('car');
+  await expect(dialog.getByRole('button', { name: /Picker drill/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole('button', { name: /^\+ Log$/ }).click();
+  await dialog.getByRole('button', { name: /Picker car/ }).click();
+  // A car with a counter goes to its reading, as the old per-card "+" did.
+  await expect(page).toHaveURL(new RegExp(`/objects/${car}/reading$`));
+});
