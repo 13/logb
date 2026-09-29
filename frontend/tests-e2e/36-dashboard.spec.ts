@@ -132,3 +132,41 @@ test('"+ Log" is not offered when no object can be logged against', async ({ pag
   await expect(page.getByRole('button', { name: /^\+ New object$/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^\+ Log$/ })).toHaveCount(0);
 });
+
+test('a reload after an outbox flush keeps the search box, its focus and its text', async ({ page, context }) => {
+  await signInFresh(page, '36-dashboard-flush');
+  const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
+  await page.request.post('/api/objects', { data: { name: 'Flush existing', type: 'other' } });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /Flush existing/ })).toBeVisible();
+
+  // Open the form once online, so its code is loaded before the network goes away.
+  await page.getByRole('button', { name: /New object/ }).click();
+  await expect(page.getByLabel('Name')).toBeVisible();
+  await nav.getByRole('button', { name: 'Objects' }).click();
+  await expect(page.getByRole('button', { name: /Flush existing/ })).toBeVisible();
+
+  // Queue an object create offline, so the flush on reconnect changes the queue and reloads.
+  await context.setOffline(true);
+  await page.getByRole('button', { name: /New object/ }).click();
+  await page.getByLabel('Name').fill('Flush queued');
+  await page.getByLabel('Type').selectOption('other');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page).toHaveURL(/\/objects\/-?\d+$/);
+  await nav.getByRole('button', { name: 'Objects' }).click();
+
+  const search = page.getByRole('searchbox');
+  await search.focus();
+  await search.pressSequentially('Flush');
+  await search.evaluate((el) => { (el as HTMLElement).dataset.probe = 'same'; });
+
+  const reloaded = page.waitForResponse((r) => r.url().includes('/api/objects?all=true') && r.ok());
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await reloaded;
+  await expect(page.getByRole('button', { name: /Flush queued/ })).toBeVisible();
+  // The same element (never unmounted), still focused, text intact.
+  await expect(search).toHaveAttribute('data-probe', 'same');
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('Flush');
+});

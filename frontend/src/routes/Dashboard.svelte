@@ -28,6 +28,9 @@
   let due = $state<Reminder[]>([]);
   let soon = $state<Reminder[]>([]);
   let loading = $state(true);
+  /** One-way: set when the first load ends, never cleared. `loading` flips on every reload (an
+   *  outbox flush), and gating the toolbar on it would unmount the search box mid-typing. */
+  let firstLoaded = $state(false);
   let error = $state('');
 
   async function pendingObjects(): Promise<MemObject[]> {
@@ -98,6 +101,7 @@
     }
     error = failure;
     loading = false;
+    firstLoaded = true;
     if (fetched && !fetchedArchived) await loadArchived(token);
   }
 
@@ -152,7 +156,7 @@
   /** The first load has answered -- and with it the archived list when nothing is active, so
    *  `nothingYet` is final. Before that a fresh user's header action and toolbar would render
    *  and then vanish, taking keyboard focus with them. */
-  const settled = $derived(!loading);
+  const settled = $derived(firstLoaded);
   const nothingYet = $derived(active.length === 0 && archivedKnown && archived.length === 0);
 
   /** A snoozed reminder leaves the due list at once, and its object's due count with it; only the

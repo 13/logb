@@ -331,12 +331,12 @@ test('tag chips on an entry never paint over the bottom nav', async ({ page }, i
   await expect(chip).toBeVisible();
   // Scroll until the chip sits right behind the nav's centre.
   await chip.evaluate((el) => {
-    const n = document.querySelector('nav[aria-label]') as HTMLElement;
+    const n = document.querySelector('nav[aria-label="Main"]') as HTMLElement;
     const nb = n.getBoundingClientRect();
     window.scrollBy(0, el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2 - (nb.top + nb.height / 2));
   });
   const hit = await chip.evaluate(() => {
-    const nb = (document.querySelector('nav[aria-label]') as HTMLElement).getBoundingClientRect();
+    const nb = (document.querySelector('nav[aria-label="Main"]') as HTMLElement).getBoundingClientRect();
     return { x: nb.left + nb.width / 2, y: nb.top + nb.height / 2 };
   });
   const box = (await chip.boundingBox())!;

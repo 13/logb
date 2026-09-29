@@ -385,7 +385,7 @@
   $effect(() => { oid; if (offersEnergy) loadEnergy(); });
   // Figures for the other path (with or without contents) are dropped first, so a switch that
   // says "include contents" never sits next to figures that do not include them.
-  $effect(() => { const path = insightsUrl; if (serverReady) { insights = null; loadInsights(path); } });
+  $effect(() => { const path = insightsUrl; if (serverReady) { insights = null; insightsError = ''; loadInsights(path); } });
   // `dueCount` is derived, so a reload of the object that leaves the count alone does not ask again.
   $effect(() => { oid; if (dueCount > 0) loadDue(); else { dueSeq.invalidate(); dueReminders = []; } });
   // A background replay can succeed while this view is mounted; without this the synthetic
@@ -417,10 +417,10 @@
     // (the pending entry's own numbers, or none at all) until the next remount, exactly the
     // gap `loadActivities('refresh')` just above exists to close for the timeline itself. Same
     // guards as the effects that load them in the first place, since neither is worth loading
-    // on an object that never offers it.
-    if (offersEnergy) loadEnergy();
-    if (offersTrip) loadTripSummary();
-    refreshDetails();
+    // on an object that never offers it. The details refresh covers both while they are shown;
+    // the Energy rate also feeds the Timeline, so it reloads regardless.
+    if (detailsShown) refreshDetails();
+    else if (offersEnergy) loadEnergy();
   }));
 
   // The default tab is left out of the address, and the address is replaced only when it changes:
