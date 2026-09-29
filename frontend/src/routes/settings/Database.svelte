@@ -213,8 +213,8 @@
   .restart { border-left: 4px solid var(--danger); }
   /* Marked out, but in the accent colour rather than the warning or danger one: a PostgreSQL
      database LogB does not back up is a division of responsibility, not a fault. */
-  .elsewhere { border-left: 4px solid var(--accent); }
-  .elsewhere b { color: var(--accent); }
+  .elsewhere { border-left: 4px solid var(--accent-ink); }
+  .elsewhere b { color: var(--accent-ink); }
   .tables { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-1); }
   .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
 </style>

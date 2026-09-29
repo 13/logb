@@ -47,5 +47,55 @@ describe('theme contrast', () => {
       const border = varIn(rule(':is(input, select, textarea):where(:not([data-slot]))'), 'border')!;
       for (const bg of ['bg', 'surface']) expect(contrastRatio(token(border, theme), token(bg, theme)), bg).toBeGreaterThanOrEqual(3);
     });
+
+    it(`${name}: text on the amber fill is readable (>= 4.5:1)`, () => {
+      expect(contrastRatio(token('accent-text', theme), token('accent', theme))).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it(`${name}: amber as text reads on the page and on a card (>= 4.5:1)`, () => {
+      for (const bg of ['bg', 'surface']) expect(contrastRatio(token('accent-ink', theme), token(bg, theme)), bg).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it(`${name}: the focus ring shows on the page and on a card (>= 3:1)`, () => {
+      for (const bg of ['bg', 'surface']) expect(contrastRatio(token('focus', theme), token(bg, theme)), bg).toBeGreaterThanOrEqual(3);
+    });
+
+    it(`${name}: muted text reads on the page, a card and a muted fill (>= 4.5:1)`, () => {
+      for (const bg of ['bg', 'surface', 'surface-2']) expect(contrastRatio(token('muted', theme), token(bg, theme)), bg).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});
+
+const tw = readFileSync(fileURLToPath(new URL('../src/app.tw.css', import.meta.url)), 'utf8');
+const twBlock = (sel: string) => tw.slice(tw.indexOf(sel), tw.indexOf('}', tw.indexOf(sel)));
+const twLight = twBlock(':root {');
+const twDark = twBlock(":root[data-theme='dark'] {");
+const ui = (name: string, theme: string): string => {
+  const own = theme.match(new RegExp(`--ui-${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
+  const value = own ?? twLight.match(new RegExp(`--ui-${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
+  expect(value, `--ui-${name}`).toBeTruthy();
+  return value!;
+};
+
+describe('shadcn token contrast', () => {
+  for (const [name, theme] of [['light', twLight], ['dark', twDark]] as const) {
+    const text: Array<[string, string]> = [
+      ['foreground', 'background'], ['card-foreground', 'card'], ['popover-foreground', 'popover'],
+      ['primary-foreground', 'primary'], ['secondary-foreground', 'secondary'],
+      ['muted-foreground', 'background'], ['muted-foreground', 'card'], ['muted-foreground', 'muted'],
+      ['accent-foreground', 'accent'], ['destructive-foreground', 'destructive'],
+      ['destructive', 'background'], ['destructive', 'card'],
+      ['brand-ink', 'background'], ['brand-ink', 'card'],
+    ];
+    for (const [fg, bg] of text) {
+      it(`${name}: ${fg} on ${bg} (>= 4.5:1)`, () => {
+        expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+    for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card']] as const) {
+      it(`${name}: ${fg} against ${bg} (>= 3:1)`, () => {
+        expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(3);
+      });
+    }
   }
 });

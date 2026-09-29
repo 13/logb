@@ -230,7 +230,7 @@
     border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; color: var(--muted);
   }
   .icon-choice:has(input:checked) { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
-  .icon-choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .icon-choice:has(input:focus-visible) { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
   .cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 var(--space-3); }
   .cats label { min-height: 44px; }
   .actions { margin-top: var(--space-2); }

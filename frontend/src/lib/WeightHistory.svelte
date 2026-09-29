@@ -111,5 +111,5 @@
   select { width: 100%; } .reminder { margin-top: var(--space-2); }
   .history-list { list-style: none; padding: 0; margin: var(--space-2) 0 0; display: grid; gap: var(--space-1); }
   .history-list button { width: 100%; display: flex; justify-content: space-between; text-align: left; }
-  .history-list .chosen { outline: 2px solid var(--accent); }
+  .history-list .chosen { outline: 2px solid var(--accent-ink); }
 </style>

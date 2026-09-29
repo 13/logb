@@ -216,5 +216,5 @@
   .calendar-grid button { min-width: 0; padding: var(--space-2) var(--space-1); }
   .weekday { text-align: center; color: var(--muted); font-size: var(--text-xs); padding: var(--space-1) 0; }
   .outside { opacity: .45; }
-  .selected { outline: 2px solid var(--accent); }
+  .selected { outline: 2px solid var(--accent-ink); }
 </style>

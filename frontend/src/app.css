@@ -1,22 +1,25 @@
 :root {
-  --bg: #f7f7f5;
+  --bg: #fafafa;
   --surface: #ffffff;
-  --surface-2: #eeeeea;
-  --text: #1c1c1a;
-  --muted: #6b6b66;
-  --accent: #1f6f5f;
-  --accent-text: #ffffff;
-  --danger: #b3261e;
+  --surface-2: #f4f4f5;
+  --text: #18181b;
+  --muted: #6b6b74;
+  /* The brand fill (buttons, the active chip) with dark text on it. Amber is too light to carry
+     white text or to be read as text itself; that is --accent-ink's job. */
+  --accent: #f59e0b;
+  --accent-text: #1c1300;
+  --accent-ink: #b45309;
+  --danger: #b91c1c;
   /* Dark enough for warn TEXT on the page (5.5:1) as well as white text on it (5.9:1). */
   --warn: #915700;
   /* Text on a --danger / --warn fill, >= 4.5:1 in each theme (tests/theme-contrast.test.ts). */
   --on-danger: #ffffff;
   --on-warn: #ffffff;
-  --border: #dddcd6;
+  --border: #e4e4e7;
   /* A form control's own outline: the card --border is too faint (1.4:1) to show where a field
      is, and WCAG's non-text contrast wants 3:1 against what it sits on. */
-  --control-border: #8a8a84;
-  --shadow: 0 1px 2px rgba(0,0,0,.08);
+  --control-border: #8a8a93;
+  --shadow: 0 1px 2px rgba(0,0,0,.04);
   /* Type: six steps at roughly a 1.2 ratio, sized for UI density rather than editorial
      reading. Replaces nine improvised sizes (1.4/1.15/1.1/1.05/1/.9/.85/.8/.75rem). */
   --text-xs: .75rem;
@@ -47,10 +50,9 @@
   --radius-md: 12px;
   --radius-full: 999px;
 
-  /* The ring sits on the page behind the control (see outline-offset below), so it is the
-     text colour rather than the accent -- an accent ring on a filled accent button is
-     invisible, which is exactly where focus matters most. */
-  --focus: #1c1c1a;
+  /* The ring sits on the page behind the control (see outline-offset below). Amber ink, not the
+     amber fill: the fill is 2.1:1 on the page and would vanish around a filled button. */
+  --focus: #b45309;
   --transition: 150ms ease;
   font-family: 'Inter Variable', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
@@ -67,22 +69,23 @@
   --tag-7-bg: #eceef1; --tag-7-fg: #1f2937;
 }
 :root[data-theme="dark"] {
-  --bg: #121412;
-  --surface: #1c1f1c;
-  --surface-2: #262a26;
-  --text: #ecebe6;
-  --muted: #a3a39c;
-  --accent: #4fb39a;
-  --accent-text: #0b1f1a;
-  --danger: #ff6b60;
+  --bg: #09090b;
+  --surface: #18181b;
+  --surface-2: #27272a;
+  --text: #fafafa;
+  --muted: #a1a1aa;
+  --accent: #fbbf24;
+  --accent-text: #1c1300;
+  --accent-ink: #fbbf24;
+  --danger: #f87171;
   --warn: #f0a640;
   /* The dark theme's fills are light, so the text on them is dark (white was 2.1-2.8:1). */
-  --on-danger: #121412;
+  --on-danger: #09090b;
   --on-warn: #121412;
-  --border: #33372f;
-  --control-border: #6e726b;
+  --border: #27272a;
+  --control-border: #71717a;
   --shadow: none;
-  --focus: #ecebe6;
+  --focus: #fbbf24;
   color-scheme: dark;
 
   --tag-0-bg: #16392d; --tag-0-fg: #b7f0d2;
@@ -103,7 +106,7 @@ h1, h2, h3, h4, h5, h6 { font-size: revert; font-weight: revert; }
 ul, ol, menu { list-style: revert; padding: revert; }
 img, svg, video, canvas, audio, iframe, embed, object { display: revert; vertical-align: revert; }
 img, video { max-width: revert; height: revert; }
-a { text-decoration: revert; }
+a:where(:not([data-slot])) { text-decoration: revert; }
 fieldset, legend, td, th, hr { padding: revert; border: revert; }
 table { border-collapse: revert; text-indent: revert; border-color: revert; }
 /* Beyond the elements above, the reset also sets a 1.5 line height on the page, its own
@@ -126,7 +129,7 @@ body {
   background: var(--bg); color: var(--text); -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: contain;
 }
-a { color: var(--accent); }
+a:where(:not([data-slot])) { color: var(--accent-ink); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
 /* Sign-in and first-run setup render without the shell, so the form IS the page: a narrow
    column in the middle of the screen both ways, instead of a 720px column pinned to the top
@@ -268,7 +271,7 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 .fab { position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); z-index: 6; border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
 .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: var(--space-3); }
 .tabs button { flex: 1; background: none; border-radius: 0; border-bottom: 2px solid transparent; padding: var(--space-3) var(--space-1); }
-.tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.tabs button.active { border-bottom-color: var(--accent-ink); color: var(--accent-ink); font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-3); }
 /* `img.thumb`, not `.thumb`: this sizes a grid image, and a non-image that borrowed the name
    inherited `width: 100%` plus a square aspect ratio. Both real users are images -- the object
@@ -335,7 +338,7 @@ button, a, .chip {
   display: flex; align-items: center; width: 100%;
   background: none; color: var(--muted);
 }
-.appnav .dest.active { color: var(--accent); font-weight: 600; }
+.appnav .dest.active { color: var(--accent-ink); font-weight: 600; }
 .wordmark { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
 
 /* Mobile: a bottom tab bar. The top of a phone screen is the one place a thumb cannot reach,

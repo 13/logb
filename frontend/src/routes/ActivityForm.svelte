@@ -599,7 +599,7 @@
 </main>
 
 <style>
-  .hintbtn { font-size: var(--text-sm); color: var(--accent); padding: var(--space-1) 0; text-align: left; }
+  .hintbtn { font-size: var(--text-sm); color: var(--accent-ink); padding: var(--space-1) 0; text-align: left; }
   .pickerlike { border: 1px dashed var(--border); width: 100%; }
   .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
   .actions { margin-top: var(--space-2); }
