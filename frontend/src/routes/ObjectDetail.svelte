@@ -8,6 +8,8 @@
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
   import Icon from '../lib/Icon.svelte';
+  import LogAction from '../lib/LogAction.svelte';
+  import { logOptions } from '../lib/log-options';
   import ObjectCard from '../lib/ObjectCard.svelte';
   import TagChips from '../lib/TagChips.svelte';
   import LastDone from '../lib/LastDone.svelte';
@@ -52,6 +54,13 @@
   const offersEnergy = $derived(offersEnergyFor(object));
   const resourceCategory = $derived(resourceCategoryFor(object));
   const resourceLogLabel = $derived(object?.resource_kind === 'water' ? $t('water.log') : $t(`${energyLabelKey(object?.resource_unit ?? object?.fuel_unit ?? null)}-log`));
+  /** "+ Log" on this object: the same three actions the floating buttons used to be. */
+  const logChoices = $derived(logOptions({
+    oid,
+    offersTrip,
+    resourceCategory: offersEnergy ? resourceCategory : null,
+    labels: { activity: $t('timeline.log'), trip: $t('trip.log'), resource: resourceLogLabel },
+  }));
   let activities = $state<Activity[]>([]);
   /// How many activities match the current filter in total, page window aside.
   let activityTotal = $state(0);
@@ -418,17 +427,7 @@
            already is; two of them would be two calls to the same action. -->
       {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
         <div class="fab-row">
-          {#if offersTrip}
-            <!-- Not `.ghost`: this floats over the scrolling timeline, and a transparent
-                 button there shows whatever card/text is currently scrolled beneath it through
-                 its own label. `.fab-secondary` gives it the same solid surface + border a card
-                 has, so it reads as a button regardless of what is behind it. -->
-            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=trip`)}>+ {$t('trip.log')}</button>
-          {/if}
-          {#if offersEnergy}
-            <button class="fab-btn fab-secondary" onclick={() => go(`/objects/${oid}/activities/new?category=${resourceCategory}`)}>+ {resourceLogLabel}</button>
-          {/if}
-          <button class="primary fab-btn" onclick={() => go(`/objects/${oid}/activities/new`)}>+ {$t('timeline.log')}</button>
+          <LogAction options={logChoices} onpick={(o) => go(o.path)} />
         </div>
       {/if}
     {:else if tab === 'documents'}
@@ -478,18 +477,12 @@
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
   .info-actions { margin-top: var(--space-4); }
   .tabs .chip { margin-left: var(--space-1); }
-  /* A second FAB ("+ Log trip") beside the usual one, only on a km/mi object. `.fab` itself
-     (app.css) is `position: fixed`, sized for exactly one button -- two of those stacked on top
-     of each other would overlap, not sit side by side. This wrapper takes over the fixed
-     positioning (mirroring `.fab`'s own rules, including its two responsive overrides below) and
-     lays its buttons out with `.fab-btn`, `.fab`'s own look with no position of its own. */
+  /* Where "+ Log" floats: `.fab`'s own position (app.css), mirrored here -- including its two
+     responsive overrides below -- because the action is a component, not a `.fab` button. */
   .fab-row {
     position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
     z-index: 6; display: flex; gap: var(--space-2);
   }
-  .fab-btn { border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
-  /* A solid surface + border, not `.ghost`'s transparent: see the comment on the button itself. */
-  .fab-secondary { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
   @media (width < 900px) {
     .fab-row { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
   }

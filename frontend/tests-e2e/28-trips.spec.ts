@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { logEntry, signInFresh } from './helpers';
 
 /** The app's own example date, pinned so nothing here depends on when it actually runs (mirrors
  *  `FIXED_NOW` in `26-date-format.spec.ts`). Nothing in this spec asserts on a date directly, but
@@ -27,7 +27,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await entry(page, bike, { category: 'reading', title: 'Odometer', counter_value: 400, date: '2026-01-01' });
 
   await page.goto(`/objects/${bike}`);
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=trip`));
 
   // Start defaults to the object's current counter (the last reading, 400).
@@ -56,7 +56,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await expect(page.locator('.stat', { hasText: 'Current' })).toContainText('600 km');
 
   // A second trip: start now prefills from the first trip's end, and From already offers "Home".
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await expect(page.getByLabel(/^Start/)).toHaveValue('600');
   await expect(page.locator('#trip-from option[value="Home"]')).toHaveCount(1);
   await page.getByLabel(/^Distance/).fill('50');
@@ -77,7 +77,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await expect(page.locator('.entry-row')).toHaveCount(2);
 
   // An end below start is refused, and the form is left open with the error on screen.
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await page.getByLabel(/^Start/).fill('500');
   await page.getByLabel(/^End/).fill('400');
   await page.getByRole('button', { name: 'Save' }).click();
@@ -123,7 +123,7 @@ test('repeating a titled trip also carries its From/To places', async ({ page })
   });
 
   await page.goto(`/objects/${bike}`);
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=trip`));
 
   await page.getByRole('button', { name: 'Repeat: Commute' }).click();

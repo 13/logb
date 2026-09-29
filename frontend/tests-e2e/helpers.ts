@@ -85,3 +85,20 @@ export function jpegWithExifPayload(name = 'photo.jpg') {
     ),
   };
 }
+
+/**
+ * Starts a new entry on the open object page. "+ Log" is a menu when the object offers more
+ * than activities (a trip, a fill or charge) and the action itself when it does not; an empty
+ * timeline shows its own buttons instead. This finds whichever the page has.
+ */
+export async function logEntry(page: Page, name: RegExp): Promise<void> {
+  const menu = page.getByTestId('log-menu');
+  const direct = page.getByRole('button', { name });
+  await menu.or(direct).first().waitFor();
+  if (await menu.isVisible()) {
+    await menu.click();
+    await page.getByRole('menuitem', { name }).click();
+  } else {
+    await direct.first().click();
+  }
+}

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { logEntry, signInFresh } from './helpers';
 
 /** Pinned so every entry logged through the form (its date defaults to "today") lands on the
  *  same day, and the maths in this spec's own comments below don't depend on when it runs --
@@ -26,7 +26,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   // A brand-new object's timeline is empty, so this is the empty-state ghost button, not the
   // FAB row (which only appears once there is at least one entry) -- exercising both is exactly
   // why `onchargelog` exists on Timeline.svelte, not only the FAB in ObjectDetail.
-  await page.getByRole('button', { name: /Log charge/ }).click();
+  await logEntry(page, /Log charge/);
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=fuel`));
 
   // A full charge at 1000 km, no amount and no cost -- it still marks distance, which is all
@@ -43,7 +43,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
 
   // A trip 1000 -> 1200 using 40 % of the battery. Start prefills from the object's own current
   // counter, exactly as in 28-trips.spec.ts.
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=trip`));
   await expect(page.getByLabel(/^Start/)).toHaveValue('1000');
   await page.getByLabel(/^Distance/).fill('200');
@@ -68,7 +68,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   // A second full charge at 1400 km, 8 kWh, €2.40 -- now two full charges exist, so the window
   // 1000 -> 1400 (400 km) forms, and every rate is drawn from this charge's own amount/cost.
   await page.goto(`/objects/${bike}`);
-  await page.getByRole('button', { name: /Log charge/ }).click();
+  await logEntry(page, /Log charge/);
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=fuel`));
   await expect(page.getByLabel('Charged full')).toBeChecked();
   await page.getByLabel('Title').fill('Charge');
@@ -113,7 +113,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   // measured over every trip carrying a battery figure, not only this one: (200 + 50) / (40 +
   // 85) = 250 / 125 = 2, so range_left = 15 * 2 = 30.
   await page.goto(`/objects/${bike}`);
-  await page.getByRole('button', { name: /Log trip/ }).click();
+  await logEntry(page, /Log trip/);
   await expect(page.getByLabel(/^Start/)).toHaveValue('1400');
   await page.getByLabel(/^Distance/).fill('50');
   await page.getByLabel(/Battery used/).fill('85');

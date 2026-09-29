@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { logEntry, signInFresh } from './helpers';
 
 test('water meter readings produce monthly household consumption', async ({ page }) => {
   await signInFresh(page, '31-water');
@@ -12,7 +12,7 @@ test('water meter readings produce monthly household consumption', async ({ page
   await page.getByRole('button', { name: /Record water/ }).click();
   await page.getByLabel(/Meter reading/).fill('100');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.getByRole('button', { name: /Record water/ }).click();
+  await logEntry(page, /Record water/);
   await page.getByLabel(/Meter reading/).fill('102.5');
   // Leaving the page while this save is in flight cancels it, and then there is no consumption
   // to show; under a loaded full run the request was still open when the goto below fired.
