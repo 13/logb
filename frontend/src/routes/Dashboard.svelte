@@ -96,16 +96,32 @@
     }
     error = failure;
     loading = false;
-    if (fetched && !fetchedArchived) {
-      try {
-        const rows = await fetchArchived();
-        if (loadSeq.current(token)) { archived = rows; archivedKnown = true; }
-      } catch (e) {
-        // Only worth a word where the list itself was wanted: elsewhere it is just a count.
-        if (loadSeq.current(token) && tab === 'archived') error = errorMessage(e, $t);
-      }
+    if (fetched && !fetchedArchived) await loadArchived(token);
+  }
+
+  /** Why the archived list, fetched after the first screen, could not be had. Kept apart from
+   *  `error`: on the active tab it is only a missing count, and it must still be shown -- not a
+   *  "Loading…" that never ends -- when the archived tab is opened afterwards. */
+  let archivedFailure = $state('');
+
+  async function loadArchived(token = loadSeq.next()) {
+    archivedFailure = '';
+    try {
+      const rows = await fetchArchived();
+      if (loadSeq.current(token)) { archived = rows; archivedKnown = true; }
+    } catch (e) {
+      if (loadSeq.current(token)) archivedFailure = errorMessage(e, $t);
     }
   }
+
+  // Opening the archived tab after its background fetch failed tries once more.
+  let archivedRetried = false;
+  $effect(() => {
+    if (tab === 'archived' && !archivedKnown && archivedFailure && !loading && !archivedRetried) {
+      archivedRetried = true;
+      void loadArchived();
+    }
+  });
   onMount(() => {
     void load();
     return onOutboxFlushed((_resolved, changed) => { if (changed) void load(); });
@@ -200,7 +216,8 @@
   </nav>
 
   {#if error}<p class="error">{error}</p>{/if}
-  {#if loading || (tab === 'archived' && !archivedKnown && !error)}
+  {#if tab === 'archived' && !archivedKnown && archivedFailure && !error}<p class="error">{archivedFailure}</p>{/if}
+  {#if loading || (tab === 'archived' && !archivedKnown && !error && !archivedFailure)}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if tab === 'active' && nothingYet}
     <!-- The one screen in the app that can say what LogB is for: it is what a new user sees
