@@ -118,11 +118,19 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
-    // Also covers the dashboard object card's due badge (destructive/10 text-destructive on card).
-    it(`${name}: due-reminder card text on destructive/10 over card (>= 4.5:1)`, () => {
+    // Covers the object card's due badge (text-destructive) and the due-reminder card's title.
+    it(`${name}: destructive and foreground text on destructive/10 over card (>= 4.5:1)`, () => {
       const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('destructive', theme), bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ui('foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${name}: muted-foreground subtitle on the due-reminder card (destructive/10 over card) (>= 4.5:1)`, () => {
+      const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);
+      expect(contrastRatio(ui('muted-foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${name}: brand-ink on the object card icon tile (primary/10 over card) (>= 4.5:1)`, () => {
+      const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
+      expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
   }
 });

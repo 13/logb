@@ -99,7 +99,7 @@
     </div>
   {/if}
 {:else}
-  <div class="grid">
+  <div class="thumb-grid">
     {#each items as a (a.id)}
       <figure>
         {#if a.kind === 'photo'}

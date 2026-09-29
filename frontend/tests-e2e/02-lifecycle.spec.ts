@@ -39,7 +39,7 @@ test('an object records activities, photos and reminders', async ({ page }) => {
 
   // documents tab shows the photo
   await page.getByRole('button', { name: 'Documents' }).click();
-  await expect(page.locator('.grid img.thumb')).toHaveCount(1);
+  await expect(page.locator('.thumb-grid img.thumb')).toHaveCount(1);
 
   // a counter reminder is already due
   await page.getByRole('button', { name: /^Reminders/ }).click();

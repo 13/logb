@@ -23,14 +23,14 @@
   {#if object.cover_file_id}
     <img class="size-12 shrink-0 rounded-md object-cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" decoding="async" />
   {:else}
-    <span class="flex size-12 shrink-0 items-center justify-center rounded-md bg-primary/15 text-brand-ink" aria-hidden="true">
+    <span class="grid size-12 shrink-0 place-items-center rounded-md bg-primary/10 text-brand-ink" aria-hidden="true">
       <Icon name={typeIcon(object.type, $customTypes)} size={22} />
     </span>
   {/if}
   <div class="flex min-w-0 flex-1 flex-col gap-1">
     <div class="flex items-start gap-2">
       <button data-slot="card-open"
-              class="min-w-0 flex-1 cursor-pointer truncate text-left text-base font-semibold text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring"
+              class="min-w-0 flex-1 cursor-pointer line-clamp-2 break-words text-left text-base font-semibold text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring"
               onclick={() => go(`/objects/${object.id}`)}>{object.name}</button>
       {#if object.stats.due_reminder_count > 0}
         <span data-testid="due-badge" class="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive">

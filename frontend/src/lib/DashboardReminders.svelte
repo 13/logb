@@ -30,7 +30,7 @@
       <div data-testid="due-reminder" class="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
         <span class="size-2 shrink-0 rounded-full bg-destructive" aria-hidden="true"></span>
         <div class="min-w-0 flex-1">
-          <a href={`/objects/${r.object_id}?tab=reminders`} class={`block font-semibold text-foreground no-underline ${focus}`}
+          <a href={`/objects/${r.object_id}?tab=reminders`} class={`block break-words font-semibold text-foreground no-underline ${focus}`}
              onclick={(e) => { e.preventDefault(); open(r); }}>{r.title}</a>
           <p class="m-0 text-sm text-muted-foreground">{r.object_name}{#if lateness(r)}{' · '}{lateness(r)}{/if}</p>
         </div>
