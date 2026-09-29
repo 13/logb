@@ -3,6 +3,25 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.21.0: new look, the object page
+
+**On a wide screen (1024 px and up) an object's page has two panes.** The left one holds the
+photo, the key figures, anything due, spend per month and everything the Info tab used to show,
+and it stays in view while the timeline scrolls. "+ Log" and Edit sit in the page header. There
+is no Info tab at that width; an old `?tab=info` link opens the timeline beside the pane.
+
+**On a phone** the photo, a row of figures and anything due sit above the tabs. The tabs stay on
+one row, the Reminders count sits inside its tab, and Info holds the rest. A "Skip to timeline"
+link at the top of the page jumps past the summary for keyboard users.
+
+**Timeline entries** show a category icon, the amount on the right and their tags inside the
+entry, under year headings; the category chips scroll sideways. Charts leave out empty months.
+The Reminders and Documents tabs are restyled too; documents get icon buttons for their actions.
+The Energy figures now show only for objects that charge (kWh), so a diesel car no longer shows
+"Distance per charge".
+
+No migration.
+
 ## 0.20.0: new look, the dashboard
 
 **The dashboard is redesigned.** Due reminders are cards with a snooze button, what is coming
