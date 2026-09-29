@@ -1,6 +1,6 @@
 use super::activities::load_owned_activity;
 use super::insights::{usage_by_object, Usage};
-use super::objects::{load_owned_object, stats, validate_date};
+use super::objects::{load_owned_object, stats, validate_date, ObjectScope};
 use crate::auth::AuthUser;
 use crate::db;
 use crate::domain::insights::estimated_date;
@@ -198,7 +198,7 @@ async fn load_owned(state: &App, user: &AuthUser, id: i64) -> Result<ReminderRow
 /// A single reminder as the API answers it, with its object's usage for the estimate.
 async fn out(state: &App, user: &AuthUser, row: ReminderRow) -> Result<ReminderOut, AppError> {
     let today = user.today();
-    let usage = usage_by_object(state, Some(user.id), Some(row.object_id), today)
+    let usage = usage_by_object(state, ObjectScope::Ids(&[row.object_id]), today)
         .await?
         .remove(&row.object_id);
     Ok(ReminderOut::build(row, today, usage))
@@ -367,7 +367,7 @@ async fn list(
     .bind(object_id)
     .fetch_all(&state.db)
     .await?;
-    let usage = usage_by_object(&state, Some(user.id), Some(object_id), today)
+    let usage = usage_by_object(&state, ObjectScope::Ids(&[object_id]), today)
         .await?
         .remove(&object_id);
     Ok(Json(
@@ -395,7 +395,7 @@ pub async fn due_for_user(
     .fetch_all(&state.db)
     .await?;
     let usage: HashMap<i64, Usage> = if within_days > 0 {
-        usage_by_object(state, Some(user_id), None, today).await?
+        usage_by_object(state, ObjectScope::User(user_id), today).await?
     } else {
         // The estimate only ever feeds the lookahead, and a zero-day window has none.
         HashMap::new()
