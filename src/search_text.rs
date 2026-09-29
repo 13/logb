@@ -92,8 +92,10 @@ pub enum Rows<'a> {
     Uuid(&'a str),
     /// Every row of this user's not yet folded -- what an import leaves behind.
     UnfoldedOf(i64),
-    /// Up to `BATCH` unfolded rows of anyone's -- one step of [`backfill`].
-    Unfolded,
+    /// Up to `BATCH` unfolded rows of anyone's with an id above this one -- one step of
+    /// [`backfill`]. Keyed on the id rather than re-asking for the first `BATCH` NULL rows, which
+    /// with no index on `search_text IS NULL` walked every already-filled row on each step.
+    UnfoldedAfter(i64),
 }
 
 impl Rows<'_> {
@@ -108,7 +110,9 @@ impl Rows<'_> {
                     .into()
             }
             Rows::UnfoldedOf(_) => "search_text IS NULL AND user_id = $1".into(),
-            Rows::Unfolded => format!("search_text IS NULL ORDER BY id LIMIT {BATCH}"),
+            Rows::UnfoldedAfter(_) => {
+                format!("id > $1 AND search_text IS NULL ORDER BY id LIMIT {BATCH}")
+            }
         }
     }
 }
@@ -134,17 +138,20 @@ struct ActivityFields {
 }
 
 /// Recomputes `search_text` for the chosen objects from what is stored, and answers how many
-/// rows it looked at. Called with the write transaction that just changed them.
-pub async fn refresh_objects(conn: &mut AnyConnection, rows: Rows<'_>) -> Result<usize, sqlx::Error> {
+/// rows it looked at and the highest id among them. Called with the write transaction that just
+/// changed them.
+pub async fn refresh_objects(
+    conn: &mut AnyConnection,
+    rows: Rows<'_>,
+) -> Result<(usize, Option<i64>), sqlx::Error> {
     let sql = format!(
         "SELECT id, name, description, tags, search_text FROM objects WHERE {}",
         rows.filter(false)
     );
     let query = sqlx::query_as::<_, ObjectFields>(AssertSqlSafe(sql));
     let found = match rows {
-        Rows::Id(id) | Rows::UnfoldedOf(id) => query.bind(id),
+        Rows::Id(id) | Rows::UnfoldedOf(id) | Rows::UnfoldedAfter(id) => query.bind(id),
         Rows::Uuid(uuid) => query.bind(uuid),
-        Rows::Unfolded => query,
     }
     .fetch_all(&mut *conn)
     .await?;
@@ -153,23 +160,22 @@ pub async fn refresh_objects(conn: &mut AnyConnection, rows: Rows<'_>) -> Result
         (row.search_text.as_deref() != Some(text.as_str())).then_some((row.id, text))
     });
     write(conn, "objects", changed.collect()).await?;
-    Ok(found.len())
+    Ok((found.len(), found.iter().map(|row| row.id).max()))
 }
 
 /// As [`refresh_objects`], for activities.
 pub async fn refresh_activities(
     conn: &mut AnyConnection,
     rows: Rows<'_>,
-) -> Result<usize, sqlx::Error> {
+) -> Result<(usize, Option<i64>), sqlx::Error> {
     let sql = format!(
         "SELECT id, title, notes, from_place, to_place, tags, search_text FROM activities WHERE {}",
         rows.filter(true)
     );
     let query = sqlx::query_as::<_, ActivityFields>(AssertSqlSafe(sql));
     let found = match rows {
-        Rows::Id(id) | Rows::UnfoldedOf(id) => query.bind(id),
+        Rows::Id(id) | Rows::UnfoldedOf(id) | Rows::UnfoldedAfter(id) => query.bind(id),
         Rows::Uuid(uuid) => query.bind(uuid),
-        Rows::Unfolded => query,
     }
     .fetch_all(&mut *conn)
     .await?;
@@ -184,7 +190,7 @@ pub async fn refresh_activities(
         (row.search_text.as_deref() != Some(text.as_str())).then_some((row.id, text))
     });
     write(conn, "activities", changed.collect()).await?;
-    Ok(found.len())
+    Ok((found.len(), found.iter().map(|row| row.id).max()))
 }
 
 /// Writes each `(id, text)`, a whole chunk per statement: an import or a backfill folds
@@ -260,17 +266,19 @@ pub async fn backfill(state: &crate::state::App) -> Result<(), crate::error::App
 
     let mut filled = 0;
     for activities in [false, true] {
+        let mut after = 0;
         loop {
             let mut tx = crate::db::begin_write(state).await?;
-            let n = if activities {
-                refresh_activities(&mut tx, Rows::Unfolded).await?
+            let (n, last) = if activities {
+                refresh_activities(&mut tx, Rows::UnfoldedAfter(after)).await?
             } else {
-                refresh_objects(&mut tx, Rows::Unfolded).await?
+                refresh_objects(&mut tx, Rows::UnfoldedAfter(after)).await?
             };
             tx.commit().await?;
             filled += n;
-            if n == 0 {
-                break;
+            match last {
+                Some(last) => after = last,
+                None => break,
             }
         }
     }
