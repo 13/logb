@@ -224,7 +224,7 @@
             {#if a.attachments.length > 0}
               <div class="thumb-strip">
                 {#each a.attachments.slice(0, 6) as att (att.id)}
-                  {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
+                  {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" decoding="async" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
                 {/each}
               </div>
             {/if}

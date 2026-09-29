@@ -264,8 +264,8 @@ export const SAVE_TIMEOUT_MS = 10_000;
  * after the client gave up, and the operator would be told a migration failed that in fact
  * succeeded.
  */
-export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
-  return (await apiWithStatus<T>(method, path, body, timeoutMs)).body;
+export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+  return (await apiWithStatus<T>(method, path, body, timeoutMs, signal)).body;
 }
 
 /**
@@ -274,9 +274,12 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
  * `create` in src/api/activities/write.rs) -- which the outbox needs to tell whether an edit it
  * folded into the queued body ever reached the row.
  */
-export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; body: T }> {
+export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<{ status: number; body: T }> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
-  if (timeoutMs !== undefined) init.signal = AbortSignal.timeout(timeoutMs);
+  // `signal` lets a caller drop a request nobody will read any more (a superseded search).
+  const timeout = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
+  if (timeout && signal) init.signal = AbortSignal.any([timeout, signal]);
+  else if (timeout ?? signal) init.signal = timeout ?? signal;
   if (body !== undefined) {
     init.headers = { 'content-type': 'application/json' };
     init.body = JSON.stringify(body);

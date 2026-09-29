@@ -45,6 +45,12 @@
       } catch (e) { error = errorMessage(e, $t); }
       push = await pushState();
     })();
+  });
+
+  // The countdown and the "has the bot been linked yet" poll, only while a link is pending: the
+  // page otherwise ticked -- and re-rendered -- every two seconds for as long as it was open.
+  $effect(() => {
+    if (!telegramLink) return;
     const timer = setInterval(async () => {
       now = Date.now();
       if (!telegramLink) return;
