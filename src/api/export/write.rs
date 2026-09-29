@@ -1,7 +1,7 @@
 //! Writing an archive: every object a person owns, with its activities and attachments.
 
 use crate::api::activities::ActivityRow;
-use crate::api::attachments::{self};
+use crate::api::attachments::AttachmentOut;
 use crate::api::objects::{load_owned_object, ObjectRow};
 use crate::api::reminders::{select_reminders, ReminderRow};
 use crate::api::settings;
@@ -47,18 +47,51 @@ pub(super) async fn export(
             .await?;
     let sha_by_file: HashMap<i64, String> = sha_rows.into_iter().collect();
 
+    // Three statements for the whole export -- activities, attachments, reminders -- grouped by
+    // object here, where there used to be three per object. The order within each object is
+    // the one the per-object statements had: activities by date then id, attachments newest
+    // first, reminders by id.
+    let (scope, scope_id) = match q.object_id {
+        Some(id) => ("o.id = $1", id),
+        None => ("o.user_id = $1", user.id),
+    };
+    let mut acts_by_object: HashMap<i64, Vec<ActivityRow>> = HashMap::new();
+    for a in sqlx::query_as::<_, ActivityRow>(sqlx::AssertSqlSafe(format!(
+        "SELECT a.id, a.object_id, a.date, a.category, a.title, a.notes, a.counter_value, a.cost_cents, a.quantity_milli, a.client_op_id, a.created_at, a.updated_at, a.client_uuid, a.tags, \
+         a.start_counter, a.from_place, a.to_place, a.duration_minutes, a.battery_used_pct, a.charged_full, a.weight_grams, a.fuel_level_pct, a.meter_reading_milli, a.period_start, a.period_end, a.estimated, a.meter_reset \
+         FROM activities a JOIN objects o ON o.id = a.object_id \
+         WHERE {scope} AND o.deleted_at IS NULL AND a.deleted_at IS NULL ORDER BY a.object_id, a.date, a.id")))
+        .bind(scope_id).fetch_all(&state.db).await?
+    {
+        acts_by_object.entry(a.object_id).or_default().push(a);
+    }
+    let mut atts_by_object: HashMap<i64, Vec<AttachmentOut>> = HashMap::new();
+    for a in sqlx::query_as::<_, AttachmentOut>(sqlx::AssertSqlSafe(format!(
+        "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
+         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id, \
+         a.client_uuid, f.client_uuid AS file_uuid \
+         FROM attachments a JOIN files f ON f.id = a.file_id JOIN objects o ON o.id = a.object_id \
+         WHERE {scope} AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
+         ORDER BY a.created_at DESC, a.id DESC")))
+        .bind(scope_id).fetch_all(&state.db).await?
+    {
+        atts_by_object.entry(a.object_id).or_default().push(a);
+    }
+    let mut rems_by_object: HashMap<i64, Vec<ReminderRow>> = HashMap::new();
+    for r in sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(&format!(
+        "WHERE {} AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id",
+        scope.replace("$1", "$2")))))
+        .bind(crate::api::reminders::reading_horizon(user.today())).bind(scope_id).fetch_all(&state.db).await?
+    {
+        rems_by_object.entry(r.object_id).or_default().push(r);
+    }
+
     let mut out = Vec::new();
     let mut blobs: Vec<String> = Vec::new();
     for o in objects {
-        let acts = sqlx::query_as::<_, ActivityRow>(
-            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset \
-             FROM activities WHERE object_id = $1 AND deleted_at IS NULL ORDER BY date, id")
-            .bind(o.id).fetch_all(&state.db).await?;
-        let atts = attachments::for_object(&state, o.id).await?;
-        let rems = sqlx::query_as::<_, ReminderRow>(sqlx::AssertSqlSafe(select_reminders(
-            "WHERE r.object_id = $2 AND r.deleted_at IS NULL AND o.deleted_at IS NULL ORDER BY r.id")))
-            .bind(crate::api::reminders::reading_horizon(user.today())).bind(o.id).fetch_all(&state.db).await?;
+        let acts = acts_by_object.remove(&o.id).unwrap_or_default();
+        let atts = atts_by_object.remove(&o.id).unwrap_or_default();
+        let rems = rems_by_object.remove(&o.id).unwrap_or_default();
         for a in &atts {
             blobs.push(sha_of(&sha_by_file, a.file_id)?);
         }
@@ -189,8 +222,6 @@ pub(super) async fn export(
         types,
         objects: out,
     };
-    let json = serde_json::to_vec_pretty(&data).map_err(|e| AppError::Internal(e.to_string()))?;
-
     blobs.sort();
     blobs.dedup();
 
@@ -201,6 +232,10 @@ pub(super) async fn export(
     let storage = state.storage.clone();
     let path = scratch.clone();
     let build = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        // Serialised here, off the async runtime, and compactly: a library's worth of JSON is
+        // megabytes, and the pretty form was a third larger for nobody -- the file is read by
+        // `import`, which parses either form. It is compressed in the archive anyway.
+        let json = serde_json::to_vec(&data).map_err(|e| AppError::Internal(e.to_string()))?;
         let file = std::fs::File::create(&path)?;
         let mut w = zip::ZipWriter::new(std::io::BufWriter::new(file));
         let deflate = zip::write::SimpleFileOptions::default()
