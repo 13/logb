@@ -53,16 +53,16 @@ test('the Info tab shows what was last done, and tapping it filters the timeline
   // Tapping the row switches to the timeline, narrowed to the tapped title.
   await row.click();
   await expect(page.getByRole('tab', { name: 'Timeline', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.tag-filter', { hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
-  const entries = page.locator('.entry-row');
+  await expect(page.getByTestId('timeline-filter').filter({ hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
+  const entries = page.getByTestId('timeline-entry');
   await expect(entries).toHaveCount(2);
-  await expect(page.locator('.entry-row', { hasText: 'Kette' })).toHaveCount(0);
-  await expect(page.locator('.entry-row', { hasText: 'Bremsbeläge vorne' })).toHaveCount(2);
+  await expect(page.getByTestId('timeline-entry').filter({ hasText: 'Kette' })).toHaveCount(0);
+  await expect(page.getByTestId('timeline-entry').filter({ hasText: 'Bremsbeläge vorne' })).toHaveCount(2);
 
   // Clearing the chip shows every entry again.
   await page.getByRole('button', { name: 'Clear title filter' }).click();
-  await expect(page.locator('.tag-filter')).toHaveCount(0);
-  await expect(page.locator('.entry-row', { hasText: 'Kette' })).toBeVisible();
+  await expect(page.getByTestId('timeline-filter')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-entry').filter({ hasText: 'Kette' })).toBeVisible();
 });
 
 test('a title filter on one object does not follow you to another opened from its Contents', async ({ page }) => {
@@ -79,7 +79,7 @@ test('a title filter on one object does not follow you to another opened from it
   await page.goto(`/objects/${parent}`);
   await openInfo(page);
   await page.getByTestId('last-done-row').filter({ hasText: 'Bremsbeläge vorne' }).click();
-  await expect(page.locator('.tag-filter', { hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
+  await expect(page.getByTestId('timeline-filter').filter({ hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
 
   // Open the child from Contents: the underlying component instance is reused (`App.svelte`
   // routes every `/objects/:id` to the same `ObjectDetail`), so without a reset this filter
@@ -89,6 +89,6 @@ test('a title filter on one object does not follow you to another opened from it
   await expect(page).toHaveURL(new RegExp(`/objects/${child}$`));
 
   await page.getByRole('tab', { name: 'Timeline', exact: true }).click();
-  await expect(page.locator('.tag-filter')).toHaveCount(0);
-  await expect(page.locator('.entry-row', { hasText: 'Child Only Entry' })).toBeVisible();
+  await expect(page.getByTestId('timeline-filter')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-entry').filter({ hasText: 'Child Only Entry' })).toBeVisible();
 });

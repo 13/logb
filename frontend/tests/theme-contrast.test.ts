@@ -139,7 +139,7 @@ describe('tinted highlight contrast', () => {
         expect(contrastRatio(ui(fg, theme), ui('card', theme))).toBeGreaterThanOrEqual(4.5);
       }
     });
-    it(`${name}: brand-ink on the object card icon tile (primary/10 over card) (>= 4.5:1)`, () => {
+    it(`${name}: brand-ink on an icon tile -- object card, timeline entry (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });

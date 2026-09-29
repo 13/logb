@@ -29,7 +29,7 @@ test('returning to the tab keeps the extra pages the user loaded', async ({ page
   }
 
   await page.reload();
-  const entries = page.locator('button.entry');
+  const entries = page.getByTestId('timeline-entry');
   await expect(entries).toHaveCount(100);
 
   // Appending a page is itself a regression guard: the load used to read `activities` inside
@@ -83,7 +83,7 @@ test('an ordinary object loads its timeline in one request', async ({ page }) =>
   const loads: string[] = [];
   page.on('request', (r) => { if (r.url().includes('/activities?')) loads.push(r.url()); });
   await page.reload();
-  await expect(page.locator('button.entry')).toHaveCount(3);
+  await expect(page.getByTestId('timeline-entry')).toHaveCount(3);
   await page.waitForLoadState('networkidle');
 
   expect(loads).toHaveLength(1);

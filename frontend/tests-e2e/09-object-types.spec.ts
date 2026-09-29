@@ -49,7 +49,7 @@ test('a car is not offered health filters, and keeps a chip for what it actually
   await page.getByLabel('Type').selectOption('car');
   await page.getByRole('button', { name: 'Save' }).click();
 
-  const chips = page.locator('.chips button');
+  const chips = page.getByTestId('category-chips').getByRole('button');
   // Order matters here, and both lines are load-bearing.
   //
   // The presence assertion comes FIRST because it is the one that waits: a bare
@@ -72,5 +72,5 @@ test('a car is not offered health filters, and keeps a chip for what it actually
   await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Type').selectOption('body');
   await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.locator('.chips button')).toContainText(['Fuel / charge']);
+  await expect(page.getByTestId('category-chips').getByRole('button')).toContainText(['Fuel / charge']);
 });

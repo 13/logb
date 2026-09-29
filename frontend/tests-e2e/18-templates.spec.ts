@@ -21,7 +21,7 @@ test('a new car starts with the reminders ticked for it, measured from its curre
   await expect(page.getByRole('heading', { name: 'Template Golf' })).toBeVisible();
 
   // The reading was saved as the first entry...
-  await expect(page.locator('.entry.reading')).toContainText('80,000 km');
+  await expect(page.getByTestId('timeline-reading')).toContainText('80,000 km');
 
   // ...and the oil change is due 15,000 km on from it.
   await page.getByRole('tab', { name: /^Reminders/ }).click();

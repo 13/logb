@@ -45,7 +45,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
 
   // The counter-value pattern allows for a thousands separator the real numbers here don't need,
   // so this stays correct however large a real trip's counters get.
-  const firstTrip = page.locator('.card.entry', { hasText: 'Home → Office' });
+  const firstTrip = page.getByTestId('timeline-entry').filter({ hasText: 'Home → Office' });
   await expect(firstTrip).toBeVisible();
   await expect(firstTrip).toContainText(/400 km → 600 km/);
   await expect(firstTrip).toContainText('200 km');
@@ -73,8 +73,8 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}$`));
 
   // The "Trip" category chip narrows the timeline to exactly the two trips just logged.
-  await page.getByRole('button', { name: 'Trip', exact: true }).click();
-  await expect(page.locator('.entry-row')).toHaveCount(2);
+  await page.getByTestId('category-chips').getByRole('button', { name: 'Trip', exact: true }).click();
+  await expect(page.getByTestId('timeline-entry')).toHaveCount(2);
 
   // An end below start is refused, and the form is left open with the error on screen.
   await logEntry(page, /Log trip/);

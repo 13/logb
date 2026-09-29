@@ -35,7 +35,7 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
   await page.getByRole('button', { name: 'Save' }).click();
 
   // Back on the object: the reading is in the timeline, folded to one line.
-  await expect(page.locator('.entry.reading')).toContainText('12,345 km');
+  await expect(page.getByTestId('timeline-reading')).toContainText('12,345 km');
 
   await page.getByRole('tab', { name: /^Reminders/ }).click();
   await expect(card.getByText(/Last reading 12,345 km/)).toBeVisible();

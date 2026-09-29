@@ -251,3 +251,36 @@ test.describe('with the service worker blocked', () => {
     await expect(log).toHaveCount(1);
   });
 });
+
+test('a timeline entry: icon, title, date and counter, amount on the right, tags inside, years as headings', async ({ page }, info) => {
+  await signInFresh(page, '37-timeline');
+  const car = await object(page, { name: 'Timeline car', type: 'car', counter_unit: 'km', fuel_unit: 'l' });
+  await entry(page, car, { date: '2026-01-05', category: 'repair', title: 'Brake pads', counter_value: 45_800, cost_cents: 31_200, tags: ['service'] });
+  await entry(page, car, { date: '2025-06-10', category: 'inspection', title: 'Inspection 2025', counter_value: 41_020, cost_cents: 5_000 });
+  await page.goto(`/objects/${car}`);
+
+  await expect(page.getByRole('heading', { name: '2026', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '2025', exact: true })).toBeVisible();
+  const e = page.getByTestId('timeline-entry').filter({ hasText: 'Brake pads' });
+  await expect(e.getByRole('img', { name: 'Repair' })).toBeVisible();
+  await expect(e).toContainText('45,800 km');
+  const box = (await e.boundingBox())!;
+  const amount = (await e.getByText('€312.00').boundingBox())!;
+  expect(box.x + box.width - (amount.x + amount.width)).toBeLessThan(24);
+  const tag = (await e.getByRole('button', { name: 'service' }).boundingBox())!;
+  expect(tag.y + tag.height).toBeLessThanOrEqual(box.y + box.height);
+
+  // The category chips are one row that scrolls sideways on a phone.
+  const chips = page.getByTestId('category-chips');
+  const ys = await chips.getByRole('button').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().y)));
+  expect(new Set(ys).size).toBe(1);
+  if (info.project.name === 'mobile') {
+    expect(await chips.evaluate((el) => { const s = el.firstElementChild as HTMLElement; return s.scrollWidth > s.clientWidth; })).toBe(true);
+  }
+
+  // The tag filters; anywhere else on the card opens the entry.
+  await e.getByRole('button', { name: 'service' }).click();
+  await expect(page.getByTestId('timeline-filter')).toContainText('service');
+  await page.getByTestId('timeline-entry').filter({ hasText: 'Brake pads' }).click({ position: { x: 8, y: 8 } });
+  await expect(page).toHaveURL(new RegExp(`/objects/${car}/activities/\\d+$`));
+});

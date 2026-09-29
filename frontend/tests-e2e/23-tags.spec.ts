@@ -11,9 +11,9 @@ async function newObject(page: Page, name: string): Promise<number> {
   return Number(new URL(page.url()).pathname.split('/').pop());
 }
 
-/** The entry's chips on the timeline: an entry and its chips share an `.entry-row`. */
+/** The entry's chips on the timeline: inside its `timeline-entry`. */
 function entryChip(page: Page, title: string, tag: string) {
-  return page.locator('.entry-row', { hasText: title }).locator('.tag', { hasText: tag });
+  return page.getByTestId('timeline-entry').filter({ hasText: title }).locator('.tag', { hasText: tag });
 }
 
 /** The stored row, straight from the server: no local or queued state can answer this. */
@@ -38,7 +38,7 @@ test('an entry created and edited through the form keeps its tags on the timelin
   expect(await storedTags(page, objectId, 'Bremsbeläge vorne')).toEqual(['BBV']);
 
   // Edit: open the entry, add a second tag.
-  await page.locator('.entry-row', { hasText: 'Bremsbeläge vorne' }).locator('button.entry').click();
+  await page.getByTestId('timeline-entry').filter({ hasText: 'Bremsbeläge vorne' }).getByRole('button', { name: 'Bremsbeläge vorne' }).click();
   await expect(page.getByLabel('Title')).toHaveValue('Bremsbeläge vorne');
   await expect(page.locator('.tag-input .tag', { hasText: 'BBV' })).toBeVisible();
   await tagInput.fill('Bremse');
@@ -80,7 +80,7 @@ test('an entry logged offline keeps its tag while queued and once it syncs', asy
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect.poll(() => storedTags(page, objectId, 'Bremsbeläge hinten'), { timeout: 15000 }).toEqual(['BBH']);
   await page.reload();
-  await expect(page.locator('.entry-row', { hasText: 'Bremsbeläge hinten' }).locator('.pending-chip')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-entry').filter({ hasText: 'Bremsbeläge hinten' }).getByText('Waiting to send')).toHaveCount(0);
   await expect(entryChip(page, 'Bremsbeläge hinten', 'BBH')).toBeVisible();
 });
 
@@ -134,8 +134,8 @@ test('tag an object and an entry, see coloured chips, and filter by tapping one'
   }
   await page.goto(`/objects/${objectId}`);
   await expect(page.getByText('Wash')).toBeVisible();
-  // Timeline.svelte has no single root element; an entry and its chips share an `.entry-row`.
-  await page.locator('.entry-row .tag', { hasText: 'Winter' }).first().click();
+  // an entry's chips are inside its `timeline-entry`
+  await page.getByTestId('timeline-entry').locator('.tag', { hasText: 'Winter' }).first().click();
   await expect(page.getByText('Wash')).toHaveCount(0);
   await expect(page.getByText('Tyres')).toBeVisible();
 
@@ -236,7 +236,7 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
 
   await entryHit.locator('.tag', { hasText: 'Antrieb' }).click();
   await page.waitForURL(new RegExp(`/objects/${objectId}$`));
-  await expect(page.locator('.tag-filter', { hasText: 'Antrieb' })).toBeVisible();
+  await expect(page.getByTestId('timeline-filter').filter({ hasText: 'Antrieb' })).toBeVisible();
   await expect(page.getByText('Suchkette geölt')).toBeVisible();
   await expect(page.getByText('Suchlicht getauscht')).toHaveCount(0);
 

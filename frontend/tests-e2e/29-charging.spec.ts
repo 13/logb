@@ -37,7 +37,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}$`));
 
-  const firstCharge = page.locator('.card.entry', { hasText: 'Charge' });
+  const firstCharge = page.getByTestId('timeline-entry').filter({ hasText: 'Charge' });
   await expect(firstCharge).toContainText('1,000 km');
   await expect(firstCharge).toContainText('full');
 
@@ -83,7 +83,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
 
   // Newest first: the just-saved second charge is now the first match, and the earlier one has
   // shifted to the second.
-  const secondCharge = page.locator('.card.entry', { hasText: 'Charge' }).first();
+  const secondCharge = page.getByTestId('timeline-entry').filter({ hasText: 'Charge' }).first();
   await expect(secondCharge).toContainText('1,400 km');
   await expect(secondCharge).toContainText('full');
   // "kWh", not the stored lowercase "kwh" -- fuelUnitLabel.
@@ -94,7 +94,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   // (1400 km) charge's own cost -- 240 cents x1000 / 400 km = 600 (cents x1000 per km) -- so the
   // 200 km trip costs 200 * 600 = 120,000 (cents x1000) -> €1.20, always prefixed "≈" since it is
   // never stored.
-  const trip = page.locator('.card.entry', { hasText: /1,000 km → 1,200 km/ });
+  const trip = page.getByTestId('timeline-entry').filter({ hasText: /1,000 km → 1,200 km/ });
   await expect(trip).toContainText('≈ €1.20');
 
   // The Info tab's Energy section: distance per charge (400 km, the one surviving window),

@@ -121,7 +121,7 @@ test('an activity logged offline with an attachment replays both exactly once', 
     await signIn(otherPage);
     await otherPage.goto(`/objects/${objectId}`);
     await expect(otherPage.getByText('Fuel', { exact: true })).toHaveCount(1);
-    await expect(otherPage.locator('.thumb-strip img')).toHaveCount(1);
+    await expect(otherPage.getByTestId('entry-thumbs').locator('img')).toHaveCount(1);
   } finally {
     await otherContext.close();
   }
