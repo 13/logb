@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { signIn, signInFresh } from './helpers';
 
 /// The nav is one element with two presentations, so "is it the right one" is a question about
 /// layout, not about which markup rendered. A sidebar sits at the left edge; a tab bar sits at
@@ -173,4 +173,26 @@ test('the sign-in form sits in the middle of the screen', async ({ page }) => {
 test('signing in is offered without a nav, since there is nowhere yet to go', async ({ page }) => {
   await page.goto('/login');
   await expect(page.getByRole('navigation', { name: /Main|Hauptnavigation/ })).toHaveCount(0);
+});
+
+test('the active destination is marked and the nav keeps its place', async ({ page }, info) => {
+  await signInFresh(page, '13-shell-active');
+  const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
+  const objects = nav.getByRole('button', { name: /Objects|Objekte/ });
+  await expect(objects).toHaveAttribute('aria-current', 'page');
+  await nav.getByRole('button', { name: /Statistics|Statistik/ }).click();
+  await expect(nav.getByRole('button', { name: /Statistics|Statistik/ })).toHaveAttribute('aria-current', 'page');
+  await expect(objects).not.toHaveAttribute('aria-current', 'page');
+  const box = (await nav.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  if (info.project.name === 'mobile') {
+    // A bar along the bottom edge, the full width of the screen.
+    expect(Math.round(box.y + box.height)).toBe(viewport.height);
+    expect(Math.round(box.width)).toBe(viewport.width);
+  } else {
+    // A column down the left edge, the full height of the screen.
+    expect(Math.round(box.x)).toBe(0);
+    expect(Math.round(box.height)).toBe(viewport.height);
+    await expect(nav.getByText('LogB', { exact: true })).toBeVisible();
+  }
 });

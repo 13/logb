@@ -6,12 +6,8 @@
 <!-- The sidebar's foot: who is signed in, a one-click way out, and the version. Desktop only --
      a phone has no footer, and finds all three in Settings instead. `__APP_VERSION__` is a
      build-time global (see vite.config.ts). -->
-<div class="foot">
+<div class="flex flex-col gap-2">
   <SignedIn compact />
-  <p class="version muted">{$t('settings.version')} {__APP_VERSION__}</p>
+  <p class="text-xs text-muted-foreground">{$t('settings.version')} {__APP_VERSION__}</p>
 </div>
 
-<style>
-  .foot { display: flex; flex-direction: column; gap: var(--space-2); }
-  .version { font-size: var(--text-xs); }
-</style>

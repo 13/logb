@@ -266,7 +266,6 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 .chips:focus-within { mask-image: none; }
 .chips button { min-height: 32px; padding: var(--space-1) var(--space-3); white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
-.topbar h1 { flex: 1; font-size: var(--text-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar button { min-width: 44px; padding: var(--space-2); }
 .fab { position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); z-index: 6; border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
 .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: var(--space-3); }
@@ -332,18 +331,7 @@ button, a, .chip {
 
 /* --- The app shell -------------------------------------------------------------------- */
 
-.appnav { position: fixed; z-index: 7; background: var(--surface); }
-.appnav ul { list-style: none; margin: 0; padding: 0; }
-.appnav .dest {
-  display: flex; align-items: center; width: 100%;
-  background: none; color: var(--muted);
-}
-.appnav .dest.active { color: var(--accent-ink); font-weight: 600; }
-.wordmark { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; font-size: var(--text-lg); letter-spacing: -0.01em; }
-
-/* Mobile: a bottom tab bar. The top of a phone screen is the one place a thumb cannot reach,
-   which is exactly where every navigation control in this app used to live.
-   Range syntax (`width < 900px` / `width >= 900px` below), not `max-width: 899px` /
+/* Range syntax (`width < 900px` / `width >= 900px` below), not `max-width: 899px` /
    `min-width: 900px`: those two are only complementary at whole-number widths, and a viewport
    is routinely fractional under OS display scaling or browser zoom. At e.g. 899.4px the old
    pair both failed to match, and `.appnav` -- fixed, but with no inset and no `display` set
@@ -351,19 +339,6 @@ button, a, .chip {
    flow at the top of the page. Leave this as range syntax; do not "tidy" it back to
    899px/900px. */
 @media (width < 900px) {
-  .appnav {
-    left: 0; right: 0; bottom: 0;
-    border-top: 1px solid var(--border);
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  .appnav ul { display: flex; }
-  .appnav li { flex: 1; }
-  .appnav .dest {
-    flex-direction: column; gap: 2px; justify-content: center;
-    min-height: var(--navbar); padding: var(--space-1);
-    font-size: var(--text-xs); border-radius: 0;
-  }
-  .wordmark, .navfoot { display: none; }
   /* The tab bar's clearance belongs to the whole column, not to `main` alone. `main` keeps only
      the clearance the FAB needs to float above its last row. */
   .app-content {
@@ -384,19 +359,6 @@ button, a, .chip {
    `width >= 900px`, the exact complement of the mobile query's `width < 900px` above -- see the
    comment there for why this is range syntax rather than `min-width: 900px`. */
 @media (width >= 900px) {
-  .appnav {
-    top: 0; bottom: 0; left: 0; width: 240px;
-    border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: var(--space-4);
-    padding: var(--space-4) var(--space-3);
-  }
-  .appnav ul { display: flex; flex-direction: column; gap: var(--space-1); }
-  .appnav .dest {
-    gap: var(--space-3); min-height: var(--control);
-    padding: var(--space-3); border-radius: var(--radius-sm);
-  }
-  .appnav .dest.active { background: var(--surface-2); }
-  .navfoot { margin-top: auto; }
   .app-content { margin-left: 240px; }
   main { max-width: 1100px; }
   /* The FAB is `position: fixed`, so `right` measures from the *viewport* edge -- fine while
