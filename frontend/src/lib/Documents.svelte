@@ -118,13 +118,13 @@
         <div class="flex gap-1">
           {#if a.kind === 'photo'}
             {@const isCover = a.id === coverAttachmentId}
-            {@const label = isCover ? $t('object.clear-cover') : $t('object.set-cover')}
+            {@const label = $t('object.cover-photo')}
             <Button variant="ghost" class="size-11" aria-label={label} title={label} aria-pressed={isCover}
                     onclick={() => setCover(isCover ? null : a.id)}>
               <ImageUp class={isCover ? 'text-brand-ink' : ''} fill={isCover ? 'currentColor' : 'none'} fill-opacity={isCover ? 0.25 : 0} />
             </Button>
           {/if}
-          <Button variant="ghost" class="size-11 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={$t('nav.delete')} title={$t('nav.delete')} onclick={() => remove(a)}>
+          <Button variant="ghost" class="size-11 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={$t('doc.delete-named', { name: a.caption || a.original_name })} title={$t('nav.delete')} onclick={() => remove(a)}>
             <Trash2 />
           </Button>
         </div>
