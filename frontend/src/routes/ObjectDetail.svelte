@@ -365,10 +365,22 @@
     {/if}
 
     {#if object.cover_file_id}
-      <!-- The thumbnail, not the original: the hero is at most 240px tall, the original can be a
-           multi-megabyte phone photo, and the thumbnail is usually already cached from the
-           dashboard's card. -->
-      <img class="hero" src={fileUrl(object.cover_file_id, true)} alt="" decoding="async" />
+      <!-- The thumbnail first, the original over it once loaded. The thumbnail is usually already
+           cached from the dashboard's card, so the page shows a cover at once; but it is at most
+           400px wide, soft across a phone's full width, so the original replaces it rather than
+           the thumbnail standing in for it. Keyed so a new cover starts from its own thumbnail. -->
+      {#key object.cover_file_id}
+        <div class="hero-wrap">
+          <img class="hero" src={fileUrl(object.cover_file_id, true)} alt="" decoding="async" />
+          <img
+            class="hero full"
+            src={fileUrl(object.cover_file_id)}
+            alt=""
+            decoding="async"
+            onload={(e) => e.currentTarget.classList.add('loaded')}
+          />
+        </div>
+      {/key}
     {/if}
 
     <div class="stats">
@@ -457,7 +469,10 @@
 </main>
 
 <style>
-  .hero { width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
+  .hero-wrap { position: relative; }
+  .hero { display: block; width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
+  .hero.full { position: absolute; inset: 0; height: 100%; opacity: 0; transition: opacity 0.2s; }
+  .hero.full:global(.loaded) { opacity: 1; }
   .breadcrumb { color: var(--muted); font-size: var(--text-sm); margin: var(--space-2) 0; }
   .breadcrumb a { color: inherit; }
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
