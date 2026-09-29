@@ -22,7 +22,7 @@ jobs:
     name: the tag must match Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: |
           tag="${GITHUB_REF_NAME#v}"
           # ^version only matches a crate's own version key because dependency versions are
@@ -54,7 +54,7 @@ jobs:
       contents: write   # create the GitHub Release
       packages: write   # push to ghcr.io
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # release notes are generated from the commits since the last tag
 
