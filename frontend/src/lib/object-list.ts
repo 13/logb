@@ -90,6 +90,15 @@ export function withPendingObjects(queued: MemObject[], rows: MemObject[]): MemO
   return [...queued, ...rows.filter((o) => !o.pending)];
 }
 
+/** How many objects the active tab lists with no query: the top-level ones, counting an object
+ *  whose parent is not active as top-level (see `visibleRows`). Without sorting anything. */
+export function topLevelCount(active: MemObject[]): number {
+  const ids = new Set(active.map((o) => o.id));
+  let n = 0;
+  for (const o of active) if (o.parent_id === null || !ids.has(o.parent_id)) n++;
+  return n;
+}
+
 export interface ListRow { object: MemObject; parentName: string | null }
 
 /** What the list shows for a tab, a query, a sort and a tag filter.

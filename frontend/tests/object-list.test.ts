@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, parseSort, parseTab, sortObjects, visibleRows, withPendingObjects } from '../src/lib/object-list';
+import { matchesQuery, parseSort, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
 import type { MemObject, ObjectType } from '../src/lib/types';
 
 let nextId = 1;
@@ -99,6 +99,11 @@ describe('visibleRows', () => {
   it('shows top-level objects on the active tab, counting a child of an archived parent as top-level', () => {
     const rows = visibleRows(active, archived, 'active', '', 'name', label, 'en');
     expect(rows.map((r) => [r.object.name, r.parentName])).toEqual([['Car', null], ['House', null], ['Mower', null]]);
+  });
+  it('counts the active tab without the archived list', () => {
+    expect(topLevelCount(active)).toBe(visibleRows(active, archived, 'active', '', 'name', label, 'en').length);
+    expect(topLevelCount(active)).toBe(visibleRows(active, [], 'active', '', 'name', label, 'en').length);
+    expect(topLevelCount([])).toBe(0);
   });
   it('searches every depth and names the parent of a nested match', () => {
     const rows = visibleRows(active, archived, 'active', 'boil', 'name', label, 'en');
