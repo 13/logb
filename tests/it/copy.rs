@@ -141,6 +141,33 @@ async fn the_copy_can_still_take_new_rows_of_its_own() {
     assert_eq!(ids.len(), 2, "the copied user and the new one: {ids:?}");
 }
 
+/// `search_text` crosses like any other column -- the folding is the same Rust on both sides --
+/// and the destination is searchable the moment an app starts on it, without refolding a row.
+#[tokio::test]
+async fn the_copy_is_searchable_as_it_arrives() {
+    let app = seeded().await;
+    app.release_database().await;
+    let dest = common::scratch_database().await;
+    logb::copy::run(&app.database_url(), &dest.url).await.unwrap();
+
+    let pool = logb::db::connect_existing(&dest.url).await.unwrap();
+    let folded: Vec<String> =
+        sqlx::query_scalar("SELECT search_text FROM activities WHERE search_text IS NOT NULL ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(folded, ["olwechsel\u{1f}", "winter tyres\u{1f}"], "copied as stored");
+
+    let moved = common::spawn_on(&dest.url).await;
+    let res = moved.login(&moved.client, "ben", "correct horse").await;
+    assert_eq!(res.status(), 200);
+    let r = moved.search("ÖLWECHSEL").await;
+    assert_eq!(r["activities"].as_array().unwrap().len(), 1, "{r}");
+    let r = moved.search("golf").await;
+    assert_eq!(r["objects"].as_array().unwrap().len(), 1, "{r}");
+}
+
 /// A copy that reports success while having dropped rows is worse than one that fails: the
 /// operator deletes the source. So the command counts both sides and compares, and a mismatch
 /// is an error naming the table.
