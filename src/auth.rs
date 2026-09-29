@@ -604,6 +604,7 @@ mod tests {
             login_attempts_by_user: Mutex::new(HashMap::new()),
             backup_verified: Mutex::new(None),
             shutdown: tokio_util::sync::CancellationToken::new(),
+            telegram_key: std::sync::OnceLock::new(),
         })
     }
 

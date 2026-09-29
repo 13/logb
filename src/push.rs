@@ -221,11 +221,7 @@ fn vapid_authorization(
 /// Redirects are not followed: a push service answers the POST itself, and following one would
 /// send the server wherever a validated endpoint chose to point it (see `validate`).
 async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
-    let client = match reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
+    let client = match crate::notify::http_client() {
         Ok(c) => c,
         Err(e) => return Delivery::Failed(format!("client: {e}")),
     };
@@ -234,6 +230,7 @@ async fn deliver(req: axum::http::Request<Vec<u8>>) -> Delivery {
         .request(parts.method, parts.uri.to_string())
         .headers(parts.headers)
         .body(body)
+        .timeout(HTTP_TIMEOUT)
         .send()
         .await;
     match sent {

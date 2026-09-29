@@ -242,6 +242,7 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         login_attempts_by_user: Mutex::new(HashMap::new()),
         backup_verified: Mutex::new(None),
         shutdown: tokio_util::sync::CancellationToken::new(),
+        telegram_key: std::sync::OnceLock::new(),
     });
     // Once per start, and a directory read once there is nothing left to move. A failure is
     // logged rather than fatal: an unmoved thumbnail costs a 404 on one /thumb, while refusing
