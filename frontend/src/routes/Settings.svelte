@@ -52,22 +52,28 @@
   // Each of these fills in one row's value. They fail quietly: a hub whose Database row says
   // nothing is honest, while a hub that shows an error banner because a count did not load
   // makes a working instance look broken.
-  onMount(async () => {
-    dead = await deadOps();
-    try { serverVersion = (await api<{ version: string }>('GET', '/health')).version; } catch { /* About shows nothing */ }
-    try { tokenCount = (await api<ApiToken[]>('GET', '/auth/tokens')).length; } catch { /* row shows nothing */ }
-    try {
-      const n = await api<NotificationSettings>('GET', '/me/notifications');
-      notificationsLabel = n.push_devices > 0
-        ? countLabel(n.push_devices, 'notify.push-devices-one', 'notify.push-devices')
-        : n.url ? $t('notify.webhook-title') : null;
-    } catch { /* row shows nothing */ }
-    if (!isAdmin) return;
-    try { userCount = (await api<User[]>('GET', '/users')).length; } catch { /* row shows nothing */ }
-    try {
-      const db = await api<DbDescription>('GET', '/database');
-      backendLabel = $t(db.backend === 'postgres' ? 'db.backend-postgres' : 'db.backend-sqlite');
-    } catch { /* row shows nothing */ }
+  //
+  // All at once: none of them depends on another, and one after the other the hub took seven
+  // round trips to fill in. Each keeps its own quiet failure.
+  onMount(() => {
+    void Promise.allSettled([
+      deadOps().then((ops) => { dead = ops; }),
+      api<{ version: string }>('GET', '/health').then((h) => { serverVersion = h.version; }),
+      api<ApiToken[]>('GET', '/auth/tokens').then((list) => { tokenCount = list.length; }),
+      api<NotificationSettings>('GET', '/me/notifications').then((n) => {
+        notificationsLabel = n.push_devices > 0
+          ? countLabel(n.push_devices, 'notify.push-devices-one', 'notify.push-devices')
+          : n.url ? $t('notify.webhook-title') : null;
+      }),
+      ...(isAdmin
+        ? [
+            api<User[]>('GET', '/users').then((list) => { userCount = list.length; }),
+            api<DbDescription>('GET', '/database').then((db) => {
+              backendLabel = $t(db.backend === 'postgres' ? 'db.backend-postgres' : 'db.backend-sqlite');
+            }),
+          ]
+        : []),
+    ]);
   });
 
   async function retryOutbox() {
