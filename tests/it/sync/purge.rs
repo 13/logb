@@ -283,156 +283,105 @@ async fn purge_reclaims_the_blob_of_an_expired_attachment() {
     assert_eq!(files, 0, "the files row goes with its last attachment");
 }
 
-/// `client_uuid` is nullable on all five tables, so a database can hold a row without one.
-/// `entity_uuid NOT IN (SELECT client_uuid ...)` is UNKNOWN for every row the moment that
-/// subquery yields one NULL, which turned the orphan sweep into a permanent no-op for the whole
-/// database. The sweep's fix (`NOT EXISTS`, one correlated clause per table) is structurally
-/// identical across `objects`, `activities`, `reminders`, `attachments` and `files`, so a test
-/// that plants the NULL in only one of them proves nothing about the other four -- a clause
-/// that regressed back to the `NOT IN` shape on any one of them would pass a single-table test
-/// unnoticed. This drives the same scenario once per table, planting the NULL row in a
-/// different table each time.
-#[tokio::test]
-async fn an_orphaned_field_clock_row_is_swept_despite_a_null_client_uuid_in_any_table() {
-    for legacy_table in ["objects", "activities", "reminders", "attachments", "files"] {
-        let app = common::spawn().await;
-        app.setup("ben", "correct horse").await;
-        let car = app.create_object(&app.client, "Golf", Some("km")).await;
-        let object_id = car["id"].as_i64().unwrap();
-        let object_uuid = client_uuid(&app.state.db, "objects", object_id).await;
-        let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM objects WHERE id = $1")
-            .bind(object_id)
-            .fetch_one(&app.state.db)
-            .await
-            .unwrap();
-
-        // A live clock the sweep must leave alone, so a run that swept everything -- rather
-        // than only the orphan -- would still be caught.
-        let res = app
-            .client
-            .post(app.url("/sync/push"))
-            .json(&push_body(json!([{
-                "client_op_id": "op-name", "entity": "object", "entity_uuid": &object_uuid,
-                "op": "set", "field": "name", "value": "Renamed",
-                "edited_at": after_now(7776060), "device_id": "phone"
-            }])))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            res.status(),
-            200,
-            "push failed: {}",
-            res.text().await.unwrap()
-        );
-
-        // A row from before `client_uuid` existed, or from any writer that never set it, in the
-        // table under test this iteration -- every column each table's NOT NULL constraints
-        // require, and nothing that names `client_uuid`, so it defaults NULL.
-        match legacy_table {
-            "objects" => {
-                sqlx::query(
-                    "INSERT INTO objects (user_id, name, type, created_at, updated_at) \
-                     VALUES ($1, 'Legacy', 'car', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
-                )
-                .bind(user_id)
-                .execute(&app.state.db)
-                .await
-                .unwrap();
-            }
-            "activities" => {
-                sqlx::query(
-                    "INSERT INTO activities \
-                     (object_id, date, category, title, notes, created_at, updated_at) \
-                     VALUES ($1, '2026-03-05', 'other', 'Legacy', '', \
-                             '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
-                )
-                .bind(object_id)
-                .execute(&app.state.db)
-                .await
-                .unwrap();
-            }
-            "reminders" => {
-                sqlx::query(
-                    "INSERT INTO reminders (object_id, title, due_date, created_at) \
-                     VALUES ($1, 'Legacy', '2026-09-01', '2026-03-05T00:00:00Z')",
-                )
-                .bind(object_id)
-                .execute(&app.state.db)
-                .await
-                .unwrap();
-            }
-            "attachments" => {
-                let file_id: i64 = sqlx::query_scalar(
-                    "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
-                     VALUES ($1, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z') \
-                     RETURNING id",
-                )
-                .bind(user_id)
-                .fetch_one(&app.state.db)
-                .await
-                .unwrap();
-                sqlx::query(
-                    "INSERT INTO attachments (object_id, file_id, kind, created_at) \
-                     VALUES ($1, $2, 'photo', '2026-03-05T00:00:00Z')",
-                )
-                .bind(object_id)
-                .bind(file_id)
-                .execute(&app.state.db)
-                .await
-                .unwrap();
-            }
-            "files" => {
-                sqlx::query(
-                    "INSERT INTO files (user_id, sha256, original_name, mime, size, created_at) \
-                     VALUES ($1, 'deadbeef', 'legacy.png', 'image/png', 1, '2026-03-05T00:00:00Z')",
-                )
-                .bind(user_id)
-                .execute(&app.state.db)
-                .await
-                .unwrap();
-            }
-            other => unreachable!("not one of the five tables: {other}"),
-        }
-
-        // A clock for a uuid no table carries any more: the sweep's whole reason to exist.
-        sqlx::query(
-            "INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) \
-             VALUES ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone')",
-        )
-        .execute(&app.state.db)
-        .await
-        .unwrap();
-
-        logb::sync::feed::purge(&app.state, 90).await.unwrap();
-
-        let orphans: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM field_clock WHERE entity_uuid = 'gone-with-the-row'",
-        )
+async fn clocks_for(app: &common::TestApp, uuid: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
+        .bind(uuid)
         .fetch_one(&app.state.db)
         .await
-        .unwrap();
-        assert_eq!(
-            orphans, 0,
-            "the orphaned clock must be swept even beside a NULL client_uuid in {legacy_table}"
-        );
+        .unwrap()
+}
 
-        let kept: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM field_clock WHERE entity_uuid = $1")
-                .bind(&object_uuid)
-                .fetch_one(&app.state.db)
-                .await
-                .unwrap();
-        // 20, not 1: the object's own REST `create` stamps every field in `Entity::Object`'s
-        // whitelist (task 9), and the pushed `set` above only overwrites `name`'s entry rather
-        // than adding a fourteenth. All 13 must survive the sweep untouched. It was 9 until
-        // `parent_id` joined the whitelist, 10 until `tags` did, and 11 until `energy_price_milli`
-        // did, 12 until weight_unit did, 14 with fuel_capacity_milli, and 20 with the generic
-        // resource settings -- this count is deliberately a literal so that widening the whitelist has to be
-        // noticed here.
-        assert_eq!(
-            kept, 20,
-            "a clock for a row that still exists must be left alone (NULL planted in {legacy_table})"
-        );
+/// The purge forgets the field clocks of exactly the rows it removes: a purged object's and a
+/// purged activity's go, a live object's all stay, and so does a tombstone's that is still
+/// inside the window. It no longer sweeps the whole table for clocks that name nothing, so a
+/// row without a `client_uuid` anywhere -- which once disabled that sweep outright -- cannot
+/// get in the way; one is planted here to keep it that way.
+#[tokio::test]
+async fn the_purge_forgets_the_field_clocks_of_what_it_removes_and_nothing_else() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let live = app.create_object(&app.client, "Golf", Some("km")).await;
+    let live_uuid = client_uuid(&app.state.db, "objects", live["id"].as_i64().unwrap()).await;
+    let gone = app.create_object(&app.client, "Polo", Some("km")).await;
+    let gone_uuid = client_uuid(&app.state.db, "objects", gone["id"].as_i64().unwrap()).await;
+    let activity = app.create_activity(&live["id"], "Oil").await;
+    let activity_uuid = client_uuid(&app.state.db, "activities", activity["id"].as_i64().unwrap()).await;
+    let fresh = app.create_activity(&live["id"], "Tyres").await;
+    let fresh_uuid = client_uuid(&app.state.db, "activities", fresh["id"].as_i64().unwrap()).await;
+    for uuid in [&live_uuid, &gone_uuid, &activity_uuid, &fresh_uuid] {
+        assert!(clocks_for(&app, uuid).await > 0, "a REST create stamps its fields");
     }
+    let live_clocks = clocks_for(&app, &live_uuid).await;
+
+    // A row from before `client_uuid` existed.
+    sqlx::query(
+        "INSERT INTO activities (object_id, date, category, title, notes, created_at, updated_at) \
+         VALUES ($1, '2026-03-05', 'other', 'Legacy', '', '2026-03-05T00:00:00Z', '2026-03-05T00:00:00Z')",
+    )
+    .bind(live["id"].as_i64().unwrap())
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    app.delete_object(&gone).await;
+    let res = app.client.delete(app.url(&format!("/activities/{}", activity["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+    app.age_out_tombstones().await;
+    // Deleted after the backdate, so still inside the window: its row and its clocks stay.
+    let res = app.client.delete(app.url(&format!("/activities/{}", fresh["id"]))).send().await.unwrap();
+    assert_eq!(res.status(), 204);
+    app.run_purge().await;
+
+    assert_eq!(clocks_for(&app, &gone_uuid).await, 0, "the purged object's clocks went with it");
+    assert_eq!(clocks_for(&app, &activity_uuid).await, 0, "the purged activity's clocks went with it");
+    assert_eq!(clocks_for(&app, &live_uuid).await, live_clocks, "a live row's clocks are untouched");
+    assert!(clocks_for(&app, &fresh_uuid).await > 0, "a tombstone inside the window keeps its clocks");
+}
+
+/// What the old hourly sweep would have found, migration 0029 removes once: clocks naming a uuid
+/// no row carries. Beside a row with no `client_uuid` at all, which is what once turned a
+/// `NOT IN` version of that sweep into a no-op. SQLite only and without the harness, like
+/// `migration_object_types`: it replays the migration files onto an in-memory database, and
+/// the PostgreSQL file runs the same statement.
+#[tokio::test]
+async fn migration_0029_clears_the_clocks_that_name_nothing() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().in_memory(true).foreign_keys(true))
+        .await
+        .unwrap();
+    let mut files: Vec<String> = std::fs::read_dir("migrations/sqlite")
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.as_str() < "0029")
+        .collect();
+    files.sort();
+    for file in &files {
+        let sql = std::fs::read_to_string(format!("migrations/sqlite/{file}")).unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
+    }
+    sqlx::raw_sql(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) \
+         VALUES (1, 'ben', 'x', 1, '2026-01-01T00:00:00Z');
+         INSERT INTO objects (id, user_id, name, type, description, created_at, updated_at, client_uuid) \
+         VALUES (1, 1, 'Golf', 'car', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'live-object');
+         INSERT INTO objects (id, user_id, name, type, description, created_at, updated_at) \
+         VALUES (2, 1, 'Legacy', 'car', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+         INSERT INTO field_clock (entity, entity_uuid, field, edited_at, device_id) VALUES \
+           ('object', 'live-object', 'name', '2026-01-01T00:00:00Z', 'phone'), \
+           ('activity', 'gone-with-the-row', 'title', '2026-01-01T00:00:00Z', 'phone');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sql = std::fs::read_to_string("migrations/sqlite/0029_perf_indexes.sql").unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
+
+    let left: Vec<String> = sqlx::query_scalar("SELECT entity_uuid FROM field_clock ORDER BY entity_uuid")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, ["live-object"]);
 }

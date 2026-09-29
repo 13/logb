@@ -426,7 +426,10 @@ async fn forget_subscription(state: &App, id: i64) -> Result<(), AppError> {
 
 /// Delivery history is for answering "did today's digest arrive"; a row from last quarter answers
 /// nothing and keeps a row per destination per instance forever. Thirty days of it is kept.
-async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
+///
+/// Run with the hourly prune in `tasks`, not on every minute's tick: the cutoff moves once a
+/// day, so fifty-nine of every sixty runs deleted nothing.
+pub async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
     let cutoff = chrono::Utc::now()
         .with_timezone(&crate::db::timezone())
         .date_naive()
@@ -521,7 +524,6 @@ async fn deliver(state: &App, target: &str, owner: Option<i64>, day: &str, desti
 /// answers `Err` afterwards when anything failed, so the loop's own log line says the day was
 /// not clean -- but only after every other destination has had its turn.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
-    prune_delivery_history(state).await?;
     let recipients = recipients(state).await?;
     let mut plans: Vec<Plan> = Vec::new();
     let mut failed = false;

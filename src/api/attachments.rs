@@ -110,17 +110,25 @@ pub async fn purge_orphan_files(state: &App, candidates: &[i64]) -> Result<(), A
         return Ok(());
     }
     let mut orphans: Vec<String> = Vec::new();
+    let mut uuids: Vec<String> = Vec::new();
     let mut tx = db::begin_write(state).await?;
     for &file_id in candidates {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT sha256 FROM files WHERE id = $1 AND id NOT IN (SELECT file_id FROM attachments)",
+        // `NOT EXISTS` on `idx_attachments_file` is one index probe; `NOT IN (SELECT file_id
+        // FROM attachments)` built the whole column into a list for each candidate.
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT sha256, client_uuid FROM files WHERE id = $1 \
+             AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.file_id = files.id)",
         )
         .bind(file_id).fetch_optional(&mut *tx).await?;
-        if let Some((sha,)) = row {
+        if let Some((sha, uuid)) = row {
             sqlx::query("DELETE FROM files WHERE id = $1").bind(file_id).execute(&mut *tx).await?;
             orphans.push(sha);
+            uuids.extend(uuid);
         }
     }
+    // The purge no longer sweeps `field_clock` for rows nobody names; a deleted file forgets
+    // its own clocks here instead.
+    crate::sync::feed::forget_clocks(&mut tx, crate::sync::Entity::File, &uuids).await?;
     tx.commit().await?;
     for sha in orphans {
         discard_blob(state, &sha).await?;
