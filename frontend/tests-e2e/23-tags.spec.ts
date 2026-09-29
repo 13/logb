@@ -248,7 +248,7 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
   await expect(page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).getByRole('button', { name: /Pendeln/ })).toHaveCount(0);
 });
 
-test('a reminder row shows its object\'s tags on the dashboard and the reminders tab', async ({ page }) => {
+test('a reminder shows its object\'s tags on the reminders tab, not on the dashboard', async ({ page }) => {
   await signInFresh(page, '23-tags-reminders');
   const obj = await page.request.post('/api/objects', { data: { name: 'Erinnerungsrad', type: 'other', description: '', tags: ['E-Bike'] } });
   expect(obj.ok()).toBe(true);
@@ -257,10 +257,10 @@ test('a reminder row shows its object\'s tags on the dashboard and the reminders
   expect(rem.ok()).toBe(true);
 
   await page.goto('/');
-  const row = page.locator('.banner li', { hasText: 'Kette prüfen' });
-  await expect(row.locator('.tag', { hasText: 'E-Bike' })).toBeVisible();
-  // Plain labels here: nothing on the dashboard to filter.
-  await expect(row.locator('button.tag')).toHaveCount(0);
+  const row = page.getByTestId('due-reminder').filter({ hasText: 'Kette prüfen' });
+  await expect(row).toBeVisible();
+  // The tags describe the object; on the dashboard's reminder they read as the reminder's own.
+  await expect(row.locator('.tag')).toHaveCount(0);
 
   await page.goto(`/objects/${objectId}?tab=reminders`);
   const card = page.locator('.card', { hasText: 'Kette prüfen' });

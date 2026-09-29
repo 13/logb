@@ -118,6 +118,11 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
+    it(`${name}: due-reminder card text on destructive/10 over card (>= 4.5:1)`, () => {
+      const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);
+      expect(contrastRatio(ui('destructive', theme), bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ui('foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
+    });
   }
 });
 

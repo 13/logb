@@ -5,8 +5,6 @@
   import { api, onOutboxFlushed, pendingObjectOps } from '../lib/api';
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
-  import { fmtDate } from '../lib/format';
-  import { dateFormat } from '../stores/date-format';
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
@@ -16,8 +14,8 @@
   import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
   import { customTypes, typesLoaded, typeLabel as labelOf } from '../lib/type-registry';
   import { tagColorIndex } from '../lib/tags';
+  import DashboardReminders from '../lib/DashboardReminders.svelte';
   import Icon from '../lib/Icon.svelte';
-  import TagChips from '../lib/TagChips.svelte';
 
   let active = $state<MemObject[]>([]);
   let archived = $state<MemObject[]>([]);
@@ -168,43 +166,7 @@
 <main>
   <TopBar title={$t('dash.title')} />
 
-  {#if due.length > 0}
-    <div class="banner">
-      <b>{due.length === 1 ? $t('dash.due-one') : $t('dash.due', { n: due.length })}</b>
-      <ul>
-        {#each due as r (r.id)}
-          <li>
-            <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
-            <TagChips tags={r.object_tags ?? []} />
-            {#if r.kind === 'reading'}
-              <!-- The whole job is one number, so it is one tap from here. -->
-              <button class="ghost snooze" onclick={() => go(`/objects/${r.object_id}/reading`)}>{$t('reminder.record')}</button>
-            {/if}
-            <button class="ghost snooze" onclick={() => snooze(r)}>{$t('reminder.snooze')}</button>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
-
-  {#if soon.length > 0}
-    <div class="banner soon">
-      <b>{$t('dash.upcoming')}</b>
-      <ul>
-        {#each soon as r (r.id)}
-          <li>
-            <a href={`/objects/${r.object_id}`} onclick={(e) => { e.preventDefault(); go(`/objects/${r.object_id}?tab=reminders`); }}>{r.object_name}: {r.title}</a>
-            <TagChips tags={r.object_tags ?? []} />
-            <span class="muted">
-              {#if r.days_until !== null}{r.days_until === 1 ? $t('dash.in-day') : $t('dash.in-days', { n: r.days_until })}{/if}
-              {#if r.counter_until !== null && r.counter_unit} · {$t('dash.in-counter', { n: r.counter_until, unit: r.counter_unit })}{/if}
-              {#if r.estimated_due_date} · {$t('dash.estimated', { date: fmtDate(r.estimated_due_date, $dateFormat) })}{/if}
-            </span>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
+  <DashboardReminders {due} {soon} onsnooze={snooze} />
 
   <nav class="tabs" aria-label={$t('dash.title')}>
     <button class:active={tab === 'active'} aria-pressed={tab === 'active'} onclick={() => (tab = 'active')}>
@@ -261,11 +223,6 @@
 </main>
 
 <style>
-  .banner ul { margin: var(--space-2) 0 0 var(--space-4); }
-  /* Upcoming is not overdue: a calm surface card, not the alarming red used for `due`. */
-  .banner.soon { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-  .banner.soon a { color: var(--text); }
-  .snooze { font-size: var(--text-xs); padding: 2px var(--space-2); }
   .controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-3); }
   .controls input[type='search'] { flex: 1 1 12rem; }
   .sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
