@@ -276,7 +276,7 @@ async fn upload(
         }
     }
 
-    let sha = files::sha256_hex(&bytes);
+    let sha = files::sha256_hex_off_runtime(bytes.clone()).await.map_err(|e| AppError::Internal(e.to_string()))?;
     let image = if mime.starts_with("image/") {
         files::process_image_queued(bytes.clone()).await.map_err(|e| AppError::Internal(e.to_string()))?
     } else { None };
