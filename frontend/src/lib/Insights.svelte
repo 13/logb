@@ -2,9 +2,10 @@
   import { errorMessage } from './api-error';
   import { api } from './api';
   import BarList from './BarList.svelte';
+  import Chart from './Chart.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
   import { energyLabelKey, fuelUnitLabel } from './energy';
-  import { fillLabel, insightsPath, monthLabel, sinceLabel } from './insights';
+  import { fillLabel, fillTick, insightsPath, monthLabel, monthTick, sinceLabel } from './insights';
   import { persisted } from '../stores/persisted';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
@@ -63,8 +64,13 @@
   {#if !spent}
     <p class="muted">{$t('insights.none')}</p>
   {:else}
-    <h3>{$t('insights.spend-by-month')}</h3>
-    <BarList items={data.by_month.map((b) => ({ key: b.bucket, label: monthLabel(b.bucket, $locale), value: b.cost_cents, display: fmt(b.cost_cents) }))} />
+    {#if data.by_month.some((b) => b.cost_cents > 0)}
+      <section data-testid="insights-spend">
+        <h3>{$t('insights.spend-by-month')}</h3>
+        <Chart label={$t('insights.spend-by-month')}
+               items={data.by_month.map((b) => ({ key: b.bucket, label: monthLabel(b.bucket, $locale), tick: monthTick(b.bucket, $locale), value: b.cost_cents, display: fmt(b.cost_cents) }))} />
+      </section>
+    {/if}
 
     <h3>{$t('insights.by-year')}</h3>
     <BarList items={data.by_year.map((b) => ({ key: b.bucket, label: b.bucket, value: b.cost_cents, display: fmt(b.cost_cents) }))} />
@@ -111,19 +117,22 @@
          does not have. -->
     <p class="muted">{$t('insights.usage')}: <b>{$t('insights.per-month', { amount: counter(Math.round(data.counter_per_day_milli * 30.44 / 1000), unit, $locale) })}</b></p>
   {/if}
-  {#if data.usage_by_month.length > 0 && unit}
-    <h3>{$t('insights.usage-by-month')}</h3>
-    <!-- A month the readings cannot measure says so, rather than drawing a zero it does not know. -->
-    <BarList items={data.usage_by_month.map((m) => ({
-      key: m.month, label: monthLabel(m.month, $locale), value: m.amount ?? 0,
-      display: m.amount === null ? '—' : counter(m.amount, unit, $locale),
-    }))} />
+  {#if data.usage_by_month.some((m) => (m.amount ?? 0) > 0) && unit}
+    <!-- A month the readings cannot measure is left out with the empty ones, rather than drawn
+         as a zero it does not know. -->
+    <section data-testid="insights-usage">
+      <h3>{$t('insights.usage-by-month')}</h3>
+      <Chart label={$t('insights.usage-by-month')} items={data.usage_by_month.map((m) => ({
+        key: m.month, label: monthLabel(m.month, $locale), tick: monthTick(m.month, $locale), value: m.amount ?? 0,
+        display: m.amount === null ? '—' : counter(m.amount, unit, $locale),
+      }))} />
+    </section>
   {/if}
   {#if data.trip_distance_by_month.some((m) => m.distance > 0) && unit}
     <section data-testid="insights-trip-distance">
       <h3>{$t('trips.by-month')}</h3>
-      <BarList items={data.trip_distance_by_month.map((m) => ({
-        key: m.month, label: monthLabel(m.month, $locale), value: m.distance, display: counter(m.distance, unit, $locale),
+      <Chart label={$t('trips.by-month')} items={data.trip_distance_by_month.map((m) => ({
+        key: m.month, label: monthLabel(m.month, $locale), tick: monthTick(m.month, $locale), value: m.distance, display: counter(m.distance, unit, $locale),
       }))} />
     </section>
   {/if}
@@ -132,8 +141,8 @@
     <section data-testid="insights-by-fill">
       <h3>{$t('insights.by-fill')}</h3>
       <p class="muted hint">{$t('insights.by-fill-hint')}</p>
-      <BarList items={fuel.fills.map((f, i) => ({
-        key: `${f.date}-${i}`, label: fillLabel(f.date, $locale), value: f.per_100_milli,
+      <Chart label={$t('insights.by-fill')} items={fuel.fills.map((f, i) => ({
+        key: `${f.date}-${i}`, label: fillLabel(f.date, $locale), tick: fillTick(f.date, $locale), value: f.per_100_milli,
         display: `${quantity(f.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 ${unit}`,
       }))} />
     </section>

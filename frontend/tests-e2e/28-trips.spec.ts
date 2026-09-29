@@ -106,7 +106,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   // Statistics (the object's own Insights section, further down the same tab) shows the same
   // distance under "Trip distance per month".
   await expect(page.getByRole('heading', { name: 'Trip distance per month' })).toBeVisible();
-  await expect(page.getByTestId('insights-trip-distance').locator('.bar-row')).toHaveCount(12);
+  await expect(page.getByTestId('insights-trip-distance').getByTestId('chart-bar')).toHaveCount(1);
 });
 
 test('repeating a titled trip also carries its From/To places', async ({ page }) => {

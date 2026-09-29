@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openInfo, signInFresh } from './helpers';
 
 /** The object page as round 3 of the UI overhaul left it: tabs, summary, panes, timeline, charts.
  *  Seeds through the API so each test drives only the screen it is about. */
@@ -8,6 +8,13 @@ async function object(page: Page, data: Record<string, unknown>): Promise<number
   expect(res.ok()).toBe(true);
   return (await res.json()).id as number;
 }
+
+async function entry(page: Page, id: number, data: Record<string, unknown>): Promise<void> {
+  const res = await page.request.post(`/api/objects/${id}/activities`, { data: { notes: '', title: 'Entry', category: 'other', ...data } });
+  expect(res.ok()).toBe(true);
+}
+/** A date `n` days back, as the API takes it. */
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
 test('the tabs stay on one row and the due count sits inside the Reminders tab', async ({ page }) => {
   await signInFresh(page, '37-tabs');
@@ -64,4 +71,18 @@ test.describe('German', () => {
     await tabsFitAt360(page, '37-fit-de');
     await expect(page.getByRole('tab', { name: /^Erinnerungen/ })).toBeVisible();
   });
+});
+
+test('a chart leaves out the months with nothing in them', async ({ page }) => {
+  await signInFresh(page, '37-chart');
+  const car = await object(page, { name: 'Chart car', type: 'car', counter_unit: 'km' });
+  // Two spends, 67 days apart: two different months inside the last twelve, ten empty ones.
+  await entry(page, car, { date: daysAgo(3), category: 'repair', title: 'Recent', cost_cents: 10_000 });
+  await entry(page, car, { date: daysAgo(70), category: 'repair', title: 'Earlier', cost_cents: 5_000 });
+  await page.goto(`/objects/${car}`);
+  await openInfo(page);
+
+  await expect(page.getByTestId('insights-spend').getByTestId('chart-bar')).toHaveCount(2);
+  // What a screen reader gets: one row per drawn month, named by the chart's own heading.
+  await expect(page.getByRole('table', { name: 'Spend per month' }).getByRole('row')).toHaveCount(2);
 });

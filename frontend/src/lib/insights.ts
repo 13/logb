@@ -27,3 +27,16 @@ export function fillLabel(date: string, locale: string): string {
   const [y, m, d] = date.split('-').map(Number);
   return dateTimeFormat(locale, { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(utc(y, m, d));
 }
+
+/** `2026-09` as "Sep": a chart's axis has room for the month alone. The bar's full label (with
+ *  the year, `monthLabel`) is in its tooltip and in the table screen readers read. */
+export function monthTick(month: string, locale: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return dateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(utc(y, m, 15));
+}
+
+/** `2026-01-10` as "1/10" (en-US) or "10.1." (de): short enough for twelve fills under a chart. */
+export function fillTick(date: string, locale: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return dateTimeFormat(locale, { day: 'numeric', month: 'numeric', timeZone: 'UTC' }).format(utc(y, m, d));
+}

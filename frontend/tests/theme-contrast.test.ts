@@ -93,7 +93,8 @@ describe('shadcn token contrast', () => {
         expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(4.5);
       });
     }
-    for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card']] as const) {
+    // Chart bars (Chart.svelte) are brand-ink on a card: a meaningful graphic, 1.4.11.
+    for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card'], ['brand-ink', 'card']] as const) {
       it(`${name}: ${fg} against ${bg} (>= 3:1)`, () => {
         expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(3);
       });

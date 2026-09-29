@@ -25,7 +25,7 @@ test('a car shows consumption per fill and no contents switch', async ({ page })
   }
 
   await openInfo(page, car);
-  await expect(page.getByTestId('insights-by-fill').locator('.bar-row')).toHaveCount(2);
+  await expect(page.getByTestId('insights-by-fill').getByTestId('chart-bar')).toHaveCount(2);
   await expect(page.getByLabel('Include contents')).toHaveCount(0);
 });
 

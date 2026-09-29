@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fillLabel, insightsPath, monthLabel, sinceLabel } from '../src/lib/insights';
+import { fillLabel, fillTick, insightsPath, monthLabel, monthTick, sinceLabel } from '../src/lib/insights';
 
 describe('insightsPath', () => {
   it('asks for the object alone by default', () => {
@@ -29,5 +29,16 @@ describe('fillLabel', () => {
   it('shows day and month', () => {
     expect(fillLabel('2026-01-10', 'en')).toBe('Jan 10');
     expect(fillLabel('2026-01-10', 'de')).toMatch(/^10\. Jan/);
+  });
+});
+
+describe('axis ticks', () => {
+  it('a month is its short name alone', () => {
+    expect(monthTick('2026-09', 'en')).toBe('Sep');
+    expect(monthTick('2026-05', 'de')).toBe('Mai');
+  });
+  it('a fill is its day and month in numbers', () => {
+    expect(fillTick('2026-01-10', 'en-US')).toBe('1/10');
+    expect(fillTick('2026-01-10', 'de')).toBe('10.1.');
   });
 });
