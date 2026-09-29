@@ -117,6 +117,7 @@
     el.addEventListener('scroll', measure, { passive: true });
     const ro = new ResizeObserver(measure);
     ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
     return () => { el.removeEventListener('scroll', measure); ro.disconnect(); };
   });
   const focus = 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';

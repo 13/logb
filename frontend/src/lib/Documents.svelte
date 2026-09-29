@@ -5,6 +5,8 @@
   import { api, fileUrl } from './api';
   import FilePicker from './FilePicker.svelte';
   import Icon from './Icon.svelte';
+  import ImageUp from '@lucide/svelte/icons/image-up';
+  import Trash2 from '@lucide/svelte/icons/trash-2';
   import { Button } from '$lib/components/ui/button/index.js';
   import { t } from '../i18n';
   import { toInput } from './object-form';
@@ -113,13 +115,18 @@
              class={`grid aspect-square w-full place-items-center rounded-md bg-muted text-muted-foreground ${focus}`}><Icon name="document" size={32} /></a>
         {/if}
         <span class="truncate text-xs text-foreground">{a.caption || a.original_name}</span>
-        <div class="flex flex-wrap gap-1">
+        <div class="flex gap-1">
           {#if a.kind === 'photo'}
-            <Button variant="ghost" class="min-h-11 px-2 text-xs" onclick={() => setCover(a.id === coverAttachmentId ? null : a.id)}>
-              {a.id === coverAttachmentId ? $t('object.clear-cover') : $t('object.set-cover')}
+            {@const isCover = a.id === coverAttachmentId}
+            {@const label = isCover ? $t('object.clear-cover') : $t('object.set-cover')}
+            <Button variant="ghost" class="size-11" aria-label={label} title={label} aria-pressed={isCover}
+                    onclick={() => setCover(isCover ? null : a.id)}>
+              <ImageUp class={isCover ? 'text-brand-ink' : ''} fill={isCover ? 'currentColor' : 'none'} fill-opacity={isCover ? 0.25 : 0} />
             </Button>
           {/if}
-          <Button variant="ghost" class="min-h-11 px-2 text-xs text-destructive hover:text-destructive" onclick={() => remove(a)}>{$t('nav.delete')}</Button>
+          <Button variant="ghost" class="size-11 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={$t('nav.delete')} title={$t('nav.delete')} onclick={() => remove(a)}>
+            <Trash2 />
+          </Button>
         </div>
       </li>
     {/each}

@@ -154,7 +154,7 @@
 {/if}
 
 <!-- A due reminder's card is tinted like the dashboard's, so what needs doing reads first. -->
-<ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
+<ul role="list" class="m-0 flex list-none flex-col gap-2 p-0 pb-20">
   {#each [...groups.due, ...groups.open] as r (r.id)}
     <li data-testid="reminder-card"
         class={['flex flex-col gap-1 rounded-lg border p-3 shadow-xs', r.due ? 'border-destructive/30 bg-destructive/10' : 'border-border bg-card']}>

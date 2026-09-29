@@ -131,6 +131,12 @@ describe('tinted highlight contrast', () => {
         expect(contrastRatio(ui(fg, theme), bg)).toBeGreaterThanOrEqual(4.5);
       }
     });
+    // The Documents tab's delete icon: destructive on the page (3:1 non-text), and on its hover fill.
+    it(`${name}: destructive icon on background and on its hover fill (>= 3:1)`, () => {
+      const fg = ui('destructive', theme);
+      expect(contrastRatio(fg, ui('background', theme))).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(fg, blend(fg, ui('background', theme), 0.1))).toBeGreaterThanOrEqual(3);
+    });
     // An outline button on a due reminder card: in dark mode its fill is input/30 painted over
     // the card's destructive/10 over the page. Light mode's is plain background; the stricter
     // blend is checked for both.
