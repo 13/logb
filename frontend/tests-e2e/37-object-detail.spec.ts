@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openInfo, signInFresh } from './helpers';
+import { openInfo, pngPayload, signInFresh } from './helpers';
 
 /** The object page as round 3 of the UI overhaul left it: tabs, summary, panes, timeline, charts.
  *  Seeds through the API so each test drives only the screen it is about. */
@@ -85,4 +85,53 @@ test('a chart leaves out the months with nothing in them', async ({ page }) => {
   await expect(page.getByTestId('insights-spend').getByTestId('chart-bar')).toHaveCount(2);
   // What a screen reader gets: one row per drawn month, named by the chart's own heading.
   await expect(page.getByRole('table', { name: 'Spend per month' }).getByRole('row')).toHaveCount(2);
+});
+
+test('the summary shows the figures that apply, and nothing about charging on a diesel car', async ({ page }) => {
+  await signInFresh(page, '37-figures');
+  const car = await object(page, { name: 'Figures diesel', type: 'car', counter_unit: 'km', fuel_unit: 'l' });
+  for (const [date, counter_value, quantity_milli, cost_cents] of [
+    ['2026-01-01', 10_000, 40_000, 6_000], ['2026-02-01', 10_500, 30_000, 4_500], ['2026-03-01', 11_000, 25_000, 3_800],
+  ] as const) {
+    await entry(page, car, { date, category: 'fuel', counter_value, quantity_milli, cost_cents, charged_full: 1 });
+  }
+  const drill = await object(page, { name: 'Figures drill', type: 'tool' });
+
+  await page.goto(`/objects/${car}`);
+  await expect(page.getByTestId('figure-cost')).toContainText('€143.00');
+  await expect(page.getByTestId('figure-counter')).toContainText('11,000 km');
+  await expect(page.getByTestId('figure-consumption')).toContainText('l/100 km');
+  // Full fills make a "distance per charge" computable; it is still not a thing a diesel car has.
+  await openInfo(page);
+  await expect(page.getByRole('heading', { name: 'Consumption per fill' })).toBeVisible();
+  await expect(page.getByText(/Distance per charge/)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Energy', exact: true })).toHaveCount(0);
+
+  await page.goto(`/objects/${drill}`);
+  await expect(page.getByTestId('figure-cost')).toBeVisible();
+  await expect(page.getByTestId('figure-activities')).toBeVisible();
+  await expect(page.getByTestId('figure-counter')).toHaveCount(0);
+  await expect(page.getByTestId('figure-consumption')).toHaveCount(0);
+});
+
+test('a due reminder in the summary opens the Reminders tab; the cover keeps 16:10', async ({ page }) => {
+  await signInFresh(page, '37-summary');
+  const car = await object(page, { name: 'Summary car', type: 'car', counter_unit: 'km' });
+  expect((await page.request.post(`/api/objects/${car}/reminders`, { data: { title: 'Summary overdue', due_date: '2000-01-01' } })).ok()).toBe(true);
+  await page.goto(`/objects/${car}`);
+
+  const due = page.getByTestId('summary-due-reminder').filter({ hasText: 'Summary overdue' });
+  await expect(due).toContainText(/days overdue/);
+  await due.click();
+  await expect(page.getByRole('tab', { name: /^Reminders/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page).toHaveURL(/\?tab=reminders$/);
+
+  await page.getByRole('tab', { name: 'Documents', exact: true }).click();
+  await page.getByRole('button', { name: /Add photos or files/ }).click();
+  await page.setInputFiles('input[type=file]', pngPayload());
+  await page.getByRole('button', { name: 'Use as cover' }).click();
+  const cover = page.getByTestId('object-cover');
+  await expect(cover).toBeVisible();
+  const box = (await cover.boundingBox())!;
+  expect(box.width / box.height).toBeCloseTo(1.6, 1);
 });

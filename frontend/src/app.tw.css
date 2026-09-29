@@ -92,6 +92,9 @@
   /* The shell's breakpoint (app.css), so `desk:` and `max-desk:` switch exactly where the
      sidebar does. Tailwind writes these as range queries, which is what app.css requires. */
   --breakpoint-desk: 900px;
+  /* The object page's two panes (routes/ObjectDetail.svelte). In px, not Tailwind's rem `lg`,
+     because the page's one script-side query must read the same width: `(width >= 1024px)`. */
+  --breakpoint-wide: 1024px;
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;

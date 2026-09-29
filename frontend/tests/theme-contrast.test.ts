@@ -131,6 +131,14 @@ describe('tinted highlight contrast', () => {
         expect(contrastRatio(ui(fg, theme), bg)).toBeGreaterThanOrEqual(4.5);
       }
     });
+    // The object page's summary reuses that pair for its due reminders, and puts its figures on cards.
+    it(`${name}: text on the summary's due reminder (destructive/10 over background) and figures (card) (>= 4.5:1)`, () => {
+      const bg = blend(ui('destructive', theme), ui('background', theme), 0.1);
+      for (const fg of ['foreground', 'muted-foreground']) {
+        expect(contrastRatio(ui(fg, theme), bg)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(ui(fg, theme), ui('card', theme))).toBeGreaterThanOrEqual(4.5);
+      }
+    });
     it(`${name}: brand-ink on the object card icon tile (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);

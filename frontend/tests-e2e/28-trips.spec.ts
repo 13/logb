@@ -53,7 +53,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await expect(firstTrip).toContainText('1:15 h');
   await expect(firstTrip).toContainText('32 %');
   // The trip moved the object's own current counter, the same as a plain reading would.
-  await expect(page.locator('.stat', { hasText: 'Current' })).toContainText('600 km');
+  await expect(page.getByTestId('figure-counter')).toContainText('600 km');
 
   // A second trip: start now prefills from the first trip's end, and From already offers "Home".
   await logEntry(page, /Log trip/);

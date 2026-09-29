@@ -210,6 +210,10 @@ export default {
   'object.contents': 'Contents',
   'object.contents-empty': 'Nothing inside yet.',
   'object.contents-add': 'New object inside',
+  'object.summary': 'Summary',
+  'object.since-short': 'since {date}',
+  'object.per-month': 'Per month',
+  'object.figures': 'Figures',
 
   'tab.timeline': 'Timeline',
   'tab.documents': 'Documents',

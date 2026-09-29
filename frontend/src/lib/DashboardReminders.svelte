@@ -1,5 +1,6 @@
 <script lang="ts">
   import { go } from './router';
+  import { lateness as latenessOf } from './lateness';
   import { t } from '../i18n';
   import { fmtDate } from './format';
   import { dateFormat } from '../stores/date-format';
@@ -7,15 +8,8 @@
 
   let { due, soon, onsnooze }: { due: Reminder[]; soon: Reminder[]; onsnooze: (r: Reminder) => void } = $props();
 
-  /** How late a due reminder is, when it is due by date. A counter-only reminder has no date to
-   *  be late against, so it says nothing here; its card already says it is due. */
-  function lateness(r: Reminder): string {
-    if (r.days_until === null) return '';
-    if (r.days_until === 0) return $t('dash.due-today');
-    if (r.days_until === -1) return $t('dash.overdue-day');
-    if (r.days_until < 0) return $t('dash.overdue-days', { n: -r.days_until });
-    return '';
-  }
+  /** See ./lateness.ts. */
+  const lateness = (r: Reminder) => latenessOf(r, $t);
 
   const open = (r: Reminder) => go(`/objects/${r.object_id}?tab=reminders`);
   /** Stretched link: the title's ::after covers the whole card/row, so all of it opens the object;

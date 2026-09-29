@@ -1,6 +1,6 @@
 <script lang="ts">
   import { counter, perCounter } from './format';
-  import { formatPerUnit, fuelUnitLabel } from './energy';
+  import { energyApplies, formatPerUnit, fuelUnitLabel } from './energy';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { CounterUnit, EnergyOut } from './types';
@@ -11,7 +11,8 @@
    *  failed request, treated the same as "nothing to show" -- see `TripTotals.svelte`'s own
    *  doc comment for why. `unit` is the object's counter unit (km/mi/h); a `null` one (an
    *  object with a fuel unit but no counter, or historical rows from before one was cleared)
-   *  hides the distance-based rows below the same way each row itself does -- see `hasAny`. */
+   *  hides the distance-based rows below the same way each row itself does -- see `hasAny`.
+   *  Charging objects only -- see `energyApplies`. */
   let { energy, unit }: { energy: EnergyOut | null; unit: CounterUnit } = $props();
 
   // Mirrors each row's own guard below exactly, rather than only checking the underlying
@@ -19,7 +20,7 @@
   // before the object's counter unit was cleared, and a heading with every row hidden beneath
   // it is worse than no heading at all.
   const hasAny = $derived(
-    energy !== null
+    energy !== null && energyApplies(energy.unit)
     && ((energy.distance_per_charge !== null && !!unit)
       || (energy.distance_per_unit_milli !== null && !!energy.unit && !!unit)
       || (energy.cost_per_counter_milli !== null && !!unit)

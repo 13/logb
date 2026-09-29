@@ -119,11 +119,11 @@ test('"+ New type…" on the object form makes a type without losing what was ty
 
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);
-  // The object's own name also contains "Pedelec", so the type itself is checked on the Info
-  // tab's own type line rather than by a page-wide text search that a coincidence like that
-  // could pass on its own.
+  // The object's own name also contains "Pedelec", so the type itself is checked on the
+  // summary's own type line rather than by a page-wide text search that a coincidence like that
+  // could pass on its own. The type line is in the summary, on every tab.
   await openInfo(page);
-  await expect(page.locator('main .muted').first()).toHaveText('Pedelec');
+  await expect(page.getByTestId('object-type')).toHaveText('Pedelec');
 
   // Back from the saved object must not reopen the "Add type" form the round trip passed through.
   await page.goBack();
@@ -180,9 +180,9 @@ test('the shortcut also works from the edit form, and clears type/draft from the
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(`**/objects/${objectId}`);
   await expect(page.getByRole('main')).toContainText('New Name');
-  // The type line lives under the Info tab, not the default Timeline one.
+  // The type line is in the summary, on every tab.
   await openInfo(page);
-  await expect(page.locator('main .muted').first()).toHaveText('Widget');
+  await expect(page.getByTestId('object-type')).toHaveText('Widget');
 });
 
 test('abandoning the shortcut leaves a later, plain visit to the object form empty', async ({ page }) => {

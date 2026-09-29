@@ -277,25 +277,10 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 img.thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-sm); background: var(--surface-2); display: block; }
 .thumb-strip { display: flex; gap: var(--space-2); overflow-x: auto; margin-top: var(--space-2); }
 .thumb-strip img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); }
-.stat { display: flex; flex-direction: column; } .stat b { font-size: var(--text-data); } .stat span { font-size: var(--text-xs); color: var(--muted); }
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: var(--space-3);
-  margin: var(--space-3) 0;
-}
-/* Four is the only count auto-fit gets wrong on a phone: at this width 110px minimums fit
-   three across, so the fourth drops onto a row of its own and reads as a layout that broke
-   rather than one that wrapped. Two-by-two instead. The row holds 2, 3 or 4 stats -- the
-   third and fourth are conditional (see routes/ObjectDetail.svelte) -- and auto-fit already
-   gets the other two counts right. */
-@media (max-width: 479px) {
-  .stats:has(> .stat:nth-child(4)) { grid-template-columns: repeat(2, 1fr); }
-}
 /* Figures line up when stacked. A column of costs in proportional numerals does not, and this
    app is mostly costs, odometer readings and dates read down a list. Tabular figures are a
    property of the existing family, not a second typeface. */
-.stat b, .tnum { font-variant-numeric: tabular-nums; }
+.tnum { font-variant-numeric: tabular-nums; }
 .banner { background: var(--danger); color: var(--on-danger); padding: var(--space-3); border-radius: var(--radius-md); margin-bottom: var(--space-3); }
 .banner a { color: var(--on-danger); }
 dialog { border: none; border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface); color: var(--text); width: min(92vw, 420px); }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { energyLabelKey, formatPerUnit, energyCost, fuelUnitLabel } from '../src/lib/energy';
+import { energyLabelKey, formatPerUnit, energyCost, fuelUnitLabel, energyApplies } from '../src/lib/energy';
 
 describe('energyLabelKey', () => {
   it('picks the charged wording for kWh', () => {
@@ -45,5 +45,14 @@ describe('energyCost', () => {
     // `de`'s currency format places a non-breaking space before the symbol -- normalised to a
     // plain space, the same way format.test.ts does for `money`.
     expect(energyCost(200, 30_000, 'EUR', 'de').replace(/ /g, ' ')).toBe('60,00 €');
+  });
+});
+
+describe('energyApplies', () => {
+  it('is for objects that charge', () => {
+    expect(energyApplies('kwh')).toBe(true);
+    expect(energyApplies('l')).toBe(false);
+    expect(energyApplies('gal')).toBe(false);
+    expect(energyApplies(null)).toBe(false);
   });
 });

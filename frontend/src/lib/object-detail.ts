@@ -88,3 +88,26 @@ export function nextUrl(href: string, tab: string): string {
   url.searchParams.delete('tag');
   return url.pathname + url.search;
 }
+
+/** A figure the object page's summary can show. */
+export type FigureKey = 'cost' | 'weight' | 'counter' | 'usage' | 'consumption' | 'activities';
+
+/**
+ * Which figures the summary shows for `o`, most telling first, at most four: what it cost (a
+ * body's latest weight instead -- a person has no running cost), its counter, how far it goes a
+ * month, and its consumption when there is one to show. A figure that does not apply to the
+ * object is left out rather than shown as a dash; the activity count fills a short row, so a
+ * drill's summary is not one lonely card.
+ */
+export function figureKeys(o: MemObject, hasConsumption: boolean): FigureKey[] {
+  const keys: FigureKey[] = [];
+  if (o.type !== 'body') keys.push('cost');
+  else if (o.stats.latest_weight_grams != null) keys.push('weight');
+  if (o.counter_unit) {
+    keys.push('counter');
+    if (o.stats.counter_per_day_milli !== null) keys.push('usage');
+    if (hasConsumption) keys.push('consumption');
+  }
+  if (keys.length < 4) keys.push('activities');
+  return keys;
+}

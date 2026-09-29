@@ -7,27 +7,28 @@
   import Documents from '../lib/Documents.svelte';
   import Reminders from '../lib/Reminders.svelte';
   import Insights from '../lib/Insights.svelte';
+  import ObjectSummary from '../lib/ObjectSummary.svelte';
   import Icon from '../lib/Icon.svelte';
   import LogAction from '../lib/LogAction.svelte';
   import { logOptions } from '../lib/log-options';
   import ObjectCard from '../lib/ObjectCard.svelte';
-  import TagChips from '../lib/TagChips.svelte';
   import LastDone from '../lib/LastDone.svelte';
   import TripTotals from '../lib/TripTotals.svelte';
   import EnergyFigures from '../lib/EnergyFigures.svelte';
   import ResourceCsvImport from '../lib/ResourceCsvImport.svelte';
   import { energyLabelKey } from '../lib/energy';
-  import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
-  import { api, apiPage, fileUrl, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
+  import { customTypes, typeIcon } from '../lib/type-registry';
+  import { api, apiPage, isRejection, onOutboxFlushed, pendingOpsFor, markServingSaved, supersedeStale } from '../lib/api';
   import { dropCachedObject, getCachedActivities, getCachedObject, setCachedActivities, setCachedObject } from '../lib/object-cache';
   import { createSeq } from '../lib/seq-guard';
+  import { persisted } from '../stores/persisted';
+  import { insightsPath } from '../lib/insights';
   import { go } from '../lib/router';
-  import { counter, fmtDate, money, todayIso } from '../lib/format';
-  import { dateFormat } from '../stores/date-format';
+  import { money, todayIso } from '../lib/format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import * as Tabs from '$lib/components/ui/tabs/index.js';
-  import type { Activity, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
+  import type { Activity, Category, EnergyOut, Insights as InsightsData, LastDone as LastDoneT, MemObject, Reminder, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import { tagParam, offersTrip as offersTripFor, offersEnergy as offersEnergyFor, resourceCategory as resourceCategoryFor, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath } from '../lib/object-detail';
 
@@ -87,6 +88,46 @@
    *  than only while the Info tab is open, unlike `tripSummary`/`lastDone`. `null` until loaded,
    *  and again on a failed request, exactly like those two. */
   let energyData = $state<EnergyOut | null>(null);
+
+  /** The Cost data: the summary's consumption figure, the Info tab's breakdown and (from
+   *  1024 px) the pane's spend chart. Loaded once here rather than by each. `null` until loaded. */
+  let insights = $state<InsightsData | null>(null);
+  let insightsError = $state('');
+  const insightsSeq = createSeq();
+  /** Per device and not synced, like the Statistics screen's purchase switch: a way of looking, not data. */
+  const includeContents = persisted('logb.insights.contents', false);
+  /** Archived children are not listed under Contents, but their costs still count with "Include
+   *  contents", so having any is enough to offer the switch. */
+  const hasContents = $derived(children.length > 0 || archivedChildCount > 0);
+  // An object without children always asks for its own figures, whatever the switch last said
+  // on a house. Derived, so a `hasContents` flip that does not change the path does not refetch.
+  const insightsUrl = $derived(insightsPath(oid, hasContents && $includeContents));
+
+  async function loadInsights(path: string) {
+    const token = insightsSeq.next();
+    try {
+      const d = await api<InsightsData>('GET', path);
+      if (insightsSeq.current(token)) { insights = d; insightsError = ''; }
+    } catch (e) {
+      if (insightsSeq.current(token)) insightsError = errorMessage(e, $t);
+    }
+  }
+
+  /** This object's due reminders, for the summary. Asked for only when the object says it has
+   *  any, so an object with none costs no request. A failure just leaves the list empty: the
+   *  Reminders tab is where they are managed, and its badge still counts them. */
+  let dueReminders = $state<Reminder[]>([]);
+  const dueSeq = createSeq();
+  const dueCount = $derived(object?.stats.due_reminder_count ?? 0);
+  async function loadDue() {
+    const token = dueSeq.next();
+    try {
+      const rows = await api<Reminder[]>('GET', `/objects/${oid}/reminders`);
+      if (dueSeq.current(token)) dueReminders = rows.filter((r) => r.due && r.done_at === null);
+    } catch {
+      if (dueSeq.current(token)) dueReminders = [];
+    }
+  }
   let error = $state('');
 
   /// Guards `loadObject` like `loadLastDone` below: a mount, an oid change and a flush can each
@@ -306,6 +347,11 @@
     children = [];
     archivedChildCount = 0;
     childrenSeq.invalidate();
+    insights = null;
+    insightsError = '';
+    insightsSeq.invalidate();
+    dueReminders = [];
+    dueSeq.invalidate();
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
   $effect(() => { oid; if (tab === 'info') { loadChildren(); loadLastDone(); if (offersTrip) loadTripSummary(); } });
@@ -314,6 +360,9 @@
   // soon as the object is known to have a fuel unit, whichever tab is open. `offersEnergy`
   // starts false (before `object` itself has loaded) and this effect re-runs once it flips true.
   $effect(() => { oid; if (offersEnergy) loadEnergy(); });
+  $effect(() => { const path = insightsUrl; loadInsights(path); });
+  // `dueCount` is derived, so a reload of the object that leaves the count alone does not ask again.
+  $effect(() => { oid; if (dueCount > 0) loadDue(); else { dueSeq.invalidate(); dueReminders = []; } });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -337,6 +386,7 @@
     if (!shouldReload(changed, rendered, queued)) return;
     loadObject();
     loadActivities('refresh');
+    loadInsights(insightsUrl);
     // A replayed offline charge or trip changes the Energy section's figures and the Trips
     // table the same way it changes the timeline above -- without this, either stayed stale
     // (the pending entry's own numbers, or none at all) until the next remount, exactly the
@@ -374,35 +424,9 @@
       </p>
     {/if}
 
-    {#if object.cover_file_id}
-      <!-- The thumbnail first, the original over it once loaded. The thumbnail is usually already
-           cached from the dashboard's card, so the page shows a cover at once; but it is at most
-           400px wide, soft across a phone's full width, so the original replaces it rather than
-           the thumbnail standing in for it. Keyed so a new cover starts from its own thumbnail. -->
-      {#key object.cover_file_id}
-        <div class="hero-wrap">
-          <img class="hero" src={fileUrl(object.cover_file_id, true)} alt="" decoding="async" />
-          <img
-            class="hero full"
-            src={fileUrl(object.cover_file_id)}
-            alt=""
-            decoding="async"
-            onload={(e) => e.currentTarget.classList.add('loaded')}
-          />
-        </div>
-      {/key}
-    {/if}
-
-    <div class="stats">
-      {#if object.type !== 'body'}<span class="stat"><b>{money(object.stats.total_cost_cents, $currency, $locale)}</b><span>{$t('object.total')}</span></span>{/if}
-      <span class="stat"><b>{object.stats.activity_count}</b><span>{$t('object.activities')}</span></span>
-      {#if object.counter_unit}
-        <span class="stat"><b>{counter(object.stats.current_counter, object.counter_unit, $locale) || '—'}</b><span>{$t('object.current')}</span></span>
-      {/if}
-      {#if object.purchase_date}
-        <span class="stat"><b>{fmtDate(object.purchase_date, $dateFormat)}</b><span>{$t('object.since')}</span></span>
-      {/if}
-    </div>
+    <section aria-label={$t('object.summary')} class="mb-4 flex flex-col gap-4">
+      <ObjectSummary {object} {insights} due={dueReminders} onreminders={() => setTab('reminders')} />
+    </section>
 
     {#if object.type === 'body'}
       <WeightHistory objectId={oid} unit={object.weight_unit ?? 'kg'} />
@@ -447,13 +471,10 @@
         {#if tab === 'documents'}<Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />{/if}
       </Tabs.Content>
       <Tabs.Content value="reminders">
-        {#if tab === 'reminders'}<Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />{/if}
+        {#if tab === 'reminders'}<Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); if (dueCount > 0) loadDue(); }} />{/if}
       </Tabs.Content>
       <Tabs.Content value="info">
         {#if tab === 'info'}
-          <h2>{object.name}</h2>
-          <p class="muted">{typeLabel(object.type, $customTypes, $t, $typesLoaded)}</p>
-          <TagChips tags={object.tags ?? []} />
           {#if object.description}<p class="desc">{object.description}</p>{/if}
           {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
           <LastDone items={lastDone} {object} onselect={selectLastDone} />
@@ -472,7 +493,8 @@
           {/if}
           <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
           <h3>{$t('insights.title')}</h3>
-          <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0 || archivedChildCount > 0} />
+          <Insights data={insights} error={insightsError} unit={object.counter_unit} {hasContents}
+                contents={$includeContents} oncontents={(on) => includeContents.set(on)} />
           <div class="list info-actions">
             <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
             <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>
@@ -486,10 +508,6 @@
 </main>
 
 <style>
-  .hero-wrap { position: relative; }
-  .hero { display: block; width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-md); }
-  .hero.full { position: absolute; inset: 0; height: 100%; opacity: 0; transition: opacity 0.2s; }
-  .hero.full:global(.loaded) { opacity: 1; }
   .breadcrumb { color: var(--muted); font-size: var(--text-sm); margin: var(--space-2) 0; }
   .breadcrumb a { color: inherit; }
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { tagParam, offersTrip, offersEnergy, resourceCategory, foldTitle, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath } from '../src/lib/object-detail';
+import { tagParam, offersTrip, offersEnergy, resourceCategory, foldTitle, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath, figureKeys } from '../src/lib/object-detail';
+import type { MemObject } from '../src/lib/types';
 import type { QueuedOp } from '../src/lib/outbox';
 
 function op(id: string, body: Record<string, unknown>): QueuedOp {
@@ -74,5 +75,29 @@ describe('resolvedObjectPath', () => {
   it('stays put for a real id or a temp id this pass did not resolve', () => {
     expect(resolvedObjectPath(-9, new Map([[-10, 45]]), '')).toBeNull();
     expect(resolvedObjectPath(5, new Map([[5, 45]]), '')).toBeNull();
+  });
+});
+
+const mo = (o: { type?: string; counter_unit?: 'km' | 'h' | null; stats?: Partial<MemObject['stats']> }): MemObject => ({
+  type: 'car', counter_unit: null, ...o,
+  stats: { total_cost_cents: 0, activity_count: 0, current_counter: null, due_reminder_count: 0, last_reading_date: null, last_activity_date: null, counter_per_day_milli: null, ...o.stats },
+}) as unknown as MemObject;
+
+describe('figureKeys', () => {
+  it('a car with history: cost, counter, usage per month, consumption', () => {
+    expect(figureKeys(mo({ counter_unit: 'km', stats: { counter_per_day_milli: 40_000 } }), true)).toEqual(['cost', 'counter', 'usage', 'consumption']);
+  });
+  it('a new car fills its row with the activity count', () => {
+    expect(figureKeys(mo({ counter_unit: 'km' }), false)).toEqual(['cost', 'counter', 'activities']);
+  });
+  it('a drill has no counter figures', () => {
+    expect(figureKeys(mo({ type: 'tool' }), false)).toEqual(['cost', 'activities']);
+  });
+  it('consumption needs a counter to be "per 100" of', () => {
+    expect(figureKeys(mo({ type: 'home' }), true)).toEqual(['cost', 'activities']);
+  });
+  it('a body shows its weight instead of a cost', () => {
+    expect(figureKeys(mo({ type: 'body', stats: { latest_weight_grams: 80_500 } }), false)).toEqual(['weight', 'activities']);
+    expect(figureKeys(mo({ type: 'body' }), false)).toEqual(['activities']);
   });
 });

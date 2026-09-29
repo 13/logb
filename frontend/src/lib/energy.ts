@@ -49,3 +49,14 @@ export function formatPerUnit(milli: number, unit: string, counterUnit: string, 
 export function energyCost(distance: number, costPerCounterMilli: number, currency: string, locale: string): string {
   return perCounter(distance * costPerCounterMilli, currency, locale);
 }
+
+/**
+ * Whether the Energy section's figures mean anything for an object with this fuel unit. They are
+ * charging figures -- distance per charge, per kWh, when to charge next -- and on a diesel car
+ * they read as nonsense (the audit found "Distance per charge" there). A liquid fuel's
+ * consumption and cost per distance are already in the Cost section. The energy rate itself is
+ * still used for every fuel (trip cost estimates); only the section is gated.
+ */
+export function energyApplies(unit: string | null): boolean {
+  return unit === 'kwh';
+}

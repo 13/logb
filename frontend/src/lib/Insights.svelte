@@ -1,44 +1,21 @@
 <script lang="ts">
-  import { errorMessage } from './api-error';
-  import { api } from './api';
   import BarList from './BarList.svelte';
   import Chart from './Chart.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
   import { energyLabelKey, fuelUnitLabel } from './energy';
-  import { fillLabel, fillTick, insightsPath, monthLabel, monthTick, sinceLabel } from './insights';
-  import { persisted } from '../stores/persisted';
+  import { fillLabel, fillTick, monthLabel, monthTick, sinceLabel } from './insights';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { CounterUnit, FuelUnit, Insights } from './types';
 
-  let { objectId, unit, hasContents = false }: { objectId: number; unit: CounterUnit; hasContents?: boolean } = $props();
-
-  /** Per device and not synced, like the Statistics screen's purchase switch: a way of looking, not data. */
-  const includeContents = persisted('logb.insights.contents', false);
-
-  // An object without children always asks for its own figures, whatever the switch last said
-  // on a house. Derived (not read directly in the effect below) so a `hasContents` flip that
-  // doesn't change the resulting path -- e.g. `children` finishing its own load after Insights
-  // has already mounted -- doesn't re-trigger the fetch.
-  const path = $derived(insightsPath(objectId, hasContents && $includeContents));
-
-  let data = $state<Insights | null>(null);
-  let error = $state('');
-
-  $effect(() => {
-    const p = path;
-    // Reset before the fetch, not just on success: without this, switching to another object
-    // shows the previous one's cost breakdown under the new object's name for however long the
-    // request takes -- and indefinitely if it fails, since neither `data` nor `error` was ever
-    // touched for the new id.
-    data = null;
-    error = '';
-    let current = true;
-    api<Insights>('GET', p)
-      .then((d) => { if (current) data = d; })
-      .catch((e) => { if (current) error = errorMessage(e, $t); });
-    return () => { current = false; };
-  });
+  /** Loaded by ObjectDetail, which needs the same answer for the summary's consumption figure
+   *  and the spend chart: one request, not two. `null` until it arrives. `contents` is the
+   *  "Include contents" switch; ObjectDetail owns it because it decides which request is made.
+   *  `hasContents` offers the switch only where there is something to include. */
+  let { data, error = '', unit, hasContents = false, contents = false, oncontents }: {
+    data: Insights | null; error?: string; unit: CounterUnit; hasContents?: boolean; contents?: boolean;
+    oncontents?: (on: boolean) => void;
+  } = $props();
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
   const spent = $derived(data ? data.by_year.some((b) => b.cost_cents > 0) : false);
@@ -46,7 +23,7 @@
 
 {#if hasContents}
   <label class="row toggle">
-    <input type="checkbox" bind:checked={$includeContents} />
+    <input type="checkbox" checked={contents} onchange={(e) => oncontents?.(e.currentTarget.checked)} />
     {$t('insights.contents')}
   </label>
 {/if}
