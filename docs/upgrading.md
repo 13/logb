@@ -3,6 +3,13 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.18.1: heating fuel statistic
+
+**Statistics → household heating fuel no longer counts vehicles.** A car's or van's refuels
+were listed as heating fuel. Only objects marked as heating fuel are counted now, plus older
+objects that have a fuel unit and no distance counter (a tank or generator measured in hours).
+No migration.
+
 ## 0.18.0: faster lists, search, imports and first load
 
 **The first start builds six indexes.** Five cover deleted entries (only those, so they stay
