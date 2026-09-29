@@ -7,7 +7,7 @@ A new image applies any pending database migrations when it starts. Take a snaps
 
 **The dashboard is redesigned.** Due reminders are cards with a snooze button, what is coming
 up is a short list, and each object's tags sit inside its card. Search, sort and the
-Active/Archived switch share one row; on a wide screen the objects fill two columns.
+Active/Archived switch share one row; on a wide screen the objects fill two or three columns. Dashboard reminders no longer show the object's tags.
 
 **"+ Log" on the dashboard asks which object**, then opens the same quick entry the small "+" on
 each card used to: a reading for something with a counter, a fill for a tank, a weight for a

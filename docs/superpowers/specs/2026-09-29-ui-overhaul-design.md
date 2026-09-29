@@ -96,7 +96,7 @@ already hides the section when there is nothing to show. No UI redesign in this 
   | card, popover | `#ffffff` | `#18181b` |
   | foreground | `#18181b` | `#fafafa` |
   | muted, secondary, accent (hover fill) | `#f4f4f5` | `#27272a` |
-  | muted-foreground | `#6b6b74` | `#a1a1aa` |
+  | muted-foreground | `#65656e` | `#a1a1aa` |
   | border | `#e4e4e7` | `#27272a` |
   | input (control outline, ≥3:1) | `#8a8a93` | `#71717a` |
   | primary | `#f59e0b` | `#fbbf24` |
@@ -189,7 +189,9 @@ already hides the section when there is nothing to show. No UI redesign in this 
   notification, configure bot, create backup) are explicit buttons. Exactly one primary button
   per page (audit #9). Fixes the appearance page's checkbox alignment.
 - Login and setup: centred card with logo, password visibility toggle.
-- `app.css` deleted.
+- `app.css` deleted. First move the floating buttons (`LogPicker`, ObjectDetail's `.fab-row`) off
+  app.css's `.fab` rule, which supplies their position, the mobile offset above the bottom nav
+  and the desktop gutter maths, into utilities or a component.
 - The app icon (`frontend/public/icon.svg` and the generated PNGs) is recoloured from teal to the
   amber palette.
 
