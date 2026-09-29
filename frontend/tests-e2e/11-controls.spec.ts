@@ -57,7 +57,7 @@ test('an object card is one box with an icon and no quick-log action', async ({ 
   await page.getByLabel('Type').selectOption('car');
   await page.getByRole('button', { name: 'Save' }).click();
   // Waiting for the object's heading closes the window in which "Back" would hit the form's own
-  // Back button (see the geometry tests below).
+  // Back button.
   await expect(page.getByRole('heading', { name: 'Row shape probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
 

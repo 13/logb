@@ -9,7 +9,7 @@ test('due reminders are cards with a snooze button; upcoming ones are plain rows
   const obj = await page.request.post('/api/objects', { data: { name: 'Dash reminder car', type: 'car', counter_unit: 'km', tags: ['family'] } });
   expect(obj.ok()).toBe(true);
   const id = (await obj.json()).id as number;
-  const soonDate = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+  const soonDate = new Date(Date.now() + 5 * 86_400_000).toLocaleDateString('sv');
   for (const data of [{ title: 'Dash overdue', due_date: '2000-01-01' }, { title: 'Dash soon', due_date: soonDate }]) {
     expect((await page.request.post(`/api/objects/${id}/reminders`, { data })).ok()).toBe(true);
   }
@@ -28,6 +28,20 @@ test('due reminders are cards with a snooze button; upcoming ones are plain rows
   await expect(soon.locator('.tag')).toHaveCount(0);
 
   await due.getByRole('link', { name: /Dash overdue/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}\\?tab=reminders`));
+
+  // The whole card opens the object, not just the title text: click its far-right padding edge,
+  // beside (not on) the Snooze button.
+  await page.goto('/');
+  const card = page.getByTestId('due-reminder').filter({ hasText: 'Dash overdue' });
+  const cb = (await card.boundingBox())!;
+  await page.mouse.click(cb.x + cb.width / 2, cb.y + 3);
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}\\?tab=reminders`));
+  await page.goto('/');
+  const row = page.getByTestId('upcoming-reminder').filter({ hasText: 'Dash soon' });
+  const rb = (await row.boundingBox())!;
+  expect(rb.height).toBeGreaterThanOrEqual(44);
+  await page.mouse.click(rb.x + rb.width - 4, rb.y + rb.height / 2);
   await expect(page).toHaveURL(new RegExp(`/objects/${id}\\?tab=reminders`));
 
   await page.goto('/');
@@ -108,4 +122,13 @@ test('"+ Log" on the dashboard asks for the object, then opens its quick entry',
   await dialog.getByRole('button', { name: /Picker car/ }).click();
   // A car with a counter goes to its reading, as the old per-card "+" did.
   await expect(page).toHaveURL(new RegExp(`/objects/${car}/reading$`));
+});
+
+test('"+ Log" is not offered when no object can be logged against', async ({ page }) => {
+  await signInFresh(page, '36-dashboard-log-none');
+  const id = (await (await page.request.post('/api/objects', { data: { name: 'Only archived', type: 'tool' } })).json()).id as number;
+  expect((await page.request.patch(`/api/objects/${id}`, { data: { name: 'Only archived', type: 'tool', description: '', archived: true } })).ok()).toBe(true);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /^\+ New object$/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^\+ Log$/ })).toHaveCount(0);
 });

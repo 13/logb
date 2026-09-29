@@ -118,15 +118,17 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
-    // Covers the object card's due badge (text-destructive) and the due-reminder card's title.
-    it(`${name}: destructive and foreground text on destructive/10 over card (>= 4.5:1)`, () => {
+    // The object card's due badge sits on the card.
+    it(`${name}: destructive text on the object card's due badge (destructive/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('destructive', theme), bg)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastRatio(ui('foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
-    it(`${name}: muted-foreground subtitle on the due-reminder card (destructive/10 over card) (>= 4.5:1)`, () => {
-      const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);
-      expect(contrastRatio(ui('muted-foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
+    // The due-reminder card sits on the page background, not on a card.
+    it(`${name}: text on the due-reminder card (destructive/10 over background) (>= 4.5:1)`, () => {
+      const bg = blend(ui('destructive', theme), ui('background', theme), 0.1);
+      for (const fg of ['destructive', 'foreground', 'muted-foreground']) {
+        expect(contrastRatio(ui(fg, theme), bg)).toBeGreaterThanOrEqual(4.5);
+      }
     });
     it(`${name}: brand-ink on the object card icon tile (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
