@@ -74,44 +74,26 @@ fn wanted_title(q: &ListQuery) -> Option<String> {
     (!title.is_empty()).then(|| fold_title(title))
 }
 
-/// How many activities match the filters, ignoring the page window -- the client needs it to
-/// know whether a "load more" button belongs on screen.
-pub async fn count_for_object(state: &App, object_id: i64, q: &ListQuery) -> Result<i64, AppError> {
-    let wanted_tag = wanted_tag(q);
-    let wanted_title = wanted_title(q);
-    if wanted_tag.is_some() || wanted_title.is_some() {
-        // Counted in Rust with the same match the page uses, so the header and the page can
-        // never disagree -- see `list_for_object` for why SQL cannot do this match.
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT tags, title FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
-             AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
-        )
-        .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
-        .fetch_all(&state.db).await?;
-        return Ok(rows
-            .iter()
-            .filter(|(t, _)| wanted_tag.as_ref().is_none_or(|w| tags::carries(t, w)))
-            .filter(|(_, title)| {
-                wanted_title
-                    .as_ref()
-                    .is_none_or(|w| &fold_title(title) == w)
-            })
-            .count() as i64);
-    }
-    let (n,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
-         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
-    )
-    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
-    .fetch_one(&state.db).await?;
-    Ok(n)
+/// A page row with the size of the whole filtered set beside it, from `COUNT(*) OVER ()`.
+#[derive(sqlx::FromRow)]
+struct CountedRow {
+    #[sqlx(flatten)]
+    row: ActivityRow,
+    total_count: i64,
 }
 
+/// One page of an object's activities, and how many match the filters ignoring the page window
+/// -- the client needs that to know whether a "load more" button belongs on screen.
+///
+/// One read serves both. With a tag or title filter that is the one fetch of every row the
+/// other filters allow, matched and counted here; without, the count rides along on each row
+/// of the page as a window function. The page and the count used to be two statements -- and
+/// with a filter, two full fetches of the same rows.
 pub async fn list_for_object(
     state: &App,
     object_id: i64,
     q: &ListQuery,
-) -> Result<Vec<ActivityRow>, AppError> {
+) -> Result<(Vec<ActivityRow>, i64), AppError> {
     if let Some(d) = &q.from {
         validate_date(d)?;
     }
@@ -123,29 +105,23 @@ pub async fn list_for_object(
     // A tag matches ignoring case and accents, and a title matches ignoring case and surrounding
     // space -- neither of which either backend's LIKE/LOWER does reliably (SQLite's LOWER folds
     // ASCII only, and neither strips accents; see `fold_title`). So with either filter SQL
-    // returns every row the other filters allow and the match and the page window are applied
-    // here. One object's timeline is hundreds of rows at most, so that costs nothing noticeable.
+    // returns every row the other filters allow and the match, the count and the page window
+    // are applied here. One object's timeline is hundreds of rows at most, so that costs
+    // nothing noticeable.
     let wanted_tag = wanted_tag(q);
     let wanted_title = wanted_title(q);
-    let filtered = wanted_tag.is_some() || wanted_title.is_some();
-    let (sql_limit, sql_offset) = if filtered {
-        (i64::MAX, 0)
-    } else {
-        (limit, offset)
-    };
-    let rows = sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset \
-         FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
-         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
-         ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
-    )
-    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(sql_limit).bind(sql_offset)
-    .fetch_all(&state.db).await?;
-    Ok(if !filtered {
-        rows
-    } else {
-        rows.into_iter()
+    if wanted_tag.is_some() || wanted_title.is_some() {
+        let rows = sqlx::query_as::<_, ActivityRow>(
+            "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset \
+             FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+             AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
+             ORDER BY date DESC, id DESC",
+        )
+        .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+        .fetch_all(&state.db).await?;
+        let matching: Vec<ActivityRow> = rows
+            .into_iter()
             .filter(|r| {
                 wanted_tag
                     .as_ref()
@@ -156,10 +132,41 @@ pub async fn list_for_object(
                     .as_ref()
                     .is_none_or(|w| &fold_title(&r.title) == w)
             })
+            .collect();
+        let total = matching.len() as i64;
+        let page = matching
+            .into_iter()
             .skip(offset as usize)
             .take(limit as usize)
-            .collect()
-    })
+            .collect();
+        return Ok((page, total));
+    }
+    let rows = sqlx::query_as::<_, CountedRow>(
+        "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset, \
+         COUNT(*) OVER () AS total_count \
+         FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
+         ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
+    )
+    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(limit).bind(offset)
+    .fetch_all(&state.db).await?;
+    let total = match rows.first() {
+        Some(r) => r.total_count,
+        // An empty first page means nothing matched. An empty later page carries no row to
+        // read the count from, so -- only then -- it is asked for on its own.
+        None if offset == 0 => 0,
+        None => {
+            let (n,): (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+                 AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
+            )
+            .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+            .fetch_one(&state.db).await?;
+            n
+        }
+    };
+    Ok((rows.into_iter().map(|r| r.row).collect(), total))
 }
 
 pub(crate) async fn list(
@@ -169,8 +176,7 @@ pub(crate) async fn list(
     Query(q): Query<ListQuery>,
 ) -> Result<Response, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
-    let rows = list_for_object(&state, object_id, &q).await?;
-    let total = count_for_object(&state, object_id, &q).await?;
+    let (rows, total) = list_for_object(&state, object_id, &q).await?;
     let out = with_attachments(&state, rows).await?;
     Ok((
         [(
