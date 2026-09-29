@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openInfo, signInFresh } from './helpers';
 
 test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }) => {
   await signInFresh(page, '12-object-hierarchy');
@@ -25,7 +25,7 @@ test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }
   // The house's page lists the garage in its contents.
   await page.goto('/');
   await page.getByText('Hierarchy House').click();
-  await page.getByRole('button', { name: 'Info' }).click();
+  await openInfo(page);
   await expect(page.getByText('Hierarchy Garage')).toBeVisible();
 });
 

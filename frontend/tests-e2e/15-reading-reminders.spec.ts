@@ -14,7 +14,7 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
   await signInFresh(page, '15-reading-reminders');
   await newCar(page, 'Reading Golf');
 
-  await page.getByRole('button', { name: /^Reminders/ }).click();
+  await page.getByRole('tab', { name: /^Reminders/ }).click();
   await page.getByRole('button', { name: 'Remind me to log the reading' }).click();
   await expect(page.getByLabel('Every')).toHaveValue('1');
   // Started long ago, so with no reading on record it is due straight away.
@@ -37,7 +37,7 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
   // Back on the object: the reading is in the timeline, folded to one line.
   await expect(page.locator('.entry.reading')).toContainText('12,345 km');
 
-  await page.getByRole('button', { name: /^Reminders/ }).click();
+  await page.getByRole('tab', { name: /^Reminders/ }).click();
   await expect(card.getByText(/Last reading 12,345 km/)).toBeVisible();
   await expect(card.locator('.chip.due')).toHaveCount(0);
 });
@@ -78,7 +78,7 @@ test('a new object with a counter can ask for a monthly reading reminder on the 
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Reading Bike' })).toBeVisible();
 
-  await page.getByRole('button', { name: /^Reminders/ }).click();
+  await page.getByRole('tab', { name: /^Reminders/ }).click();
   const card = page.locator('.card').filter({ hasText: 'Log the counter reading' });
   await expect(card.getByText('every month')).toBeVisible();
   // It starts a month out, so it is not due yet.

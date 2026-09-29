@@ -26,6 +26,7 @@
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
+  import * as Tabs from '$lib/components/ui/tabs/index.js';
   import type { Activity, Category, EnergyOut, LastDone as LastDoneT, MemObject, TripSummary } from '../lib/types';
   import { fetchWindow, mergeWindow, shouldReload, windowFor, type LoadMode } from '../lib/timeline-load';
   import { tagParam, offersTrip as offersTripFor, offersEnergy as offersEnergyFor, resourceCategory as resourceCategoryFor, pendingToActivity, filterPendingOps, nextUrl, resolvedObjectPath } from '../lib/object-detail';
@@ -407,61 +408,78 @@
       <WeightHistory objectId={oid} unit={object.weight_unit ?? 'kg'} />
     {/if}
 
-    <nav class="tabs">
-      <button class:active={tab === 'timeline'} aria-pressed={tab === 'timeline'} onclick={() => setTab('timeline')}>{$t('tab.timeline')}</button>
-      <button class:active={tab === 'documents'} aria-pressed={tab === 'documents'} onclick={() => setTab('documents')}>{$t('tab.documents')}</button>
-      <button class:active={tab === 'reminders'} aria-pressed={tab === 'reminders'} onclick={() => setTab('reminders')}>{$t('tab.reminders')}{#if object.stats.due_reminder_count > 0}<span class="chip due">{object.stats.due_reminder_count}</span>{/if}</button>
-      <button class:active={tab === 'info'} aria-pressed={tab === 'info'} onclick={() => setTab('info')}>{$t('tab.info')}</button>
-    </nav>
+    <Tabs.Root value={tab} onValueChange={(v) => setTab(v as Tab)}>
+      <Tabs.List aria-label={$t('object.sections')}>
+        <Tabs.Trigger value="timeline">{$t('tab.timeline')}</Tabs.Trigger>
+        <Tabs.Trigger value="documents">{$t('tab.documents')}</Tabs.Trigger>
+        <Tabs.Trigger value="reminders">
+          {$t('tab.reminders')}
+          {#if object.stats.due_reminder_count > 0}
+            <!-- The number is for the eye; the words after it are for everyone else. -->
+            <span data-testid="tab-due-badge" aria-hidden="true"
+                  class="inline-grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1.5 text-xs font-semibold text-destructive-foreground tabular-nums">{object.stats.due_reminder_count}</span>
+            <span class="sr-only">{$t('tab.reminders-due', { n: object.stats.due_reminder_count })}</span>
+          {/if}
+        </Tabs.Trigger>
+        <Tabs.Trigger value="info">{$t('tab.info')}</Tabs.Trigger>
+      </Tabs.List>
 
-    {#if tab === 'timeline'}
-      <Timeline
-        objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
-        onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
-        ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
-        onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
-        unit={object.counter_unit} fuelUnit={object.resource_unit ?? object.fuel_unit} resourceKind={object.resource_kind} energyRate={energyData?.cost_per_counter_milli ?? null}
-        bind:category bind:tagFilter bind:titleFilter
-      />
-      <!-- The empty timeline puts this same action in the middle of the page, where the eye
-           already is; two of them would be two calls to the same action. -->
-      {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
-        <div class="fab-row">
-          <LogAction options={logChoices} onpick={(o) => go(o.path)} />
-        </div>
-      {/if}
-    {:else if tab === 'documents'}
-      <Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />
-    {:else if tab === 'reminders'}
-      <Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />
-    {:else}
-      <h2>{object.name}</h2>
-      <p class="muted">{typeLabel(object.type, $customTypes, $t, $typesLoaded)}</p>
-      <TagChips tags={object.tags ?? []} />
-      {#if object.description}<p class="desc">{object.description}</p>{/if}
-      {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
-      <LastDone items={lastDone} {object} onselect={selectLastDone} />
-      {#if offersTrip}
-        <TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} energyRate={energyData?.cost_per_counter_milli ?? null} />
-      {/if}
-      {#if offersEnergy}<EnergyFigures energy={energyData} unit={object.counter_unit} />{/if}
-      {#if object.resource_kind}<ResourceCsvImport objectId={oid} mode={object.measurement_mode} onimported={() => loadActivities('refresh')} />{/if}
-      <h3>{$t('object.contents')}</h3>
-      {#if children.length === 0}
-        <p class="muted">{$t('object.contents-empty')}</p>
-      {:else}
-        <div class="grid grid-cols-1 gap-3">
-          {#each children as c (c.id)}<ObjectCard object={c} />{/each}
-        </div>
-      {/if}
-      <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
-      <h3>{$t('insights.title')}</h3>
-      <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0 || archivedChildCount > 0} />
-      <div class="list info-actions">
-        <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
-        <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>
-      </div>
-    {/if}
+      <Tabs.Content value="timeline">
+        {#if tab === 'timeline'}
+          <Timeline
+            objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
+            onmore={loadMore} onlog={() => go(`/objects/${oid}/activities/new`)}
+            ontriplog={offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
+            onchargelog={offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
+            unit={object.counter_unit} fuelUnit={object.resource_unit ?? object.fuel_unit} resourceKind={object.resource_kind} energyRate={energyData?.cost_per_counter_milli ?? null}
+            bind:category bind:tagFilter bind:titleFilter
+          />
+          <!-- The empty timeline puts this same action in the middle of the page, where the eye
+               already is; two of them would be two calls to the same action. -->
+          {#if activities.length > 0 || category !== '' || tagFilter !== null || titleFilter !== null}
+            <div class="fab-row">
+              <LogAction options={logChoices} onpick={(o) => go(o.path)} />
+            </div>
+          {/if}
+        {/if}
+      </Tabs.Content>
+      <Tabs.Content value="documents">
+        {#if tab === 'documents'}<Documents objectId={oid} coverAttachmentId={object.cover_attachment_id} onchanged={loadObject} />{/if}
+      </Tabs.Content>
+      <Tabs.Content value="reminders">
+        {#if tab === 'reminders'}<Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities} onchanged={() => { loadObject(); loadActivities('refresh'); }} />{/if}
+      </Tabs.Content>
+      <Tabs.Content value="info">
+        {#if tab === 'info'}
+          <h2>{object.name}</h2>
+          <p class="muted">{typeLabel(object.type, $customTypes, $t, $typesLoaded)}</p>
+          <TagChips tags={object.tags ?? []} />
+          {#if object.description}<p class="desc">{object.description}</p>{/if}
+          {#if object.purchase_price_cents !== null}<p class="muted">{$t('object.purchase-price')}: {money(object.purchase_price_cents, $currency, $locale)}</p>{/if}
+          <LastDone items={lastDone} {object} onselect={selectLastDone} />
+          {#if offersTrip}
+            <TripTotals summary={tripSummary} unit={object.counter_unit as 'km' | 'mi'} energyRate={energyData?.cost_per_counter_milli ?? null} />
+          {/if}
+          {#if offersEnergy}<EnergyFigures energy={energyData} unit={object.counter_unit} />{/if}
+          {#if object.resource_kind}<ResourceCsvImport objectId={oid} mode={object.measurement_mode} onimported={() => loadActivities('refresh')} />{/if}
+          <h3>{$t('object.contents')}</h3>
+          {#if children.length === 0}
+            <p class="muted">{$t('object.contents-empty')}</p>
+          {:else}
+            <div class="grid grid-cols-1 gap-3">
+              {#each children as c (c.id)}<ObjectCard object={c} />{/each}
+            </div>
+          {/if}
+          <button class="ghost" onclick={() => go(`/objects/new?parent_id=${oid}`)}>+ {$t('object.contents-add')}</button>
+          <h3>{$t('insights.title')}</h3>
+          <Insights objectId={oid} unit={object.counter_unit} hasContents={children.length > 0 || archivedChildCount > 0} />
+          <div class="list info-actions">
+            <button onclick={() => go(`/objects/${oid}/edit`)}>{$t('nav.edit')}</button>
+            <a class="button-like" href={`/api/export?object_id=${oid}`}>{$t('object.export')}</a>
+          </div>
+        {/if}
+      </Tabs.Content>
+    </Tabs.Root>
   {:else if !error}
     <p class="muted">{$t('nav.loading')}</p>
   {/if}
@@ -476,7 +494,6 @@
   .breadcrumb a { color: inherit; }
   .desc { white-space: pre-wrap; margin: var(--space-2) 0; }
   .info-actions { margin-top: var(--space-4); }
-  .tabs .chip { margin-left: var(--space-1); }
   /* Where "+ Log" floats: `.fab`'s own position (app.css), mirrored here -- including its two
      responsive overrides below -- because the action is a component, not a `.fab` button. */
   .fab-row {

@@ -107,3 +107,15 @@ export async function logEntry(page: Page, name: RegExp): Promise<void> {
     try { await direct.first().click({ timeout: 2000 }); } catch { await viaMenu(); }
   }
 }
+
+/**
+ * Opens the object page's Info tab where there is one. From 1024 px the summary pane on the left
+ * holds the same content and there is no Info tab, so there is nothing to open. Waits for the
+ * tab list first, so "no Info tab" is an answer about the page, not about a page still loading.
+ */
+export async function openInfo(page: Page): Promise<void> {
+  const tabs = page.getByRole('tablist');
+  await expect(tabs).toBeVisible();
+  const info = tabs.getByRole('tab', { name: 'Info', exact: true });
+  if ((await info.count()) > 0) await info.click();
+}

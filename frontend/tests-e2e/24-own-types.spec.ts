@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openInfo, signInFresh } from './helpers';
 
 // `/api/types` is matched by the service worker's `householdData` route (NetworkFirst), and a
 // request it handles never reaches `page.route` -- this test delays that request to check the
@@ -122,7 +122,7 @@ test('"+ New type…" on the object form makes a type without losing what was ty
   // The object's own name also contains "Pedelec", so the type itself is checked on the Info
   // tab's own type line rather than by a page-wide text search that a coincidence like that
   // could pass on its own.
-  await page.getByRole('button', { name: 'Info' }).click();
+  await openInfo(page);
   await expect(page.locator('main .muted').first()).toHaveText('Pedelec');
 
   // Back from the saved object must not reopen the "Add type" form the round trip passed through.
@@ -181,7 +181,7 @@ test('the shortcut also works from the edit form, and clears type/draft from the
   await page.waitForURL(`**/objects/${objectId}`);
   await expect(page.getByRole('main')).toContainText('New Name');
   // The type line lives under the Info tab, not the default Timeline one.
-  await page.getByRole('button', { name: 'Info' }).click();
+  await openInfo(page);
   await expect(page.locator('main .muted').first()).toHaveText('Widget');
 });
 

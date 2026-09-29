@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openInfo as openInfoTab, signInFresh } from './helpers';
 
 async function object(page: Page, data: Record<string, unknown>): Promise<number> {
   const res = await page.request.post('/api/objects', { data: { description: '', ...data } });
@@ -14,7 +14,7 @@ async function entry(page: Page, id: number, data: Record<string, unknown>) {
 
 async function openInfo(page: Page, id: number) {
   await page.goto(`/objects/${id}`);
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfoTab(page);
 }
 
 test('a car shows consumption per fill and no contents switch', async ({ page }) => {
@@ -45,7 +45,7 @@ test('a house includes its boiler on request, and remembers the choice', async (
   await expect(ownership).toContainText('4,250.00');
 
   await page.reload();
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfoTab(page);
   await expect(page.getByLabel('Include contents')).toBeChecked();
   await expect(page.getByTestId('insights-ownership')).toContainText('4,250.00');
 });

@@ -38,11 +38,11 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await expect(page.getByText('104,500 km').first()).toBeVisible();
 
   // documents tab shows the photo
-  await page.getByRole('button', { name: 'Documents' }).click();
+  await page.getByRole('tab', { name: 'Documents' }).click();
   await expect(page.locator('.thumb-grid img.thumb')).toHaveCount(1);
 
   // a counter reminder is already due
-  await page.getByRole('button', { name: /^Reminders/ }).click();
+  await page.getByRole('tab', { name: /^Reminders/ }).click();
   await page.getByRole('button', { name: /New reminder/ }).click();
   await page.getByLabel('Title').fill('Oil change');
   await page.getByLabel(/Due at counter/).fill('100000');

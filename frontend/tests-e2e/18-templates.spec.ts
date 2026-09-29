@@ -24,7 +24,7 @@ test('a new car starts with the reminders ticked for it, measured from its curre
   await expect(page.locator('.entry.reading')).toContainText('80,000 km');
 
   // ...and the oil change is due 15,000 km on from it.
-  await page.getByRole('button', { name: /^Reminders/ }).click();
+  await page.getByRole('tab', { name: /^Reminders/ }).click();
   const oilCard = page.locator('.card').filter({ hasText: 'Oil change' });
   await expect(oilCard).toContainText('at 95,000 km');
   await expect(page.locator('.card').filter({ hasText: 'Inspection' })).toBeVisible();

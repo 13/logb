@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openInfo, signInFresh } from './helpers';
 
 /** The persistent shell nav (see AppNav.svelte): every destination is a client-side route
  *  change. Mirrors the same helper in `26-date-format.spec.ts`. */
@@ -39,7 +39,7 @@ test('the Info tab shows what was last done, and tapping it filters the timeline
   await entry(page, bike, { date: '2026-06-01', category: 'reading', title: 'Stand', counter_value: 4650 });
 
   await page.goto(`/objects/${bike}`);
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfo(page);
 
   await expect(page.getByRole('heading', { name: 'Last done', exact: true })).toBeVisible();
   const row = page.locator('.card.entry', { hasText: 'Bremsbeläge vorne' });
@@ -52,7 +52,7 @@ test('the Info tab shows what was last done, and tapping it filters the timeline
 
   // Tapping the row switches to the timeline, narrowed to the tapped title.
   await row.click();
-  await expect(page.getByRole('button', { name: 'Timeline', exact: true })).toHaveClass(/active/);
+  await expect(page.getByRole('tab', { name: 'Timeline', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('.tag-filter', { hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
   const entries = page.locator('.entry-row');
   await expect(entries).toHaveCount(2);
@@ -77,18 +77,18 @@ test('a title filter on one object does not follow you to another opened from it
 
   // Set a title filter on the parent's timeline.
   await page.goto(`/objects/${parent}`);
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfo(page);
   await page.locator('.card.entry', { hasText: 'Bremsbeläge vorne' }).click();
   await expect(page.locator('.tag-filter', { hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
 
   // Open the child from Contents: the underlying component instance is reused (`App.svelte`
   // routes every `/objects/:id` to the same `ObjectDetail`), so without a reset this filter
   // would otherwise still be set on the child too.
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfo(page);
   await page.getByRole('button', { name: /Isolation Child/ }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${child}$`));
 
-  await page.getByRole('button', { name: 'Timeline', exact: true }).click();
+  await page.getByRole('tab', { name: 'Timeline', exact: true }).click();
   await expect(page.locator('.tag-filter')).toHaveCount(0);
   await expect(page.locator('.entry-row', { hasText: 'Child Only Entry' })).toBeVisible();
 });

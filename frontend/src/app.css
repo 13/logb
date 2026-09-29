@@ -268,9 +268,6 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
 .topbar button:where(:not([data-slot])) { min-width: 44px; padding: var(--space-2); }
 .fab { position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); z-index: 6; border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
-.tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: var(--space-3); }
-.tabs button:where(:not([data-slot])) { flex: 1; background: none; border-radius: 0; border-bottom: 2px solid transparent; padding: var(--space-3) var(--space-1); }
-.tabs button.active:where(:not([data-slot])) { border-bottom-color: var(--accent-ink); color: var(--accent-ink); font-weight: 600; }
 /* Named `thumb-grid`, not `grid`: a bare `.grid` here collided with Tailwind's `grid` utility, so every
    `grid` utility without its own `grid-cols-*` inherited these 140px tracks. */
 .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-3); }

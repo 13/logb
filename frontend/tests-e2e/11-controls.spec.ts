@@ -194,12 +194,12 @@ test.describe('empty state timing', () => {
     }
 
     const docsEmpty = page.getByText(/Receipts, manuals|Belege, Handb/);
-    await page.getByRole('button', { name: 'Documents' }).click();
+    await page.getByRole('tab', { name: 'Documents' }).click();
     await expect(docsEmpty, 'the documents empty state was drawn before the request answered').toHaveCount(0);
     await expect(docsEmpty).toBeVisible({ timeout: 5000 });
 
     const remEmpty = page.getByText(/A reminder watches|Eine Erinnerung/);
-    await page.getByRole('button', { name: 'Reminders' }).click();
+    await page.getByRole('tab', { name: 'Reminders' }).click();
     await expect(remEmpty, 'the reminders empty state was drawn before the request answered').toHaveCount(0);
     await expect(remEmpty).toBeVisible({ timeout: 5000 });
   });

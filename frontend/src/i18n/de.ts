@@ -215,6 +215,8 @@ export default {
   'tab.documents': 'Dokumente',
   'tab.reminders': 'Erinnerungen',
   'tab.info': 'Info',
+  'tab.reminders-due': '({n} fällig)',
+  'object.sections': 'Bereiche',
 
   'insights.title': 'Kosten',
   'insights.by-year': 'Pro Jahr',

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { pngPayload, signInFresh } from './helpers';
+import { openInfo, pngPayload, signInFresh } from './helpers';
 
 /** A fresh object made through the form, and its id. */
 async function newObject(page: Page, name: string): Promise<number> {
@@ -123,7 +123,7 @@ test('tag an object and an entry, see coloured chips, and filter by tapping one'
   await page.waitForURL(/\/objects\/\d+$/);
 
   // Info tab chips.
-  await page.getByRole('button', { name: 'Info', exact: true }).click();
+  await openInfo(page);
   await expect(page.locator('.tag', { hasText: 'Lease' }).first()).toBeVisible();
 
   // An entry with a tag; the timeline shows it and filters by it.
