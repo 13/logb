@@ -666,7 +666,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> logb::config::Config {
         // a pool of 16 per test (today's PostgreSQL default) exhausts a stock server's
         // `max_connections` long before the suite finishes. A small pool is all one test needs.
         db_pool_size: Some(2),
-        // The stand-in push service in tests/notifications.rs listens on plain-http loopback,
+        // The stand-in push service in tests/timezone/notifications.rs listens on plain-http loopback,
         // which a real instance refuses; see the field's own comment.
         allow_loopback_http_push: true,
     }

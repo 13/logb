@@ -1,7 +1,7 @@
 //! `GET /objects/{id}/last-done` -- see `src/api/activities.rs::last_done` and section C of
 //! `docs/superpowers/specs/2026-09-15-dates-tags-last-done-design.md`.
 
-mod common;
+use crate::common;
 use serde_json::{json, Value};
 
 async fn act(app: &common::TestApp, object_id: i64, date: &str, category: &str, title: &str, counter: Option<i64>) -> Value {
@@ -204,7 +204,7 @@ async fn trips_never_count_towards_last_done() {
 }
 
 /// Creates a car with the given `fuel_unit` (or none) and a `km` counter. `app.create_object`
-/// has no `fuel_unit` parameter, hence this -- mirrors `create_car` in `tests/charging.rs`.
+/// has no `fuel_unit` parameter, hence this -- mirrors `create_car` in `tests/it/charging.rs`.
 async fn create_car(app: &common::TestApp, fuel_unit: Option<&str>) -> Value {
     let res = app.client.post(app.url("/objects")).json(&json!({
         "name": "Golf", "type": "car", "counter_unit": "km", "fuel_unit": fuel_unit,

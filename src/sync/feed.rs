@@ -267,7 +267,7 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
     // leaves 1, 2 and 3, run 2 leaves 1 and 2, run 3 leaves 1, run 4 leaves nothing. That is the
     // guard's whole cost, and it is what
     // `a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it` in
-    // `tests/sync.rs` spells out as "one extra run per level of nesting". The parent waiting a
+    // `tests/it/sync/` spells out as "one extra run per level of nesting". The parent waiting a
     // run is what it already does for an activity, a reminder or an attachment; nesting only
     // makes it happen more than once.
     //

@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::json;
 
 #[tokio::test]
@@ -94,7 +94,7 @@ async fn fuel_unit_round_trips_and_is_validated() {
 }
 
 /// `energy_price_milli`'s two 400 messages, exactly as the spec states them --
-/// `tests/charging.rs` covers the round trip and the cross-field rule with `fuel_unit` in full.
+/// `tests/it/charging.rs` covers the round trip and the cross-field rule with `fuel_unit` in full.
 #[tokio::test]
 async fn energy_price_milli_error_messages() {
     let app = common::spawn().await;
@@ -146,7 +146,7 @@ async fn due_reminder_count_respects_snooze_for_a_date_due_reminder() {
     assert_eq!(due_reminder_count(&app, id).await, 0, "a snoozed date-due reminder must not count as due");
 
     // Lapse the snooze by writing an already-past date directly through the pool, the same
-    // way tests/reminders.rs does it -- there is no time-travel helper in this harness.
+    // way tests/it/reminders.rs does it -- there is no time-travel helper in this harness.
     sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(rid)
         .execute(&app.state.db)
@@ -228,7 +228,7 @@ async fn due_reminder_count_agrees_with_each_reminders_due_flag() {
 
     let snoozed_lapsed = add_reminder(&app, id, json!({ "title": "Lapsed snooze", "due_date": "2020-01-01" })).await;
     // Write an already-past snoozed_until directly through the pool, the same way
-    // tests/reminders.rs lapses a snooze -- there is no time-travel helper in this harness.
+    // tests/it/reminders.rs lapses a snooze -- there is no time-travel helper in this harness.
     sqlx::query("UPDATE reminders SET snoozed_until = '2020-01-01' WHERE id = $1")
         .bind(snoozed_lapsed)
         .execute(&app.state.db)
@@ -698,7 +698,7 @@ async fn an_ancestor_walk_over_a_data_level_cycle_still_terminates() {
 
 /// `all=true` must actually reach past the roots.
 ///
-/// `tests/export.rs` already sends `all=true`, but the object it asserts on is a root, so its
+/// `tests/it/export.rs` already sends `all=true`, but the object it asserts on is a root, so its
 /// assertion holds just as well against a `list` that ignored the flag entirely: deleting
 /// `$3 OR` from the `WHERE` clause in `objects::list` failed no test in either suite. This one
 /// builds three levels and asks for all of them, so that deletion turns it red (it comes back

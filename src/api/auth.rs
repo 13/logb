@@ -111,7 +111,7 @@ async fn create_token(
 /// token caller has always gotten from this route: today that is `SessionUser` rejecting the
 /// request outright with `AppError::Unauthorized` before a handler ever runs, so that is what a
 /// mismatched id gets here too, rather than the `NotFound` a session caller gets for someone
-/// else's id below. `tests/openapi.rs` and `tests/api_tokens.rs` pin both refusals.
+/// else's id below. `tests/it/openapi.rs` and `tests/it/api_tokens.rs` pin both refusals.
 async fn revoke_token(
     user: AuthUser,
     State(state): State<App>,

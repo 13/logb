@@ -2,7 +2,7 @@
 //! `fuel_unit` can carry a price per unit (`energy_price_milli`) -- see
 //! `docs/superpowers/specs/2026-09-16-charging-energy-design.md`.
 
-mod common;
+use crate::common;
 use serde_json::{json, Value};
 
 /// Creates an object with the given `fuel_unit` (or none) and a `km` counter -- the fixture

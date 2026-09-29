@@ -16,7 +16,7 @@
 //!     bearer-token authentication did a sequential scan, and the old table/column-only version
 //!     of this test passed throughout.
 
-mod common;
+use crate::common;
 
 use sqlx::AnyPool;
 use std::collections::BTreeSet;

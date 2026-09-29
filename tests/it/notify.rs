@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use axum::routing::post;
 use axum::Router;
 use serde_json::json;

@@ -531,7 +531,7 @@ objects that have others inside them.
 ## API
 
 JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which
-`tests/openapi.rs` checks against the router — a route added, removed or
+`tests/it/openapi.rs` checks against the router — a route added, removed or
 renamed without updating it fails the build.
 
 Two credentials work everywhere except token management: the `logb_session`

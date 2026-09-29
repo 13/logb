@@ -6,7 +6,7 @@
 //! These run against whichever backend the harness is configured for, so they catch a dialect
 //! difference rather than describing one.
 
-mod common;
+use crate::common;
 
 fn hits(results: &serde_json::Value, kind: &str) -> usize {
     results[kind].as_array().unwrap_or_else(|| panic!("no {kind} in {results}")).len()

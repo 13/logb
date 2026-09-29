@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 /// Why the two `--backup` tests in this file do not run on PostgreSQL.
 ///

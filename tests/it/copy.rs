@@ -1,7 +1,7 @@
 //! Moving a database to another backend. The thing that matters is that identifiers survive:
 //! every foreign key still points where it did, and every device's stored ids still resolve.
 
-mod common;
+use crate::common;
 
 /// Seeds a database through the real API, so the copy is exercised against rows the application
 /// actually produces rather than rows a test invented.

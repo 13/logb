@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use reqwest::multipart::{Form, Part};
 use serde_json::json;
 
@@ -1739,7 +1739,7 @@ async fn count_files(app: &common::TestApp) -> i64 {
         .unwrap()
 }
 
-/// The import twin of the upload test of the same name in `tests/attachments.rs`: an import
+/// The import twin of the upload test of the same name in `tests/it/attachments.rs`: an import
 /// that rolls back after writing a file row must not leave a thumbnail behind for the next file
 /// SQLite hands the same id to.
 #[tokio::test]

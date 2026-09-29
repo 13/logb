@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::json;
 
 fn act(date: &str, category: &str, counter: Option<i64>, cost: Option<i64>) -> serde_json::Value {

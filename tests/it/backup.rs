@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 /// Why the snapshot tests in this file do not run on PostgreSQL.
 ///

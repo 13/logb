@@ -408,7 +408,7 @@ async fn derived(
     // `domain::reminder::is_due` -- it exists only so N objects' counts can be computed in one
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
     // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
-    // in tests/objects.rs is what catches them drifting apart. Both encodings read the same
+    // in tests/it/objects.rs is what catches them drifting apart. Both encodings read the same
     // `today`, the caller's own (`AuthUser::today`), so a user in another zone gets one answer
     // from both.
     //

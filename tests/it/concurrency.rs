@@ -4,7 +4,7 @@
 //! to see it red, and the task that added it proved it. A concurrency test that has never been
 //! observed failing is decoration.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 
@@ -51,7 +51,7 @@ async fn two_write_transactions_do_not_overlap() {
 /// serialises the two regardless of this test.
 ///
 /// Ten is comfortably inside the test harness's `login_max_attempts` of 10 per IP per minute
-/// (see `tests/pairing.rs::too_many_redeem_attempts_from_one_ip_are_rate_limited`), so a 429
+/// (see `tests/it/pairing.rs::too_many_redeem_attempts_from_one_ip_are_rate_limited`), so a 429
 /// from the rate limiter -- a different mechanism entirely -- cannot be mistaken for the
 /// single-use guard this test is actually about.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

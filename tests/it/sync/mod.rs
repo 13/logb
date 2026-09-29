@@ -1,7 +1,6 @@
-//! The sync protocol's integration tests, one binary split by theme. Shared fixtures live in
+//! The sync protocol's integration tests, split by theme. Shared fixtures live in
 //! `helpers`; everything else is a pure move from the former `tests/sync.rs`.
-#[path = "../common/mod.rs"]
-mod common;
+use crate::common;
 mod helpers;
 
 mod bootstrap;

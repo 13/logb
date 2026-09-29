@@ -495,7 +495,7 @@ pub fn local_hour() -> u32 {
 /// only choice made here is which embedded set to run. The two sets are not translations of
 /// each other: SQLite keeps its nine historical steps because existing databases have to be
 /// moved forward one at a time, while a fresh PostgreSQL database has no history to replay and
-/// gets today's schema in a single file. `tests/schema_parity.rs` is what keeps them agreeing.
+/// gets today's schema in a single file. `tests/it/schema_parity.rs` is what keeps them agreeing.
 pub fn migrator(url: &str) -> sqlx::migrate::Migrator {
     if url.starts_with("sqlite:") {
         sqlx::migrate!("./migrations/sqlite")

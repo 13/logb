@@ -269,8 +269,8 @@ async fn the_schema_accepts_every_type_and_category_the_code_offers() {
 
     // 0014 drops the objects CHECK on purpose: a user's own type (`custom:<uuid>`) cannot be
     // listed in one, so a type nobody defined is refused by `object_type::is_valid_for_user`
-    // instead -- `an_unknown_type_is_refused` in tests/objects.rs and
-    // `an_object_can_use_its_owners_type_only` in tests/own_types.rs pin that. What the schema
+    // instead -- `an_unknown_type_is_refused` in tests/it/objects.rs and
+    // `an_object_can_use_its_owners_type_only` in tests/it/own_types.rs pin that. What the schema
     // still guarantees is that every object has a type, and the activities CHECK is untouched.
     assert!(
         sqlx::query("INSERT INTO objects (user_id, name, type, created_at, updated_at) VALUES (1, 'x', NULL, 'x', 'x')")

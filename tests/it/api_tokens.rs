@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::json;
 
 // A client that is not a browser should not have to pretend to be one: a cookie's SameSite and

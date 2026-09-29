@@ -473,7 +473,7 @@ async fn pushing_category_away_from_trip_once_fields_are_cleared_is_accepted() {
 }
 
 /// The same rule as `a_counter_unit_cannot_leave_km_mi_while_the_object_has_trips` in
-/// `tests/objects.rs`, checked at the other door: `km`/`mi` stay interchangeable, but leaving
+/// `tests/it/objects.rs`, checked at the other door: `km`/`mi` stay interchangeable, but leaving
 /// the pair is rejected while a live trip depends on it.
 #[tokio::test]
 async fn pushing_counter_unit_away_from_km_mi_with_a_live_trip_is_rejected() {

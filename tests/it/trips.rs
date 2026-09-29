@@ -2,7 +2,7 @@
 //! start is the new `start_counter`, and it carries four more optional fields -- see
 //! `docs/superpowers/specs/2026-09-15-trip-log-design.md`.
 
-mod common;
+use crate::common;
 use serde_json::{json, Value};
 
 /// Creates an object of the built-in `e_bike` type with a `km` counter, the fixture every test

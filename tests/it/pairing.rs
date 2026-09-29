@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::json;
 
 /// A client with no cookie jar: the phone side of pairing never holds a session.
@@ -397,7 +397,7 @@ async fn too_many_redeem_attempts_from_one_ip_are_rate_limited() {
     let anon = bare_client();
     let body = json!({ "code": "not-a-real-code", "device_name": "phone" });
 
-    // `login_max_attempts` in the test harness's config is 10 (see tests/common/mod.rs).
+    // `login_max_attempts` in the test harness's config is 10 (see tests/it/common/mod.rs).
     for _ in 0..10 {
         let res = anon.post(app.url("/auth/pair/redeem")).json(&body).send().await.unwrap();
         assert_eq!(res.status(), 401);

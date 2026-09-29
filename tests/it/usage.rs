@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use chrono::{Duration, NaiveDate};
 use serde_json::json;
 

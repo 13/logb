@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::json;
 
 async fn seed(app: &common::TestApp) -> (i64, i64) {

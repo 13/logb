@@ -1,7 +1,7 @@
 //! Where LogB remembers which database to open. It cannot live in the database, because it
 //! points away from it.
 
-mod common;
+use crate::common;
 
 use clap::Parser;
 

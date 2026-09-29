@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use serde_json::{json, Value};
 
 async fn post(app: &common::TestApp, client: &reqwest::Client, path: &str, body: Value) -> reqwest::Response {

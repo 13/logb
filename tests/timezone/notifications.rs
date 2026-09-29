@@ -2,10 +2,10 @@
 //! instance timezone that decides when both go out.
 //!
 //! The timezone tests change the process-wide timezone (`db::set_timezone`), which is why they
-//! live in this binary and not beside tests whose due dates depend on "today". Every due date
+//! live in `tests/timezone`, not beside the tests in `tests/it` whose due dates depend on "today". Every due date
 //! here is years in the past, so which day it is does not change any answer.
 
-mod common;
+use crate::common;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;

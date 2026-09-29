@@ -1,7 +1,7 @@
 //! A user's own object types: CRUD, the rules on each field, and that an object may use only
 //! its owner's types.
 
-mod common;
+use crate::common;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::AssertSqlSafe;

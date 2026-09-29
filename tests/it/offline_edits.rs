@@ -1,7 +1,7 @@
 //! An edit made offline reaches the server later than it was made. It carries `edited_at`, and
 //! each field it changes is kept only if nothing newer changed that field in the meantime.
 
-mod common;
+use crate::common;
 use serde_json::json;
 use std::time::Duration;
 

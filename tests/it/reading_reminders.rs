@@ -1,7 +1,7 @@
 //! Reading reminders: "log the odometer every month". Due when the newest reading is older than
 //! the interval, satisfied by any entry that carries a counter value, never marked done.
 
-mod common;
+use crate::common;
 use axum::routing::post;
 use axum::Router;
 use chrono::{Days, Months, NaiveDate};

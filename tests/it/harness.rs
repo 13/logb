@@ -1,12 +1,10 @@
-//! The harness's own helpers, tested here rather than in `tests/common/mod.rs`.
+//! The harness's own helpers, tested here rather than in `common/mod.rs`.
 //!
-//! `common` is included by every integration binary, so a `#[cfg(test)] mod tests` inside it
-//! would be compiled and run eighteen times over. These live in one binary instead, and are
-//! the only tests in the suite whose subject is the harness rather than the app.
+//! `common` is also included by `tests/timezone`, so a `#[cfg(test)] mod tests` inside
+//! it would run twice. These are the only tests in the suite whose subject is the harness rather
+//! than the app.
 
-mod common;
-
-use common::{pid_of, process_is_alive, replace_database_in_url, unique_suffix};
+use crate::common::{pid_of, process_is_alive, replace_database_in_url, unique_suffix};
 
 /// The whole job: keep user, password, host and port, replace the database name.
 #[test]

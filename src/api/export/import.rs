@@ -849,7 +849,7 @@ async fn import_attachment(
             // manages to race this INSERT -- `db::begin_write`'s advisory lock on PostgreSQL
             // (SQLite's single writer, always) serialises every write transaction, `import`
             // included, so today nothing can. It rides the same rule as `apply.rs` anyway,
-            // rather than trusting that the lock is never lifted: `tests/concurrency.rs`
+            // rather than trusting that the lock is never lifted: `tests/it/concurrency.rs`
             // documents removing it as a mutation test, and an unrescued arm here would have
             // sprung back to life as a real 500 the moment that lock came off, on the one
             // failure path this function could not otherwise exercise.
