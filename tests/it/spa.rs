@@ -102,3 +102,20 @@ async fn responses_carry_a_request_id() {
         .send().await.unwrap();
     assert_ne!(hostile.headers()["x-request-id"], "a b c; drop");
 }
+
+/// API responses are compressed with brotli or zstd when a client asks for one, and gzip still
+/// works for one that does not.
+#[tokio::test]
+async fn api_responses_compress_with_brotli_zstd_and_gzip() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    for i in 0..5 {
+        app.create_object(&app.client, &format!("Car number {i}"), Some("km")).await;
+    }
+    for encoding in ["br", "zstd", "gzip"] {
+        let res = app.client.get(app.url("/objects"))
+            .header("accept-encoding", encoding).send().await.unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.headers()["content-encoding"], encoding);
+    }
+}

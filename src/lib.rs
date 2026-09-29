@@ -269,10 +269,29 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         .fallback(spa::handler)
         // The default predicate already skips images, gRPC and event streams. Export archives
         // are the other already-compressed response LogB serves: gzipping a zip burns CPU on
-        // both ends for no gain.
-        .layer(CompressionLayer::new().compress_when(
-            DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
-        ))
+        // both ends for no gain. An attachment's original advertises `Accept-Ranges`, and is
+        // skipped too: PDFs, Office files and videos are compressed already, and compressing
+        // one would strip that header, so a viewer could no longer ask for a slice of it.
+        //
+        // Brotli and zstd besides gzip, at quality 4 for all three. Brotli's own default is
+        // 11, which is for compressing a file once at build time, not a JSON response on every
+        // request; at 4 it is about as fast as gzip's default and still smaller.
+        .layer(
+            CompressionLayer::new()
+                .quality(tower_http::CompressionLevel::Precise(4))
+                .compress_when(
+                    DefaultPredicate::new()
+                        .and(NotForContentType::const_new("application/zip"))
+                        .and(
+                            |_: axum::http::StatusCode,
+                             _: axum::http::Version,
+                             headers: &axum::http::HeaderMap,
+                             _: &axum::http::Extensions| {
+                                !headers.contains_key(header::ACCEPT_RANGES)
+                            },
+                        ),
+                ),
+        )
         .layer(TraceLayer::new_for_http());
     // Applied with an `if` rather than an always-present layer, so an instance that has not
     // configured any origin behaves exactly as it did before this existed.

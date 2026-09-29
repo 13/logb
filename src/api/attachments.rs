@@ -580,15 +580,92 @@ async fn serve_original(user: AuthUser, State(state): State<App>, Path(id): Path
     // Streamed from disk, not read whole: an original can be as large as the upload limit, and
     // a gallery of them opened at once used to hold every one in memory for the length of its
     // download.
-    let file = tokio::fs::File::open(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
+    let mut file = tokio::fs::File::open(state.storage.blob_path(&f.sha256)).await.map_err(|_| AppError::NotFound)?;
     let len = file.metadata().await?.len();
     let inline = may_render_inline(&f.mime);
-    let mut res = file_response(
-        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
-        &f.mime, content_disposition(inline, &f.original_name), &etag,
-    );
-    res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    let disposition = content_disposition(inline, &f.original_name);
+    let range = match requested_range(&headers, &etag, len) {
+        Some(Ok(range)) => Some(range),
+        Some(Err(())) => {
+            return Ok((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [(header::CONTENT_RANGE, HeaderValue::from_str(&format!("bytes */{len}")).unwrap())],
+            ).into_response());
+        }
+        None => None,
+    };
+    let mut res = match range {
+        Some((start, end)) => {
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            file.seek(std::io::SeekFrom::Start(start)).await?;
+            let part = file.take(end - start + 1);
+            let mut res = file_response(
+                Body::from_stream(tokio_util::io::ReaderStream::new(part)),
+                &f.mime, disposition, &etag,
+            );
+            *res.status_mut() = StatusCode::PARTIAL_CONTENT;
+            res.headers_mut().insert(
+                header::CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes {start}-{end}/{len}")).unwrap(),
+            );
+            res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(end - start + 1));
+            res
+        }
+        None => {
+            let mut res = file_response(
+                Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+                &f.mime, disposition, &etag,
+            );
+            res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+            res
+        }
+    };
+    // Also what keeps the compression layer off originals (see `lib::build`): a range is a slice
+    // of the stored bytes, and a PDF or a phone video gains nothing from being compressed again.
+    res.headers_mut().insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     Ok(res)
+}
+
+/// The one byte range a request asks for, inclusive, clamped to a file of `len` bytes.
+///
+/// `None` means "send the whole file": no `Range` header, a unit other than bytes, several
+/// ranges at once (which a server may answer with the whole representation, and which no
+/// viewer of a single PDF or video sends), a header that does not parse, or an `If-Range` that
+/// names another version. `Some(Err(()))` is a well-formed range that starts past the end, which
+/// is a 416.
+fn requested_range(headers: &HeaderMap, etag: &str, len: u64) -> Option<Result<(u64, u64), ()>> {
+    let spec = headers.get(header::RANGE)?.to_str().ok()?.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    // `If-Range` takes a strong comparison; a date there is never ours, since no
+    // `Last-Modified` is sent.
+    if let Some(if_range) = headers.get(header::IF_RANGE) {
+        if if_range.to_str().ok()?.trim() != etag {
+            return None;
+        }
+    }
+    let (first, last) = spec.trim().split_once('-')?;
+    let (first, last) = (first.trim(), last.trim());
+    let range = if first.is_empty() {
+        // `bytes=-N`: the last N bytes.
+        let n: u64 = last.parse().ok()?;
+        if n == 0 || len == 0 {
+            return Some(Err(()));
+        }
+        (len.saturating_sub(n), len - 1)
+    } else {
+        let start: u64 = first.parse().ok()?;
+        let end = if last.is_empty() { u64::MAX } else { last.parse().ok()? };
+        if end < start {
+            return None;
+        }
+        if start >= len {
+            return Some(Err(()));
+        }
+        (start, end.min(len - 1))
+    };
+    Some(Ok(range))
 }
 
 async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i64>, headers: HeaderMap) -> Result<Response, AppError> {
@@ -605,7 +682,40 @@ async fn serve_thumb(user: AuthUser, State(state): State<App>, Path(id): Path<i6
 
 #[cfg(test)]
 mod tests {
-    use super::content_disposition;
+    use super::{content_disposition, requested_range};
+    use axum::http::{header, HeaderMap, HeaderValue};
+
+    fn range(value: &str, len: u64) -> Option<Result<(u64, u64), ()>> {
+        let mut h = HeaderMap::new();
+        h.insert(header::RANGE, HeaderValue::from_str(value).unwrap());
+        requested_range(&h, "\"abc\"", len)
+    }
+
+    #[test]
+    fn byte_ranges_parse_and_clamp() {
+        assert_eq!(range("bytes=0-9", 100), Some(Ok((0, 9))));
+        assert_eq!(range("bytes=90-", 100), Some(Ok((90, 99))));
+        assert_eq!(range("bytes=50-500", 100), Some(Ok((50, 99))));
+        assert_eq!(range("bytes=-10", 100), Some(Ok((90, 99))));
+        assert_eq!(range("bytes=-500", 100), Some(Ok((0, 99))));
+        assert_eq!(range("bytes=100-", 100), Some(Err(())));
+        assert_eq!(range("bytes=-0", 100), Some(Err(())));
+        // Answered with the whole file instead.
+        assert_eq!(range("bytes=0-1,5-6", 100), None);
+        assert_eq!(range("items=0-1", 100), None);
+        assert_eq!(range("bytes=9-1", 100), None);
+        assert_eq!(range("bytes=x-1", 100), None);
+    }
+
+    #[test]
+    fn an_if_range_for_another_version_asks_for_the_whole_file() {
+        let mut h = HeaderMap::new();
+        h.insert(header::RANGE, HeaderValue::from_static("bytes=0-1"));
+        h.insert(header::IF_RANGE, HeaderValue::from_static("\"other\""));
+        assert_eq!(requested_range(&h, "\"abc\"", 10), None);
+        h.insert(header::IF_RANGE, HeaderValue::from_static("\"abc\""));
+        assert_eq!(requested_range(&h, "\"abc\"", 10), Some(Ok((0, 1))));
+    }
 
     #[test]
     fn ascii_names_pass_through_in_both_parameters() {
