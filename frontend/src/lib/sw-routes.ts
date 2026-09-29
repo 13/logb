@@ -20,6 +20,12 @@ export const neverCached: RouteMatch = ({ url, sameOrigin }) =>
 /** Content-addressed blobs: never change under an id. */
 export const files: RouteMatch = ({ url, sameOrigin }) => sameOrigin && url.pathname.startsWith('/api/files/');
 
+/** A blob's thumbnail (`/api/files/:id/thumb`): small, and what every list shows. Registered
+ *  before `files`, so thumbnails and originals are kept in separate caches -- a few opened
+ *  originals must not push hundreds of thumbnails out. */
+export const thumbnails: RouteMatch = ({ url, sameOrigin }) =>
+  sameOrigin && url.pathname.startsWith('/api/files/') && url.pathname.endsWith('/thumb');
+
 /** What a household reads with no connection: objects, entries, reminders, types, tags. */
 export const householdData: RouteMatch = ({ url, sameOrigin }) =>
   sameOrigin &&

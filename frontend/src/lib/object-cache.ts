@@ -15,7 +15,7 @@ import type { Activity, MemObject } from './types';
  * which is the server *answering*, possibly about an object that belongs to someone else
  * entirely, not the network failing to deliver the request.
  *
- * The SAME invariant covers the service worker's Workbox caches (`logb-api` / `logb-files`,
+ * The SAME invariant covers the service worker's Workbox caches (`logb-api` / `logb-files` / `logb-thumbs`,
  * configured in vite.config.ts): they hold `GET /api/...` responses -- including this same
  * object and activities data, plus the photos it links to via `cover_file_id` -- entirely
  * outside this module, and just as durably across an SPA login/logout. `clearObjectCache()`
@@ -64,20 +64,20 @@ export function clearObjectMemory(): void {
   activityPages.clear();
 }
 
-/** Drop every cached object and activities page, plus the service worker's `logb-api` and
- *  `logb-files` Workbox caches (see the invariant above) -- names must match vite.config.ts
+/** Drop every cached object and activities page, plus the service worker's `logb-api`,
+ *  `logb-files` and `logb-thumbs` Workbox caches (see the invariant above) -- names must match vite.config.ts
  *  exactly, or a stale SW response keeps answering after this call and this cache gets
  *  re-poisoned from it on the very next load. `globalThis.caches` is guarded because it does
  *  not exist under vitest (node) or in a browser with no service worker support. Call on
  *  logout and on any handled unauthorized response — this cache must never survive past the
  *  session that populated it.
  *
- *  The Maps are cleared synchronously; the returned promise resolves once both Workbox caches
+ *  The Maps are cleared synchronously; the returned promise resolves once all three Workbox caches
  *  are actually gone. A caller about to load data for a DIFFERENT user must await it: until a
  *  `caches.delete` settles, the service worker can still answer from the old cache. */
 export function clearObjectCache(): Promise<void> {
   clearObjectMemory();
   const store = globalThis.caches;
   if (!store) return Promise.resolve();
-  return Promise.all([store.delete('logb-api'), store.delete('logb-files')]).then(() => {});
+  return Promise.all([store.delete('logb-api'), store.delete('logb-files'), store.delete('logb-thumbs')]).then(() => {});
 }

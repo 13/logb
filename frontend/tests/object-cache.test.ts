@@ -28,7 +28,7 @@ describe('clearObjectCache', () => {
     expect(getCachedObject(1)).toBeUndefined();
   });
 
-  it('deletes exactly the two named service-worker caches vite.config.ts configures', async () => {
+  it('deletes exactly the three named service-worker caches vite.config.ts configures', async () => {
     const del = vi.fn().mockResolvedValue(true);
     globalThis.caches = { delete: del } as unknown as CacheStorage;
 
@@ -39,7 +39,8 @@ describe('clearObjectCache', () => {
 
     expect(del).toHaveBeenCalledWith('logb-api');
     expect(del).toHaveBeenCalledWith('logb-files');
-    expect(del).toHaveBeenCalledTimes(2);
+    expect(del).toHaveBeenCalledWith('logb-thumbs');
+    expect(del).toHaveBeenCalledTimes(3);
   });
 
   it('clears the Maps at once, and resolves only after both deletes have finished', async () => {

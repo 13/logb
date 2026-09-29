@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { pwaIcons } from './scripts/pwa-icons.ts';
-import { files, householdData, neverCached, otherApi } from './src/lib/sw-routes.ts';
+import { files, householdData, neverCached, otherApi, thumbnails } from './src/lib/sw-routes.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -55,14 +55,27 @@ export default defineConfig({
           // Session, administration, exports, sync and anything that must never be answered
           // from a cache: a stale /auth/me would show a signed-out user their old identity.
           { urlPattern: neverCached, handler: 'NetworkOnly', method: 'GET' },
-          // Blobs are content-addressed and never change under a given id.
+          // Blobs are content-addressed and never change under a given id. Thumbnails and
+          // originals in separate caches: a thumbnail is a few kB and every list shows them, an
+          // original can be megabytes and is opened one at a time -- one shared limit let a few
+          // opened photos evict the thumbnails a whole dashboard needs offline.
+          {
+            urlPattern: thumbnails,
+            handler: 'CacheFirst',
+            method: 'GET',
+            options: {
+              cacheName: 'logb-thumbs',
+              expiration: { maxEntries: 1000, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
           {
             urlPattern: files,
             handler: 'CacheFirst',
             method: 'GET',
             options: {
               cacheName: 'logb-files',
-              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [200] },
             },
           },
