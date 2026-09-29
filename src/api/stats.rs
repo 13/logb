@@ -1,5 +1,5 @@
 use crate::auth::AuthUser;
-use crate::domain::stats::{purchase_spend, summarize, ObjectRow, Spend, Stats};
+use crate::domain::stats::{purchase_spend, spend_years, summarize, summarize_with_years, ObjectRow, Spend, Stats, PURCHASE_PRICE};
 use crate::error::AppError;
 use crate::state::App;
 use axum::extract::{Query, State};
@@ -370,13 +370,20 @@ async fn fuel_usage(
         .nth(1)
         .map(|m| (m.liters_milli, m.gallons_milli))
         .unwrap_or_default();
+    // Only each object's newest level, picked in SQL by a window, where every level ever
+    // logged used to be read and all but the first per object dropped here. Newest first
+    // across objects, as before.
     let level_rows: Vec<FuelLevelRow> = sqlx::query_as(
-        "SELECT o.id, o.name, COALESCE(o.resource_unit, o.fuel_unit), o.fuel_capacity_milli, o.low_level_pct, a.date, a.fuel_level_pct \
-         FROM objects o JOIN activities a ON a.object_id = o.id \
-         WHERE o.user_id = $1 AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
-           AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind IS NULL OR o.resource_kind <> 'water') \
-           AND a.category IN ('fuel','usage') AND a.fuel_level_pct IS NOT NULL AND a.date <= $2 \
-         ORDER BY a.date DESC, a.id DESC",
+        "SELECT id, name, unit, fuel_capacity_milli, low_level_pct, date, fuel_level_pct FROM ( \
+           SELECT o.id, o.name, COALESCE(o.resource_unit, o.fuel_unit) AS unit, o.fuel_capacity_milli, o.low_level_pct, \
+             a.date, a.fuel_level_pct, a.id AS activity_id, \
+             ROW_NUMBER() OVER (PARTITION BY o.id ORDER BY a.date DESC, a.id DESC) AS n \
+           FROM objects o JOIN activities a ON a.object_id = o.id \
+           WHERE o.user_id = $1 AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
+             AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind IS NULL OR o.resource_kind <> 'water') \
+             AND a.category IN ('fuel','usage') AND a.fuel_level_pct IS NOT NULL AND a.date <= $2 \
+         ) newest WHERE n = 1 \
+         ORDER BY date DESC, activity_id DESC",
     )
     .bind(user.id).bind(&today).fetch_all(&state.db).await?;
     let since = (chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d")
@@ -453,16 +460,44 @@ async fn read(
     }
 
     // Readings are excluded as in insights: they never carry a cost.
-    let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
+    //
+    // A year is filtered here rather than in `summarize`, so a year's view reads that year's
+    // groups and not every group the account has. `substr(date, 1, 5)` against `"YYYY-"` is
+    // exactly `summarize`'s own `starts_with` test; a date range would not be, since
+    // PostgreSQL compares text by collation rather than by byte.
+    let year_filter = if q.year.is_some() { " AND substr(a.date, 1, 5) = $2" } else { "" };
+    let mut query = sqlx::query_as::<_, (i64, String, String, i64)>(sqlx::AssertSqlSafe(format!(
         "SELECT a.object_id, substr(a.date, 1, 7), a.category, CAST(SUM(a.cost_cents) AS BIGINT) \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND a.cost_cents IS NOT NULL AND a.category <> 'reading' \
-         GROUP BY a.object_id, substr(a.date, 1, 7), a.category",
-    )
-    .bind(user.id)
-    .fetch_all(&state.db)
-    .await?;
+           AND a.cost_cents IS NOT NULL AND a.category <> 'reading'{year_filter} \
+         GROUP BY a.object_id, substr(a.date, 1, 7), a.category"
+    )))
+    .bind(user.id);
+    if let Some(y) = q.year {
+        query = query.bind(format!("{y:04}-"));
+    }
+    let rows = query.fetch_all(&state.db).await?;
+    // The year picker still offers every year with spend, so with a year chosen those are
+    // asked for on their own: the months of every group whose sum is positive, which is the
+    // test `stats::spend_years` applies to the groups themselves.
+    let spend_months: Option<Vec<String>> = match q.year {
+        None => None,
+        Some(_) => Some(
+            sqlx::query_scalar(
+                "SELECT DISTINCT month FROM ( \
+                   SELECT substr(a.date, 1, 7) AS month FROM activities a JOIN objects o ON o.id = a.object_id \
+                   WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
+                     AND a.cost_cents IS NOT NULL AND a.category <> 'reading' \
+                   GROUP BY a.object_id, substr(a.date, 1, 7), a.category \
+                   HAVING SUM(a.cost_cents) > 0 \
+                 ) spent",
+            )
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await?,
+        ),
+    };
     let mut spend: Vec<Spend> = rows
         .into_iter()
         .map(|(object_id, month, category, cost_cents)| Spend {
@@ -520,5 +555,17 @@ async fn read(
         spend.extend(purchase_spend(&objects, &purchased));
     }
 
-    Ok(Json(summarize(&objects, &spend, q.year)))
+    Ok(Json(match spend_months {
+        None => summarize(&objects, &spend, q.year),
+        // Every year with spend: the activity groups' months from SQL, and the purchase
+        // prices, which are only ever in `spend` itself.
+        Some(months) => {
+            let purchases = spend
+                .iter()
+                .filter(|s| s.category == PURCHASE_PRICE && s.cost_cents > 0)
+                .map(|s| s.month.as_str());
+            let years = spend_years(months.iter().map(String::as_str).chain(purchases));
+            summarize_with_years(&objects, &spend, q.year, years)
+        }
+    }))
 }
