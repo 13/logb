@@ -14,7 +14,7 @@ sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "postgres", "an
 argon2 = "0.6"
 rand = "0.10"
 rust-embed = "8"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 kamadak-exif = "0.6"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 sha2 = "0.11"
@@ -43,6 +43,16 @@ percent-encoding = "2.3.2"
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }
 tempfile = "3"
+
+# Tests and local runs need line numbers in a backtrace, not full debug info: full DWARF is most
+# of what made `target/` grow into the hundreds of gigabytes.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies are built once and then reused, so optimising them costs little and makes the
+# test suite fast where it is slow at opt-level 0: argon2 at every login, image decoding, hashing.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 lto = true
