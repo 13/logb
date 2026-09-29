@@ -6,7 +6,7 @@
   import { go } from '../lib/router';
   import { locale, t } from '../i18n';
   import { persisted } from '../stores/persisted';
-  import { SORT_KEYS, parseSort, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
+  import { SORT_KEYS, activeSpend, parseSort, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
   import { debouncer } from '../lib/debounce';
   import { pendingObject } from '../lib/object-form';
@@ -16,6 +16,8 @@
   import { tagColorIndex } from '../lib/tags';
   import DashboardReminders from '../lib/DashboardReminders.svelte';
   import Icon from '../lib/Icon.svelte';
+  import { money } from '../lib/format';
+  import { currency } from '../stores/session';
 
   let active = $state<MemObject[]>([]);
   let archived = $state<MemObject[]>([]);
@@ -140,6 +142,9 @@
   const typeLabel = (ty: ObjectType) => labelOf(ty, $customTypes, $t, $typesLoaded);
   const rows = $derived(visibleRows(active, archived, tab, filterQuery, sort, typeLabel, $locale, tagFilter));
   const activeCount = $derived(topLevelCount(active));
+  const subtitle = $derived(activeCount === 0 ? null
+    : (activeCount === 1 ? $t('dash.subtitle-one', { spend: money(activeSpend(active), $currency, $locale) })
+      : $t('dash.subtitle', { n: activeCount, spend: money(activeSpend(active), $currency, $locale) })));
   const nothingYet = $derived(active.length === 0 && archivedKnown && archived.length === 0);
 
   /** A snoozed reminder leaves the due list at once, and its object's due count with it; only the
@@ -164,18 +169,42 @@
 </script>
 
 <main>
-  <TopBar title={$t('dash.title')} />
+  <TopBar title={$t('dash.title')} {subtitle}>
+    <!-- Hidden while the first-run empty state carries the same action, so a screen never shows
+         two buttons of the same name. -->
+    {#if !nothingYet || tab === 'archived'}
+      <!-- A phone's header has room for an icon, not for the words: the text stays for screen
+           readers (and for the accessible name the e2e suite finds it by). -->
+      <button data-slot="dash-action" aria-label={`+ ${$t('dash.new')}`}
+              class="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
+              onclick={() => go('/objects/new')}><span aria-hidden="true">+</span> <span class="max-desk:sr-only">{$t('dash.new')}</span></button>
+    {/if}
+  </TopBar>
 
   <DashboardReminders {due} {soon} onsnooze={snooze} />
 
-  <nav class="tabs" aria-label={$t('dash.title')}>
-    <button class:active={tab === 'active'} aria-pressed={tab === 'active'} onclick={() => (tab = 'active')}>
-      {$t('dash.tab-active')} <span class="count muted">{activeCount}</span>
-    </button>
-    <button class:active={tab === 'archived'} aria-pressed={tab === 'archived'} onclick={() => (tab = 'archived')}>
-      {$t('dash.tab-archived')} <span class="count muted">{archivedKnown ? archived.length : ''}</span>
-    </button>
-  </nav>
+  {#if !(tab === 'active' && nothingYet)}
+    <div data-testid="dash-toolbar" class="mb-3 flex flex-wrap items-center gap-2">
+      <input type="search" data-slot="dash-search" aria-label={$t('dash.search')} placeholder={$t('dash.search')} bind:value={query}
+             class="h-11 min-w-48 flex-1 rounded-md border border-input bg-card px-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring" />
+      <label class="flex items-center gap-2 text-sm text-muted-foreground">
+        <span>{$t('dash.sort')}</span>
+        <select data-slot="dash-sort" value={sort} onchange={(e) => setSort(parseSort((e.currentTarget as HTMLSelectElement).value) ?? 'name')}
+                class="h-11 rounded-md border border-input bg-card px-3 text-base text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring">
+          {#each SORT_KEYS as key (key)}<option value={key}>{$t(`dash.sort-${key}`)}</option>{/each}
+        </select>
+      </label>
+      <div class="flex rounded-md bg-muted p-1" role="group" aria-label={$t('dash.title')}>
+        {#each [['active', $t('dash.tab-active'), activeCount], ['archived', $t('dash.tab-archived'), archivedKnown ? archived.length : '']] as [key, label, count] (key)}
+          <button data-slot="dash-tab" aria-pressed={tab === key} onclick={() => (tab = key as ListTab)}
+                  class={['min-h-9 cursor-pointer rounded px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring',
+                          tab === key ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground']}>
+            {label} <span class="ml-1 tabular-nums text-muted-foreground">{count}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   {#if error}<p class="error">{error}</p>{/if}
   {#if tab === 'archived' && !archivedKnown && archivedFailure && !error}<p class="error">{archivedFailure}</p>{/if}
@@ -192,41 +221,19 @@
   {:else if tab === 'archived' && archived.length === 0}
     <div class="empty"><p>{$t('dash.none-archived')}</p></div>
   {:else}
-    <div class="controls">
-      <input type="search" aria-label={$t('dash.search')} placeholder={$t('dash.search')} bind:value={query} />
-      <label class="sort">
-        <span>{$t('dash.sort')}</span>
-        <select value={sort} onchange={(e) => setSort(parseSort((e.currentTarget as HTMLSelectElement).value) ?? 'name')}>
-          {#each SORT_KEYS as key (key)}<option value={key}>{$t(`dash.sort-${key}`)}</option>{/each}
-        </select>
-      </label>
-    </div>
     {#if tagFilter !== null}
-      <div class="tag-filter" data-testid="tag-filter">
+      <div data-testid="tag-filter" class="mb-3 flex flex-wrap items-center gap-2">
         <span class={`tag tag-${tagColorIndex(tagFilter)}`}>{$t('tags.filter', { tag: tagFilter })}</span>
-        <button class="ghost" onclick={() => (tagFilter = null)}>{$t('tags.clear')}</button>
+        <button data-slot="dash-action" onclick={() => (tagFilter = null)}
+                class="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring">{$t('tags.clear')}</button>
       </div>
     {/if}
     {#if rows.length === 0}
       <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
-      <div data-testid="object-list" class="grid grid-cols-1 gap-3">
+      <div data-testid="object-list" class="grid grid-cols-1 gap-3 min-[1024px]:grid-cols-2 min-[1440px]:grid-cols-3">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}
       </div>
     {/if}
   {/if}
-
-  <!-- Hidden while the first-run empty state carries the same action. -->
-  {#if !nothingYet || tab === 'archived'}
-    <button class="primary fab" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
-  {/if}
 </main>
-
-<style>
-  .controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-3); }
-  .controls input[type='search'] { flex: 1 1 12rem; }
-  .sort { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
-  .tag-filter { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
-  .tag-filter button { font-size: var(--text-sm); }
-  .tabs .count { margin-left: var(--space-1); font-weight: normal; }
-</style>

@@ -132,3 +132,12 @@ export function visibleRows(
     parentName: withParent && object.parent_id !== null ? names.get(object.parent_id) ?? null : null,
   }));
 }
+
+/** What the listed objects have cost so far, for the dashboard's subtitle. Each object's own
+ *  total counts once -- a child's costs are its own, not folded into its parent's -- and an
+ *  object still waiting in the outbox has no server total yet. */
+export function activeSpend(objects: MemObject[]): number {
+  let sum = 0;
+  for (const o of objects) if (!o.pending) sum += o.stats.total_cost_cents;
+  return sum;
+}

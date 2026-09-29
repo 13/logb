@@ -62,3 +62,29 @@ test('an object card holds its tags, a compact due badge and a labelled last ent
   await card.getByRole('button', { name: /Card drill/ }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${id}$`));
 });
+
+test('the dashboard has a subtitle, one toolbar row, and a grid on wide screens', async ({ page }, info) => {
+  await signInFresh(page, '36-dashboard-toolbar');
+  for (const name of ['Grid one', 'Grid two', 'Grid three']) {
+    const r = await page.request.post('/api/objects', { data: { name, type: 'tool' } });
+    const id = (await r.json()).id as number;
+    await page.request.post(`/api/objects/${id}/activities`, { data: { date: '2026-01-02', category: 'purchase', title: 'Bought', cost_cents: 1000 } });
+  }
+  await page.goto('/');
+  await expect(page.getByRole('main').locator('header')).toContainText(/3 active · .*30\.00 spent/);
+  await expect(page.getByRole('button', { name: '+ New object' })).toBeVisible();
+
+  const search = page.getByLabel('Search objects');
+  const sort = page.getByLabel('Sort');
+  const tabs = page.getByRole('button', { name: /^Active/ });
+  if (info.project.name === 'desktop') {
+    // One row: search, sort and the Active/Archived switch share a line.
+    const ys = await Promise.all([search, sort, tabs].map(async (l) => Math.round((await l.boundingBox())!.y)));
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(12);
+    // Two columns at 1280 px.
+    const cards = page.getByTestId('object-card');
+    const [a, b] = await Promise.all([cards.nth(0).boundingBox(), cards.nth(1).boundingBox()]);
+    expect(Math.round(a!.y)).toBe(Math.round(b!.y));
+  }
+  await expect(tabs).toHaveAttribute('aria-pressed', 'true');
+});

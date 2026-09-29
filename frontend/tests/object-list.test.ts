@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, parseSort, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
+import { activeSpend, matchesQuery, parseSort, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
 import type { MemObject, ObjectType } from '../src/lib/types';
 
 let nextId = 1;
@@ -140,5 +140,20 @@ describe('withPendingObjects', () => {
     expect(once.map((o) => o.id)).toEqual([-9, 5]);
     // A second load that fell back to what is on screen (offline) merges into its own output.
     expect(withPendingObjects([queued], once).map((o) => o.id)).toEqual([-9, 5]);
+  });
+});
+
+describe('activeSpend', () => {
+  it('adds every object\'s own cost once, children included, and skips queued rows', () => {
+    const rows = [
+      obj({ id: 1, parent_id: null, stats: { total_cost_cents: 1000 } }),
+      obj({ id: 2, parent_id: 1, stats: { total_cost_cents: 250 } }),
+      obj({ id: -3, pending: true, stats: { total_cost_cents: 999 } }),
+    ];
+    expect(activeSpend(rows)).toBe(1250);
+  });
+
+  it('is zero for an empty list', () => {
+    expect(activeSpend([])).toBe(0);
   });
 });

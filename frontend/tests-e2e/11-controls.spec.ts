@@ -148,19 +148,23 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await expect(async () => {
     const result = await page.evaluate(() => {
       const box = (el: Element) => el.getBoundingClientRect();
-      const tabs = document.querySelector('.tabs')!;
-      const controls = document.querySelector('.controls')!;
+      const header = document.querySelector('header.topbar')!;
+      const controls = document.querySelector('[data-testid="dash-toolbar"]')!;
       const search = controls.querySelector('input[type="search"]')!;
-      const list = document.querySelector('.controls + [data-testid="object-list"]');
+      const list = document.querySelector('[data-testid="dash-toolbar"] + [data-testid="object-list"]');
       if (!list) return null;
-      const above = box(search).top - box(tabs).bottom;
+      // The header's own bottom padding is air too, and it is inside its box.
+      const above = box(search).top - box(header).bottom + parseFloat(getComputedStyle(header).paddingBottom);
       const below = box(list).top - box(controls).bottom;
       return { above, below };
     });
     expect(result).not.toBeNull();
     gaps = result!;
   }).toPass();
-  expect(gaps.below, `the controls row is off-centre in its gap: ${JSON.stringify(gaps)}`).toBe(gaps.above);
+  // The switch that used to sit above the row moved into it, so the row now has the header above
+  // and the list below: neither may be flush (the focus ring's 4px bleed is not a gap).
+  expect(gaps.above, `the controls row is flush against the header: ${JSON.stringify(gaps)}`).toBeGreaterThanOrEqual(8);
+  expect(gaps.below, `the controls row is flush against the list: ${JSON.stringify(gaps)}`).toBeGreaterThanOrEqual(8);
 });
 
 test.describe('empty state timing', () => {

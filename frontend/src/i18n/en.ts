@@ -131,6 +131,8 @@ export default {
   'dash.empty': 'LogB keeps the history of the things you own — a car, a bike, the washing machine, your own body — so every repair, service and receipt has one place to live.',
   'dash.none-archived': 'Nothing is archived.',
   'dash.new': 'New object',
+  'dash.subtitle': '{n} active · {spend} spent',
+  'dash.subtitle-one': '1 active · {spend} spent',
   'dash.due': '{n} reminders due',
   'dash.due-one': '1 reminder due',
   'dash.last-entry': 'Last entry {when}',
