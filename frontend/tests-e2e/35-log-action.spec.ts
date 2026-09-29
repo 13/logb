@@ -19,6 +19,7 @@ test('"+ Log" is a button for a tool and a menu for a car', async ({ page }) => 
   }
 
   await page.goto(`/objects/${drill}`);
+  await expect(page.getByRole('button', { name: /Log activity/ })).toBeVisible();
   await expect(page.getByTestId('log-menu')).toHaveCount(0);
   await page.getByRole('button', { name: /Log activity/ }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${drill}/activities/new$`));
