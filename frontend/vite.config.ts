@@ -77,6 +77,10 @@ export default defineConfig({
               cacheName: 'logb-files',
               expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [200] },
+              // A cached original answers a Range request with the part asked for, as the
+              // server does, rather than the whole file: a video or a PDF viewer seeking in a
+              // file it has already opened would otherwise get the full body back.
+              rangeRequests: true,
             },
           },
           // What a household reads with no connection: the network when it answers, the last
