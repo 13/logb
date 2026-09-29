@@ -3,7 +3,7 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
-## Unreleased: performance
+## 0.18.0: faster lists, search, imports and first load
 
 **The first start builds six indexes.** Five cover deleted entries (only those, so they stay
 small) and one covers reminders completed by an entry. The migration also removes, once,
@@ -18,6 +18,16 @@ own size. PostgreSQL is unchanged.
 **Responses can be compressed with brotli or zstd** as well as gzip, whichever the browser
 prefers. An attachment's original is never compressed, and answers `Range` requests, so a large
 PDF or video can be read in parts.
+
+**The first start folds every object and entry for search.** Search now reads a stored,
+pre-folded copy of each row's text instead of folding every row on every search. The copy is
+filled at the first start, 500 rows per short transaction, before the instance answers: about a
+second for a household with tens of thousands of entries. On PostgreSQL the server also tries to
+create the `pg_trgm` extension and two trigram indexes; if the database role may not create
+extensions, it logs one line and search scans instead, which is still fast.
+
+**`POST /sync/push` refuses more than 1000 operations** in one request with `413 too_large`.
+The bundled app never sends that many; a script that does should split its batch.
 
 ## 0.17.1: faster saves
 
