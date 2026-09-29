@@ -149,6 +149,10 @@
       : $t('dash.subtitle', { n: activeCount, spend: money(activeSpend(active), $currency, $locale) })));
   /** What "+ Log" can offer: an archived or still-queued object cannot be logged against. */
   const pickable = $derived(pickerOrder(active, $locale));
+  /** The first load has answered -- and with it the archived list when nothing is active, so
+   *  `nothingYet` is final. Before that a fresh user's header action and toolbar would render
+   *  and then vanish, taking keyboard focus with them. */
+  const settled = $derived(!loading);
   const nothingYet = $derived(active.length === 0 && archivedKnown && archived.length === 0);
 
   /** A snoozed reminder leaves the due list at once, and its object's due count with it; only the
@@ -176,7 +180,7 @@
   <TopBar title={$t('dash.title')} {subtitle}>
     <!-- Hidden while the first-run empty state carries the same action, so a screen never shows
          two buttons of the same name. -->
-    {#if !nothingYet || tab === 'archived'}
+    {#if settled && (!nothingYet || tab === 'archived')}
       <!-- A phone's header has room for an icon, not for the words: the text stays for screen
            readers (and for the accessible name the e2e suite finds it by). -->
       <button data-slot="dash-action" aria-label={`+ ${$t('dash.new')}`}
@@ -187,7 +191,7 @@
 
   <DashboardReminders {due} {soon} onsnooze={snooze} />
 
-  {#if !(tab === 'active' && nothingYet)}
+  {#if settled && !(tab === 'active' && nothingYet)}
     <div data-testid="dash-toolbar" class="mb-3 flex flex-wrap items-center gap-2">
       <input type="search" data-slot="dash-search" aria-label={$t('dash.search')} placeholder={$t('dash.search')} bind:value={query}
              class="h-11 min-w-48 flex-1 rounded-md border border-input bg-card px-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring" />

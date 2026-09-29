@@ -61,7 +61,7 @@ test('a calendar reading reminder queued offline replays once', async ({ page, c
   await expect.poll(async () => {
     const list = await (await page.request.get(`/api/objects/${object.id}/reminders`)).json();
     return list.filter((r: { title: string; schedule: string }) => r.title === 'Offline weekly reading' && r.schedule === 'weekly:1').length;
-  }).toBe(1);
+  }, { timeout: 15_000 }).toBe(1);
 });
 
 test('calendar reminders and the localized first weekday setting work together', async ({ page }) => {

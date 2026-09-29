@@ -6,6 +6,9 @@ test('keyboard focus is visible', async ({ page }) => {
   // A navigation moves focus to the page heading (`focusPageHeading`, a tick after the route
   // renders). Wait for it, or the Tab below can land first and have its focus taken back.
   await expect(page.getByRole('heading', { level: 1 })).toBeFocused();
+  // A fresh user's dashboard settles into its empty state; a Tab before that can land on a
+  // control that is about to go.
+  await expect(page.getByText(/LogB keeps the history/)).toBeVisible();
 
   // A real Tab press, not .focus(): `:focus-visible` deliberately does not match a programmatic
   // or mouse focus, so focusing by script would pass while a keyboard user still saw nothing.
