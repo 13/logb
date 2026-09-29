@@ -49,7 +49,7 @@ pub async fn run_once(url: &str, dest: &Path) -> Result<(), BoxError> {
 /// integrity check -- and gives each rejection its own wording, since these are read from a log
 /// at 3am rather than matched in code.
 pub async fn verify(path: &Path) -> Result<(), BoxError> {
-    let len = std::fs::metadata(path)?.len();
+    let len = tokio::fs::metadata(path).await?.len();
     if len == 0 {
         return Err("the file is empty, not a database".into());
     }
@@ -114,40 +114,43 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
     if hour_now < state.config.backup_hour {
         return Ok(None);
     }
-    std::fs::create_dir_all(&dir)?;
+    // Through `tokio::fs`, which runs each call on a blocking thread: this runs every minute
+    // from the backup hour to midnight, and the directory may be on a slow or network volume.
+    tokio::fs::create_dir_all(&dir).await?;
     let dest = dir.join(format!("logb-{}.db", db::today()));
+    let exists = tokio::fs::try_exists(&dest).await?;
 
     // Verified once, then remembered. The loop calls this every minute from the backup hour to
     // midnight, and verifying means opening the file twice and reading all of it for
     // `integrity_check` -- hundreds of whole-file reads a day to re-answer a question settled
     // by the first. The existence check stays: a stat is cheap, and a snapshot someone deleted
     // is a day with no backup, which is worth a rewrite.
-    if dest.exists() && remembered(state, &dest) {
+    if exists && remembered(state, &dest) {
         return Ok(None);
     }
 
     // An existing file only counts as done if it verifies. One that does not is worse than
     // nothing -- it occupies today's slot while being unrestorable -- so it is replaced.
-    if dest.exists() {
+    if exists {
         if verify(&dest).await.is_ok() {
             remember(state, &dest);
             return Ok(None);
         }
         tracing::warn!(path = %dest.display(), "replacing an unverifiable snapshot");
-        std::fs::remove_file(&dest)?;
+        tokio::fs::remove_file(&dest).await?;
     }
 
     if let Err(e) = db::backup_to(&state.db, &dest).await {
         // A disk-full or similar failure can still leave a partial (even zero-length) file at
         // `dest`. Left behind, it would be mistaken for a finished backup on the next tick
         // today, the same way an unverifiable one would be -- so clear it the same way.
-        let _ = std::fs::remove_file(&dest);
+        let _ = tokio::fs::remove_file(&dest).await;
         return Err(AppError::Internal(e.to_string()));
     }
     if let Err(e) = verify(&dest).await {
         // Leave no unrestorable file behind, and leave every earlier snapshot alone: a failure
         // today must not cost yesterday's good copy.
-        let _ = std::fs::remove_file(&dest);
+        let _ = tokio::fs::remove_file(&dest).await;
         return Err(AppError::Internal(format!(
             "snapshot failed verification: {e}"
         )));
@@ -156,7 +159,7 @@ pub async fn tick(state: &App, hour_now: u32) -> Result<Option<PathBuf>, AppErro
 
     // A prune problem must never be reported as a backup failure: the snapshot above is already
     // written and verified, so `prune` handles its own errors internally rather than via `?`.
-    prune(&dir);
+    let _ = tokio::task::spawn_blocking(move || prune(&dir)).await;
     Ok(Some(dest))
 }
 

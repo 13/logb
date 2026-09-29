@@ -415,7 +415,10 @@ async fn backup_status(AdminUser(_): AdminUser, State(state): State<App>) -> Jso
     let Some(dir) = state.config.backup_dir.clone() else {
         return Json(BackupStatus { state: OFF, directory: None, last_at: None, hour: None });
     };
-    let last_at = newest_snapshot(&dir);
+    // A directory listing and a stat per entry: blocking calls, so off the async workers. A
+    // backup directory on a slow or network volume is exactly where they take a while.
+    let listed = dir.clone();
+    let last_at = tokio::task::spawn_blocking(move || newest_snapshot(&listed)).await.ok().flatten();
     let stale = last_at.as_deref().and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
         .map(|at| chrono::Utc::now().signed_duration_since(at.with_timezone(&chrono::Utc)) > chrono::Duration::hours(36))
         .unwrap_or(false);
