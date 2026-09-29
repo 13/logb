@@ -8,6 +8,7 @@
   import { figureKeys, type FigureKey } from './object-detail';
   import { formatWeight } from './weight';
   import { customTypes, typeLabel, typesLoaded } from './type-registry';
+  import { MediaQuery } from 'svelte/reactivity';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
   import type { Insights, MemObject, Reminder } from './types';
@@ -20,6 +21,9 @@
   let { object, insights, due, onreminders }: {
     object: MemObject; insights: Insights | null; due: Reminder[]; onreminders: () => void;
   } = $props();
+
+  /** The strip only scrolls below 1024 px (the same query as `wide:`), so only there is it a tab stop. */
+  const wide = new MediaQuery('(width >= 1024px)');
 
   const LABEL: Record<FigureKey, string> = {
     cost: 'object.total', weight: 'weight.latest', counter: 'object.current', usage: 'object.per-month',
@@ -74,7 +78,7 @@
        pane. Focusable, so a keyboard can scroll it; the fade is dropped while it has focus so it
        does not dim the ring. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div role="group" aria-label={$t('object.figures')} tabindex="0"
+  <div role="group" aria-label={$t('object.figures')} tabindex={wide.current ? undefined : 0}
        class="-m-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-wide:[mask-image:linear-gradient(to_right,#000_calc(100%_-_24px),transparent)] max-wide:focus-visible:[mask-image:none] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring wide:overflow-visible">
     <dl data-testid="figures" class="m-0 flex gap-2 wide:grid wide:grid-cols-2">
       {#each keys as key (key)}

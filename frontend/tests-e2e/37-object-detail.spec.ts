@@ -124,12 +124,17 @@ test('a due reminder in the summary opens the Reminders tab; the cover keeps 16:
   await expect(due).toContainText(/days overdue/);
   await due.click();
   await expect(page.getByRole('tab', { name: /^Reminders/ })).toHaveAttribute('aria-selected', 'true');
+  // Focus follows into the tab list, as the skip link does.
+  await expect(page.getByRole('tab', { name: /^Reminders/ })).toBeFocused();
   await expect(page).toHaveURL(/\?tab=reminders$/);
 
   await page.getByRole('tab', { name: 'Documents', exact: true }).click();
   await page.getByRole('button', { name: /Add photos or files/ }).click();
   await page.setInputFiles('input[type=file]', pngPayload());
-  await page.getByRole('button', { name: 'Use as cover' }).click();
+  const cover0 = page.getByRole('button', { name: 'Cover photo' });
+  await expect(cover0).toHaveAttribute('aria-pressed', 'false');
+  await cover0.click();
+  await expect(cover0).toHaveAttribute('aria-pressed', 'true');
   const cover = page.getByTestId('object-cover');
   await expect(cover).toBeVisible();
   const box = (await cover.boundingBox())!;
@@ -210,7 +215,7 @@ test('a desktop visit asks for the contents, Last done and trips once each; a sk
   expect(count(`/objects/${car}/trips/summary`)).toBe(1);
   expect(count(`/objects/${car}/insights`)).toBe(1);
 
-  const skip = page.getByRole('link', { name: 'Skip to timeline' });
+  const skip = page.getByRole('link', { name: 'Skip to the tabs' });
   await skip.focus();
   await expect(skip).toBeVisible();
   await page.keyboard.press('Enter');
@@ -313,4 +318,45 @@ test('the category chip fade shows only while the row can scroll further', async
   await expect(row).not.toHaveAttribute('data-fade', '');
   await page.setViewportSize({ width: 1800, height: 700 });
   await expect(row).not.toHaveAttribute('data-fade', '');
+});
+
+test('tag chips on an entry never paint over the bottom nav', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'the bottom nav is a phone thing');
+  await signInFresh(page, '37-chips-nav');
+  const car = await object(page, { name: 'Chips car', type: 'car', counter_unit: 'km' });
+  for (let i = 0; i < 12; i++) await entry(page, car, { date: daysAgo(i + 1), category: 'maintenance', title: `Chips entry ${i}`, tags: ['service'] });
+  await page.goto(`/objects/${car}`);
+  const nav = page.getByRole('navigation', { name: /Main|Hauptnavigation/ });
+  const chip = page.getByTestId('timeline-entry').nth(6).getByRole('button', { name: 'service' });
+  await expect(chip).toBeVisible();
+  // Scroll until the chip sits right behind the nav's centre.
+  await chip.evaluate((el) => {
+    const n = document.querySelector('nav[aria-label]') as HTMLElement;
+    const nb = n.getBoundingClientRect();
+    window.scrollBy(0, el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2 - (nb.top + nb.height / 2));
+  });
+  const hit = await chip.evaluate(() => {
+    const nb = (document.querySelector('nav[aria-label]') as HTMLElement).getBoundingClientRect();
+    return { x: nb.left + nb.width / 2, y: nb.top + nb.height / 2 };
+  });
+  const box = (await chip.boundingBox())!;
+  // The point is over the chip's row of the page; the nav must still be what is on top there.
+  expect(box.y).toBeLessThan(hit.y + 1);
+  expect(box.y + box.height).toBeGreaterThan(hit.y - 1);
+  expect(await nav.evaluate((n, pt) => n.contains(document.elementFromPoint(pt.x, pt.y)), { ...hit, x: box.x + box.width / 2 })).toBe(true);
+});
+
+test('the desktop pane starts at the top when another object opens', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'the pane scrolls on its own only from 1024 px');
+  await signInFresh(page, '37-pane-reset');
+  const house = await object(page, { name: 'Pane reset house', type: 'other' });
+  for (let i = 0; i < 14; i++) await object(page, { name: `Pane reset room ${i}`, type: 'other', parent_id: house });
+  await page.goto(`/objects/${house}`);
+  const summary = page.getByRole('region', { name: 'Summary' });
+  await expect(summary.getByRole('heading', { name: 'Contents' })).toBeVisible();
+  await summary.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  expect(await summary.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  await summary.getByRole('button', { name: /Pane reset room 13/ }).click();
+  await expect(page.getByRole('heading', { name: 'Pane reset room 13', level: 1 })).toBeVisible();
+  await expect.poll(() => summary.evaluate((el) => el.scrollTop)).toBe(0);
 });

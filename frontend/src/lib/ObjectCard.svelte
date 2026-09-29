@@ -19,7 +19,7 @@
      facts are one big target and 26 e2e tests still find the object by that button's name. The
      tag chips are buttons of their own and cannot sit inside another button, so they are
      siblings raised above the stretched target (`relative z-10`). -->
-<article data-testid="object-card" class="relative flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input">
+<article data-testid="object-card" class="relative isolate flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input">
   {#if object.cover_file_id}
     <img class="size-12 shrink-0 rounded-md object-cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" decoding="async" />
   {:else}

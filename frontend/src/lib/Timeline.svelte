@@ -20,11 +20,13 @@
   import { tagColorIndex } from './tags';
 
   let {
-    objectId, type, activities, total, weightUnit = 'kg', loadingMore = false, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, resourceKind = null, energyRate = null,
+    objectId, type, activities, total, weightUnit = 'kg', loadingMore = false, loaded = true, onmore, onlog, ontriplog, onchargelog, unit, fuelUnit = null, resourceKind = null, energyRate = null,
     category = $bindable(''), tagFilter = $bindable(null), titleFilter = $bindable(null),
   }:
     {
       weightUnit?: WeightUnit; objectId: number; type: ObjectType; activities: Activity[]; total: number; loadingMore?: boolean;
+      /** False until the first load has answered: the empty state must not flash before it. */
+      loaded?: boolean;
       onmore?: () => void; onlog?: () => void;
       /** Set only on a km/mi object (see ObjectDetail.svelte) -- offers "+ Log trip" in the
        *  empty state beside the plain "+ Log activity" one, the same pair the object page's own
@@ -174,6 +176,7 @@
 {/if}
 
 {#if activities.length === 0}
+  {#if loaded}
   <!-- An object with no history and an object whose filter matched nothing are not the same
        screen: the first is an invitation, the second is a fact about the chips above. -->
   <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
@@ -187,6 +190,7 @@
       <p class="m-0 text-sm text-muted-foreground">{$t('timeline.none-in-filter')}</p>
     {/if}
   </div>
+  {/if}
 {:else}
   {#each groups as [year, rows], gi (year)}
     <h2 class={['mb-2 text-sm font-semibold text-muted-foreground tabular-nums', gi === 0 ? 'mt-1' : 'mt-5']}>{year}</h2>
@@ -215,7 +219,7 @@
         {:else if row.activity.category === 'reading'}
           {@const a = row.activity}
           <!-- A single reading shows its chips like any entry; a folded run stays one line each. -->
-          <li class="flex flex-col gap-1">
+          <li class="isolate flex flex-col gap-1">
             {@render readingRow(a)}
             {#if (a.tags ?? []).length > 0}
               <div class="w-fit pl-3"><TagChips tags={a.tags} onselect={(tag) => (tagFilter = tag)} active={tagFilter} /></div>
@@ -224,7 +228,7 @@
         {:else}
           {@const a = row.activity}
           <li data-testid="timeline-entry"
-              class={['relative flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input', a.pending && 'opacity-60']}>
+              class={['relative isolate flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input', a.pending && 'opacity-60']}>
             <span role="img" aria-label={$t(`cat.${a.category}`)} class="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-brand-ink">
               <CategoryIcon category={a.category} />
             </span>

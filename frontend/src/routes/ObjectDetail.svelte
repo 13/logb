@@ -1,7 +1,7 @@
 <script lang="ts">
   import { errorMessage } from '../lib/api-error';
   import WeightHistory from '../lib/WeightHistory.svelte';
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { MediaQuery } from 'svelte/reactivity';
   import TopBar from '../lib/TopBar.svelte';
   import Timeline from '../lib/Timeline.svelte';
@@ -41,7 +41,9 @@
    *  further down calls it again on every such navigation, so a fresh `?tag=` on the object
    *  just navigated to still wins, the same way it does here at mount. */
   const initialTag = tagParam(location.search);
-  let tab = $state<Tab>(initialTag !== null ? 'timeline' : (initialQuery.get('tab') as Tab) || 'timeline');
+  const TABS: readonly Tab[] = ['timeline', 'documents', 'reminders', 'info'];
+  const queryTab = initialQuery.get('tab');
+  let tab = $state<Tab>(initialTag !== null ? 'timeline' : TABS.find((x) => x === queryTab) ?? 'timeline');
   let object = $state<MemObject | null>(null);
   /** Whether a trip can be logged here at all -- the same condition `categoriesFor`'s own
    *  `counterUnit` argument checks, so "+ Log trip" (both the FAB and the empty-state one) and
@@ -130,6 +132,8 @@
     }
   }
   let error = $state('');
+  /** The desktop left pane, scrolled back to the top on every navigation to another object. */
+  let pane = $state<HTMLElement | null>(null);
 
   /** Whether the object's own reads (the Cost data, and the details' lists) may be asked for. Not
    *  for a temporary (negative) id: the server has no such object yet, and the outbox moves this
@@ -365,6 +369,8 @@
     insightsSeq.invalidate();
     dueReminders = [];
     dueSeq.invalidate();
+    // untrack: binding the pane must not re-run this reset.
+    untrack(() => { if (pane) pane.scrollTop = 0; });
   });
   $effect(() => { oid; category; tagFilter; titleFilter; loadActivities('reset'); });
   // Two effects, each keyed on derived booleans only: `offersTrip` flipping true once the object
@@ -377,7 +383,9 @@
   // soon as the object is known to have a fuel unit, whichever tab is open. `offersEnergy`
   // starts false (before `object` itself has loaded) and this effect re-runs once it flips true.
   $effect(() => { oid; if (offersEnergy) loadEnergy(); });
-  $effect(() => { const path = insightsUrl; if (serverReady) loadInsights(path); });
+  // Figures for the other path (with or without contents) are dropped first, so a switch that
+  // says "include contents" never sits next to figures that do not include them.
+  $effect(() => { const path = insightsUrl; if (serverReady) { insights = null; loadInsights(path); } });
   // `dueCount` is derived, so a reload of the object that leaves the count alone does not ask again.
   $effect(() => { oid; if (dueCount > 0) loadDue(); else { dueSeq.invalidate(); dueReminders = []; } });
   // A background replay can succeed while this view is mounted; without this the synthetic
@@ -412,6 +420,7 @@
     // on an object that never offers it.
     if (offersEnergy) loadEnergy();
     if (offersTrip) loadTripSummary();
+    refreshDetails();
   }));
 
   // The default tab is left out of the address, and the address is replaced only when it changes:
@@ -423,6 +432,21 @@
   });
 
   function setTab(x: Tab) { tab = x; }
+  /** A due reminder in the summary opens the Reminders tab; focus follows, so the keyboard user
+   *  lands where the actions are (the tab list can render after the click, hence the tick). */
+  async function openReminders() {
+    setTab('reminders');
+    await tick();
+    document.querySelector<HTMLElement>('#object-sections [role="tab"][aria-selected="true"]')?.focus();
+  }
+  /** The wide layout keeps the details on screen, so after something changes them (a replayed
+   *  offline entry, a CSV import, a reminder completed) they are asked for again. */
+  function refreshDetails() {
+    if (!detailsShown || !serverReady) return;
+    loadLastDone();
+    if (offersTrip) loadTripSummary();
+    if (offersEnergy) loadEnergy();
+  }
   /** The pane's skip link: to the selected tab, where the arrow keys take over. Not a hash
    *  navigation, which the router would not know about. */
   function skipToSections(e: MouseEvent) {
@@ -485,15 +509,16 @@
          room for focus rings, which a scroller clips. `*:shrink-0`: a column flex box with a
          max-height shrinks its children to fit instead of scrolling, which squashed the cover. -->
     <div class="flex flex-col gap-4 wide:grid wide:grid-cols-[300px_minmax(0,1fr)] wide:items-start wide:gap-6">
-      <section aria-label={$t('object.summary')}
+      <section aria-label={$t('object.summary')} bind:this={pane}
                class="flex flex-col gap-4 *:shrink-0 wide:sticky wide:top-20 wide:-mx-1 wide:max-h-[calc(100dvh-6rem)] wide:overflow-y-auto wide:overscroll-contain wide:px-1 wide:pb-4 wide:[scrollbar-width:thin]
                       wide:after:pointer-events-none wide:after:sticky wide:after:bottom-0 wide:after:-mt-4 wide:after:block wide:after:h-4 wide:after:shrink-0 wide:after:bg-linear-to-t wide:after:from-background wide:after:to-transparent wide:after:content-['']">
         {#if wide.current}
           <!-- The pane is long; a keyboard user can jump past it to the tabs. Hidden until focused. -->
           <a href="#object-sections" onclick={skipToSections}
-             class="sr-only focus-visible:not-sr-only focus-visible:self-start focus-visible:rounded-md focus-visible:bg-card focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">{$t('object.skip-to-timeline')}</a>
+             data-slot="skip-link"
+             class="sr-only no-underline focus-visible:not-sr-only focus-visible:self-start focus-visible:rounded-md focus-visible:bg-card focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">{$t('object.skip-to-tabs')}</a>
         {/if}
-        <ObjectSummary {object} {insights} due={dueReminders} onreminders={() => setTab('reminders')} />
+        <ObjectSummary {object} {insights} due={dueReminders} onreminders={openReminders} />
         {#if wide.current}{@render details()}{/if}
       </section>
 
@@ -520,7 +545,7 @@
           <Tabs.Content value="timeline">
             {#if shownTab === 'timeline'}
               <Timeline
-                objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore}
+                objectId={oid} type={object.type} weightUnit={object.weight_unit} {activities} total={activityTotal} {loadingMore} loaded={timelineLoaded}
                 onmore={loadMore} onlog={emptyStateLog ? () => go(`/objects/${oid}/activities/new`) : undefined}
                 ontriplog={emptyStateLog && offersTrip ? () => go(`/objects/${oid}/activities/new?category=trip`) : undefined}
                 onchargelog={emptyStateLog && offersEnergy ? () => go(`/objects/${oid}/activities/new?category=${resourceCategory}`) : undefined}
@@ -536,7 +561,7 @@
             {#if shownTab === 'reminders'}
               <!-- Completing a reminder can log an entry with a cost, so the Cost data follows. -->
               <Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities}
-                         onchanged={() => { loadObject(); loadActivities('refresh'); refreshInsights(); if (dueCount > 0) loadDue(); }} />
+                         onchanged={() => { loadObject(); loadActivities('refresh'); refreshInsights(); refreshDetails(); if (dueCount > 0) loadDue(); }} />
             {/if}
           </Tabs.Content>
           {#if !wide.current}
@@ -562,7 +587,7 @@
     <ObjectDetails
       {object} {insights} {insightsError} {lastDone} {tripSummary} energy={energyData} inside={children}
       {hasContents} contents={$includeContents} {offersTrip} {offersEnergy}
-      oncontents={(on) => includeContents.set(on)} onlastdone={selectLastDone} onimported={() => { loadActivities('refresh'); refreshInsights(); }}
+      oncontents={(on) => includeContents.set(on)} onlastdone={selectLastDone} onimported={() => { loadActivities('refresh'); refreshInsights(); refreshDetails(); }}
     />
   {/if}
 {/snippet}
