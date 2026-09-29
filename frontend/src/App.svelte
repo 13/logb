@@ -121,13 +121,21 @@
       if (!live) return;
       page = { pattern: route.pattern, comp: m.default };
       slow = false;
+      try { sessionStorage.removeItem('logb.chunk-reload'); } catch { /* nothing to forget */ }
       // The router moved focus when the address changed, before this page existed.
       await tick();
       if (live) focusPageHeading();
     }).catch(() => {
-      // A chunk that cannot be fetched (a deploy replaced it while this tab was open and
-      // offline, say): a reload asks for the current build's.
-      if (live) location.reload();
+      // A chunk that cannot be fetched (a deploy replaced it while this tab was open, say): a
+      // reload asks for the current build's. Once only per tab -- if that did not help, a reload
+      // loop would not either, and "Loading…" stays up instead.
+      if (!live) return;
+      slow = true;
+      try {
+        if (sessionStorage.getItem('logb.chunk-reload')) return;
+        sessionStorage.setItem('logb.chunk-reload', '1');
+      } catch { return; }
+      location.reload();
     });
     return () => { live = false; clearTimeout(timer); };
   });
