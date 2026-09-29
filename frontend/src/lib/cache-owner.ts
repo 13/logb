@@ -1,7 +1,7 @@
 /**
  * Whose data the on-disk caches hold, and who last signed in on this device.
  *
- * The service worker's `logb-api`/`logb-files` caches and the stored own-type list survive a
+ * The service worker's `logb-api`/`logb-files`/`logb-thumbs` caches and the stored own-type list survive a
  * reload, a closed tab and an expired session -- so "clear them when a session ends" is not
  * enough on its own: a session that simply lapsed never runs a logout, and the next person to
  * sign in on the device would be served the previous person's objects from cache. Recording the

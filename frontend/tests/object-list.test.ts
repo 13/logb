@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, parseSort, parseTab, sortObjects, visibleRows, withPendingObjects } from '../src/lib/object-list';
+import { matchesQuery, parseSort, parseTab, sortObjects, topLevelCount, visibleRows, withPendingObjects } from '../src/lib/object-list';
 import type { MemObject, ObjectType } from '../src/lib/types';
 
 let nextId = 1;
@@ -45,6 +45,18 @@ describe('matchesQuery', () => {
   it('treats an empty or blank query as matching everything', () => {
     expect(matchesQuery(bike, '   ', label)).toBe(true);
   });
+  it('never matches across two fields', () => {
+    const lamp = obj({ name: 'Lamp', description: 'shade', tags: ['desk'] });
+    expect(matchesQuery(lamp, 'lampshade', label)).toBe(false);
+    expect(matchesQuery(lamp, 'shadedesk', label)).toBe(false);
+    expect(matchesQuery(lamp, 'desk', label)).toBe(true);
+  });
+  it('searches a reloaded object by its new text', () => {
+    expect(matchesQuery(bike, 'kathm', label)).toBe(true);
+    const renamed = { ...bike, name: 'Cube Reaction' };
+    expect(matchesQuery(renamed, 'kathm', label)).toBe(false);
+    expect(matchesQuery(renamed, 'reaction', label)).toBe(true);
+  });
 });
 
 describe('sortObjects', () => {
@@ -87,6 +99,11 @@ describe('visibleRows', () => {
   it('shows top-level objects on the active tab, counting a child of an archived parent as top-level', () => {
     const rows = visibleRows(active, archived, 'active', '', 'name', label, 'en');
     expect(rows.map((r) => [r.object.name, r.parentName])).toEqual([['Car', null], ['House', null], ['Mower', null]]);
+  });
+  it('counts the active tab without the archived list', () => {
+    expect(topLevelCount(active)).toBe(visibleRows(active, archived, 'active', '', 'name', label, 'en').length);
+    expect(topLevelCount(active)).toBe(visibleRows(active, [], 'active', '', 'name', label, 'en').length);
+    expect(topLevelCount([])).toBe(0);
   });
   it('searches every depth and names the parent of a nested match', () => {
     const rows = visibleRows(active, archived, 'active', 'boil', 'name', label, 'en');

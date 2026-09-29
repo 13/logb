@@ -1,3 +1,4 @@
+import { numberFormat } from './intl-cache';
 /**
  * Pure helpers for the trip log (see docs/superpowers/specs/2026-09-15-trip-log-design.md).
  * No Svelte, no i18n, no API: everything here is unit-testable on its own.
@@ -66,7 +67,7 @@ export function spanLabel(from: string, to: string): string {
  *  drop a trailing ".0" -- would make a whole-number average look like an integer reading rather
  *  than the average it is. */
 export function formatSpeed(speedX10: number, unit: 'km' | 'mi', locale: string): string {
-  const n = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(speedX10 / 10);
+  const n = numberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(speedX10 / 10);
   return `${n} ${unit === 'mi' ? 'mph' : 'km/h'}`;
 }
 
@@ -78,7 +79,7 @@ export function formatSpeed(speedX10: number, unit: 'km' | 'mi', locale: string)
  *  own distance unit (`counter_unit`, "km" or "mi"), the same as everywhere else a distance is
  *  shown. */
 export function formatPer10Pct(value: number, unit: string, locale: string): string {
-  return `${new Intl.NumberFormat(locale).format(value)} ${unit}`;
+  return `${numberFormat(locale).format(value)} ${unit}`;
 }
 
 /** The trip form's three linked counter fields, as ActivityForm holds them: `start`/`end` travel

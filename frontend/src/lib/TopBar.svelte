@@ -1,6 +1,6 @@
 <script lang="ts">
   import { back, go } from './router';
-  import { onOutboxFlushed, outboxDeadCount, outboxPending, servingSaved } from './api';
+  import { ensureOutboxCounts, outboxCounts, servingSaved } from './api';
   import { t } from '../i18n';
   import Icon, { type IconName } from './Icon.svelte';
   import AccountMenu from './AccountMenu.svelte';
@@ -9,28 +9,10 @@
     title: string; backTo?: string | null; icon?: IconName | null; children?: import('svelte').Snippet;
   } = $props();
 
-  let pending = $state(0);
-  let dead = $state(0);
-  async function refresh() {
-    pending = await outboxPending();
-    dead = await outboxDeadCount();
-  }
-  $effect(() => {
-    refresh();
-    globalThis.addEventListener?.('online', refresh);
-    globalThis.addEventListener?.('offline', refresh);
-    // `online`/`offline` alone leave this stale on reconnect: api.ts's own `online` listener
-    // (which actually flushes the queue) is registered before this one ever runs, so `refresh`
-    // above reads the pending count before the flush has removed anything, and nothing then
-    // refreshes it again until the component remounts. Subscribing to the flush itself closes
-    // that gap regardless of which listener fired first.
-    const unsubscribe = onOutboxFlushed(refresh);
-    return () => {
-      globalThis.removeEventListener?.('online', refresh);
-      globalThis.removeEventListener?.('offline', refresh);
-      unsubscribe();
-    };
-  });
+  // Counted once per queue change in ./api-outbox.ts, not read from IndexedDB on every mount.
+  $effect(() => { ensureOutboxCounts(); });
+  const pending = $derived($outboxCounts.pending);
+  const dead = $derived($outboxCounts.dead);
 </script>
 
 <header class="topbar">

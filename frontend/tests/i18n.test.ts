@@ -17,3 +17,18 @@ describe('i18n', () => {
     expect(pickLocale(['fr-FR'])).toBe('en');
   });
 });
+
+describe('the active locale, loaded on demand', () => {
+  it('shows the fallback language until the chosen one has loaded, then the chosen one', async () => {
+    const { get } = await import('svelte/store');
+    const { settings } = await import('../src/stores/settings');
+    const i18n = await import('../src/i18n');
+    settings.update((s) => ({ ...s, locale: 'de' }));
+    // Whatever `t` shows before the chunk arrives, it is never the bare key.
+    expect(get(i18n.t)('nav.loading')).not.toBe('nav.loading');
+    await i18n.ensureLocale('de');
+    expect(get(i18n.t)('nav.loading')).toBe(de['nav.loading']);
+    settings.update((s) => ({ ...s, locale: 'en' }));
+    expect(get(i18n.t)('nav.loading')).toBe(en['nav.loading']);
+  });
+});

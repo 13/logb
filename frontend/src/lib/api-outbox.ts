@@ -6,10 +6,59 @@
  */
 import { cancelQueuedActivityOps, cancelQueuedObjectOps, createKeyedLock, createLock, enqueue, isQueuedActivity, isQueuedObject, isQueuedUnderActivity, isQueuedUnderObject, mayLeaveDevice, newOpId, pendingCount, removeQueuedActivity, replay, serialize, SkipOp, updateQueuedActivityBody, updateQueuedObjectBody, type OutboxStore, type QueuedOp } from './outbox';
 import { idbStore } from './idb';
+import { readonly, writable, type Readable } from 'svelte/store';
 import { ApiError, isRejection, isUnauthenticated } from './api-error';
 import { api, apiWithStatus, editedAtNow, isOurs, outboxUser, SAVE_TIMEOUT_MS, sendGateOpen, upload } from './api';
 
-let store: OutboxStore = idbStore();
+/**
+ * What the top bar's chips show: the signed-in user's ops still waiting to be sent, and those
+ * parked dead. Kept here, and refreshed whenever this tab writes to the queue or a flush pass
+ * ends, rather than every `TopBar` reading the whole queue (photos included) each time it
+ * mounts -- which was every navigation.
+ */
+export interface OutboxCounts { pending: number; dead: number }
+const counts = writable<OutboxCounts>({ pending: 0, dead: 0 });
+export const outboxCounts: Readable<OutboxCounts> = readonly(counts);
+/** The user the counts were last worked out for, `undefined` before the first time. */
+let countedFor: number | null | undefined;
+let countsRun: Promise<void> | null = null;
+let countsDirty = false;
+
+/** Works the counts out again. Calls that arrive while one is running are folded into a single
+ *  rerun once it ends, so a burst of queue writes costs two reads, not one per write. */
+export function refreshOutboxCounts(): Promise<void> {
+  if (countsRun) { countsDirty = true; return countsRun; }
+  countsRun = (async () => {
+    do {
+      countsDirty = false;
+      const user = outboxUser();
+      try {
+        // An empty queue -- nearly always -- is answered without reading a single op.
+        const rows = store.count && (await store.count()) === 0 ? [] : (await store.all()).filter(isOurs);
+        counts.set({ pending: rows.filter((o) => !o.dead).length, dead: rows.filter((o) => o.dead).length });
+        countedFor = user;
+      } catch { /* IndexedDB unavailable: the chips keep what they showed */ }
+    } while (countsDirty);
+  })().finally(() => { countsRun = null; });
+  return countsRun;
+}
+
+/** For a `TopBar` mounting: works the counts out only if they were never worked out for the
+ *  user now signed in (the first mount, or the session changed since). */
+export function ensureOutboxCounts(): void {
+  if (countedFor !== outboxUser()) void refreshOutboxCounts();
+}
+
+/** The store, with every write followed by a recount. */
+function counted(s: OutboxStore): OutboxStore {
+  return {
+    ...s,
+    async put(op) { try { await s.put(op); } finally { void refreshOutboxCounts(); } },
+    async remove(id) { try { await s.remove(id); } finally { void refreshOutboxCounts(); } },
+  };
+}
+
+let store: OutboxStore = counted(idbStore());
 
 /**
  * Test seam only: swaps the store `createQueued`/`flushOutbox` write through, so a unit test
@@ -18,7 +67,8 @@ let store: OutboxStore = idbStore();
  * always starts, and stays, on the real `idbStore()` above.
  */
 export function setOutboxStoreForTesting(s: OutboxStore): void {
-  store = s;
+  store = counted(s);
+  countedFor = undefined;
 }
 
 /**
@@ -375,6 +425,9 @@ async function doFlushOutbox(): Promise<void> {
     // The same holds for a user nobody has confirmed yet (offline mode): the flush that counts
     // is the one `loadSession` fires once the real session check succeeds.
     if (outboxUser() === null || !sendGateOpen()) { completed = true; changed = false; return; }
+    // Nearly every pass -- one per `visibilitychange` -- finds the queue empty. A count answers
+    // that without reading (and snapshotting) every op, photos and all.
+    if (store.count && (await store.count()) === 0) { completed = true; changed = false; return; }
     before = await queueSnapshot();
     resolved = await replay(store, async (op: QueuedOp) => {
       if (!isOurs(op)) {
@@ -469,6 +522,8 @@ async function doFlushOutbox(): Promise<void> {
     } catch {
       changed = true;
     }
+    // Another tab may have queued or sent meanwhile; a pass is the moment to catch up.
+    if (changed || countedFor !== outboxUser()) void refreshOutboxCounts();
     for (const fn of flushListeners) fn(resolved, changed);
   }
 }

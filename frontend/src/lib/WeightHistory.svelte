@@ -20,8 +20,11 @@
   async function load() {
     const request = ++sequence;
     try {
-      const rows = await api<WeightPoint[]>('GET', `/objects/${objectId}/weight`);
-      const totals = await api<typeof summary>('GET', `/objects/${objectId}/weight/summary`).catch(() => null);
+      // Both at once; the summary is optional, the history is not.
+      const [rows, totals] = await Promise.all([
+        api<WeightPoint[]>('GET', `/objects/${objectId}/weight`),
+        api<typeof summary>('GET', `/objects/${objectId}/weight/summary`).catch(() => null),
+      ]);
       if (request !== sequence) return;
       history = rows; failed = false; loaded = true;
       summary = totals;

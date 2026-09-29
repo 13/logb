@@ -138,7 +138,7 @@ export function resetClockSkewForTesting(): void {
  * Pure so it can be unit-tested without a fetch: true only when `dateHeader` is far enough before
  * `sentAt` (the moment the request went out), once `skewMs` -- the server clock's known offset
  * from this device's, see `clockSkewMs` above -- is subtracted out, that ordinary latency cannot
- * explain it. Given the 4s `NetworkFirst` timeout, only a cache hit reads as over a minute stale
+ * explain it. Given the 2s `NetworkFirst` timeout, only a cache hit reads as over a minute stale
  * after that correction. A missing or unparsable header counts as fresh: there is nothing there to
  * prove otherwise, and treating "we don't know" as "cached" would show the note on every response
  * an unrelated proxy happened to strip the header from.
@@ -264,8 +264,8 @@ export const SAVE_TIMEOUT_MS = 10_000;
  * after the client gave up, and the operator would be told a migration failed that in fact
  * succeeded.
  */
-export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
-  return (await apiWithStatus<T>(method, path, body, timeoutMs)).body;
+export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+  return (await apiWithStatus<T>(method, path, body, timeoutMs, signal)).body;
 }
 
 /**
@@ -274,9 +274,12 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
  * `create` in src/api/activities/write.rs) -- which the outbox needs to tell whether an edit it
  * folded into the queued body ever reached the row.
  */
-export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; body: T }> {
+export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<{ status: number; body: T }> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
-  if (timeoutMs !== undefined) init.signal = AbortSignal.timeout(timeoutMs);
+  // `signal` lets a caller drop a request nobody will read any more (a superseded search).
+  const timeout = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
+  if (timeout && signal) init.signal = AbortSignal.any([timeout, signal]);
+  else if (timeout ?? signal) init.signal = timeout ?? signal;
   if (body !== undefined) {
     init.headers = { 'content-type': 'application/json' };
     init.body = JSON.stringify(body);

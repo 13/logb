@@ -114,18 +114,15 @@
   async function loadChildren() {
     const token = childrenSeq.next();
     const target = oid;
-    try {
-      const rows = await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=false`);
-      if (childrenSeq.current(token)) children = rows;
-    } catch (e) {
-      if (childrenSeq.current(token)) error = errorMessage(e, $t);
-    }
-    try {
-      const archived = (await api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=true`)).length;
-      if (childrenSeq.current(token)) archivedChildCount = archived;
-    } catch {
-      if (childrenSeq.current(token)) archivedChildCount = 0;
-    }
+    // Both at once: neither needs the other's answer.
+    const [live, archived] = await Promise.allSettled([
+      api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=false`),
+      api<MemObject[]>('GET', `/objects?parent_id=${target}&archived=true`),
+    ]);
+    if (!childrenSeq.current(token)) return;
+    if (live.status === 'fulfilled') children = live.value;
+    else error = errorMessage(live.reason, $t);
+    archivedChildCount = archived.status === 'fulfilled' ? archived.value.length : 0;
   }
 
   /// Guards a `loadLastDone` response against a since-superseded request, the same way
@@ -225,7 +222,11 @@
     // and immediately replaced by a fresh page-one load.
     const loaded = untrack(() => activities.filter((a) => !a.pending).length);
     const { want, base, append } = windowFor(mode, loaded);
-    const pending = append ? [] : await pendingActivities();
+    // The queue read runs while the page is fetched, not in front of it. Awaited below, where
+    // its failure surfaces exactly as it did when it ran first; the no-op catch only keeps a
+    // rejection from being reported as unhandled while the fetch is still in flight.
+    const pendingRead = append ? Promise.resolve([]) : pendingActivities();
+    pendingRead.catch(() => {});
     let items: Activity[] = [];
     let total = 0;
     let fetched = false;
@@ -254,6 +255,7 @@
       items = cached?.items ?? [];
       total = cached?.total ?? 0;
     }
+    const pending = await pendingRead;
     if (token !== loadSeq) return; // a newer load started while this one was in flight
     // Below the token check: a superseded load must not leave the offline cache holding a page
     // the UI has already decided not to show -- e.g. the pre-filter page, after a filter change
@@ -363,7 +365,10 @@
     {/if}
 
     {#if object.cover_file_id}
-      <img class="hero" src={fileUrl(object.cover_file_id)} alt="" />
+      <!-- The thumbnail, not the original: the hero is at most 240px tall, the original can be a
+           multi-megabyte phone photo, and the thumbnail is usually already cached from the
+           dashboard's card. -->
+      <img class="hero" src={fileUrl(object.cover_file_id, true)} alt="" decoding="async" />
     {/if}
 
     <div class="stats">

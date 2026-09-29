@@ -29,18 +29,29 @@
 
   // One request per pause in typing, and the query stays in the URL so a result list
   // survives a reload or a share.
+  /** Writes the query into the address, replacing the entry only when it changed. */
+  function remember(term: string) {
+    const url = new URL(location.href);
+    if (term) url.searchParams.set('q', term); else url.searchParams.delete('q');
+    const next = url.pathname + url.search;
+    if (next !== location.pathname + location.search) history.replaceState(null, '', next);
+  }
+
   $effect(() => {
     const term = q.trim();
     const generation = ++requestGeneration;
-    const url = new URL(location.href);
-    if (term) url.searchParams.set('q', term); else url.searchParams.delete('q');
-    history.replaceState(null, '', url.pathname + url.search);
     offset = 0;
-    if (!term) { results = null; searched = ''; error = ''; loading = false; return; }
+    // Cleared at once; a term is written to the address with its request, once typing pauses,
+    // not on every keystroke.
+    if (!term) { remember(''); results = null; searched = ''; error = ''; loading = false; return; }
+    // Aborted when a newer term (or leaving the page) supersedes it: the server stops working on
+    // an answer nobody will read.
+    const abort = new AbortController();
     const timer = setTimeout(async () => {
+      remember(term);
       loading = true; error = '';
       try {
-        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}&offset=0`);
+        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}&offset=0`, undefined, undefined, abort.signal);
         if (generation !== requestGeneration) return;
         results = next; searched = term;
       } catch (e) {
@@ -49,7 +60,7 @@
         if (generation === requestGeneration) loading = false;
       }
     }, 200);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); abort.abort(); };
   });
 
   async function loadMore() {

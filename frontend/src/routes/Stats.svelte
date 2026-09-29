@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { numberFormat } from '../lib/intl-cache';
   import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
   import BarList, { type Bar } from '../lib/BarList.svelte';
@@ -43,14 +45,18 @@
     const path = statsPath(year, $includePurchases);
     // Cleared first: a stale total under a new selection would be a wrong number on screen.
     data = null;
-    energy = null;
-    fuel = null;
-    water = null;
     error = '';
     let current = true;
     api<Stats>('GET', path)
       .then((d) => { if (current) { data = d; years = d.years; } })
       .catch((e) => { if (current) error = errorMessage(e, $t); });
+    return () => { current = false; };
+  });
+
+  // Energy, fuel and water take neither the year nor the purchases switch, so they are asked for
+  // once per visit, not again on every change of either.
+  onMount(() => {
+    let current = true;
     api<EnergyUsage>('GET', '/stats/energy').then((e) => { if (current) energy = e; }, () => {});
     api<FuelUsage>('GET', '/stats/fuel').then((f) => { if (current) fuel = f; }, () => {});
     api<WaterUsage>('GET', '/stats/water').then((w) => { if (current) water = w; }, () => {});
@@ -68,10 +74,10 @@
   }
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
-  const fmtKwh = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
-  const fmtLiters = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
-  const fmtGallons = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
-  const fmtWater = (litersMilli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 2 }).format(litersMilli / 1_000_000)} m³`;
+  const fmtKwh = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
+  const fmtLiters = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
+  const fmtGallons = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
+  const fmtWater = (litersMilli: number) => `${numberFormat($locale, { maximumFractionDigits: 2 }).format(litersMilli / 1_000_000)} m³`;
   const share = (cents: number) => `${fmt(cents)} · ${sharePct(cents, data?.total_cents ?? 0)}%`;
   const bars = (list: Amount[], label: (bucket: string) => string): Bar[] =>
     list.map((a) => ({ key: a.bucket, label: label(a.bucket), value: a.cost_cents, display: share(a.cost_cents) }));
