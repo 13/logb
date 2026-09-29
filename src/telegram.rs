@@ -92,12 +92,21 @@ fn read_key(state: &App) -> Result<[u8; 32], AppError> {
         .map_err(|_| AppError::Internal("Telegram encryption key has the wrong size".into()))?;
     Ok(*state.telegram_key.get_or_init(|| key))
 }
+/// The key to encrypt a newly saved token with, writing the key file when there is none.
+///
+/// Decided by the file, not by `state.telegram_key`: a key file deleted while the instance runs
+/// is exactly what "save the bot token again" is meant to repair, and a token encrypted with a
+/// key only held in memory could not be read after the next start. The key in memory, if any, is
+/// the one written back, since the cache cannot change and every later decrypt uses it.
 fn save_key(state: &App) -> Result<[u8; 32], AppError> {
-    if state.telegram_key.get().is_some() || key_path(state).exists() {
+    if key_path(state).exists() {
         return read_key(state);
     }
-    let mut key = [0u8; 32];
-    rand::rng().fill(&mut key);
+    let key = state.telegram_key.get().copied().unwrap_or_else(|| {
+        let mut key = [0u8; 32];
+        rand::rng().fill(&mut key);
+        key
+    });
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]

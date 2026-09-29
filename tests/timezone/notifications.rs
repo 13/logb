@@ -517,3 +517,24 @@ async fn logb_timezone_wins_and_settings_says_so() {
     let res = app.client.put(app.url("/settings")).json(&json!({ "currency": "EUR", "timezone": "Europe/Berlin" })).send().await.unwrap();
     assert_eq!(res.status(), 400, "an environment variable is not overridden from the app");
 }
+
+/// Deleting the key file and saving the bot token again, as the "key is missing" error says to,
+/// must leave a key file behind that can decrypt what was just saved. The running instance keeps
+/// its key in memory after the first read, and once only that copy decided whether a file was
+/// needed: the token was re-encrypted with it and no file written, so the next start could not
+/// read the token.
+#[tokio::test]
+async fn saving_the_bot_token_again_restores_a_deleted_key_file() {
+    let (api_url, _telegram) = telegram_stub().await;
+    let app = common::spawn_with(|c| c.telegram_api_url = api_url).await;
+    app.setup("ben", "correct horse").await;
+    save_telegram(&app, &app.client).await;
+    let path = app.state.config.data_dir.join("telegram.key");
+    let first = std::fs::read(&path).unwrap();
+
+    std::fs::remove_file(&path).unwrap();
+    save_telegram(&app, &app.client).await;
+
+    let rewritten = std::fs::read(&path).expect("saving the token again writes the key file");
+    assert_eq!(rewritten, first, "the key in memory, which the saved token is encrypted with");
+}
