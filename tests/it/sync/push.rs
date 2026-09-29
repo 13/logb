@@ -651,3 +651,42 @@ async fn a_foreign_key_field_rejects_a_value_that_is_not_an_id() {
             .unwrap();
     assert!(cover.is_none(), "null clears the reference");
 }
+
+/// A push is one write transaction, so its size is capped: the largest allowed batch is applied
+/// whole, and one op more answers 413 without applying any of it.
+#[tokio::test]
+async fn a_push_over_the_op_cap_is_refused_whole() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let uuid: String = sqlx::query_scalar("SELECT client_uuid FROM objects WHERE id = $1")
+        .bind(car["id"].as_i64().unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let ops = |n: usize, prefix: &str| -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| json!({
+                "client_op_id": format!("{prefix}-{i}"), "entity": "object", "entity_uuid": uuid,
+                "op": "set", "field": "name", "value": format!("{prefix} {i}"),
+                "edited_at": after_now(3600 + i as i64), "device_id": "phone"
+            }))
+            .collect()
+    };
+    let cap = logb::api::sync::MAX_PUSH_OPS;
+
+    let res = app.push_raw(&push_body(json!(ops(cap + 1, "over")))).await;
+    assert_eq!(res.status(), 413);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "too_large");
+    assert_eq!(app.count_changes_of("over-0").await, 0, "nothing of a refused push is applied");
+
+    let res = app.push_raw(&push_body(json!(ops(cap, "full")))).await;
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let name: String = sqlx::query_scalar("SELECT name FROM objects WHERE client_uuid = $1")
+        .bind(&uuid)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(name, format!("full {}", cap - 1));
+}

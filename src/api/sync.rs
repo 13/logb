@@ -43,6 +43,16 @@ pub struct PushOut {
     pub ids: HashMap<String, i64>,
 }
 
+/// The most ops one push may carry. Every op of a push is applied in one write transaction, and
+/// on SQLite that transaction holds the only writer connection for as long as it runs, so an
+/// unbounded batch is an unbounded stall for every other writer. A thousand is the same page
+/// size `pull` tops out at, and far above anything a client has reason to send in one go: the
+/// bundled web client queues its offline writes as REST requests and never pushes, and a
+/// device replaying a long outbox can split it into several pushes without losing anything,
+/// since each op is idempotent on its `client_op_id`. A larger batch answers 413 before the
+/// write lock is taken.
+pub const MAX_PUSH_OPS: usize = 1000;
+
 /// The whole batch lands in one transaction: a client that retries after a lost response must
 /// find either all of its ops recorded or none, never a prefix it cannot identify.
 ///
@@ -56,6 +66,9 @@ async fn push(
     user: AuthUser,
     Json(mut body): Json<PushBody>,
 ) -> Result<Json<PushOut>, AppError> {
+    if body.ops.len() > MAX_PUSH_OPS {
+        return Err(AppError::TooLarge);
+    }
     // On SQLite this is `BEGIN IMMEDIATE` rather than the default deferred begin: push is the
     // endpoint most likely to have concurrent writers, and a deferred transaction that is
     // going to write can lose its snapshot under WAL and throw the whole batch away with a

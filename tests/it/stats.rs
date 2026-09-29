@@ -118,6 +118,26 @@ async fn household_fuel_reports_the_latest_tank_level_and_remaining_volume() {
     assert_eq!(out["levels"][0]["capacity_milli"], 2_000_000);
     assert_eq!(out["levels"][0]["remaining_milli"], 700_000);
 
+    // One level per tank, its newest, and the tanks newest reading first.
+    let second = object(
+        &app,
+        json!({ "name": "Workshop oil", "type": "home", "fuel_unit": "l", "counter_unit": "h" }),
+    )
+    .await;
+    for (date, level) in [("2026-02-01", 60), ("2025-06-01", 90)] {
+        let res = app.client.post(app.url(&format!("/objects/{second}/activities")))
+            .json(&json!({ "date": date, "category": "fuel", "title": "Tank reading", "fuel_level_pct": level }))
+            .send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+    let out = app.get_json("/stats/fuel").await;
+    let levels = out["levels"].as_array().unwrap();
+    assert_eq!(levels.len(), 2, "{out}");
+    assert_eq!(levels[0]["object_id"], tank);
+    assert_eq!(levels[1]["object_id"], second);
+    assert_eq!(levels[1]["level_pct"], 60);
+    assert_eq!(levels[1]["date"], "2026-02-01");
+
     let bad = app
         .client
         .post(app.url("/objects"))
