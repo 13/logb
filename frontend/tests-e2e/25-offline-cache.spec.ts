@@ -3,11 +3,17 @@ import { ADMIN, signInFresh } from './helpers';
 
 /** The service worker must control the page before an offline reload can be served from it. */
 async function underServiceWorker(page: Page) {
+  // Asked BEFORE waiting: a page the worker claims only later has already made its reads past
+  // the worker, so `logb-api` does not hold them. With the start-up requests running in
+  // parallel and every page chunk in the precache, the first screen's reads regularly finish
+  // before the worker has installed and claimed the page.
+  const controlledFromTheStart = await page.evaluate(() => !!navigator.serviceWorker.controller);
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
   // The built `sw.js` calls `clientsClaim()`, so an open page is taken over once the worker
-  // activates -- but that can land a moment after `ready` resolves. A page still uncontrolled is
-  // reloaded, because a load that starts under an active worker is controlled for certain.
-  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+  // activates -- but its reads so far went past it. A page that was not controlled from the
+  // start is reloaded, because a load that starts under an active worker is controlled for
+  // certain, and so are its reads.
+  if (!controlledFromTheStart) await page.reload();
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
 }
 
