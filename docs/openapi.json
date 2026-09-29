@@ -1176,7 +1176,7 @@
     },
     "/files/{id}": {
       "get": {
-        "summary": "The original bytes. Served from this origin under a sandbox policy; only a short list of types renders in place, everything else downloads.",
+        "summary": "The original bytes. Served from this origin under a sandbox policy; only a short list of types renders in place, everything else downloads. Never compressed in transit, and a single byte range may be asked for with `Range` (optionally guarded by `If-Range` with the ETag); several ranges at once are answered with the whole file.",
         "parameters": [
           {
             "name": "id",
@@ -1185,6 +1185,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "bytes=0-1023"
             }
           }
         ],
@@ -1199,6 +1208,20 @@
                 }
               }
             }
+          },
+          "206": {
+            "description": "The requested byte range, described by `Content-Range`",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range starts past the end of the file; `Content-Range: bytes */<length>` gives the length"
           }
         }
       }

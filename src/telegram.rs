@@ -46,15 +46,13 @@ async fn call(state: &App, token: &str, method: &str, body: &Value) -> Result<Va
     // No redirects, like every other outgoing notification client (`notify::post`): the Bot API
     // answers every call itself, and the base URL is operator configuration a redirect should
     // not be able to extend.
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = crate::notify::http_client()
         .map_err(|e| AppError::Internal(format!("telegram client: {e}")))?;
     for attempt in 0..2 {
         let response = client
             .post(api_url(state, token, method))
             .json(body)
+            .timeout(HTTP_TIMEOUT)
             .send()
             .await
             .map_err(|e| AppError::Internal(format!("telegram request: {}", e.without_url())))?;
@@ -77,18 +75,25 @@ async fn call(state: &App, token: &str, method: &str, body: &Value) -> Result<Va
     }
     unreachable!()
 }
+/// The key, from `state.telegram_key` after the first read: it is written once and never
+/// changes, and the loop decrypts the bot token on every poll. A key file deleted while the
+/// instance runs is therefore noticed at the next start rather than at the next poll.
 fn read_key(state: &App) -> Result<[u8; 32], AppError> {
-    std::fs::read(key_path(state))
+    if let Some(key) = state.telegram_key.get() {
+        return Ok(*key);
+    }
+    let key: [u8; 32] = std::fs::read(key_path(state))
         .map_err(|_| {
             AppError::Unavailable(
                 "Telegram's encryption key is missing; save the bot token again".into(),
             )
         })?
         .try_into()
-        .map_err(|_| AppError::Internal("Telegram encryption key has the wrong size".into()))
+        .map_err(|_| AppError::Internal("Telegram encryption key has the wrong size".into()))?;
+    Ok(*state.telegram_key.get_or_init(|| key))
 }
 fn save_key(state: &App) -> Result<[u8; 32], AppError> {
-    if key_path(state).exists() {
+    if state.telegram_key.get().is_some() || key_path(state).exists() {
         return read_key(state);
     }
     let mut key = [0u8; 32];
@@ -104,7 +109,7 @@ fn save_key(state: &App) -> Result<[u8; 32], AppError> {
         Ok(mut f) => {
             f.write_all(&key)?;
             f.sync_all()?;
-            Ok(key)
+            Ok(*state.telegram_key.get_or_init(|| key))
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_key(state),
         Err(e) => Err(e.into()),

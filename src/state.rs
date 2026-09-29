@@ -40,6 +40,9 @@ pub struct AppState {
     /// One token for every reason to stop, so a restart is exactly as orderly as a
     /// `docker stop`.
     pub shutdown: tokio_util::sync::CancellationToken,
+    /// `telegram.key`, once it has been read or written. It never changes while the instance
+    /// runs, and the Telegram loop used to read it from disk on every poll.
+    pub telegram_key: std::sync::OnceLock<[u8; 32]>,
 }
 
 pub type App = Arc<AppState>;

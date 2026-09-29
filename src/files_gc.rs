@@ -149,7 +149,8 @@ impl Sweeper {
     /// -- so this is about disk space, run daily from `tasks`.
     ///
     /// The directories are listed outside any transaction. The decision "no row names this
-    /// hash" and the unlink are then made under the write connection, for the same reason as
+    /// hash" and the move out of the way are then made under the write connection (the unlink
+    /// itself comes after it is released), for the same reason as
     /// `api::attachments::discard_blob`: a writer that has already stored the blob and is about
     /// to insert its row either commits first (and this sees the row) or restores the blob after
     /// (see `Storage::restore_if_missing`). The age check is what spares a writer that has not
@@ -240,16 +241,25 @@ impl Sweeper {
         if !unreferenced.is_empty() {
             db::sync_committed(&mut tx, state.backend).await?;
         }
+        // Under the lock each due file only moves aside, to a `.part` name nothing serves or
+        // looks up; the unlinks, which free the blocks and are the slow part on a large blob,
+        // run after the lock is released. Moving is enough for the race the lock is here for:
+        // from the rename on, a writer holding the lock sees the hash missing and restores it,
+        // exactly as it would after an unlink. A moved file whose unlink then fails is
+        // day-old scratch, which the next sweep collects.
         let mut seen = HashMap::new();
+        let mut doomed = Vec::new();
         for c in unreferenced {
             let first = self.unreferenced_since.get(&c.path).copied().unwrap_or(now);
             if first <= cutoff {
-                if tokio::fs::remove_file(&c.path).await.is_ok() {
+                let aside = c.path.with_extension("gc.part");
+                if tokio::fs::rename(&c.path, &aside).await.is_ok() {
                     if c.path.extension().is_none() {
                         swept.blobs += 1;
                     } else {
                         swept.thumbs += 1;
                     }
+                    doomed.push(aside);
                 }
             } else {
                 seen.insert(c.path, first);
@@ -260,6 +270,9 @@ impl Sweeper {
         self.unreferenced_since = seen;
         // Nothing was written; the transaction was only this sweep's turn at the lock.
         tx.rollback().await?;
+        for path in doomed {
+            let _ = tokio::fs::remove_file(&path).await;
+        }
         Ok(swept)
     }
 }

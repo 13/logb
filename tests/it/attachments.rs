@@ -583,6 +583,58 @@ async fn file_responses_are_revalidated_and_a_304_needs_ownership() {
     assert_ne!(etags[0], etags[1], "the thumbnail is different bytes, so a different validator");
 }
 
+/// A PDF viewer or a video element asks for an original in slices. Each is a 206 with the
+/// exact bytes, a range past the end is a 416, the whole file still arrives without a `Range`,
+/// and none of it is compressed on the way: the stored bytes are what a range counts.
+#[tokio::test]
+async fn an_original_answers_byte_ranges() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let anna = app.create_user_client("anna", "password123").await;
+    let car = app.create_object(&app.client, "Golf", Some("km")).await;
+    let id = car["id"].as_i64().unwrap();
+    let content: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    let a: serde_json::Value = app.client.post(app.url(&format!("/objects/{id}/attachments")))
+        .multipart(form(content.clone(), "manual.pdf", "application/pdf")).send().await.unwrap().json().await.unwrap();
+    let url = app.url(&format!("/files/{}", a["file_id"]));
+
+    let full = app.client.get(&url).header("accept-encoding", "gzip, br, zstd").send().await.unwrap();
+    assert_eq!(full.status(), 200);
+    assert_eq!(full.headers()["accept-ranges"], "bytes");
+    assert!(full.headers().get("content-encoding").is_none(), "an original is served as stored");
+    let etag = full.headers()["etag"].to_str().unwrap().to_string();
+    assert_eq!(full.bytes().await.unwrap().as_ref(), content.as_slice());
+
+    for (range, start, end) in [("bytes=0-99", 0, 99), ("bytes=4900-", 4900, 4999), ("bytes=-10", 4990, 4999), ("bytes=4000-9999", 4000, 4999)] {
+        let res = app.client.get(&url).header("range", range).header("accept-encoding", "gzip").send().await.unwrap();
+        assert_eq!(res.status(), 206, "{range}");
+        assert_eq!(res.headers()["content-range"], format!("bytes {start}-{end}/5000").as_str(), "{range}");
+        assert_eq!(res.headers()["content-length"], (end - start + 1).to_string().as_str(), "{range}");
+        assert_eq!(res.headers()["etag"], etag.as_str(), "{range}");
+        assert!(res.headers().get("content-encoding").is_none(), "{range}");
+        assert_eq!(res.bytes().await.unwrap().as_ref(), &content[start..=end], "{range}");
+    }
+
+    let res = app.client.get(&url).header("range", "bytes=5000-").send().await.unwrap();
+    assert_eq!(res.status(), 416);
+    assert_eq!(res.headers()["content-range"], "bytes */5000");
+
+    // An `If-Range` naming another version gets the whole, current file.
+    let res = app.client.get(&url).header("range", "bytes=0-9").header("if-range", "\"old\"").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.bytes().await.unwrap().len(), 5000);
+    let res = app.client.get(&url).header("range", "bytes=0-9").header("if-range", &etag).send().await.unwrap();
+    assert_eq!(res.status(), 206);
+
+    // A validator the browser holds still wins over a range: nothing has changed, so no bytes.
+    let res = app.client.get(&url).header("range", "bytes=0-9").header("if-none-match", &etag).send().await.unwrap();
+    assert_eq!(res.status(), 304);
+
+    // And a range is no way around the ownership check.
+    let res = anna.get(&url).header("range", "bytes=0-9").send().await.unwrap();
+    assert_eq!(res.status(), 404);
+}
+
 /// SQLite hands a rolled-back `AUTOINCREMENT` id straight to the next insert: the counter lives
 /// in `sqlite_sequence`, an ordinary table the rollback restores. A thumbnail named after the
 /// file id and written inside the failed transaction therefore used to outlive it and be served

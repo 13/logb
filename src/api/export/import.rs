@@ -780,11 +780,14 @@ async fn store_blobs(
         let Some(bytes) = archive.read_blob(&x.sha256, max_upload).await? else {
             continue;
         };
-        if files::sha256_hex(&bytes) != x.sha256 {
+        // `Bytes` so the hash and the decode can share the buffer rather than copy it.
+        let bytes = Bytes::from(bytes);
+        let sha = files::sha256_hex_off_runtime(bytes.clone())
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if sha != x.sha256 {
             continue;
         }
-        // `Bytes` so the decode can share the buffer rather than copy it.
-        let bytes = Bytes::from(bytes);
         let image = if images.contains(x.sha256.as_str()) {
             files::process_image_queued(bytes.clone())
                 .await

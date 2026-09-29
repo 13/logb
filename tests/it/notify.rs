@@ -154,7 +154,7 @@ async fn delivery_history_older_than_a_month_is_dropped() {
         sqlx::query("INSERT INTO notification_deliveries (target, user_id, day, attempts) VALUES ($1, $2, $3, 1)")
             .bind(target).bind(user_id).bind(day).execute(&app.state.db).await.unwrap();
     }
-    logb::notify::tick(&app.state, 9).await.unwrap();
+    logb::notify::prune_delivery_history(&app.state).await.unwrap();
     let remaining: Vec<(String,)> = sqlx::query_as("SELECT target FROM notification_deliveries ORDER BY target")
         .fetch_all(&app.state.db).await.unwrap();
     let targets: Vec<&str> = remaining.iter().map(|(t,)| t.as_str()).collect();

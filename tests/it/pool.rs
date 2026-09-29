@@ -46,6 +46,13 @@ async fn the_after_connect_hook_runs_on_every_pooled_connection() {
 
         let sync: i64 = sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut **conn).await.unwrap();
         assert_eq!(sync, 1, "synchronous is not NORMAL on a pooled connection");
+
+        let cache: i64 = sqlx::query_scalar("PRAGMA cache_size").fetch_one(&mut **conn).await.unwrap();
+        assert_eq!(cache, -32000, "a pooled connection has the default 2 MB page cache");
+        let mmap: i64 = sqlx::query_scalar("PRAGMA mmap_size").fetch_one(&mut **conn).await.unwrap();
+        assert_eq!(mmap, 268435456, "a pooled connection reads without a memory map");
+        let temp: i64 = sqlx::query_scalar("PRAGMA temp_store").fetch_one(&mut **conn).await.unwrap();
+        assert_eq!(temp, 2, "a pooled connection spills temporary b-trees to disk");
     }
 }
 
@@ -124,4 +131,17 @@ async fn sync_committed_reaches_the_wal_from_inside_a_write_transaction() {
     let mut tx = logb::db::begin_write_on(&writer, backend).await.unwrap();
     logb::db::sync_committed(&mut tx, backend).await.unwrap();
     tx.rollback().await.unwrap();
+}
+
+/// The hourly `PRAGMA optimize` has to run on a live instance without disturbing it: on SQLite it
+/// takes the writer connection and gives it back, and on PostgreSQL it does nothing.
+#[tokio::test]
+async fn the_hourly_optimize_runs_and_releases_the_writer() {
+    let app = crate::common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    app.create_object(&app.client, "Golf", None).await;
+    logb::db::optimize(&app.state).await.unwrap();
+    logb::db::optimize(&app.state).await.unwrap();
+    // The writer connection went back to its pool: an ordinary write still goes through.
+    app.create_object(&app.client, "Polo", None).await;
 }

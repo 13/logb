@@ -306,6 +306,40 @@ async fn use_is_recorded_so_a_forgotten_token_can_be_recognised() {
     assert!(used.is_some(), "using a token should record that it was used");
 }
 
+/// Once today's use is recorded, a request with the token writes nothing at all -- not even an
+/// `UPDATE` that matches no row, which on SQLite still has to take the write lock to find that
+/// out. Proved by holding the lock the `UPDATE` would need: the write lock on SQLite, the
+/// token's row lock on PostgreSQL. A read that still issued the `UPDATE` would wait on it.
+#[tokio::test]
+async fn a_token_used_today_reads_without_writing() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (id, token) = issue(&app, "phone").await;
+    let first = bare_client().get(app.url("/objects")).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(first.status(), 200);
+    let (recorded,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+
+    let mut held = logb::db::begin_write(&app.state).await.unwrap();
+    if common::backend() == logb::dialect::Backend::Postgres {
+        sqlx::query("SELECT id FROM api_tokens WHERE id = $1 FOR UPDATE")
+            .bind(id).fetch_one(&mut *held).await.unwrap();
+    }
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bare_client().get(app.url("/objects")).bearer_auth(&token).send(),
+    )
+    .await
+    .expect("a request with a token already used today waited on a write lock")
+    .unwrap();
+    assert_eq!(second.status(), 200);
+    held.rollback().await.unwrap();
+
+    let (after,): (Option<String>,) = sqlx::query_as("SELECT last_used_at FROM api_tokens WHERE id = $1")
+        .bind(id).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(after, recorded, "the day's first use is the one kept");
+}
+
 /// CORS exists for a SEPARATE web client on another origin -- the bundled SPA is same-origin and
 /// needs none of it, so an instance that has not asked for it must behave exactly as before.
 #[tokio::test]

@@ -3,6 +3,22 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## Unreleased: performance
+
+**The first start builds six indexes.** Five cover deleted entries (only those, so they stay
+small) and one covers reminders completed by an entry. The migration also removes, once,
+the per-field edit clocks of rows that no longer exist; from now on they go with their rows.
+Both take seconds on a household's database, and the instance answers once they are done.
+
+**SQLite uses more memory, up to about 160 MB.** Each of its five connections may now cache
+32 MB of the database instead of 2 MB, and reads go through a memory map of up to 256 MB, which
+the kernel shares and can reclaim. On a small database the cache never grows past the database's
+own size. PostgreSQL is unchanged.
+
+**Responses can be compressed with brotli or zstd** as well as gzip, whichever the browser
+prefers. An attachment's original is never compressed, and answers `Range` requests, so a large
+PDF or video can be read in parts.
+
 ## 0.17.1: faster saves
 
 0.17.0 was tagged but never published: its release failed before any image was pushed under a

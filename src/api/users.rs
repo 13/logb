@@ -210,6 +210,21 @@ async fn delete(AdminUser(me): AdminUser, State(state): State<App>, Path(id): Pa
         .bind(id).fetch_all(&state.db).await?;
 
     let mut tx = db::begin_write(&state).await?;
+    // The field clocks of everything about to go, first, while the rows still say which uuids
+    // were this user's: the retention purge no longer sweeps the whole table for clocks that
+    // name nothing, so a hard delete forgets its own.
+    for (entity, rows) in [
+        ("object", "SELECT client_uuid FROM objects WHERE user_id = $2"),
+        ("activity", "SELECT a.client_uuid FROM activities a JOIN objects o ON o.id = a.object_id WHERE o.user_id = $2"),
+        ("reminder", "SELECT r.client_uuid FROM reminders r JOIN objects o ON o.id = r.object_id WHERE o.user_id = $2"),
+        ("attachment", "SELECT a.client_uuid FROM attachments a JOIN objects o ON o.id = a.object_id WHERE o.user_id = $2"),
+        ("file", "SELECT client_uuid FROM files WHERE user_id = $2"),
+        ("object_type", "SELECT client_uuid FROM object_types WHERE user_id = $2"),
+    ] {
+        // Both strings come from the fixed list above.
+        let sql = format!("DELETE FROM field_clock WHERE entity = $1 AND entity_uuid IN ({rows})");
+        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(entity).bind(id).execute(&mut *tx).await?;
+    }
     sqlx::query("DELETE FROM attachments WHERE object_id IN (SELECT id FROM objects WHERE user_id = $1)")
         .bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM objects WHERE user_id = $1").bind(id).execute(&mut *tx).await?;

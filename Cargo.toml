@@ -9,7 +9,7 @@ license = "MIT"
 axum = { version = "0.8", features = ["multipart", "macros"] }
 axum-extra = { version = "0.12", features = ["cookie"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["compression-gzip", "cors", "set-header", "trace"] }
+tower-http = { version = "0.7", features = ["compression-br", "compression-gzip", "compression-zstd", "cors", "set-header", "trace"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "postgres", "any", "migrate"] }
 argon2 = "0.6"
 rand = "0.10"
@@ -39,6 +39,7 @@ aes-gcm = "0.10"
 unicode-normalization = "0.1"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 percent-encoding = "2.3.2"
+mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "multipart", "cookies"] }
