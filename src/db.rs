@@ -119,6 +119,13 @@ pub(crate) const WRITE_WAIT: std::time::Duration = std::time::Duration::from_sec
 /// what a save costs. NORMAL syncs at checkpoints instead: the database cannot be corrupted
 /// either way, and the most a power cut can lose is the last few commits before it.
 ///
+/// The cache and mmap settings are per connection. `cache_size = -32000` gives each connection
+/// 32 MB of page cache instead of SQLite's 2 MB default, so a list or search over a few thousand
+/// rows stops re-reading the same pages from the OS on every request. `mmap_size` lets reads go
+/// through a 256 MB memory map rather than a `read()` per page; it is an upper bound, not an
+/// allocation, and the mapping is shared between connections by the OS. `temp_store = MEMORY`
+/// keeps the sorts and temporary b-trees of `ORDER BY` and `GROUP BY` off the disk.
+///
 /// The busy timeout is a parameter only because the two callers have always differed: the
 /// server waits five seconds for a writer, while the one-shot `--backup` connection waits
 /// thirty, since it is competing with a live instance and has nothing else to do.
@@ -126,6 +133,7 @@ fn after_connect(url: &str, busy_timeout_ms: u32) -> Option<String> {
     url.starts_with("sqlite:").then(|| {
         format!(
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; \
+             PRAGMA cache_size = -32000; PRAGMA mmap_size = 268435456; PRAGMA temp_store = MEMORY; \
              PRAGMA busy_timeout = {busy_timeout_ms}"
         )
     })
@@ -279,6 +287,25 @@ pub async fn sync_committed(
     })
     .await
     .map_err(std::io::Error::other)??;
+    Ok(())
+}
+
+/// Refreshes SQLite's query-planner statistics where they have gone stale. A no-op on
+/// PostgreSQL, whose autovacuum does the same job unasked.
+///
+/// `PRAGMA optimize` runs `ANALYZE` only on tables whose row counts have moved enough to matter,
+/// and `analysis_limit` bounds each of those to a sample, so this takes milliseconds rather than
+/// a scan of the database. `0x10002` asks it to consider every table rather than only the ones
+/// this connection has happened to query. `ANALYZE` writes `sqlite_stat1`, so it runs on the
+/// writer connection and waits its turn behind any write in progress instead of racing it.
+pub async fn optimize(state: &crate::state::App) -> Result<(), crate::error::AppError> {
+    if state.backend != crate::dialect::Backend::Sqlite {
+        return Ok(());
+    }
+    let mut conn = state.write_db.acquire().await?;
+    sqlx::raw_sql("PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002")
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
