@@ -133,7 +133,13 @@ already hides the section when there is nothing to show. No UI redesign in this 
 
 ## Round 2 — dashboard and objects list (0.20.0)
 
-- Subtitle "N active · €X this year".
+- No bits-ui on the dashboard: it is the eagerly loaded chunk, and bits-ui's shared core would
+  move onto every first load. Native `<select>`, native `<dialog>`, plain buttons.
+- Subtitle "N active · €X spent" (the listed objects' own totals; a per-year figure would need
+  another request on the first screen).
+- "New object" moves to the page header (icon only on a phone); the floating button becomes
+  "+ Log", which asks for the object in a dialog (most recently used first) and opens the same
+  quick entry the per-card "+" did (`quickLogPath`).
 - Due reminders: light red card per reminder with title, object, how overdue, and a Snooze
   button. "Coming up": plain rows with relative due time. No bullets, no underlines, no object
   tags on reminders (audit #2, #3).
