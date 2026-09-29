@@ -10,6 +10,7 @@
   import { persisted } from '../stores/persisted';
   import { SORT_KEYS, parseSort, parseTab, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
+  import { debouncer } from '../lib/debounce';
   import { pendingObject } from '../lib/object-form';
   import { errorMessage } from '../lib/api-error';
   import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
@@ -38,6 +39,12 @@
   let sort = $state<SortKey>(parseSort(params.get('sort')) ?? parseSort($rememberedSort) ?? 'name');
   /** Session-only: a search is a moment's question, not a way of looking at the list. */
   let query = $state('');
+  /** `query` as the list is filtered by: it follows the box once typing pauses, so a household's
+   *  list is not re-filtered and re-sorted on every keystroke. Clearing the box applies at once. */
+  let filterQuery = $state('');
+  const applyQuery = debouncer<string>((q) => { filterQuery = q; }, 100, (q) => q.trim() === '');
+  $effect(() => { applyQuery.push(query); });
+  $effect(() => () => applyQuery.cancel());
   /** Session-only too, and not in the address: set by tapping a chip on a card. */
   let tagFilter = $state<string | null>(null);
 
@@ -97,7 +104,7 @@
 
   // Search matches what the card says, so an own type is found by its name, not its key.
   const typeLabel = (ty: ObjectType) => labelOf(ty, $customTypes, $t, $typesLoaded);
-  const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale, tagFilter));
+  const rows = $derived(visibleRows(active, archived, tab, filterQuery, sort, typeLabel, $locale, tagFilter));
   const activeCount = $derived(visibleRows(active, archived, 'active', '', 'name', typeLabel, $locale).length);
   const nothingYet = $derived(active.length === 0 && archived.length === 0);
 
@@ -187,7 +194,7 @@
       </div>
     {/if}
     {#if rows.length === 0}
-      <p class="muted">{$t('dash.no-match', { q: query.trim() || (tagFilter ?? '') })}</p>
+      <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
       <div class="list">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}

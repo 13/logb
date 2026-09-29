@@ -45,6 +45,18 @@ describe('matchesQuery', () => {
   it('treats an empty or blank query as matching everything', () => {
     expect(matchesQuery(bike, '   ', label)).toBe(true);
   });
+  it('never matches across two fields', () => {
+    const lamp = obj({ name: 'Lamp', description: 'shade', tags: ['desk'] });
+    expect(matchesQuery(lamp, 'lampshade', label)).toBe(false);
+    expect(matchesQuery(lamp, 'shadedesk', label)).toBe(false);
+    expect(matchesQuery(lamp, 'desk', label)).toBe(true);
+  });
+  it('searches a reloaded object by its new text', () => {
+    expect(matchesQuery(bike, 'kathm', label)).toBe(true);
+    const renamed = { ...bike, name: 'Cube Reaction' };
+    expect(matchesQuery(renamed, 'kathm', label)).toBe(false);
+    expect(matchesQuery(renamed, 'reaction', label)).toBe(true);
+  });
 });
 
 describe('sortObjects', () => {
