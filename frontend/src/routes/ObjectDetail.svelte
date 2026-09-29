@@ -363,7 +363,10 @@
     {/if}
 
     {#if object.cover_file_id}
-      <img class="hero" src={fileUrl(object.cover_file_id)} alt="" />
+      <!-- The thumbnail, not the original: the hero is at most 240px tall, the original can be a
+           multi-megabyte phone photo, and the thumbnail is usually already cached from the
+           dashboard's card. -->
+      <img class="hero" src={fileUrl(object.cover_file_id, true)} alt="" decoding="async" />
     {/if}
 
     <div class="stats">
