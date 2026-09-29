@@ -3,6 +3,18 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.20.0: new look, the dashboard
+
+**The dashboard is redesigned.** Due reminders are cards with a snooze button, what is coming
+up is a short list, and each object's tags sit inside its card. Search, sort and the
+Active/Archived switch share one row; on a wide screen the objects fill two columns.
+
+**"+ Log" on the dashboard asks which object**, then opens the same quick entry the small "+" on
+each card used to: a reading for something with a counter, a fill for a tank, a weight for a
+person. The per-card "+" is gone, and "New object" moved to the page header.
+
+No migration.
+
 ## 0.19.0: new look, first part
 
 **The app is zinc and amber, set in Inter.** Colours, font and the navigation frame change on
