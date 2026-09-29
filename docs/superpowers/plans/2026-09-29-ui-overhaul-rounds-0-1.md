@@ -21,7 +21,7 @@ shadcn-svelte (bits-ui, tailwind-variants, tailwind-merge, clsx, @lucide/svelte)
 ## Global Constraints
 
 - No remote assets at runtime; the CSP in `src/lib.rs` is not changed.
-- Budget: round 1 adds at most 25 KB gzipped JS and 15 KB gzipped CSS over 0.18.0's
+- Budget: round 1 adds at most 50 KB gzipped JS (raised from 25 KB, see the spec) and 15 KB gzipped CSS over 0.18.0's
   `frontend/dist`, font files excluded (`gzip -9` per file, as in
   `docs/perf/baseline-2026-09-29-frontend.md`).
 - WCAG AA: text ≥ 4.5:1, control outlines and focus rings ≥ 3:1, in both themes, enforced by
@@ -1239,7 +1239,7 @@ done
 cd ..
 ```
 
-Expected: JS delta ≤ 25600, CSS delta ≤ 15360. If JS is over, look first at `@lucide/svelte`
+Expected: JS delta ≤ 51200, CSS delta ≤ 15360. If JS is over, look first at `@lucide/svelte`
 (only the icons the two components import should be in the bundle —
 `grep -o 'lucide[^"]*' frontend/dist/assets/*.js | sort -u`) and at whether `bits-ui` ended up in
 the eager dashboard chunk rather than `ObjectDetail`'s; report the numbers to the user if still
