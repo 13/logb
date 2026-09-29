@@ -436,10 +436,15 @@ pub async fn with_attachments(
     state: &App,
     rows: Vec<ActivityRow>,
 ) -> Result<Vec<ActivityOut>, AppError> {
-    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
-    // Grouped by activity once, rather than every row scanning every attachment.
+    let object_id = match rows.first() {
+        Some(r) => r.object_id,
+        None => return Ok(vec![]),
+    };
+    // The object's attachments in one indexed read, grouped by activity once rather than every
+    // row scanning every attachment. Not only the page's own (`activity_id IN (...)`): with a
+    // hundred bound ids that measured slower on every page but the first.
     let mut by_activity: HashMap<i64, Vec<AttachmentOut>> = HashMap::new();
-    for a in attachments::for_activities(state, &ids).await? {
+    for a in attachments::for_object(state, object_id).await? {
         if let Some(activity_id) = a.activity_id {
             by_activity.entry(activity_id).or_default().push(a);
         }

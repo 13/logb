@@ -74,21 +74,14 @@ fn wanted_title(q: &ListQuery) -> Option<String> {
     (!title.is_empty()).then(|| fold_title(title))
 }
 
-/// A page row with the size of the whole filtered set beside it, from `COUNT(*) OVER ()`.
-#[derive(sqlx::FromRow)]
-struct CountedRow {
-    #[sqlx(flatten)]
-    row: ActivityRow,
-    total_count: i64,
-}
-
 /// One page of an object's activities, and how many match the filters ignoring the page window
 /// -- the client needs that to know whether a "load more" button belongs on screen.
 ///
-/// One read serves both. With a tag or title filter that is the one fetch of every row the
-/// other filters allow, matched and counted here; without, the count rides along on each row
-/// of the page as a window function. The page and the count used to be two statements -- and
-/// with a filter, two full fetches of the same rows.
+/// With a tag or title filter, one fetch of every row the other filters allow serves both: they
+/// are matched and counted here. Without, the page is read with `LIMIT` and the count asked for
+/// separately, and only when the page does not already answer it. Not `COUNT(*) OVER ()` on the
+/// page query: a window over the whole set makes the database read and sort every row of the
+/// object to return a page of them, which measured nearly twice as slow as the two statements.
 pub async fn list_for_object(
     state: &App,
     object_id: i64,
@@ -141,32 +134,27 @@ pub async fn list_for_object(
             .collect();
         return Ok((page, total));
     }
-    let rows = sqlx::query_as::<_, CountedRow>(
+    let rows = sqlx::query_as::<_, ActivityRow>(
         "SELECT id, object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, client_op_id, created_at, updated_at, client_uuid, tags, \
-         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset, \
-         COUNT(*) OVER () AS total_count \
+         start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, meter_reading_milli, period_start, period_end, estimated, meter_reset \
          FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
          AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4) \
          ORDER BY date DESC, id DESC LIMIT $5 OFFSET $6",
     )
     .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to).bind(limit).bind(offset)
     .fetch_all(&state.db).await?;
-    let total = match rows.first() {
-        Some(r) => r.total_count,
-        // An empty first page means nothing matched. An empty later page carries no row to
-        // read the count from, so -- only then -- it is asked for on its own.
-        None if offset == 0 => 0,
-        None => {
-            let (n,): (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
-                 AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
-            )
-            .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
-            .fetch_one(&state.db).await?;
-            n
-        }
-    };
-    Ok((rows.into_iter().map(|r| r.row).collect(), total))
+    // A first page that is not full is the whole set, so it is its own count.
+    if offset == 0 && (rows.len() as i64) < limit {
+        let total = rows.len() as i64;
+        return Ok((rows, total));
+    }
+    let (total,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         AND ($2 IS NULL OR category = $2) AND ($3 IS NULL OR date >= $3) AND ($4 IS NULL OR date <= $4)",
+    )
+    .bind(object_id).bind(&q.category).bind(&q.from).bind(&q.to)
+    .fetch_one(&state.db).await?;
+    Ok((rows, total))
 }
 
 pub(crate) async fn list(

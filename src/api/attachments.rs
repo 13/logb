@@ -78,32 +78,6 @@ pub async fn for_activity(state: &App, activity_id: i64) -> Result<Vec<Attachmen
     .bind(activity_id).fetch_all(&state.db).await?)
 }
 
-/// The attachments of several activities -- a timeline page -- in one statement, newest first
-/// like `for_object`. Reads only the page's attachments, where the page used to read every
-/// attachment its object has.
-///
-/// Same INVARIANT as `for_activity`: the caller has already loaded the activities through a
-/// query that filters tombstoned rows. `ids` is at most a page (`activities::query::MAX_LIMIT`).
-pub async fn for_activities(state: &App, ids: &[i64]) -> Result<Vec<AttachmentOut>, AppError> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let list: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
-    let sql = format!(
-        "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
-         f.original_name, f.mime, f.size, f.width, f.height, f.taken_at, a.client_op_id, \
-         a.client_uuid, f.client_uuid AS file_uuid \
-         FROM attachments a JOIN files f ON f.id = a.file_id WHERE a.activity_id IN ({}) AND a.deleted_at IS NULL \
-         ORDER BY a.created_at DESC, a.id DESC",
-        list.join(", ")
-    );
-    let mut query = sqlx::query_as::<_, AttachmentOut>(sqlx::AssertSqlSafe(sql));
-    for id in ids {
-        query = query.bind(*id);
-    }
-    Ok(query.fetch_all(&state.db).await?)
-}
-
 async fn load_owned(state: &App, user_id: i64, id: i64) -> Result<AttachmentOut, AppError> {
     sqlx::query_as::<_, AttachmentOut>(
         "SELECT a.id, a.object_id, a.activity_id, a.file_id, a.kind, a.caption, a.created_at, \
