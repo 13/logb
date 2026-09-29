@@ -31,4 +31,9 @@ describe('tickShown', () => {
     expect(tickShown(0, 12)).toBe(false);
     expect(tickShown(0, 7)).toBe(true);
   });
+  it('thins in step with the count: 40 bars get about six labels, newest included', () => {
+    const shown = Array.from({ length: 40 }, (_, i) => i).filter((i) => tickShown(i, 40));
+    expect(shown).toEqual([39, 32, 25, 18, 11, 4].reverse());
+    expect(shown.length).toBeLessThanOrEqual(7);
+  });
 });

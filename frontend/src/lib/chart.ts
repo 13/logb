@@ -14,9 +14,9 @@ export function barShare(value: number, max: number): number {
   return max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
 }
 
-/** Whether bar `i` of `n` gets its tick drawn. Six fit a 300 px chart; past that every other one
- *  is drawn, counted from the newest (last) bar so the current month is always labelled. The
- *  screen-reader table under the chart names every bar either way. */
+/** Whether bar `i` of `n` gets its tick drawn. About six ticks fit a 300 px chart, so every
+ *  `ceil(n / 6)`th bar is drawn, counted from the newest (last) so the current month is always
+ *  labelled. The screen-reader table under the chart names every bar either way. */
 export function tickShown(i: number, n: number): boolean {
-  return n <= 6 || (n - 1 - i) % 2 === 0;
+  return (n - 1 - i) % Math.max(1, Math.ceil(n / 6)) === 0;
 }

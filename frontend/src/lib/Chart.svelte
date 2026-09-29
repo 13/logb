@@ -14,7 +14,10 @@
   // because it holds only rectangles and lines -- every piece of text is HTML around it.
   const W = 100;
   const H = 50;
+  // Slot i is the i-th of n equal columns, the same split as the label row's repeat(n, 1fr)
+  // below, so a bar sits over its own label. A bar is capped so one or two do not go wide.
   const slot = $derived(W / Math.max(bars.length, 1));
+  const bw = $derived(Math.min(slot * 0.64, 12));
 </script>
 
 {#if bars.length > 0}
@@ -24,10 +27,10 @@
     <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" class="block h-28 w-full" aria-hidden="true" focusable="false">
       <line x1="0" y1="0.5" x2={W} y2="0.5" class="stroke-border" stroke-width="1" stroke-dasharray="2 2" vector-effect="non-scaling-stroke" />
       {#each bars as b, i (b.key)}
-        {@const h = barShare(b.value, max) * (H - 1)}
+        {@const h = Math.max(1, barShare(b.value, max) * (H - 1))}
         <!-- brand-ink, not the amber fill: a bar is a graphic that carries meaning, so it needs
              3:1 against the card (1.4.11); the fill is 2.1:1. -->
-        <rect data-testid="chart-bar" x={i * slot + slot * 0.18} width={slot * 0.64} y={H - h} height={h} class="fill-brand-ink">
+        <rect data-testid="chart-bar" x={i * slot + (slot - bw) / 2} width={bw} y={H - h} height={h} class="fill-brand-ink">
           <title>{b.label}: {b.display}</title>
         </rect>
       {/each}
