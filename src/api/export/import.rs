@@ -761,7 +761,8 @@ impl StoredFiles<'_> {
 /// decoding, hashing and fsyncing no longer happen while every other writer queues behind this
 /// one. Inside the transaction the import only inserts rows.
 ///
-/// One blob is in memory at a time, and none is larger than the upload limit. A blob no
+/// At most `STORE_IN_FLIGHT` blobs are in memory at a time, and none is larger than the upload
+/// limit. A blob no
 /// attachment names is never read, and one whose bytes do not hash to its name is ignored, so
 /// the attachments naming it are skipped later -- exactly as a missing blob always was.
 async fn store_blobs(
@@ -776,6 +777,13 @@ async fn store_blobs(
         .collect();
     let mut stored = HashMap::new();
     let mut seen = std::collections::HashSet::new();
+    // The archive is read one entry at a time -- a zip reader cannot be shared -- but what
+    // follows each read (hash, thumbnail, two durable writes with an fsync each) runs for up to
+    // `STORE_IN_FLIGHT` blobs at once. One after another, the fsyncs alone made an archive of two
+    // thousand photos spend most of its import waiting on the disk. Decoding stays bounded by
+    // `files::process_image_queued`'s own slots, and memory by this cap times the upload limit.
+    const STORE_IN_FLIGHT: usize = 4;
+    let mut in_flight = tokio::task::JoinSet::new();
     for x in archive_attachments(data) {
         if !seen.insert(x.sha256.as_str()) {
             continue;
@@ -783,37 +791,68 @@ async fn store_blobs(
         let Some(bytes) = archive.read_blob(&x.sha256, max_upload).await? else {
             continue;
         };
-        // `Bytes` so the hash and the decode can share the buffer rather than copy it.
-        let bytes = Bytes::from(bytes);
-        let sha = files::sha256_hex_off_runtime(bytes.clone())
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        if sha != x.sha256 {
-            continue;
+        while in_flight.len() >= STORE_IN_FLIGHT {
+            collect_stored(&mut in_flight, &mut stored).await?;
         }
-        let image = if images.contains(x.sha256.as_str()) {
-            files::process_image_queued(bytes.clone())
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
-        } else {
-            None
-        };
-        state.storage.write_blob(&x.sha256, &bytes).await?;
-        if let Some(img) = &image {
-            state.storage.write_thumb(&x.sha256, &img.thumb_jpeg).await?;
-        }
-        stored.insert(
+        in_flight.spawn(store_blob(
+            state.clone(),
             x.sha256.clone(),
-            StoredBlob {
-                size: bytes.len() as i64,
-                width: image.as_ref().map(|i| i.width as i64),
-                height: image.as_ref().map(|i| i.height as i64),
-                thumb: image.is_some(),
-                taken_at: image.and_then(|i| i.taken_at),
-            },
-        );
+            Bytes::from(bytes),
+            images.contains(x.sha256.as_str()),
+        ));
+    }
+    while !in_flight.is_empty() {
+        collect_stored(&mut in_flight, &mut stored).await?;
     }
     Ok(stored)
+}
+
+type Stored = Result<Option<(String, StoredBlob)>, AppError>;
+
+/// Waits for one of `store_blobs`'s tasks and files its result. An error ends the import; the
+/// tasks still running are aborted when the set is dropped, and what they wrote is unreferenced
+/// and left to the orphan sweep, as with any other import that fails after storing blobs.
+async fn collect_stored(
+    in_flight: &mut tokio::task::JoinSet<Stored>,
+    stored: &mut HashMap<String, StoredBlob>,
+) -> Result<(), AppError> {
+    if let Some(done) = in_flight.join_next().await {
+        if let Some((sha, blob)) = done.map_err(|e| AppError::Internal(e.to_string()))?? {
+            stored.insert(sha, blob);
+        }
+    }
+    Ok(())
+}
+
+/// Checks one blob against the hash the archive names it by, then writes it (and a thumbnail,
+/// for an image). `None` when the bytes do not match their name.
+async fn store_blob(state: App, sha: String, bytes: Bytes, is_image: bool) -> Stored {
+    // `Bytes` so the hash and the decode can share the buffer rather than copy it.
+    let actual = files::sha256_hex_off_runtime(bytes.clone())
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    if actual != sha {
+        return Ok(None);
+    }
+    let image = if is_image {
+        files::process_image_queued(bytes.clone())
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+    } else {
+        None
+    };
+    state.storage.write_blob(&sha, &bytes).await?;
+    if let Some(img) = &image {
+        state.storage.write_thumb(&sha, &img.thumb_jpeg).await?;
+    }
+    let blob = StoredBlob {
+        size: bytes.len() as i64,
+        width: image.as_ref().map(|i| i.width as i64),
+        height: image.as_ref().map(|i| i.height as i64),
+        thumb: image.is_some(),
+        taken_at: image.and_then(|i| i.taken_at),
+    };
+    Ok(Some((sha, blob)))
 }
 
 /// Returns the new attachment id, or None when the blob is missing from the archive.
