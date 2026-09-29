@@ -101,16 +101,33 @@ fn valid_month(month: &str) -> bool {
 /// `years` is computed before the filter, so the year picker always offers every year that has
 /// spend, whichever one is selected.
 pub fn summarize(objects: &[ObjectRow], spend: &[Spend], year: Option<i32>) -> Stats {
-    let spend: Vec<&Spend> = spend.iter().filter(|s| valid_month(&s.month)).collect();
+    let years = spend_years(spend.iter().filter(|s| s.cost_cents > 0).map(|s| s.month.as_str()));
+    summarize_with_years(objects, spend, year, years)
+}
 
-    let mut years: Vec<String> = spend
-        .iter()
-        .filter(|s| s.cost_cents > 0)
-        .filter_map(|s| s.month.get(..4).map(str::to_string))
+/// The years of `months` -- the months that have positive spend -- newest first, skipping any
+/// month `valid_month` refuses.
+pub fn spend_years<'a>(months: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut years: Vec<String> = months
+        .into_iter()
+        .filter(|m| valid_month(m))
+        .filter_map(|m| m.get(..4).map(str::to_string))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
     years.reverse();
+    years
+}
+
+/// `summarize`, for a caller that has already worked out `years` -- the stats handler, which
+/// filters `spend` to the chosen year in SQL and so cannot derive every year from it.
+pub fn summarize_with_years(
+    objects: &[ObjectRow],
+    spend: &[Spend],
+    year: Option<i32>,
+    years: Vec<String>,
+) -> Stats {
+    let spend: Vec<&Spend> = spend.iter().filter(|s| valid_month(&s.month)).collect();
 
     let prefix = year.map(|y| format!("{y:04}-"));
     let selected: Vec<&Spend> = spend

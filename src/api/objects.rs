@@ -392,63 +392,147 @@ struct DerivedRow {
     cover_file_id: Option<i64>,
 }
 
-/// Everything `ObjectOut` needs beyond the `objects` row itself, for every object the user
-/// owns, in one statement. `only` narrows it to a single object for the read/create/update
-/// handlers, which keeps one copy of this SQL rather than a per-object and a per-list variant.
+/// Which objects a derived-data query covers: every object a user owns, or a set of ids whose
+/// ownership the caller has already checked (the rows a list just read, or the one object a
+/// handler loaded through `load_owned_object`).
+///
+/// This replaced `(user_id: Option<i64>, only: Option<i64>)` pairs spelled into SQL as
+/// `($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)`. That form is one statement
+/// for every case, and also a statement no planner can use an index for: the choice between
+/// "this user" and "this id" is made per row, at run time. Each case now gets SQL of its own.
+#[derive(Clone, Copy, Debug)]
+pub enum ObjectScope<'a> {
+    User(i64),
+    Ids(&'a [i64]),
+}
+
+/// How many ids one statement names. Far under either backend's bind-parameter limit (SQLite
+/// 32766, PostgreSQL 65535) even with the list spelled into a statement more than once, and
+/// above the number of objects a household list returns, so the list is one statement.
+const IDS_PER_STATEMENT: usize = 1000;
+
+impl<'a> ObjectScope<'a> {
+    /// The scope as statements' worth: one for a user, the ids in slices of
+    /// `IDS_PER_STATEMENT`, and nothing at all for an empty id list -- which is how a caller
+    /// never builds the invalid `IN ()`.
+    pub(crate) fn parts(self) -> Vec<ObjectScope<'a>> {
+        match self {
+            ObjectScope::User(_) => vec![self],
+            ObjectScope::Ids(ids) => ids.chunks(IDS_PER_STATEMENT).map(ObjectScope::Ids).collect(),
+        }
+    }
+
+    /// A predicate on `objects o`, its parameters numbered from `$first`. Whatever it names is
+    /// bound, in order, from `binds`.
+    pub(crate) fn predicate(self, first: usize) -> String {
+        match self {
+            ObjectScope::User(_) => format!("o.user_id = ${first}"),
+            ObjectScope::Ids(ids) => {
+                let list: Vec<String> = (0..ids.len()).map(|i| format!("${}", first + i)).collect();
+                format!("o.id IN ({})", list.join(", "))
+            }
+        }
+    }
+
+    pub(crate) fn binds(self) -> Vec<i64> {
+        match self {
+            ObjectScope::User(user_id) => vec![user_id],
+            ObjectScope::Ids(ids) => ids.to_vec(),
+        }
+    }
+}
+
+/// Everything `ObjectOut` needs beyond the `objects` row itself, for every object in `scope`.
+/// One copy of this SQL serves the list and the single-object handlers alike.
 ///
 /// The list endpoint used to call `stats` and then a cover lookup once per object, so showing
-/// N objects cost 2N + 1 queries.
+/// N objects cost 2N + 1 queries. After that it was one statement with nine correlated
+/// subqueries per object; now the activities are read in one grouped pass (`agg`), the newest
+/// weight by a window over the weighed ones (`weight`), and the due service reminders grouped
+/// once (`due`), for only the objects the caller is going to show.
 async fn derived(
     state: &App,
-    user_id: Option<i64>,
-    only: Option<i64>,
+    scope: ObjectScope<'_>,
     today: chrono::NaiveDate,
 ) -> Result<HashMap<i64, DerivedRow>, AppError> {
-    // INVARIANT: this due_reminder_count subquery is a second, hand-written encoding of
+    // INVARIANT: the `due` CTE is a second, hand-written encoding of
     // `domain::reminder::is_due` -- it exists only so N objects' counts can be computed in one
     // statement instead of loading every reminder and folding `is_due` over them in memory. The
     // two must keep agreeing row for row; `due_reminder_count_agrees_with_each_reminders_due_flag`
-    // in tests/objects.rs is what catches them drifting apart. Both encodings read the same
+    // in tests/it/objects.rs is what catches them drifting apart. Both encodings read the same
     // `today`, the caller's own (`AuthUser::today`), so a user in another zone gets one answer
     // from both.
     //
     // It counts service reminders only. A reading reminder's due date is a calendar-month
     // addition on the latest reading, which SQL cannot spell the same way on both backends, so
     // those are counted in Rust by `due_readings` below with the one copy of the rule.
+    //
     // `CAST(SUM(...) AS BIGINT)`, not a bare `SUM`: PostgreSQL widens a sum over a BIGINT
     // column to NUMERIC, which sqlx's `Any` driver cannot decode at all -- every read of an
     // object failed with "Any driver does not support the Postgres type Numeric" before the
     // cast. SQLite reads the cast as INTEGER affinity and is unchanged by it.
-    let rows = sqlx::query_as::<_, DerivedRow>(
-        "SELECT o.id AS object_id, \
-           COALESCE(CAST((SELECT SUM(cost_cents) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS BIGINT), 0) AS total_cost_cents, \
-           (SELECT COUNT(*) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS activity_count, \
-           (SELECT weight_grams FROM activities WHERE object_id = o.id AND deleted_at IS NULL AND weight_grams IS NOT NULL AND date <= $4 ORDER BY date DESC, created_at DESC, id DESC LIMIT 1) AS latest_weight_grams, \
-           (SELECT date FROM activities WHERE object_id = o.id AND deleted_at IS NULL AND weight_grams IS NOT NULL AND date <= $4 ORDER BY date DESC, created_at DESC, id DESC LIMIT 1) AS latest_weight_date, \
-           (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL) AS current_counter, \
-           (SELECT COUNT(*) FROM reminders r WHERE r.object_id = o.id AND r.done_at IS NULL AND r.deleted_at IS NULL \
-              AND r.kind = 'service' \
-              AND (r.snoozed_until IS NULL OR r.snoozed_until <= $2) AND ( \
-              (r.due_date IS NOT NULL AND r.due_date <= $2) OR \
-              (r.due_counter IS NOT NULL AND r.due_counter <= (SELECT MAX(counter_value) FROM activities WHERE object_id = o.id AND deleted_at IS NULL)) \
-           )) AS due_reminder_count, \
-           (SELECT MAX(date) FROM activities WHERE object_id = o.id AND deleted_at IS NULL \
-              AND counter_value IS NOT NULL AND date <= $4) AS last_reading_date, \
-           (SELECT MAX(date) FROM activities WHERE object_id = o.id AND deleted_at IS NULL \
-              AND date <= $2) AS last_activity_date, \
-           (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
-         FROM objects o WHERE o.deleted_at IS NULL AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
-    )
-    .bind(user_id).bind(today.to_string()).bind(only).bind(super::reminders::reading_horizon(today))
-    .fetch_all(&state.db).await?;
-    let mut rows: HashMap<i64, DerivedRow> = rows.into_iter().map(|r| (r.object_id, r)).collect();
-    for (object_id, due) in due_readings(state, user_id, only, today).await? {
+    //
+    // `due_counter <= agg.current_counter` is NULL, so not due, for an object with no counter
+    // reading -- as the correlated `MAX` it replaces was.
+    let horizon = super::reminders::reading_horizon(today);
+    let today_s = today.to_string();
+    let mut rows: HashMap<i64, DerivedRow> = HashMap::new();
+    for part in scope.parts() {
+        let ids = part.predicate(3);
+        let sql = format!(
+            "WITH agg AS ( \
+               SELECT a.object_id, CAST(SUM(a.cost_cents) AS BIGINT) AS total_cost_cents, \
+                 COUNT(*) AS activity_count, MAX(a.counter_value) AS current_counter, \
+                 MAX(CASE WHEN a.counter_value IS NOT NULL AND a.date <= $2 THEN a.date END) AS last_reading_date, \
+                 MAX(CASE WHEN a.date <= $1 THEN a.date END) AS last_activity_date \
+               FROM activities a JOIN objects o ON o.id = a.object_id \
+               WHERE a.deleted_at IS NULL AND o.deleted_at IS NULL AND {ids} \
+               GROUP BY a.object_id \
+             ), weight AS ( \
+               SELECT a.object_id, a.weight_grams, a.date, \
+                 ROW_NUMBER() OVER (PARTITION BY a.object_id ORDER BY a.date DESC, a.created_at DESC, a.id DESC) AS n \
+               FROM activities a JOIN objects o ON o.id = a.object_id \
+               WHERE a.deleted_at IS NULL AND a.weight_grams IS NOT NULL AND a.date <= $2 \
+                 AND o.deleted_at IS NULL AND {ids} \
+             ), due AS ( \
+               SELECT r.object_id, COUNT(*) AS n \
+               FROM reminders r JOIN objects o ON o.id = r.object_id LEFT JOIN agg ON agg.object_id = r.object_id \
+               WHERE r.done_at IS NULL AND r.deleted_at IS NULL AND r.kind = 'service' \
+                 AND o.deleted_at IS NULL AND {ids} \
+                 AND (r.snoozed_until IS NULL OR r.snoozed_until <= $1) AND ( \
+                   (r.due_date IS NOT NULL AND r.due_date <= $1) OR \
+                   (r.due_counter IS NOT NULL AND r.due_counter <= agg.current_counter)) \
+               GROUP BY r.object_id \
+             ) \
+             SELECT o.id AS object_id, COALESCE(agg.total_cost_cents, 0) AS total_cost_cents, \
+               COALESCE(agg.activity_count, 0) AS activity_count, agg.current_counter, \
+               weight.weight_grams AS latest_weight_grams, weight.date AS latest_weight_date, \
+               COALESCE(due.n, 0) AS due_reminder_count, agg.last_reading_date, agg.last_activity_date, \
+               (SELECT file_id FROM attachments WHERE id = o.cover_attachment_id AND deleted_at IS NULL) AS cover_file_id \
+             FROM objects o \
+               LEFT JOIN agg ON agg.object_id = o.id \
+               LEFT JOIN weight ON weight.object_id = o.id AND weight.n = 1 \
+               LEFT JOIN due ON due.object_id = o.id \
+             WHERE o.deleted_at IS NULL AND {ids}"
+        );
+        let mut query = sqlx::query_as::<_, DerivedRow>(sqlx::AssertSqlSafe(sql))
+            .bind(today_s.clone())
+            .bind(horizon.clone());
+        for id in part.binds() {
+            query = query.bind(id);
+        }
+        rows.extend(query.fetch_all(&state.db).await?.into_iter().map(|r| (r.object_id, r)));
+    }
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+    for (object_id, due) in due_readings(state, scope, today).await? {
         if let Some(row) = rows.get_mut(&object_id) {
             row.due_reminder_count += due;
         }
     }
     // One query for every object in scope, the same rate reminders and the Info tab use.
-    for (object_id, usage) in super::insights::usage_by_object(state, user_id, only, today).await? {
+    for (object_id, usage) in super::insights::usage_by_object(state, scope, today).await? {
         if let Some(row) = rows.get_mut(&object_id) {
             row.counter_per_day_milli = Some(usage.rate_milli);
         }
@@ -460,8 +544,7 @@ async fn derived(
 /// Decided by `domain::reminder::reading_status`, the rule each reminder's own `due` uses.
 async fn due_readings(
     state: &App,
-    user_id: Option<i64>,
-    only: Option<i64>,
+    scope: ObjectScope<'_>,
     today: chrono::NaiveDate,
 ) -> Result<HashMap<i64, i64>, AppError> {
     use crate::domain::reminder::{reading_status, CalendarSchedule, Every};
@@ -474,16 +557,24 @@ async fn due_readings(
         Option<String>,
         Option<String>,
     );
-    let rows: Vec<ReadingRow> = sqlx::query_as(
-        "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, r.schedule, \
-           (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
-              AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $2) AS last_reading_date \
-         FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE r.kind = 'reading' AND r.done_at IS NULL AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
-           AND ($1 IS NULL OR o.user_id = $1) AND ($3 IS NULL OR o.id = $3)",
-    )
-    .bind(user_id).bind(super::reminders::reading_horizon(today)).bind(only)
-    .fetch_all(&state.db).await?;
+    let horizon = super::reminders::reading_horizon(today);
+    let mut rows: Vec<ReadingRow> = Vec::new();
+    for part in scope.parts() {
+        let sql = format!(
+            "SELECT r.object_id, r.due_date, r.every_n, r.every_unit, r.snoozed_until, r.schedule, \
+               (SELECT MAX(a.date) FROM activities a WHERE a.object_id = r.object_id AND a.deleted_at IS NULL \
+                  AND ((o.type = 'body' AND a.weight_grams IS NOT NULL) OR (o.type <> 'body' AND a.counter_value IS NOT NULL)) AND a.date <= $1) AS last_reading_date \
+             FROM reminders r JOIN objects o ON o.id = r.object_id \
+             WHERE r.kind = 'reading' AND r.done_at IS NULL AND r.deleted_at IS NULL AND o.deleted_at IS NULL \
+               AND {}",
+            part.predicate(2)
+        );
+        let mut query = sqlx::query_as::<_, ReadingRow>(sqlx::AssertSqlSafe(sql)).bind(horizon.clone());
+        for id in part.binds() {
+            query = query.bind(id);
+        }
+        rows.extend(query.fetch_all(&state.db).await?);
+    }
     let parse = |s: &Option<String>| {
         s.as_deref()
             .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
@@ -528,7 +619,7 @@ impl DerivedRow {
 /// The stats block for one object, for callers outside this module. Ownership is not checked
 /// here: every caller has already loaded the object through `load_owned_object`.
 pub async fn stats(state: &App, object_id: i64, today: chrono::NaiveDate) -> Result<ObjectStats, AppError> {
-    derived(state, None, Some(object_id), today)
+    derived(state, ObjectScope::Ids(&[object_id]), today)
         .await?
         .get(&object_id)
         .map(DerivedRow::stats)
@@ -602,7 +693,7 @@ async fn ancestors(state: &App, object: &ObjectRow) -> Result<Vec<(i64, String)>
 async fn with_stats(state: &App, user: &AuthUser, object: ObjectRow) -> Result<ObjectOut, AppError> {
     let id = object.id;
     let chain = ancestors(state, &object).await?;
-    let mut out = derived(state, Some(object.user_id), Some(id), user.today())
+    let mut out = derived(state, ObjectScope::Ids(&[id]), user.today())
         .await?
         .remove(&id)
         .map(|d| d.into_out(object))
@@ -637,19 +728,32 @@ async fn list(
     // the names. See `dialect::Backend::name_order`.
     let order = state.backend.name_order("name");
     let archived = if q.archived { "IS NOT NULL" } else { "IS NULL" };
-    let rows = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
+    // Spelled per case rather than as `($3 OR ($2 IS NULL AND ...) OR ...)`, which decides the
+    // case per row and leaves the planner no index to use.
+    let nesting = match (q.all, q.parent_id) {
+        (true, _) => "",
+        (false, None) => " AND parent_id IS NULL",
+        (false, Some(_)) => " AND parent_id = $2",
+    };
+    let mut query = sqlx::query_as::<_, ObjectRow>(sqlx::AssertSqlSafe(format!(
         "SELECT id, user_id, name, type, counter_unit, fuel_unit, description, purchase_date, \
          purchase_price_cents, archived_at, cover_attachment_id, parent_id, created_at, updated_at, client_uuid, tags, \
          energy_price_milli, weight_unit, fuel_capacity_milli, resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private \
-         FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived} \
-           AND ($3 OR ($2 IS NULL AND parent_id IS NULL) OR (parent_id = $2)) \
+         FROM objects WHERE user_id = $1 AND deleted_at IS NULL AND archived_at {archived}{nesting} \
          ORDER BY {order}")))
-        .bind(user.id).bind(q.parent_id).bind(q.all).fetch_all(&state.db).await?;
+        .bind(user.id);
+    if let (false, Some(parent_id)) = (q.all, q.parent_id) {
+        query = query.bind(parent_id);
+    }
+    let rows = query.fetch_all(&state.db).await?;
     // Empty archived/child lists need no aggregates across the entire account.
     if rows.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    let mut derived = derived(&state, Some(user.id), None, user.today()).await?;
+    // Only for the rows this list shows: a child or archived list used to aggregate the
+    // whole account and throw most of it away.
+    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let mut derived = derived(&state, ObjectScope::Ids(&ids), user.today()).await?;
     let out = rows
         .into_iter()
         .filter_map(|row| derived.remove(&row.id).map(|d| d.into_out(row)))
@@ -772,6 +876,7 @@ async fn create(
         }
         Err(e) => return Err(e.into()),
     };
+    crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::Id(row.id)).await?;
     record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, &user, row).await?)))
@@ -1020,6 +1125,7 @@ async fn update(
     .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or(&existing.weight_unit)).bind(fuel_capacity_milli)
     .bind(&resource_unit).bind(&resource_kind).bind(&measurement_mode).bind(monthly_target_milli).bind(low_level_pct).bind(private).bind(id)
     .execute(&mut *tx).await?;
+    crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::Id(id)).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;
         record::record_update(

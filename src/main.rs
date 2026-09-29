@@ -4,6 +4,14 @@ use std::future::IntoFuture;
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
+/// The release binary is static musl, and musl's allocator is built for size, not speed: it
+/// takes one lock for every allocation, so under a multi-threaded runtime serialising JSON,
+/// decoding images and hashing uploads it becomes the point every worker waits on. mimalloc has
+/// per-thread heaps and is a drop-in replacement. Only the binary uses it; the library, and so
+/// the test suite, keeps the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<(), logb::db::BoxError> {
     let config = Config::parse();

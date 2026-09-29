@@ -1,6 +1,7 @@
 use crate::auth::AuthUser;
 use crate::domain::tags::fold;
 use crate::error::AppError;
+use crate::search_text;
 use crate::state::App;
 use axum::extract::{Query, State};
 use axum::routing::get;
@@ -80,16 +81,20 @@ pub struct SearchResults {
 
 /// Substring search over the caller's own objects and activities.
 ///
-/// Deliberately a scan rather than FTS5: at the scale LogB is built for -- one household's
-/// belongings -- a scan is instant, and it needs no shadow table or trigger to keep in sync.
+/// Each row carries `search_text` (see `crate::search_text`): its searched fields, each folded
+/// by `domain::tags::fold` (NFD, combining marks stripped, lower case) and written by Rust on
+/// every write path. The term is folded the same way here, so the SQL only has to ask whether
+/// one folded string contains another -- a question both backends answer identically, where
+/// folding in SQL would not be (SQLite's `LIKE` folds only ASCII, PostgreSQL's `ILIKE` folds by
+/// the cluster's collation). The fold matches what the objects list already does on the client
+/// (`lib/object-list.ts`).
 ///
-/// Matching is done in Rust, not SQL: both statements select the caller's live rows and
-/// `matches` folds each field with `domain::tags::fold` (NFD, combining marks stripped, lower
-/// case) before testing `contains`. SQLite's `LIKE` folds only ASCII and PostgreSQL's `ILIKE`
-/// folds by the cluster's collation, so a SQL predicate would answer "ölwechsel" differently
-/// per backend; folding here makes the two agree, and matches what the objects list already
-/// does on the client (`lib/object-list.ts`). A household's rows fit in one scan, the same
-/// cost `activities::list_for_object` already pays for its tag filter.
+/// Matching, ordering and paging all happen in SQL, so a request reads one page of rows
+/// rather than every row the user has. The answer is the one the old in-Rust scan gave: a hit
+/// is a row one of whose fields contains the whole term; objects come unarchived first, then
+/// by name; activities newest first; `offset` and `limit` apply to each list separately, and
+/// `has_more` says whether either list has a row beyond this page. Ties -- two objects of the
+/// same name -- are broken by id, which the scan left to the database.
 ///
 /// `type` is deliberately not matched. It used to be, back when the column held whatever the
 /// user had typed -- so a German user searching "Auto" found their car. It now holds `car`, an
@@ -110,73 +115,57 @@ async fn search(
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     let folded = fold(term);
+    // A term holding the separator `search_text` puts between fields could only match across
+    // two of them, which is not a hit; and PostgreSQL refuses a NUL in any text it is handed,
+    // where no stored field can hold one. Neither can match, so neither reaches the database.
+    if folded.contains([search_text::SEPARATOR, '\0']) {
+        return Ok(Json(SearchResults { objects: Vec::new(), activities: Vec::new(), has_more: false }));
+    }
+    let backend = state.backend;
     // Qualified: the self-join puts two `name` columns in scope, and an unqualified one is
     // ambiguous to PostgreSQL.
-    let order = state.backend.name_order("o.name");
+    let order = backend.name_order("o.name");
+    let objects_match = backend.contains("o.search_text", "$2");
+    let activities_match = backend.contains("a.search_text", "$2");
+    let needle = backend.contains_param(&folded);
+    // One row past the page, so `has_more` needs no count.
+    let fetch = limit + 1;
 
-    let objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
+    let mut objects = sqlx::query_as::<_, ObjectHit>(sqlx::AssertSqlSafe(format!(
         "SELECT o.id, o.user_id, o.name, o.type, o.counter_unit, o.fuel_unit, o.description, \
          o.purchase_date, o.purchase_price_cents, o.archived_at, o.cover_attachment_id, \
          o.parent_id, o.created_at, o.updated_at, p.name AS parent_name, o.tags \
          FROM objects o LEFT JOIN objects p ON p.id = o.parent_id \
-         WHERE o.user_id = $1 AND o.deleted_at IS NULL \
-         ORDER BY o.archived_at IS NOT NULL, {order}"
+         WHERE o.user_id = $1 AND o.deleted_at IS NULL AND {objects_match} \
+         ORDER BY o.archived_at IS NOT NULL, {order}, o.id \
+         LIMIT $3 OFFSET $4"
     )))
     .bind(user.id)
+    .bind(&needle)
+    .bind(fetch)
+    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
-    let activities = sqlx::query_as::<_, ActivityHit>(
+    let mut activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
          a.counter_value, a.cost_cents, a.weight_grams, a.tags, a.from_place, a.to_place \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
-         ORDER BY a.date DESC, a.id DESC",
-    )
+         AND {activities_match} \
+         ORDER BY a.date DESC, a.id DESC \
+         LIMIT $3 OFFSET $4"
+    )))
     .bind(user.id)
+    .bind(&needle)
+    .bind(fetch)
+    .bind(offset)
     .fetch_all(&state.db)
     .await?;
-
-    let skip = offset as usize;
-    let mut objects: Vec<ObjectHit> = objects
-        .into_iter()
-        .filter(|o| matches(&folded, &[Some(&o.name), Some(&o.description)], &o.tags))
-        .skip(skip)
-        .take(limit as usize + 1)
-        .collect();
-    let mut activities: Vec<ActivityHit> = activities
-        .into_iter()
-        .filter(|a| {
-            matches(
-                &folded,
-                &[Some(&a.title), Some(&a.notes), a.from_place.as_deref(), a.to_place.as_deref()],
-                &a.tags,
-            )
-        })
-        .skip(skip)
-        .take(limit as usize + 1)
-        .collect();
 
     let has_more = objects.len() > limit as usize || activities.len() > limit as usize;
     objects.truncate(limit as usize);
     activities.truncate(limit as usize);
 
     Ok(Json(SearchResults { objects, activities, has_more }))
-}
-
-/// Whether any of `fields`, or any tag in `tags_json`, contains the already-folded `term`.
-/// Tags are matched one by one after decoding, so a term made of JSON punctuation cannot match
-/// the encoding of every tagged row.
-///
-/// A `tags` column that does not decode as a JSON array matches nothing rather than failing the
-/// search: the column is written only by this server (`domain::tags`), so a value that does not
-/// parse is a bug elsewhere, and refusing the whole request -- or logging once per row per
-/// search -- would serve the user worse than the missing tag match does.
-fn matches(term: &str, fields: &[Option<&str>], tags_json: &str) -> bool {
-    if fields.iter().flatten().any(|f| fold(f).contains(term)) {
-        return true;
-    }
-    serde_json::from_str::<Vec<String>>(tags_json)
-        .map(|tags| tags.iter().any(|t| fold(t).contains(term)))
-        .unwrap_or(false)
 }

@@ -196,6 +196,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// `sha256_hex` of an upload or an imported blob, on a blocking thread. Hashing tens of
+/// megabytes takes tens of milliseconds of CPU, which on an async worker is that long that every
+/// other request scheduled on it waits. Pass a `Bytes` clone, which shares the buffer.
+pub async fn sha256_hex_off_runtime(
+    bytes: impl AsRef<[u8]> + Send + 'static,
+) -> Result<String, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || sha256_hex(bytes.as_ref())).await
+}
+
 fn extension(name: &str) -> String {
     Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }

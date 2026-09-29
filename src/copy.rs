@@ -14,7 +14,7 @@ use sqlx::{Any, AnyPool, AssertSqlSafe, Column, Row, ValueRef};
 ///
 /// Public because it is the copy's one hand-written list, and a list nothing checks goes stale
 /// silently: a table missing from it is copied nowhere *and* invisible to the verification
-/// below, which reads the same list. `tests/schema_parity.rs` asserts it names exactly the
+/// below, which reads the same list. `tests/it/schema_parity.rs` asserts it names exactly the
 /// tables the schema has.
 pub const TABLES: [&str; 18] = [
     "users",
@@ -243,7 +243,7 @@ async fn copy_from(
 /// What a sum cannot see is a *permutation*: the same ids dealt out to different rows sum to
 /// the same number. Nothing in `copy_table` can produce that -- every row is written with the
 /// id it was read with, in one statement -- and the value-by-value comparison in
-/// `tests/copy.rs` is what actually proves it, table by table, across a change of engine.
+/// `tests/it/copy.rs` is what actually proves it, table by table, across a change of engine.
 /// Column values this does not read at all are the copy's own `INSERT ... SELECT *` round
 /// trip, which either works for every row or none.
 pub async fn verify(source_url: &str, dest_url: &str) -> Result<(), BoxError> {
@@ -445,7 +445,7 @@ async fn claim_source(pool: &AnyPool, backend: Backend) -> Result<PoolConnection
 /// Reads one table out of the source and writes it into the destination, returning the row count.
 ///
 /// The column names come from the rows themselves rather than from eleven hard-coded lists
-/// here: `tests/schema_parity.rs` already guarantees both backends name their columns the same,
+/// here: `tests/it/schema_parity.rs` already guarantees both backends name their columns the same,
 /// and a list written out here would drift from the schema the first time one changed.
 async fn copy_table(
     src: &mut sqlx::AnyConnection,
@@ -687,7 +687,7 @@ mod tests {
     /// before the row pointing at it, and a table copied twice would collide on its own keys.
     ///
     /// That the list is *complete* is not checkable from here -- it takes a real database to
-    /// say what tables the schema has -- and is asserted in `tests/schema_parity.rs`, against
+    /// say what tables the schema has -- and is asserted in `tests/it/schema_parity.rs`, against
     /// both backends' catalogues.
     #[test]
     fn the_table_list_has_no_duplicates_and_puts_targets_before_their_references() {

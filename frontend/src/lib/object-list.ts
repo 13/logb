@@ -1,5 +1,6 @@
 import type { MemObject, ObjectType } from './types';
 import { foldTag } from './tags';
+import { collator } from './intl-cache';
 
 export const SORT_KEYS = ['name', 'last-activity', 'changed', 'cost', 'counter'] as const;
 export type SortKey = (typeof SORT_KEYS)[number];
@@ -19,10 +20,41 @@ function fold(s: string): string {
   return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }
 
-export function matchesQuery(o: MemObject, query: string, typeLabel: (t: ObjectType) => string): boolean {
+/** Joins an object's searchable fields. No query contains it (a typed query is trimmed text), so a
+ *  match can never straddle two fields -- the same answer as testing each field on its own. */
+const SEP = '\u0000';
+
+/** Each object's folded name, description and tags, worked out once per object rather than once
+ *  per object per keystroke. Keyed by the object itself: a load replaces the rows, and with them
+ *  the entries, so an edited object is never searched by its old text. The type label is not in
+ *  here -- it depends on the language and the own types, and is folded per render instead. */
+const searchText = new WeakMap<MemObject, string>();
+function textOf(o: MemObject): string {
+  let text = searchText.get(o);
+  if (text === undefined) {
+    text = [o.name, o.description, ...o.tags].map(fold).join(SEP);
+    searchText.set(o, text);
+  }
+  return text;
+}
+
+/** A matcher for one query, folded once: what `visibleRows` runs over every object. */
+function queryMatcher(query: string, typeLabel: (t: ObjectType) => string): (o: MemObject) => boolean {
   const q = fold(query.trim());
-  if (!q) return true;
-  return [o.name, typeLabel(o.type), o.description, ...o.tags].some((field) => fold(field).includes(q));
+  if (!q) return () => true;
+  const labels = new Map<ObjectType, boolean>();
+  return (o) => {
+    let label = labels.get(o.type);
+    if (label === undefined) {
+      label = fold(typeLabel(o.type)).includes(q);
+      labels.set(o.type, label);
+    }
+    return label || textOf(o).includes(q);
+  };
+}
+
+export function matchesQuery(o: MemObject, query: string, typeLabel: (t: ObjectType) => string): boolean {
+  return queryMatcher(query, typeLabel)(o);
 }
 
 /** The value each non-name sort orders by, highest or newest first. Null means "not known", and
@@ -36,7 +68,10 @@ const VALUE: Record<Exclude<SortKey, 'name'>, (o: MemObject) => string | number 
 };
 
 export function sortObjects(list: MemObject[], key: SortKey, locale: string): MemObject[] {
-  const byName = (a: MemObject, b: MemObject) => a.name.localeCompare(b.name, locale, { sensitivity: 'base' });
+  // One collator for the whole sort (and every later one in this locale): `localeCompare` with
+  // options builds one per comparison, n·log n times per keystroke.
+  const compare = collator(locale, { sensitivity: 'base' }).compare;
+  const byName = (a: MemObject, b: MemObject) => compare(a.name, b.name);
   if (key === 'name') return [...list].sort(byName);
   const value = VALUE[key];
   return [...list].sort((a, b) => {
@@ -53,6 +88,15 @@ export function sortObjects(list: MemObject[], key: SortKey, locale: string): Me
  *  offline load keeps what is on screen) never shows a queued object twice. */
 export function withPendingObjects(queued: MemObject[], rows: MemObject[]): MemObject[] {
   return [...queued, ...rows.filter((o) => !o.pending)];
+}
+
+/** How many objects the active tab lists with no query: the top-level ones, counting an object
+ *  whose parent is not active as top-level (see `visibleRows`). Without sorting anything. */
+export function topLevelCount(active: MemObject[]): number {
+  const ids = new Set(active.map((o) => o.id));
+  let n = 0;
+  for (const o of active) if (o.parent_id === null || !ids.has(o.parent_id)) n++;
+  return n;
 }
 
 export interface ListRow { object: MemObject; parentName: string | null }
@@ -74,9 +118,10 @@ export function visibleRows(
   const searching = query.trim() !== '' || tag !== null;
   const wanted = tag === null ? null : foldTag(tag);
   const pool = tab === 'archived' ? archived : active;
+  const matches = queryMatcher(query, typeLabel);
   const shown = pool.filter((o) => {
     if (searching) {
-      return matchesQuery(o, query, typeLabel) && (wanted === null || o.tags.some((x) => foldTag(x) === wanted));
+      return matches(o) && (wanted === null || o.tags.some((x) => foldTag(x) === wanted));
     }
     if (tab === 'archived') return true;
     return o.parent_id === null || !activeIds.has(o.parent_id);

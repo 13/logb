@@ -3,11 +3,17 @@ import { ADMIN, signInFresh } from './helpers';
 
 /** The service worker must control the page before an offline reload can be served from it. */
 async function underServiceWorker(page: Page) {
+  // Asked BEFORE waiting: a page the worker claims only later has already made its reads past
+  // the worker, so `logb-api` does not hold them. With the start-up requests running in
+  // parallel and every page chunk in the precache, the first screen's reads regularly finish
+  // before the worker has installed and claimed the page.
+  const controlledFromTheStart = await page.evaluate(() => !!navigator.serviceWorker.controller);
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
   // The built `sw.js` calls `clientsClaim()`, so an open page is taken over once the worker
-  // activates -- but that can land a moment after `ready` resolves. A page still uncontrolled is
-  // reloaded, because a load that starts under an active worker is controlled for certain.
-  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+  // activates -- but its reads so far went past it. A page that was not controlled from the
+  // start is reloaded, because a load that starts under an active worker is controlled for
+  // certain, and so are its reads.
+  if (!controlledFromTheStart) await page.reload();
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
 }
 
@@ -159,12 +165,12 @@ test('signing out with no connection says so, and leaves the user signed in', as
 
 /**
  * A1: `NetworkFirst` (see docs/superpowers/specs/2026-09-14-offline-api-cache-design.md, "A1")
- * falls back to `logb-api` once the network takes longer than 4s -- signed in, online, no
+ * falls back to `logb-api` once the network takes longer than 2s -- signed in, online, no
  * `context.setOffline`. `context.route` can intercept the requests the service worker itself
  * makes (verified against this Playwright/Chromium build), so this seeds the cache with a
  * response whose `Date` header is already 70s old -- unambiguously "stale" regardless of how
  * little real time separates the two requests in a fast-running test -- then makes the next
- * request to that SAME path hang past the 4s timeout so `NetworkFirst` falls back to it.
+ * request to that SAME path hang past the 2s timeout so `NetworkFirst` falls back to it.
  *
  * Routes only the one request the dashboard actually renders from (`?all=true&archived=false`),
  * not the parallel `archived=true` request it also fires: `servingSaved` now tracks staleness
@@ -194,7 +200,7 @@ test('shows saved data while online when the network is slower than the cache ti
       });
       return;
     }
-    // NetworkFirst's own timeout is 4s; outlasting it is what makes it fall back to the cache
+    // NetworkFirst's own timeout is 2s; outlasting it is what makes it fall back to the cache
     // entry seeded above instead of waiting for this (otherwise perfectly fine) response.
     await new Promise((r) => setTimeout(r, 4_500));
     try {

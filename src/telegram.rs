@@ -46,15 +46,13 @@ async fn call(state: &App, token: &str, method: &str, body: &Value) -> Result<Va
     // No redirects, like every other outgoing notification client (`notify::post`): the Bot API
     // answers every call itself, and the base URL is operator configuration a redirect should
     // not be able to extend.
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = crate::notify::http_client()
         .map_err(|e| AppError::Internal(format!("telegram client: {e}")))?;
     for attempt in 0..2 {
         let response = client
             .post(api_url(state, token, method))
             .json(body)
+            .timeout(HTTP_TIMEOUT)
             .send()
             .await
             .map_err(|e| AppError::Internal(format!("telegram request: {}", e.without_url())))?;
@@ -77,22 +75,38 @@ async fn call(state: &App, token: &str, method: &str, body: &Value) -> Result<Va
     }
     unreachable!()
 }
+/// The key, from `state.telegram_key` after the first read: it is written once and never
+/// changes, and the loop decrypts the bot token on every poll. A key file deleted while the
+/// instance runs is therefore noticed at the next start rather than at the next poll.
 fn read_key(state: &App) -> Result<[u8; 32], AppError> {
-    std::fs::read(key_path(state))
+    if let Some(key) = state.telegram_key.get() {
+        return Ok(*key);
+    }
+    let key: [u8; 32] = std::fs::read(key_path(state))
         .map_err(|_| {
             AppError::Unavailable(
                 "Telegram's encryption key is missing; save the bot token again".into(),
             )
         })?
         .try_into()
-        .map_err(|_| AppError::Internal("Telegram encryption key has the wrong size".into()))
+        .map_err(|_| AppError::Internal("Telegram encryption key has the wrong size".into()))?;
+    Ok(*state.telegram_key.get_or_init(|| key))
 }
+/// The key to encrypt a newly saved token with, writing the key file when there is none.
+///
+/// Decided by the file, not by `state.telegram_key`: a key file deleted while the instance runs
+/// is exactly what "save the bot token again" is meant to repair, and a token encrypted with a
+/// key only held in memory could not be read after the next start. The key in memory, if any, is
+/// the one written back, since the cache cannot change and every later decrypt uses it.
 fn save_key(state: &App) -> Result<[u8; 32], AppError> {
     if key_path(state).exists() {
         return read_key(state);
     }
-    let mut key = [0u8; 32];
-    rand::rng().fill(&mut key);
+    let key = state.telegram_key.get().copied().unwrap_or_else(|| {
+        let mut key = [0u8; 32];
+        rand::rng().fill(&mut key);
+        key
+    });
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -104,7 +118,7 @@ fn save_key(state: &App) -> Result<[u8; 32], AppError> {
         Ok(mut f) => {
             f.write_all(&key)?;
             f.sync_all()?;
-            Ok(key)
+            Ok(*state.telegram_key.get_or_init(|| key))
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_key(state),
         Err(e) => Err(e.into()),

@@ -8,6 +8,7 @@ use crate::state::App;
 use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 mod query;
 mod write;
@@ -439,19 +440,20 @@ pub async fn with_attachments(
         Some(r) => r.object_id,
         None => return Ok(vec![]),
     };
-    let all = attachments::for_object(state, object_id).await?;
+    // The object's attachments in one indexed read, grouped by activity once rather than every
+    // row scanning every attachment. Not only the page's own (`activity_id IN (...)`): with a
+    // hundred bound ids that measured slower on every page but the first.
+    let mut by_activity: HashMap<i64, Vec<AttachmentOut>> = HashMap::new();
+    for a in attachments::for_object(state, object_id).await? {
+        if let Some(activity_id) = a.activity_id {
+            by_activity.entry(activity_id).or_default().push(a);
+        }
+    }
     Ok(rows
         .into_iter()
-        .map(|activity| {
-            let attachments = all
-                .iter()
-                .filter(|a| a.activity_id == Some(activity.id))
-                .cloned()
-                .collect();
-            ActivityOut {
-                activity,
-                attachments,
-            }
+        .map(|activity| ActivityOut {
+            attachments: by_activity.remove(&activity.id).unwrap_or_default(),
+            activity,
         })
         .collect())
 }

@@ -44,7 +44,9 @@
     } = $props();
   /** "energy.charged"/"energy.filled", picking the empty-state log button's wording. */
   const chargeStem = $derived(energyLabelKey(fuelUnit));
-  const groups = $derived(groupByYear(activities));
+  // Folded here, once per change of the list, not in the template -- where it ran again on every
+  // re-render of the year's block (a fold opened or closed, say).
+  const groups = $derived(groupByYear(activities).map(([year, items]) => [year, foldReadings(items)] as const));
   const hasMore = $derived(activities.length < total);
   // The type's vocabulary, plus any category the loaded entries actually use. The second half
   // matters after a re-type: without it, an entry logged as `fuel` on an object that is now a
@@ -124,10 +126,10 @@
     {/if}
   </div>
 {:else}
-  {#each groups as [year, items] (year)}
+  {#each groups as [year, rows] (year)}
     <p class="year">{year}</p>
     <div class="list">
-      {#each foldReadings(items) as row (row.kind === 'entry' ? row.activity.id : row.key)}
+      {#each rows as row (row.kind === 'entry' ? row.activity.id : row.key)}
         {#if row.kind === 'readings'}
           {@const span = readingSpan(row.readings)}
           {@const expanded = open.includes(row.key)}
@@ -222,7 +224,7 @@
             {#if a.attachments.length > 0}
               <div class="thumb-strip">
                 {#each a.attachments.slice(0, 6) as att (att.id)}
-                  {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
+                  {#if att.kind === 'photo'}<img src={fileUrl(att.file_id, true)} alt="" loading="lazy" decoding="async" />{:else}<span class="doc-chip"><Icon name="document" size={28} /></span>{/if}
                 {/each}
               </div>
             {/if}

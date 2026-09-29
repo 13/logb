@@ -1,5 +1,6 @@
 import type { QueuedOp } from './outbox';
 import type { MemObject, WeightUnit } from './types';
+import { numberFormat } from './intl-cache';
 const GRAMS_PER_LB = 453.59237;
 export interface WeightPoint { id: number; date: string; created_at: string; weight_grams: number; pending?: boolean }
 export function parseWeight(text: string, unit: WeightUnit): number {
@@ -13,7 +14,7 @@ export function weightInput(grams: number | null | undefined, unit: WeightUnit):
   return grams == null ? '' : String(Number(weightValue(grams, unit).toFixed(3)));
 }
 export function formatWeight(grams: number, unit: WeightUnit, locale: string): string {
-  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(weightValue(grams, unit))} ${unit}`;
+  return `${numberFormat(locale, { maximumFractionDigits: 2 }).format(weightValue(grams, unit))} ${unit}`;
 }
 export function orderWeights(points: WeightPoint[]): WeightPoint[] {
   return [...points].sort((a,b) => b.date.localeCompare(a.date) || (Date.parse(b.created_at) - Date.parse(a.created_at)) || b.id-a.id);

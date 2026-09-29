@@ -4,6 +4,7 @@
  * here is unit-testable on its own, like ./trip.ts.
  */
 import { perCounter } from './format';
+import { numberFormat } from './intl-cache';
 
 /**
  * The i18n key stem for wording that depends on the object's fuel unit: a kWh object "charges"
@@ -34,7 +35,7 @@ export function fuelUnitLabel(u: string | null): string {
  * ./trip.ts uses).
  */
 export function formatPerUnit(milli: number, unit: string, counterUnit: string, locale: string): string {
-  const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
+  const n = numberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
   return `${n} ${counterUnit}/${unit}`;
 }
 

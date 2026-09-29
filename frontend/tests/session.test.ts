@@ -355,7 +355,7 @@ describe('offline start and cache ownership', () => {
     expect(await session.loadSession()).toBe(true);
 
     // The deletes have FINISHED (not merely started) before the new user is set.
-    expect(log.slice(0, 3)).toEqual(['deleted:logb-api', 'deleted:logb-files', 'user:8']);
+    expect(log.slice(0, 4)).toEqual(['deleted:logb-api', 'deleted:logb-files', 'deleted:logb-thumbs', 'user:8']);
     expect(log.indexOf('fetch:/settings')).toBeGreaterThan(log.indexOf('user:8'));
     expect(storage.getItem('logb.cache.user')).toBe('8');
     // Plus `currency`: `/settings` loads right after and is remembered on top (see the second
@@ -376,7 +376,7 @@ describe('offline start and cache ownership', () => {
 
     expect(await session.loadSession()).toBe(false);
 
-    expect(log).toEqual(['deleted:logb-api', 'deleted:logb-files', 'user:7']);
+    expect(log).toEqual(['deleted:logb-api', 'deleted:logb-files', 'deleted:logb-thumbs', 'user:7']);
     expect(get(session.offline)).toBe(true);
   });
 
@@ -403,7 +403,7 @@ describe('offline start and cache ownership', () => {
 
     await session.login('ben', 'pw');
 
-    expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
+    expect(log).toEqual(['delete:logb-api', 'delete:logb-files', 'delete:logb-thumbs']);
     expect(storage.getItem('logb.cache.user')).toBe('7');
     // Plus `currency`: `login()` loads `/settings` right after and remembers it too.
     expect(JSON.parse(storage.getItem('logb.session.profile')!)).toEqual({ ...PROFILE, currency: 'EUR' });
@@ -430,7 +430,7 @@ describe('offline start and cache ownership', () => {
     const log: string[] = [];
     installCaches(log);
     await session.login('ben', 'pw');
-    expect(log).toEqual(['delete:logb-api', 'delete:logb-files']);
+    expect(log).toEqual(['delete:logb-api', 'delete:logb-files', 'delete:logb-thumbs']);
     expect(storage.getItem('logb.cache.user')).toBe('7');
     expect(get(session.user)).toMatchObject(PROFILE);
   });

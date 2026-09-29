@@ -135,5 +135,6 @@ export function idbStore(): OutboxStore {
     },
     put: putWithSeq,
     async remove(id) { await run('readwrite', (s) => s.delete(id)); },
+    count() { return run<number>('readonly', (s) => s.count()); },
   };
 }

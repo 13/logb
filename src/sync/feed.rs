@@ -1,6 +1,7 @@
 //! Reading the change log: the pull cursor and the retention horizon.
 
 use crate::error::AppError;
+use crate::sync::Entity;
 use serde::Serialize;
 
 #[derive(Serialize, sqlx::FromRow, Debug, Clone)]
@@ -205,6 +206,28 @@ async fn rows(
     Ok(out)
 }
 
+/// Deletes the field clocks of rows that have just been hard-deleted in `tx`.
+///
+/// In batches, because a purge after a long absence or the deletion of a user can name tens of
+/// thousands of rows, and both engines cap the number of bind parameters in one statement.
+pub(crate) async fn forget_clocks(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    entity: Entity,
+    uuids: &[String],
+) -> Result<(), AppError> {
+    for chunk in uuids.chunks(500) {
+        let list = (2..chunk.len() + 2).map(|i| format!("${i}")).collect::<Vec<_>>().join(", ");
+        // Only numbered placeholders are spliced in; the values are bound.
+        let sql = format!("DELETE FROM field_clock WHERE entity = $1 AND entity_uuid IN ({list})");
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(entity.as_str());
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 /// Drops log rows and tombstones older than the retention window.
 ///
 /// Tombstones go last and only once their own `deleted_at` has aged out, so a device that is
@@ -267,7 +290,7 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
     // leaves 1, 2 and 3, run 2 leaves 1 and 2, run 3 leaves 1, run 4 leaves nothing. That is the
     // guard's whole cost, and it is what
     // `a_tombstoned_parent_is_not_purged_while_a_tombstoned_child_still_references_it` in
-    // `tests/sync.rs` spells out as "one extra run per level of nesting". The parent waiting a
+    // `tests/it/sync/` spells out as "one extra run per level of nesting". The parent waiting a
     // run is what it already does for an activity, a reminder or an attachment; nesting only
     // makes it happen more than once.
     //
@@ -284,14 +307,14 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
     // for both is a recursive walk run per candidate row on every purge -- a real cost, every
     // run, for a state no write path can reach. The `warn!` is the trade: an operator can see it.
     let guards = [
-        ("attachments", ""),
+        (Entity::Attachment, ""),
         (
-            "activities",
+            Entity::Activity,
             "AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.activity_id = activities.id)",
         ),
-        ("reminders", ""),
+        (Entity::Reminder, ""),
         (
-            "objects",
+            Entity::Object,
             "AND NOT EXISTS (SELECT 1 FROM activities c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM reminders c WHERE c.object_id = objects.id) \
                      AND NOT EXISTS (SELECT 1 FROM attachments c WHERE c.object_id = objects.id) \
@@ -299,7 +322,7 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
         ),
         // Nothing references a type by foreign key (objects name it by uuid in `type`), and a
         // type is only tombstoned while no live object uses it, so it needs no guard.
-        ("object_types", ""),
+        (Entity::ObjectType, ""),
     ];
     // One transaction around the whole purge, and every guarded read or delete against it. Run
     // as separate autocommit statements they were separate answers to "has this parent any
@@ -338,16 +361,24 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
     .fetch_all(&mut *tx)
     .await?;
 
-    for (table, guard) in guards {
-        // `table` and `guard` only ever come from the fixed list above, never from user input
+    // The uuids each delete removed, so their field clocks can go with them below. The guards
+    // are what make `RETURNING` the whole list: no child survives to be taken by a cascade, so
+    // every row this loop removes is a row its own statement names.
+    let mut purged: Vec<(Entity, Vec<String>)> = Vec::new();
+    for (entity, guard) in guards {
+        // `entity` and `guard` only ever come from the fixed list above, never from user input
         // -- exactly the audit `AssertSqlSafe` asks the author to have made before sqlx will
         // accept it.
-        let sql =
-            format!("DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard}");
-        sqlx::query(sqlx::AssertSqlSafe(sql))
+        let table = entity.table();
+        let sql = format!(
+            "DELETE FROM {table} WHERE deleted_at IS NOT NULL AND deleted_at < $1 {guard} \
+             RETURNING client_uuid"
+        );
+        let uuids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(&cutoff)
-            .execute(&mut *tx)
+            .fetch_all(&mut *tx)
             .await?;
+        purged.push((entity, uuids.into_iter().flatten().collect()));
     }
 
     // The one case of "held back forever" this run can name out loud. An aged-out object that is
@@ -373,32 +404,22 @@ pub async fn purge(state: &crate::state::App, retention_days: i64) -> Result<u64
         );
     }
 
-    // A field clock for a row nobody can name any more is dead weight.
-    //
-    // A correlated `NOT EXISTS` per table, not `entity_uuid NOT IN (SELECT client_uuid ...)`.
-    // `client_uuid` is nullable on all five tables, and `x NOT IN (subquery)` evaluates to
-    // UNKNOWN -- never true -- for EVERY row the moment that subquery yields a single NULL. So
-    // one row anywhere in the database without a uuid disabled this sweep entirely, for every
-    // genuinely orphaned clock, permanently and with nothing to show for it. `NOT EXISTS` asks
-    // the only question that matters, "does any row still carry this uuid", and a NULL uuid
-    // simply never matches -- which is right, since a row with no uuid is not one a
-    // `field_clock` row could have been naming.
+    // A field clock for a row nobody can name any more is dead weight, so the clocks of the
+    // rows this run removed go with them, looked up by their primary key's `(entity,
+    // entity_uuid)` prefix. This used to be a sweep of the whole `field_clock` table with a
+    // `NOT EXISTS` probe into all six entity tables per row, on every hourly run, which grew
+    // with the history of every field ever edited rather than with what had expired. The other
+    // two places that hard-delete a synced row -- `purge_orphan_files` and deleting a user --
+    // forget their own clocks the same way, and migration 0029 cleared the orphans the old
+    // sweep would have found, so nothing is left for a full sweep to catch.
     //
     // Run in the same transaction as the guarded deletes above, not against the pool afterwards:
     // the same guard-then-delete shape, straddled by a concurrent write, would otherwise lose a
     // field clock instead of a row -- the next edit to that field would then win on an empty
     // comparison instead of on its timestamp.
-    sqlx::query(
-        "DELETE FROM field_clock WHERE \
-           NOT EXISTS (SELECT 1 FROM objects WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM activities WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM reminders WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM attachments WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM files WHERE client_uuid = field_clock.entity_uuid) \
-           AND NOT EXISTS (SELECT 1 FROM object_types WHERE client_uuid = field_clock.entity_uuid)",
-    )
-    .execute(&mut *tx)
-    .await?;
+    for (entity, uuids) in &purged {
+        forget_clocks(&mut tx, *entity, uuids).await?;
+    }
 
     tx.commit().await?;
 

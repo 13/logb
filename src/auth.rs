@@ -429,31 +429,66 @@ fn bearer_from_parts(parts: &Parts) -> Option<String> {
 /// `last_used_at` is written at most once a day per token rather than on every request: it
 /// exists so a user can recognise a token they no longer need, which day-level accuracy answers
 /// perfectly well, and a write per request would turn every read of the API into a write.
+///
+/// The lookup reads `last_used_at` too, so on every request but the first of the day no
+/// `UPDATE` is issued at all. The guarded `UPDATE` alone matched no row on those requests, but
+/// it was still a write statement: SQLite took its write lock to find that out, so an ordinary
+/// read of the API could wait behind an import or the purge.
 async fn user_for_api_token(state: &App, token: &str) -> Result<Option<AuthUser>, AppError> {
     let hash = hash_api_token(token);
     // `t.id AS token_id` is the only reason this differs from the session lookup below: it
     // lands in `AuthUser::token_id` by column name, so a caller authenticated this way carries
     // the id of the very token it used.
-    let row = sqlx::query_as::<_, AuthUser>(
-        "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz, t.id AS token_id \
-         FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
+    let row = sqlx::query_as::<_, TokenOwner>(
+        "SELECT u.id, u.username, u.is_admin, u.lang, u.notify_tz AS tz, t.id AS token_id, \
+         t.last_used_at FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
     )
     .bind(&hash)
     .fetch_optional(&state.db)
     .await?;
-    if row.is_some() {
-        let today = db::today();
-        sqlx::query(
-            "UPDATE api_tokens SET last_used_at = $1 \
-             WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
-        )
-        .bind(db::now())
-        .bind(&hash)
-        .bind(&today)
-        .execute(&state.db)
-        .await?;
+    let Some(TokenOwner { user, last_used_at }) = row else {
+        return Ok(None);
+    };
+    // The UTC date, because `last_used_at` is a UTC timestamp: against the instance's local
+    // date, east of UTC yesterday evening's stamp read as older than "today" for hours every
+    // morning, and every request of those hours wrote again.
+    let today = chrono::Utc::now().date_naive().to_string();
+    // The same comparison as the `UPDATE`'s own guard, which stays: two first requests of the
+    // day racing each other still write once. The write goes through the write queue, as every
+    // write does, but in the background: it is bookkeeping, and the request it rides on should
+    // neither wait behind an import for it nor fail when it cannot be had.
+    if last_used_at.is_none_or(|t| t.as_str() < today.as_str()) {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let written = async {
+                let mut tx = db::begin_write(&state).await?;
+                sqlx::query(
+                    "UPDATE api_tokens SET last_used_at = $1 \
+                     WHERE token_hash = $2 AND (last_used_at IS NULL OR last_used_at < $3)",
+                )
+                .bind(db::now())
+                .bind(&hash)
+                .bind(&today)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok::<_, AppError>(())
+            }
+            .await;
+            if let Err(e) = written {
+                tracing::debug!(error = %e, "could not record an API token's use; the next request will");
+            }
+        });
     }
-    Ok(row)
+    Ok(Some(user))
+}
+
+/// A token's owner, and when the token was last recorded as used.
+#[derive(sqlx::FromRow)]
+struct TokenOwner {
+    #[sqlx(flatten)]
+    user: AuthUser,
+    last_used_at: Option<String>,
 }
 
 /// A caller authenticated by a session COOKIE specifically, never by an API token.
@@ -586,6 +621,7 @@ mod tests {
             login_attempts_by_user: Mutex::new(HashMap::new()),
             backup_verified: Mutex::new(None),
             shutdown: tokio_util::sync::CancellationToken::new(),
+            telegram_key: std::sync::OnceLock::new(),
         })
     }
 

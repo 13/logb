@@ -20,6 +20,28 @@ use std::time::Duration;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The one HTTP client every outgoing notification goes through: webhooks, Web Push and the
+/// Telegram Bot API. A `reqwest::Client` holds a connection pool and the TLS configuration --
+/// on a musl build, the parsed root store -- so building one per message paid for a fresh
+/// TLS setup and a fresh handshake every time. Each caller sets its own timeout per request.
+///
+/// Redirects are never followed, for every caller: a push service, a webhook and the Bot API
+/// all answer the POST themselves, and following a redirect would let the far end send the
+/// server's request somewhere that was never validated -- a service on the server's own
+/// network, say.
+pub(crate) fn http_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct DueItem {
     pub username: String,
@@ -222,11 +244,7 @@ pub async fn collect(state: &App) -> Result<Option<Digest>, AppError> {
 /// would let the far end send the server's POST somewhere that never was -- a service on the
 /// server's own network, say. A webhook that answers with one counts as failed.
 pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppError> {
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| AppError::Internal(format!("notify client: {e}")))?;
+    let client = http_client().map_err(|e| AppError::Internal(format!("notify client: {e}")))?;
     let request = if format == "text" {
         let request = client
             .post(url)
@@ -245,6 +263,7 @@ pub async fn post(url: &str, format: &str, digest: &Digest) -> Result<(), AppErr
     // `without_url`: a user's webhook is often an unguessable ntfy topic, which is to say a
     // secret, and this error reaches the log.
     let res = request
+        .timeout(HTTP_TIMEOUT)
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("notify post: {}", e.without_url())))?;
@@ -426,7 +445,10 @@ async fn forget_subscription(state: &App, id: i64) -> Result<(), AppError> {
 
 /// Delivery history is for answering "did today's digest arrive"; a row from last quarter answers
 /// nothing and keeps a row per destination per instance forever. Thirty days of it is kept.
-async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
+///
+/// Run with the hourly prune in `tasks`, not on every minute's tick: the cutoff moves once a
+/// day, so fifty-nine of every sixty runs deleted nothing.
+pub async fn prune_delivery_history(state: &App) -> Result<(), AppError> {
     let cutoff = chrono::Utc::now()
         .with_timezone(&crate::db::timezone())
         .date_naive()
@@ -521,7 +543,6 @@ async fn deliver(state: &App, target: &str, owner: Option<i64>, day: &str, desti
 /// answers `Err` afterwards when anything failed, so the loop's own log line says the day was
 /// not clean -- but only after every other destination has had its turn.
 pub async fn tick(state: &App, hour_now: u32) -> Result<Option<Digest>, AppError> {
-    prune_delivery_history(state).await?;
     let recipients = recipients(state).await?;
     let mut plans: Vec<Plan> = Vec::new();
     let mut failed = false;

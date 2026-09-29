@@ -8,8 +8,9 @@
   import { fmtDate } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
   import { persisted } from '../stores/persisted';
-  import { SORT_KEYS, parseSort, parseTab, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
+  import { SORT_KEYS, parseSort, parseTab, topLevelCount, visibleRows, withPendingObjects, type ListTab, type SortKey } from '../lib/object-list';
   import { createSeq } from '../lib/seq-guard';
+  import { debouncer } from '../lib/debounce';
   import { pendingObject } from '../lib/object-form';
   import { errorMessage } from '../lib/api-error';
   import type { MemObject, ObjectInput, ObjectType, Reminder } from '../lib/types';
@@ -20,6 +21,8 @@
 
   let active = $state<MemObject[]>([]);
   let archived = $state<MemObject[]>([]);
+  /** Whether `archived` holds an answer yet: it arrives after the active list (see `load`). */
+  let archivedKnown = $state(false);
   let due = $state<Reminder[]>([]);
   let soon = $state<Reminder[]>([]);
   let loading = $state(true);
@@ -38,6 +41,12 @@
   let sort = $state<SortKey>(parseSort(params.get('sort')) ?? parseSort($rememberedSort) ?? 'name');
   /** Session-only: a search is a moment's question, not a way of looking at the list. */
   let query = $state('');
+  /** `query` as the list is filtered by: it follows the box once typing pauses, so a household's
+   *  list is not re-filtered and re-sorted on every keystroke. Clearing the box applies at once. */
+  let filterQuery = $state('');
+  const applyQuery = debouncer<string>((q) => { filterQuery = q; }, 100, (q) => q.trim() === '');
+  $effect(() => { applyQuery.push(query); });
+  $effect(() => () => applyQuery.cancel());
   /** Session-only too, and not in the address: set by tapping a chip on a card. */
   let tagFilter = $state<string | null>(null);
 
@@ -45,26 +54,41 @@
   /// the newest commits, or two of them each prepended the queued objects to the same list.
   const loadSeq = createSeq();
 
+  const fetchArchived = () => api<MemObject[]>('GET', '/objects?all=true&archived=true');
+
   async function load() {
     const token = loadSeq.next();
     loading = true; error = '';
-    let queued: MemObject[] = [];
-    try { queued = await pendingObjects(); } catch { /* a blocked/full IndexedDB must not strand the dashboard loading */ }
-    let fetched: [MemObject[], MemObject[]] | null = null;
+    // The queue read runs alongside the requests rather than in front of them: IndexedDB and
+    // the network do not wait on each other. A blocked/full IndexedDB must not strand the
+    // dashboard loading, so its failure is just an empty queue.
+    const queuedRead = pendingObjects().catch((): MemObject[] => []);
+    // The archived list is only needed up front on its own tab. Elsewhere it is fetched once the
+    // active list is on screen -- the server has no count of its own, and the tab shows one --
+    // so the first screen waits for the requests it actually draws from. Both tabs hold every
+    // depth: switching tabs, searching and sorting then need no request, and a search can find
+    // an object inside another. A household has tens of objects.
+    const archivedFirst = tab === 'archived' ? fetchArchived() : null;
+    archivedFirst?.catch(() => { /* read below */ });
+    let fetched: MemObject[] | null = null;
+    let fetchedArchived: MemObject[] | null = null;
     let reminders: Reminder[] | null = null;
     let failure = '';
     try {
-      // Both tabs at every depth, once: switching tabs, searching and sorting then need no
-      // request, and a search can find an object inside another. A household has tens of objects.
-      fetched = await Promise.all([
+      // The reminders ride in the same batch: they never depended on the objects' answer.
+      [fetched, reminders] = await Promise.all([
         api<MemObject[]>('GET', '/objects?all=true&archived=false'),
-        api<MemObject[]>('GET', '/objects?all=true&archived=true'),
+        api<Reminder[]>('GET', '/reminders/due?within_days=30'),
       ]);
-      reminders = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
+      // With nothing active, whether this is a first run (the invitation) or a household with
+      // only archived objects is not known without the archived list, so it is awaited here.
+      if (archivedFirst || fetched.length === 0) fetchedArchived = await (archivedFirst ?? fetchArchived());
     } catch (e) { failure = errorMessage(e, $t); }
+    const queued = await queuedRead;
     if (!loadSeq.current(token)) return;
     // A failed fetch keeps what is on screen, minus the queued rows it is about to re-add.
-    if (fetched) [active, archived] = fetched;
+    if (fetched) active = fetched;
+    if (fetchedArchived) { archived = fetchedArchived; archivedKnown = true; }
     active = withPendingObjects(queued, active);
     if (reminders) {
       due = reminders.filter((r) => r.due);
@@ -72,7 +96,32 @@
     }
     error = failure;
     loading = false;
+    if (fetched && !fetchedArchived) await loadArchived(token);
   }
+
+  /** Why the archived list, fetched after the first screen, could not be had. Kept apart from
+   *  `error`: on the active tab it is only a missing count, and it must still be shown -- not a
+   *  "Loading…" that never ends -- when the archived tab is opened afterwards. */
+  let archivedFailure = $state('');
+
+  async function loadArchived(token = loadSeq.next()) {
+    archivedFailure = '';
+    try {
+      const rows = await fetchArchived();
+      if (loadSeq.current(token)) { archived = rows; archivedKnown = true; }
+    } catch (e) {
+      if (loadSeq.current(token)) archivedFailure = errorMessage(e, $t);
+    }
+  }
+
+  // Opening the archived tab after its background fetch failed tries once more.
+  let archivedRetried = false;
+  $effect(() => {
+    if (tab === 'archived' && !archivedKnown && archivedFailure && !loading && !archivedRetried) {
+      archivedRetried = true;
+      void loadArchived();
+    }
+  });
   onMount(() => {
     void load();
     return onOutboxFlushed((_resolved, changed) => { if (changed) void load(); });
@@ -91,13 +140,28 @@
 
   // Search matches what the card says, so an own type is found by its name, not its key.
   const typeLabel = (ty: ObjectType) => labelOf(ty, $customTypes, $t, $typesLoaded);
-  const rows = $derived(visibleRows(active, archived, tab, query, sort, typeLabel, $locale, tagFilter));
-  const activeCount = $derived(visibleRows(active, archived, 'active', '', 'name', typeLabel, $locale).length);
-  const nothingYet = $derived(active.length === 0 && archived.length === 0);
+  const rows = $derived(visibleRows(active, archived, tab, filterQuery, sort, typeLabel, $locale, tagFilter));
+  const activeCount = $derived(topLevelCount(active));
+  const nothingYet = $derived(active.length === 0 && archivedKnown && archived.length === 0);
 
+  /** A snoozed reminder leaves the due list at once, and its object's due count with it; only the
+   *  reminders are asked for again (a snooze can move one into "upcoming"), not every object. */
   async function snooze(r: Reminder) {
-    try { await api('POST', `/reminders/${r.id}/snooze`, { days: 7 }); await load(); }
-    catch (e) { error = errorMessage(e, $t); }
+    try {
+      await api('POST', `/reminders/${r.id}/snooze`, { days: 7 });
+      const wasDue = due.some((x) => x.id === r.id);
+      due = due.filter((x) => x.id !== r.id);
+      if (wasDue) {
+        active = active.map((o) => o.id === r.object_id
+          ? { ...o, stats: { ...o.stats, due_reminder_count: Math.max(0, o.stats.due_reminder_count - 1) } }
+          : o);
+      }
+    } catch (e) { error = errorMessage(e, $t); return; }
+    try {
+      const reminders = await api<Reminder[]>('GET', '/reminders/due?within_days=30');
+      due = reminders.filter((x) => x.due);
+      soon = reminders.filter((x) => !x.due);
+    } catch { /* the snooze landed; the lists already show it */ }
   }
 </script>
 
@@ -147,12 +211,13 @@
       {$t('dash.tab-active')} <span class="count muted">{activeCount}</span>
     </button>
     <button class:active={tab === 'archived'} aria-pressed={tab === 'archived'} onclick={() => (tab = 'archived')}>
-      {$t('dash.tab-archived')} <span class="count muted">{archived.length}</span>
+      {$t('dash.tab-archived')} <span class="count muted">{archivedKnown ? archived.length : ''}</span>
     </button>
   </nav>
 
   {#if error}<p class="error">{error}</p>{/if}
-  {#if loading}
+  {#if tab === 'archived' && !archivedKnown && archivedFailure && !error}<p class="error">{archivedFailure}</p>{/if}
+  {#if loading || (tab === 'archived' && !archivedKnown && !error && !archivedFailure)}
     <p class="muted">{$t('nav.loading')}</p>
   {:else if tab === 'active' && nothingYet}
     <!-- The one screen in the app that can say what LogB is for: it is what a new user sees
@@ -181,7 +246,7 @@
       </div>
     {/if}
     {#if rows.length === 0}
-      <p class="muted">{$t('dash.no-match', { q: query.trim() || (tagFilter ?? '') })}</p>
+      <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
       <div class="list">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}

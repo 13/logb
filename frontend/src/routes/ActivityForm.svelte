@@ -570,7 +570,7 @@
         {#each attachments as a (a.id)}
           <div class="strip-item" class:pending={a.pending}>
             {#if a.kind === 'photo'}
-              <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" />
+              <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" loading="lazy" decoding="async" />
             {:else}
               <span class="doc-chip"><Icon name="document" size={28} /></span>
             {/if}

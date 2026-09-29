@@ -63,6 +63,9 @@ export interface OutboxStore {
   all(): Promise<QueuedOp[]>;
   put(op: QueuedOp): Promise<void>;
   remove(id: string): Promise<void>;
+  /** How many ops are stored, anyone's, dead or not -- without reading them (a queued upload
+   *  carries its photo). Optional: a store without it is simply always read in full. */
+  count?(): Promise<number>;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -72,6 +75,7 @@ export function memoryStore(): OutboxStore {
   const rows: QueuedOp[] = [];
   return {
     async all() { return rows.map((r) => ({ ...r })); },
+    async count() { return rows.length; },
     async put(op) {
       const i = rows.findIndex((r) => r.id === op.id);
       if (i === -1) rows.push({ ...op }); else rows[i] = { ...op };

@@ -66,7 +66,7 @@ pub enum Legacy {
 /// English has no umlauts, which is the likeliest way this data was typed in the first place.
 ///
 /// `migrations/sqlite/0009_object_types.sql` repeats this table in SQL and
-/// `tests/migration_object_types.rs` runs every word here through the real migration, so the
+/// `tests/it/migration_object_types.rs` runs every word here through the real migration, so the
 /// two cannot drift.
 pub const LEGACY: [(&str, &str); 32] = [
     ("car", "car"),

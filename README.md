@@ -367,6 +367,28 @@ search finding two of something it seeded once. Both runs have to finish (or be
 killed, along with any `target/debug/logb` they left behind) before the next
 one starts.
 
+### Performance benchmark
+
+`examples/perf.rs` seeds a scratch instance through the API (500 objects, some
+nested and archived, 20 000 activities over ten years, 2 000 small JPEG
+attachments with thumbnails, reminders, tags and custom types; fixed seed) and
+times the hot endpoints over HTTP as a signed-in browser: median and p95 of 20
+runs each, 3 for export and import. Only a release build gives meaningful
+numbers:
+
+```bash
+cargo run --release --example perf                                   # SQLite in a temp dir
+cargo run --release --example perf -- --postgres postgres://user:pw@host:5432/postgres
+cargo run --release --example perf -- --json after.json              # keep the results
+cargo run --release --example perf -- --compare docs/perf/baseline-2026-09-29-sqlite.json after.json
+cargo run --release --example perf -- --help                         # sizes, runs, ...
+```
+
+`--postgres` (or `LOGB_PERF_DATABASE_URL`) names a *server*: a scratch
+database `logb_perf_<pid>` is created on it and dropped at the end. Baselines
+live in `docs/perf/`. Compare runs from the same machine only, and keep it
+otherwise idle: the numbers are wall-clock times.
+
 ### Two rules learned the hard way
 
 **When a second review lands in the same area, redesign instead of patching.**
@@ -513,8 +535,11 @@ not a conversion. Amounts are formatted in each user's own locale.
 `GET /api/search?q=...` returns the caller's own objects and activities whose
 name, description, tags, title, notes or trip places contain the term (`limit`,
 default 25, caps at 100). The magnifier on the dashboard opens the same thing.
-It is a substring scan, not a full-text index: instant at household scale, and
-it ignores case and accents on both databases, so `olwechsel` finds `Ölwechsel`.
+It is a substring match, not a full-text index: it ignores case and accents on
+both databases, so `olwechsel` finds `Ölwechsel`. Each row keeps a folded copy
+of its searchable text, filled in at the first start after an upgrade; on
+PostgreSQL a `pg_trgm` index speeds it up when the extension can be created,
+and search works the same without it.
 
 ## Statistics
 
@@ -531,7 +556,7 @@ objects that have others inside them.
 ## API
 
 JSON under `/api`. Described by [`docs/openapi.json`](docs/openapi.json), which
-`tests/openapi.rs` checks against the router — a route added, removed or
+`tests/it/openapi.rs` checks against the router — a route added, removed or
 renamed without updating it fails the build.
 
 Two credentials work everywhere except token management: the `logb_session`

@@ -75,6 +75,12 @@ pub fn spawn(state: App) -> tokio::task::JoinHandle<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "sync purge failed"),
                 }
+                if let Err(e) = notify::prune_delivery_history(&state).await {
+                    tracing::warn!(error = %e, "delivery history prune failed");
+                }
+                if let Err(e) = db::optimize(&state).await {
+                    tracing::warn!(error = %e, "PRAGMA optimize failed");
+                }
             }
             since_sweep += TICK;
             if since_sweep >= SWEEP_EVERY {

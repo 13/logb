@@ -1,4 +1,5 @@
 import type { StatsObject } from './types';
+import { dateTimeFormat } from './intl-cache';
 
 /** The `by_category` bucket for objects' purchase prices -- not an activity category. */
 export const PURCHASE_PRICE = 'purchase_price';
@@ -17,7 +18,7 @@ export function statsPath(year: string | null, purchases: boolean): string {
 export function periodLabel(bucket: string, locale: string): string {
   if (bucket.length === 4) return bucket;
   const [y, m] = bucket.split('-').map(Number);
-  return new Intl.DateTimeFormat(locale, { month: 'short' }).format(new Date(Date.UTC(y, m - 1, 15)));
+  return dateTimeFormat(locale, { month: 'short' }).format(new Date(Date.UTC(y, m - 1, 15)));
 }
 
 export function sharePct(part: number, total: number): number {

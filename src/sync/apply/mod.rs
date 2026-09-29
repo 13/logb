@@ -849,7 +849,7 @@ pub async fn apply_op(
             // advisory lock (`Backend::write_lock`) for the transaction's whole lifetime, so no
             // other write transaction's `field_clock` read or write can land between this read
             // and the `UPDATE` below. Remove that lock and this exact read-compare-write loses:
-            // `tests/concurrency.rs`'s `the_later_edit_wins_regardless_of_arrival_order` fails
+            // `tests/it/concurrency.rs`'s `the_later_edit_wins_regardless_of_arrival_order` fails
             // on PostgreSQL without it (and stays green on SQLite, whose own `BEGIN IMMEDIATE`
             // already serialises writers). Do not add a lock here -- the one this depends on is
             // already held for the whole push.
@@ -912,7 +912,7 @@ pub async fn apply_op(
             // transaction is aborted". Rolling back to a savepoint is the one spelling both
             // understand, and it gives SQLite exactly the statement-level rollback it already
             // had. `a_constraint_violating_op_is_rejected_without_poisoning_the_batch` in
-            // `tests/sync.rs` pins that, asserting the writes before and after really landed.
+            // `tests/it/sync/` pins that, asserting the writes before and after really landed.
             //
             // The name is a literal, and one `set` op is never nested inside another, so a
             // single name cannot collide with itself.
@@ -936,6 +936,13 @@ pub async fn apply_op(
                 // Not a constraint failure: a genuine fault, and the whole batch is rolled
                 // back with it, so the savepoint needs no unwinding of its own.
                 Err(e) => return Err(e.into()),
+            }
+            if crate::search_text::is_searched(op.entity, field) {
+                let row = crate::search_text::Rows::Uuid(&op.entity_uuid);
+                match op.entity {
+                    Entity::Object => crate::search_text::refresh_objects(&mut *tx, row).await?,
+                    _ => crate::search_text::refresh_activities(&mut *tx, row).await?,
+                };
             }
 
             record::stamp_field_clock(

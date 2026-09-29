@@ -27,7 +27,7 @@
   <div class="card-box">
   <button class="card list-card" onclick={() => go(`/objects/${object.id}`)}>
     {#if object.cover_file_id}
-      <img class="thumb cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" />
+      <img class="thumb cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" decoding="async" />
     {/if}
     <div class="body">
       <div class="row">
