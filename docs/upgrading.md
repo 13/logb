@@ -3,6 +3,27 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.17.1: faster saves
+
+0.17.0 was tagged but never published: its release failed before any image was pushed under a
+name. Coming from 0.16.x, read this section and the 0.17.0 one below.
+
+**A SQLite commit is no longer synced to disk on its own.** The database now runs with
+`synchronous = NORMAL`, SQLite's recommendation under WAL, instead of syncing the WAL on every
+commit -- which on an SD card, a NAS or a network volume was most of what a save cost. The
+database still cannot be corrupted by a crash or a power cut; what a power cut can now lose is
+the last few seconds of saves before it. Deleting a file still syncs first, so no entry is ever
+left pointing at a photo that is gone. PostgreSQL is unchanged.
+
+**Photos are shrunk before they are uploaded.** A JPEG, PNG, WebP or HEIC photo over 1.5 MB is
+resized in the browser to 2560 px on its long edge. A resized JPEG keeps its capture date and
+camera details; a resized PNG, WebP or HEIC photo loses its capture date. Smaller files, a photo
+the browser cannot decode (HEIC in most browsers), and anything that is not a photo are sent as
+they are.
+
+**A slow save gives up after 10 seconds and is queued**, exactly as a save made offline is, and
+the form carries on. It is sent again later, and cannot create a second entry.
+
 ## 0.17.0: hardening
 
 **Everyone is signed out once.** The database now stores a hash of each session token instead
