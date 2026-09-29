@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { numberFormat } from '../lib/intl-cache';
   import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
   import BarList, { type Bar } from '../lib/BarList.svelte';
@@ -68,10 +69,10 @@
   }
 
   const fmt = (cents: number) => money(cents, $currency, $locale);
-  const fmtKwh = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
-  const fmtLiters = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
-  const fmtGallons = (milli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
-  const fmtWater = (litersMilli: number) => `${new Intl.NumberFormat($locale, { maximumFractionDigits: 2 }).format(litersMilli / 1_000_000)} m³`;
+  const fmtKwh = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} kWh`;
+  const fmtLiters = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} L`;
+  const fmtGallons = (milli: number) => `${numberFormat($locale, { maximumFractionDigits: 1 }).format(milli / 1000)} gal`;
+  const fmtWater = (litersMilli: number) => `${numberFormat($locale, { maximumFractionDigits: 2 }).format(litersMilli / 1_000_000)} m³`;
   const share = (cents: number) => `${fmt(cents)} · ${sharePct(cents, data?.total_cents ?? 0)}%`;
   const bars = (list: Amount[], label: (bucket: string) => string): Bar[] =>
     list.map((a) => ({ key: a.bucket, label: label(a.bucket), value: a.cost_cents, display: share(a.cost_cents) }));

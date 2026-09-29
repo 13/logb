@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { dateTimeFormat } from '../lib/intl-cache';
   import { onMount } from 'svelte';
   import TopBar from '../lib/TopBar.svelte';
   import SettingsRow from '../lib/SettingsRow.svelte';
@@ -24,7 +25,7 @@
 
   const isAdmin = $derived($user?.is_admin === true);
   const built = $derived(
-    new Intl.DateTimeFormat($locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(__BUILD_DATE__)),
+    dateTimeFormat($locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(__BUILD_DATE__)),
   );
 
   /** Turns a count that may not have arrived yet into an already-translated, correctly

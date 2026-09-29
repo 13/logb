@@ -1,13 +1,15 @@
+import { dateTimeFormat, numberFormat, relativeTimeFormat } from './intl-cache';
+
 export function money(cents: number | null | undefined, currency: string, locale: string): string {
   if (cents === null || cents === undefined) return '';
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(cents / 100);
+  return numberFormat(locale, { style: 'currency', currency }).format(cents / 100);
 }
 
 /** Like `money`, but rounded to the nearest whole currency unit -- for an average (e.g. the
  *  per-year ownership figure), where cents claim a precision the figure does not have. */
 export function moneyWhole(cents: number | null | undefined, currency: string, locale: string): string {
   if (cents === null || cents === undefined) return '';
-  return new Intl.NumberFormat(locale, { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
+  return numberFormat(locale, { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
 }
 
 export type DateFormat = 'dmy-dot' | 'dmy-slash' | 'mdy-slash' | 'iso';
@@ -102,7 +104,7 @@ export function datePlaceholder(format: DateFormat, locale: 'en' | 'de'): string
 
 export function counter(value: number | null | undefined, unit: string | null, locale: string): string {
   if (value === null || value === undefined) return '';
-  const n = new Intl.NumberFormat(locale).format(value);
+  const n = numberFormat(locale).format(value);
   return unit ? `${n} ${unit}` : n;
 }
 
@@ -150,14 +152,14 @@ export function parseQuantity(s: string): number | null {
  */
 export function perCounter(milli: number | null | undefined, currency: string, locale: string): string {
   if (milli === null || milli === undefined) return '';
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(milli / 100_000);
+  return numberFormat(locale, { style: 'currency', currency }).format(milli / 100_000);
 }
 
 /** A milli-scaled amount with its unit: 41_300 -> "41.3 l". `unit` is nullable like `counter`'s
  *  own -- a bare number when there is no unit to show, rather than inventing one. */
 export function quantity(milli: number | null | undefined, unit: string | null, locale: string): string {
   if (milli === null || milli === undefined) return '';
-  const n = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
+  const n = numberFormat(locale, { maximumFractionDigits: 1 }).format(milli / 1000);
   return unit ? `${n} ${unit}` : n;
 }
 
@@ -168,7 +170,7 @@ export function lastActivityLabel(date: string | null, today: string, locale: st
   if (!date) return '';
   const day = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
   const days = Math.round((day(today) - day(date)) / 86_400_000);
-  if (days >= 0 && days <= 30) return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-days, 'day');
+  if (days >= 0 && days <= 30) return relativeTimeFormat(locale, { numeric: 'auto' }).format(-days, 'day');
   const [y, m] = date.split('-').map(Number);
-  return new Intl.DateTimeFormat(locale, { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 15, 12)));
+  return dateTimeFormat(locale, { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 15, 12)));
 }

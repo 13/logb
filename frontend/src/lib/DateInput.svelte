@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { dateTimeFormat } from './intl-cache';
   import { tick, untrack } from 'svelte';
   import { t, locale } from '../i18n';
   import { dateFormat } from '../stores/date-format';
@@ -51,7 +52,7 @@
   const weekStartsMonday = $derived($settings.firstDayOfWeek === 'monday' || ($settings.firstDayOfWeek === 'locale' && $locale === 'de'));
   const weekdays = $derived(Array.from({ length: 7 }, (_, i) => {
     const offset = (i + (weekStartsMonday ? 1 : 0)) % 7;
-    return new Intl.DateTimeFormat($locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 7, 2 + offset)));
+    return dateTimeFormat($locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 7, 2 + offset)));
   }));
   const calendarDays = $derived.by(() => {
     const y = view.getUTCFullYear(), m = view.getUTCMonth();
@@ -59,7 +60,7 @@
     const lead = (first.getUTCDay() - (weekStartsMonday ? 1 : 0) + 7) % 7;
     return Array.from({ length: 42 }, (_, i) => new Date(Date.UTC(y, m, i - lead + 1)));
   });
-  const monthLabel = $derived(new Intl.DateTimeFormat($locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(view));
+  const monthLabel = $derived(dateTimeFormat($locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(view));
 
   /** `value` as this component last set it itself (in `commit()` or the picker's `onchange`).
    *  What tells the reformat effect below a change is genuinely from OUTSIDE -- a picked photo
@@ -193,7 +194,7 @@
       <div class="calendar-grid">{#each weekdays as day}<span class="weekday">{day}</span>{/each}
         {#each calendarDays as day}
           <button type="button" data-date={isoDate(day)} tabindex={isoDate(day) === focusedDay ? 0 : -1}
-            aria-label={new Intl.DateTimeFormat($locale, { dateStyle: 'full', timeZone: 'UTC' }).format(day)}
+            aria-label={dateTimeFormat($locale, { dateStyle: 'full', timeZone: 'UTC' }).format(day)}
             aria-pressed={isoDate(day) === value} aria-disabled={!!rangeMessage(isoDate(day), $dateFormat)}
             class:outside={day.getUTCMonth() !== view.getUTCMonth()} class:selected={isoDate(day) === value}
             onkeydown={(e) => calendarKey(e, day)} onclick={() => { if (!rangeMessage(isoDate(day), $dateFormat)) pick(day); }}>{day.getUTCDate()}</button>
