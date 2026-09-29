@@ -62,5 +62,5 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await page.getByRole('button', { name: 'Back' }).click();
   await expect(page.getByText('Golf').first()).toBeVisible();
   await expect(page.getByText(/reminders? due/)).toHaveCount(0);
-  await expect(page.locator('.card-row svg').first()).toBeVisible();
+  await expect(page.getByTestId('object-card').locator('svg').first()).toBeVisible();
 });

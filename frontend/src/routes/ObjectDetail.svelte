@@ -450,7 +450,7 @@
       {#if children.length === 0}
         <p class="muted">{$t('object.contents-empty')}</p>
       {:else}
-        <div class="list">
+        <div class="grid grid-cols-1 gap-3">
           {#each children as c (c.id)}<ObjectCard object={c} />{/each}
         </div>
       {/if}

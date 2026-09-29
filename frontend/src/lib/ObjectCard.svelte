@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatWeight, quickLogPath } from './weight';
+  import { formatWeight } from './weight';
   import { go } from './router';
   import { fileUrl } from './api';
   import { counter, money, lastActivityLabel, todayIso } from './format';
@@ -14,81 +14,44 @@
   let { object, parentName = null, ontag, activeTag = null }: { object: MemObject; parentName?: string | null; ontag?: (tag: string) => void; activeTag?: string | null } = $props();
 </script>
 
-<!-- The quick-log action belongs to this object, so it sits inside the object's card rather than
-     in a box of its own beside it -- a row with a gap on either side of a second full-height box
-     reads as two cards, not as one thing you can act on. A button cannot be nested inside a
-     button, and the card is a button: the whole row navigates, and 26 e2e tests find objects by
-     that button's accessible name. So the card stays the button and the quick-log action is a
-     sibling positioned within its bounds. Both are in the tab order, in reading order, and the
-     card's padding-right keeps its text from running under the action. The tag chips can be
-     buttons too, so they sit below the card rather than in it; `.card-box` is what the action is
-     centred on, so the chips' height does not pull it down off the card. -->
-<div class="card-row">
-  <div class="card-box">
-  <button class="card list-card" onclick={() => go(`/objects/${object.id}`)}>
-    {#if object.cover_file_id}
-      <img class="thumb cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" decoding="async" />
-    {/if}
-    <div class="body">
-      <div class="row">
-        <b>{object.name}</b>
-        {#if object.archived_at}<span class="chip">{$t('dash.archived')}</span>{/if}
-        {#if object.pending}<span class="chip">{$t('timeline.pending')}</span>{/if}
-        {#if object.stats.due_reminder_count > 0}
-          <span class="chip due">{object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}</span>
-        {/if}
-      </div>
-      {#if parentName}<div class="muted small">{$t('search.in-parent', { name: parentName })}</div>{/if}
-      <div class="muted tnum type-row">
-        <Icon name={typeIcon(object.type, $customTypes)} size={16} />
-        {typeLabel(object.type, $customTypes, $t, $typesLoaded)}
-        {#if object.type === 'body' && object.stats.latest_weight_grams != null} · {formatWeight(object.stats.latest_weight_grams, object.weight_unit ?? 'kg', $locale)}{/if}
-        {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
-        <!-- A month is the unit people think in; rounded like the Info tab, since it is an average. -->
-        {#if object.stats.counter_per_day_milli !== null && object.counter_unit} · {$t('insights.per-month', { amount: counter(Math.round(object.stats.counter_per_day_milli * 30.44 / 1000), object.counter_unit, $locale) })}{/if}
-        {#if object.stats.total_cost_cents > 0} · {money(object.stats.total_cost_cents, $currency, $locale)}{/if}
-        {#if object.stats.last_activity_date} · {lastActivityLabel(object.stats.last_activity_date, todayIso(), $locale)}{/if}
-      </div>
-    </div>
-  </button>
-  <button class="quicklog" aria-label={object.type === 'body' ? $t('weight.log') : $t('dash.log')}
-          onclick={() => go(quickLogPath(object))}><Icon name="plus" /></button>
-  </div>
-  {#if (object.tags ?? []).length > 0}
-    <div class="card-tags"><TagChips tags={object.tags} onselect={ontag} active={activeTag} /></div>
+<!-- The card is one box holding everything about the object. The whole box opens the object:
+     the main button's ::after covers the card (`after:absolute after:inset-0`), so the name and
+     facts are one big target and 26 e2e tests still find the object by that button's name. The
+     tag chips are buttons of their own and cannot sit inside another button, so they are
+     siblings raised above the stretched target (`relative z-10`). -->
+<article data-testid="object-card" class="relative flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input">
+  {#if object.cover_file_id}
+    <img class="size-12 shrink-0 rounded-md object-cover" src={fileUrl(object.cover_file_id, true)} alt="" loading="lazy" decoding="async" />
+  {:else}
+    <span class="flex size-12 shrink-0 items-center justify-center rounded-md bg-primary/15 text-brand-ink" aria-hidden="true">
+      <Icon name={typeIcon(object.type, $customTypes)} size={22} />
+    </span>
   {/if}
-</div>
-
-<style>
-  .card-box { position: relative; }
-  /* Inset by the card's own padding, so the chips start where the card's content does. */
-  .card-tags { margin-top: var(--space-1); padding-left: var(--space-3); }
-  .list-card {
-    display: flex; gap: var(--space-3); align-items: center; text-align: left; width: 100%;
-    background: var(--surface); border: 1px solid var(--border);
-    /* Room for the action: its own width, plus the inset on each side of it. 44px is the tap
-       target -- an accessibility floor, not a spacing step -- so this gutter is not a scale
-       value and cannot be one. It is still spacing, so it is named in the spacing namespace
-       and everything about it that the scale *can* say (the insets) comes from the scale. */
-    --space-quicklog-gutter: calc(44px + var(--space-2) * 2);
-    padding-right: var(--space-quicklog-gutter);
-  }
-  /* A filled square on the card's surface, not an outlined box beside it: it reads as a control
-     within the object rather than as a second object. 44px is the tap target the rest of the
-     app uses. */
-  .quicklog {
-    position: absolute; right: var(--space-2); top: 50%; transform: translateY(-50%);
-    width: 44px; min-height: 44px; padding: 0;
-    display: grid; place-items: center;
-    background: var(--surface-2); border-radius: var(--radius-sm);
-  }
-  .cover { width: 64px; height: 64px; flex: none; }
-  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
-  .row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
-  .row > b { flex: none; }
-  /* Flex would put the icon and each piece of text (split into separate runs by Svelte's block
-     anchors) into their own wrappable items, so the icon can land alone on its own line. Block
-     flow keeps the icon inline with the text that follows it, wrapping naturally as one run. */
-  .type-row { display: block; }
-  .type-row :global(svg) { vertical-align: middle; margin-right: var(--space-2); }
-</style>
+  <div class="flex min-w-0 flex-1 flex-col gap-1">
+    <div class="flex items-start gap-2">
+      <button data-slot="card-open"
+              class="min-w-0 flex-1 cursor-pointer truncate text-left text-base font-semibold text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring"
+              onclick={() => go(`/objects/${object.id}`)}>{object.name}</button>
+      {#if object.stats.due_reminder_count > 0}
+        <span data-testid="due-badge" class="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive">
+          {object.stats.due_reminder_count === 1 ? $t('dash.due-one') : $t('dash.due', { n: object.stats.due_reminder_count })}
+        </span>
+      {/if}
+      {#if object.archived_at}<span class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{$t('dash.archived')}</span>{/if}
+      {#if object.pending}<span class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{$t('timeline.pending')}</span>{/if}
+    </div>
+    {#if parentName}<p class="m-0 truncate text-xs text-muted-foreground">{$t('search.in-parent', { name: parentName })}</p>{/if}
+    <p class="m-0 text-sm text-muted-foreground tabular-nums">
+      {typeLabel(object.type, $customTypes, $t, $typesLoaded)}
+      {#if object.type === 'body' && object.stats.latest_weight_grams != null} · {formatWeight(object.stats.latest_weight_grams, object.weight_unit ?? 'kg', $locale)}{/if}
+      {#if object.stats.current_counter !== null} · {counter(object.stats.current_counter, object.counter_unit, $locale)}{/if}
+      <!-- A month is the unit people think in; rounded like the Info tab, since it is an average. -->
+      {#if object.stats.counter_per_day_milli !== null && object.counter_unit} · {$t('insights.per-month', { amount: counter(Math.round(object.stats.counter_per_day_milli * 30.44 / 1000), object.counter_unit, $locale) })}{/if}
+      {#if object.stats.total_cost_cents > 0} · {money(object.stats.total_cost_cents, $currency, $locale)}{/if}
+      {#if object.stats.last_activity_date} · {$t('dash.last-entry', { when: lastActivityLabel(object.stats.last_activity_date, todayIso(), $locale) })}{/if}
+    </p>
+    {#if (object.tags ?? []).length > 0}
+      <div class="relative z-10 mt-1 w-fit"><TagChips tags={object.tags} onselect={ontag} active={activeTag} /></div>
+    {/if}
+  </div>
+</article>

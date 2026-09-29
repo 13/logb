@@ -34,3 +34,31 @@ test('due reminders are cards with a snooze button; upcoming ones are plain rows
   await page.getByTestId('due-reminder').filter({ hasText: 'Dash overdue' }).getByRole('button', { name: /Snooze/ }).click();
   await expect(page.getByTestId('due-reminder').filter({ hasText: 'Dash overdue' })).toHaveCount(0);
 });
+
+test('an object card holds its tags, a compact due badge and a labelled last entry', async ({ page }) => {
+  await signInFresh(page, '36-dashboard-card');
+  const obj = await page.request.post('/api/objects', { data: { name: 'Card drill', type: 'tool', tags: ['garage'] } });
+  const id = (await obj.json()).id as number;
+  expect((await page.request.post(`/api/objects/${id}/activities`, { data: { date: '2025-06-10', category: 'other', title: 'Old entry' } })).ok()).toBe(true);
+  expect((await page.request.post(`/api/objects/${id}/reminders`, { data: { title: 'Card due', due_date: '2000-01-01' } })).ok()).toBe(true);
+
+  await page.goto('/');
+  const card = page.getByTestId('object-card').filter({ hasText: 'Card drill' });
+  // Tags inside the card's box, not hanging below it.
+  const cardBox = (await card.boundingBox())!;
+  const tagBox = (await card.getByRole('button', { name: 'garage' }).boundingBox())!;
+  expect(tagBox.y + tagBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height);
+  // The badge is as wide as its text, not the rest of the row.
+  const badge = card.getByTestId('due-badge');
+  await expect(badge).toHaveText(/1 reminder due/);
+  expect((await badge.boundingBox())!.width).toBeLessThan(cardBox.width / 2);
+  // A last entry older than a month says what the date is.
+  await expect(card).toContainText(/Last entry Jun 2025/);
+  // No unlabelled quick-log square any more.
+  await expect(card.getByRole('button', { name: /^Log$/ })).toHaveCount(0);
+  // The tag filters; the rest of the card opens the object.
+  await card.getByRole('button', { name: 'garage' }).click();
+  await expect(page.getByTestId('tag-filter')).toContainText('garage');
+  await card.getByRole('button', { name: /Card drill/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}$`));
+});

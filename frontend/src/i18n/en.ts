@@ -133,6 +133,7 @@ export default {
   'dash.new': 'New object',
   'dash.due': '{n} reminders due',
   'dash.due-one': '1 reminder due',
+  'dash.last-entry': 'Last entry {when}',
   'dash.upcoming': 'Coming up',
   'dash.overdue-day': '1 day overdue',
   'dash.overdue-days': '{n} days overdue',

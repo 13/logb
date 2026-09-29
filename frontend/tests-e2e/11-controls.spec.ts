@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { logEntry, signInFresh } from './helpers';
 
 // The search box was the one input in the app nobody wrapped in `.field`, so it fell through to
 // Chrome's own styling: square corners, a hard focus rectangle, and a blue clear button in a
@@ -47,53 +47,25 @@ test('the browser draws no clear button of its own', async ({ page }) => {
   }
 });
 
-// The quick-log button sat in its own full-height box beside the card, with a gap on each side,
-// so every row read as two cards -- and it was a fullwidth plus character rather than an icon.
-test('the quick-log action belongs to its row', async ({ page }) => {
+// The quick-log button used to sit in its own box beside the card, so every row read as two
+// cards. The per-card "+" is gone (the dashboard has one "+ Log"): the card is one box that
+// holds its icon tile and text, with no second action inside it.
+test('an object card is one box with an icon and no quick-log action', async ({ page }) => {
   await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Row shape probe');
   await page.getByLabel('Type').selectOption('car');
   await page.getByRole('button', { name: 'Save' }).click();
-  // Save's own navigation to the object page happens after its POST resolves, not when the
-  // click event fires -- clicking "Back" before that lands the click on the *form's* Back
-  // button (also bound to "/"), and the form's own post-save navigation can then fire after and
-  // override it, leaving the object page on screen instead of the dashboard. Waiting for the
-  // object's heading closes that window.
+  // Waiting for the object's heading closes the window in which "Back" would hit the form's own
+  // Back button (see the geometry tests below).
   await expect(page.getByRole('heading', { name: 'Row shape probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
 
-  const row = page.locator('.card-row', { hasText: 'Row shape probe' });
-  const card = row.locator('.list-card');
-  const quick = row.getByRole('button', { name: /Log|Erfassen/ });
-
-  // The dashboard list re-renders as its data settles after "Back" remounts it, so the row and
-  // its two children need to be genuinely present -- not just resolvable -- before any of them
-  // is measured. Under a full-suite run the remount + reload can outrun the default 5s
-  // assertion timeout, so this is given the same generous budget `boundingBox()` used to get
-  // implicitly (capped only by the test timeout).
-  await expect(row).toBeVisible({ timeout: 20000 });
+  const card = page.getByTestId('object-card').filter({ hasText: 'Row shape probe' });
   await expect(card).toBeVisible({ timeout: 20000 });
-  await expect(quick).toBeVisible({ timeout: 20000 });
-
-  // Even once each element is individually visible, three separate boundingBox() calls can
-  // still land on different renders of a list that is mid-layout. Retrying the whole
-  // measurement -- not loosening it -- is what closes that race; the assertions inside are
-  // exactly as strict as before.
-  await expect(async () => {
-    const [rowBox, cardBox, quickBox] = await Promise.all([
-      row.boundingBox(), card.boundingBox(), quick.boundingBox(),
-    ]);
-    expect(rowBox).not.toBeNull();
-    expect(cardBox).not.toBeNull();
-    expect(quickBox).not.toBeNull();
-    // One card, the width of the row: the action is inside it, not a sibling with a gap.
-    expect(cardBox!.width).toBeCloseTo(rowBox!.width, 0);
-    expect(quickBox!.x).toBeGreaterThan(cardBox!.x);
-    expect(quickBox!.x + quickBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
-  }).toPass();
-  // And it is an icon, not a glyph standing in for one.
-  expect(await quick.locator('svg').count()).toBe(1);
+  await expect(card.getByRole('button', { name: /^(Log|Erfassen)$/ })).toHaveCount(0);
+  // The type icon is drawn once, inside the card.
+  expect(await card.locator('svg').count()).toBe(1);
 });
 
 // A screen that stops at a heading looks broken. Each empty state says what belongs there and
@@ -122,10 +94,8 @@ test('every control in a form is the same height', async ({ page }) => {
   // closes the window. This test has not been seen to flake, but the hazard is identical.
   await expect(page.getByRole('heading', { name: 'Control height probe' })).toBeVisible();
   await page.getByRole('button', { name: 'Back' }).click();
-  await page
-    .locator('.card-row', { hasText: 'Control height probe' })
-    .getByRole('button', { name: /Log|Erfassen/ })
-    .click();
+  await page.getByTestId('object-card').filter({ hasText: 'Control height probe' }).getByRole('button', { name: /Control height probe/ }).click();
+  await logEntry(page, /Log activity/);
 
   const title = page.locator('input#ti');
   await expect(title).toBeVisible();
@@ -166,11 +136,11 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await page.getByRole('button', { name: 'Back' }).click();
   // The remount + reload after "Back" can outrun the default 5s assertion timeout under a
   // full-suite run, so this gets the same generous budget the geometry checks below use.
-  await expect(page.locator('.card-row', { hasText: 'Chip gap probe' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('object-card').filter({ hasText: 'Chip gap probe' })).toBeVisible({ timeout: 20000 });
 
   // The dashboard re-runs its load whenever it (re)mounts, and while that is in flight
-  // `.controls`'s next element sibling is the "Loading..." paragraph, not `.list` -- reading
-  // `nextElementSibling` blind can measure that paragraph instead of the list. `.controls + .list`
+  // `.controls`'s next element sibling is the "Loading..." paragraph, not the list -- reading
+  // `nextElementSibling` blind can measure that paragraph instead of the list. `.controls + .grid`
   // matches only once the list is actually the element right after the controls row, so a null
   // result here means the load has not settled yet and the measurement is retried rather than
   // taken against the wrong element.
@@ -181,7 +151,7 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
       const tabs = document.querySelector('.tabs')!;
       const controls = document.querySelector('.controls')!;
       const search = controls.querySelector('input[type="search"]')!;
-      const list = document.querySelector('.controls + .list');
+      const list = document.querySelector('.controls + .grid');
       if (!list) return null;
       const above = box(search).top - box(tabs).bottom;
       const below = box(list).top - box(controls).bottom;

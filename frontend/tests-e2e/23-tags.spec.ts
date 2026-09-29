@@ -141,7 +141,7 @@ test('tag an object and an entry, see coloured chips, and filter by tapping one'
 
   // Objects list: chips on cards, tapping filters, the filter is removable.
   await page.goto('/');
-  const golfCard = page.locator('.card-row', { hasText: 'Tag Golf' });
+  const golfCard = page.getByTestId('object-card').filter({ hasText: 'Tag Golf' });
   await expect(golfCard.locator('.tag', { hasText: 'Lease' })).toBeVisible();
   const chipColour = await golfCard.locator('.tag', { hasText: 'Lease' }).evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(chipColour).not.toBe('rgba(0, 0, 0, 0)');

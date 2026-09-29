@@ -39,7 +39,7 @@ test('tabs, search at any depth, sorting that survives a reload, and a card that
   await expect(tabArchived).toContainText('1');
 
   // The card: counter, usage per month, last activity.
-  const bikeCard = page.getByRole('button', { name: /List E-Bike/ });
+  const bikeCard = page.getByTestId('object-card').filter({ hasText: 'List E-Bike' });
   await expect(bikeCard).toContainText('12,700 km');
   await expect(bikeCard).toContainText('913 km a month');
   await expect(bikeCard).toContainText(/\d+ days ago/);
@@ -47,7 +47,7 @@ test('tabs, search at any depth, sorting that survives a reload, and a card that
   // Top-level only until searching; a search finds the boiler inside the house and says so.
   await expect(page.getByRole('button', { name: /List Boiler/ })).toHaveCount(0);
   await page.getByLabel('Search objects').fill('boil');
-  const boiler = page.getByRole('button', { name: /List Boiler/ });
+  const boiler = page.getByTestId('object-card').filter({ hasText: 'List Boiler' });
   await expect(boiler).toBeVisible();
   await expect(boiler).toContainText('in List House');
   await expect(page.getByRole('button', { name: /^List House/ })).toHaveCount(0);
@@ -57,12 +57,12 @@ test('tabs, search at any depth, sorting that survives a reload, and a card that
 
   // Last activity puts the used bike first; the house has no entries and goes last.
   await page.getByLabel('Sort').selectOption('last-activity');
-  const cards = page.locator('.list .list-card');
+  const cards = page.getByTestId('object-card');
   await expect(cards.first()).toContainText('List E-Bike');
   await expect(page).toHaveURL(/[?&]sort=last-activity(&|$)/);
   await page.reload();
   await expect(page.getByLabel('Sort')).toHaveValue('last-activity');
-  await expect(page.locator('.list .list-card').first()).toContainText('List E-Bike');
+  await expect(page.getByTestId('object-card').first()).toContainText('List E-Bike');
 
   // Archived tab.
   await page.getByRole('button', { name: /^Archived/ }).click();

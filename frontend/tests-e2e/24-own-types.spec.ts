@@ -42,8 +42,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
 
   // The card names the type, never its key.
   await page.goto('/');
-  // Anchored: a card's accessible name also carries its nested labels.
-  const card = page.getByRole('button', { name: /^Scooter One/ });
+  const card = page.getByTestId('object-card').filter({ hasText: 'Scooter One' });
   await expect(card).toContainText('E-Scooter');
   await expect(page.getByText(/custom:/)).toHaveCount(0);
 

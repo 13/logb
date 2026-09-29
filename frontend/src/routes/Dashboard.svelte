@@ -202,7 +202,7 @@
       </label>
     </div>
     {#if tagFilter !== null}
-      <div class="tag-filter">
+      <div class="tag-filter" data-testid="tag-filter">
         <span class={`tag tag-${tagColorIndex(tagFilter)}`}>{$t('tags.filter', { tag: tagFilter })}</span>
         <button class="ghost" onclick={() => (tagFilter = null)}>{$t('tags.clear')}</button>
       </div>
@@ -210,7 +210,7 @@
     {#if rows.length === 0}
       <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
-      <div class="list">
+      <div class="grid grid-cols-1 gap-3">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}
       </div>
     {/if}
