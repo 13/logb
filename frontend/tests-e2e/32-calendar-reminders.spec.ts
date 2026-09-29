@@ -46,9 +46,17 @@ test('counter and weight reminders offer the same fixed calendar options', async
 
 test('a calendar reading reminder queued offline replays once', async ({ page, context }) => {
   await signInFresh(page, '32-offline');
+  // Save lands on the object page, a route chunk of its own, and it does so offline. Only the
+  // service worker's precache can serve that chunk then: without it the import fails, App.svelte
+  // reloads the page to recover, and the reload -- still offline -- ends on Chrome's error page,
+  // with no app left to replay the queued write. The idle-time chunk warm-up usually wins that
+  // race, but not on a busy machine, where the worker is also still installing. So the worker
+  // is active before the form is opened: a page loaded under an active worker is controlled.
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
   const response = await page.request.post('/api/objects', { data: { name: 'Offline calendar meter', type: 'car', counter_unit: 'km' } });
   const object = await response.json();
   await page.goto(`/objects/${object.id}/reminders/new?kind=reading`);
+  expect(await page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   await expect(page.getByLabel('Title', { exact: true })).not.toHaveValue('');
   await context.setOffline(true);
   await page.getByLabel('Title', { exact: true }).fill('Offline weekly reading');
@@ -61,7 +69,7 @@ test('a calendar reading reminder queued offline replays once', async ({ page, c
   await expect.poll(async () => {
     const list = await (await page.request.get(`/api/objects/${object.id}/reminders`)).json();
     return list.filter((r: { title: string; schedule: string }) => r.title === 'Offline weekly reading' && r.schedule === 'weekly:1').length;
-  }, { timeout: 15_000 }).toBe(1);
+  }).toBe(1);
 });
 
 test('calendar reminders and the localized first weekday setting work together', async ({ page }) => {
