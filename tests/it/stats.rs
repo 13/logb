@@ -496,3 +496,37 @@ async fn by_type_buckets_carry_custom_keys() {
     let out = app.get_json("/stats").await;
     assert_eq!(buckets(&out["by_type"]), [(key, 4_200)]);
 }
+
+#[tokio::test]
+async fn household_fuel_leaves_out_vehicle_fuel() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let today = logb::db::today();
+    // A car marked as vehicle fuel, and a car from before resource kinds existed (fuel_unit
+    // only): neither is heating. The tank is, and so is a legacy generator counted in hours.
+    let car = object(&app, json!({
+        "name": "Golf", "type": "car", "counter_unit": "km",
+        "resource_kind": "vehicle_fuel", "resource_unit": "l"
+    })).await;
+    let van = object(&app, json!({ "name": "Old van", "type": "car", "counter_unit": "km", "fuel_unit": "l" })).await;
+    let tank = object(&app, json!({
+        "name": "Oil tank", "type": "home", "counter_unit": "h",
+        "resource_kind": "heating_fuel", "resource_unit": "l"
+    })).await;
+    energy_entry(&app, car, today.clone(), 46_500).await;
+    energy_entry(&app, van, today.clone(), 40_000).await;
+    energy_entry(&app, tank, today.clone(), 300_000).await;
+    for oid in [van, tank] {
+        let res = app.client.post(app.url(&format!("/objects/{oid}/activities")))
+            .json(&json!({ "date": today, "category": "fuel", "title": "Level", "fuel_level_pct": 50 }))
+            .send().await.unwrap();
+        assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    }
+
+    let out = app.get_json("/stats/fuel").await;
+    assert_eq!(out["current_liters_milli"], 300_000, "{out}");
+    assert_eq!(out["months"].as_array().unwrap().last().unwrap()["charges"], 1, "{out}");
+    let levels = out["levels"].as_array().unwrap();
+    assert_eq!(levels.len(), 1, "{out}");
+    assert_eq!(levels[0]["object_id"], tank);
+}

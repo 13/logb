@@ -322,11 +322,14 @@ async fn fuel_usage(
         .ok_or_else(|| AppError::Internal("server date is malformed".into()))?;
     let (start_year, start_month) = month_before(year, month, count - 1);
     let start = format!("{start_year:04}-{start_month:02}-01");
+    // Heating fuel only. `resource_kind` says so for objects made since resources became their
+    // own field; an older object has only `fuel_unit`, and one with a distance counter is a
+    // vehicle whose refuels are not household heating (a car's diesel used to show up here).
     let rows: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(
         "SELECT substr(a.date, 1, 7), COALESCE(o.resource_unit, o.fuel_unit), CAST(SUM(a.quantity_milli) AS BIGINT), COUNT(*), COUNT(DISTINCT a.object_id) \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
-           AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind IS NULL OR o.resource_kind <> 'water') \
+           AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind = 'heating_fuel' OR (o.resource_kind IS NULL AND (o.counter_unit IS NULL OR o.counter_unit = 'h'))) \
            AND a.category IN ('fuel','usage') AND a.quantity_milli IS NOT NULL \
            AND a.date >= $2 AND a.date <= $3 \
          GROUP BY substr(a.date, 1, 7), COALESCE(o.resource_unit, o.fuel_unit)",
@@ -380,7 +383,7 @@ async fn fuel_usage(
              ROW_NUMBER() OVER (PARTITION BY o.id ORDER BY a.date DESC, a.id DESC) AS n \
            FROM objects o JOIN activities a ON a.object_id = o.id \
            WHERE o.user_id = $1 AND o.deleted_at IS NULL AND a.deleted_at IS NULL \
-             AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind IS NULL OR o.resource_kind <> 'water') \
+             AND COALESCE(o.resource_unit, o.fuel_unit) IN ('l', 'gal') AND (o.resource_kind = 'heating_fuel' OR (o.resource_kind IS NULL AND (o.counter_unit IS NULL OR o.counter_unit = 'h'))) \
              AND a.category IN ('fuel','usage') AND a.fuel_level_pct IS NOT NULL AND a.date <= $2 \
          ) newest WHERE n = 1 \
          ORDER BY date DESC, activity_id DESC",
