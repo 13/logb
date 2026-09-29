@@ -2232,6 +2232,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "More than 1000 ops in one push (`too_large`). Nothing was applied; split the batch into several pushes."
           }
         }
       }
@@ -5087,6 +5090,7 @@
         "properties": {
           "ops": {
             "type": "array",
+            "maxItems": 1000,
             "items": {
               "$ref": "#/components/schemas/Op"
             }
