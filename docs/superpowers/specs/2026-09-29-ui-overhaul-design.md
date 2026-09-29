@@ -21,9 +21,17 @@ below; its findings are cited where a round fixes them.
 
 ## Rules for every round
 
-- **Old and new CSS coexist.** Tailwind's base layer loads before `frontend/src/app.css`, so
-  screens not yet migrated render as before. A round deletes the `app.css` rules for the screens
+- **Old and new CSS coexist.** `app.css` is imported into a cascade layer, `legacy`, ordered
+  after Tailwind's `base` and before `components` and `utilities`: its rules beat Tailwind's reset
+  and lose to utility classes. Its element selectors (`button`, `input`, `select`, `textarea`)
+  skip shadcn components, which carry a `data-slot` attribute. A marked block in `app.css`
+  restores what Tailwind's reset takes from unmigrated screens (heading weights, list bullets,
+  inline images and icons, link underlines). A round deletes the `app.css` rules for the screens
   it migrates. Round 5 deletes `app.css`.
+- **Token names.** shadcn's names collide with `app.css` (`--muted` and `--accent` mean different
+  things in each). The shadcn tokens are therefore declared as `--ui-*` (`--ui-background`,
+  `--ui-muted-foreground`, …) and mapped to Tailwind colours in `@theme inline`; component class
+  names (`bg-muted`, `text-primary-foreground`) are unchanged.
 - **Offline and CSP.** No remote assets. The font is bundled with `@fontsource-variable/inter`.
   The CSP in `src/lib.rs` stays as it is: `style-src 'self' 'unsafe-inline'` already allows the
   inline positioning styles bits-ui sets on popovers.
@@ -34,7 +42,8 @@ below; its findings are cited where a round fixes them.
   visible focus ring (amber), a 44×44 px minimum touch target on mobile, and a name that
   `getByRole` can find. Motion is 150 ms and off under `prefers-reduced-motion`.
 - **Themes.** The existing light/dark/system setting in `frontend/src/lib/theme.ts` keeps working;
-  it toggles a `.dark` class on `<html>` that the shadcn tokens key off. Dark mode separates
+  it sets `data-theme` on `<html>`, and Tailwind's `dark:` variant is redefined to key off
+  `[data-theme="dark"]`. Dark mode separates
   layers with surface shades, not borders alone.
 - **i18n.** Every new string goes into both `frontend/src/i18n/en.ts` and `de.ts`.
 - **Tests.**
@@ -53,49 +62,61 @@ below; its findings are cited where a round fixes them.
 
 `GET /stats/fuel` (`src/api/stats.rs`, `fuel_usage`) is labelled "Household heating fuel usage"
 but counts every object whose resource unit is litres or gallons except water, so a car's diesel
-refuels appear as heating fuel. The query is restricted to objects whose `resource_kind` is
-`heating_fuel`. Tests on SQLite and PostgreSQL cover: a car with `vehicle_fuel` refuels is
-excluded; a home with `heating_fuel` is counted. The Statistics page hides the section when every
-month is zero. No UI redesign in this round.
+refuels appear as heating fuel. Both queries behind it (monthly usage and tank levels) count an
+object only if its `resource_kind` is `heating_fuel`, or if it has no `resource_kind` (objects
+created with the legacy `fuel_unit` alone) and no distance counter (`counter_unit` is `NULL` or
+`'h'`). Tests on SQLite and PostgreSQL cover: a car with `vehicle_fuel` refuels is excluded; a car
+with only `fuel_unit` and `counter_unit: km` is excluded; a home with `heating_fuel` is counted;
+a legacy generator (`fuel_unit: gal`, `counter_unit: h`) is still counted. The Statistics page
+already hides the section when there is nothing to show. No UI redesign in this round.
 
 ## Round 1 — foundation and app frame (0.19.0)
 
 **Foundation**
 
 - Tailwind v4, shadcn-svelte init, Inter variable font, `tabular-nums` for figures.
-- Tokens (`--background`, `--foreground`, `--card`, `--muted`, `--muted-foreground`, `--border`,
-  `--primary`, `--primary-foreground`, `--destructive`, `--ring`, radius 12 px) for light and dark,
-  starting values from the approved mockup:
+- `--ui-*` tokens for light and dark, from the approved mockup, adjusted where the AA check
+  required it (contrast computed for each pair):
 
   | Token | Light | Dark |
   |---|---|---|
   | background | `#fafafa` | `#09090b` |
-  | card | `#ffffff` | `#18181b` |
+  | card, popover | `#ffffff` | `#18181b` |
   | foreground | `#18181b` | `#fafafa` |
-  | muted-foreground | `#71717a` | `#a1a1aa` |
+  | muted, secondary, accent (hover fill) | `#f4f4f5` | `#27272a` |
+  | muted-foreground | `#6b6b74` | `#a1a1aa` |
   | border | `#e4e4e7` | `#27272a` |
+  | input (control outline, ≥3:1) | `#8a8a93` | `#71717a` |
   | primary | `#f59e0b` | `#fbbf24` |
   | primary-foreground | `#1c1300` | `#1c1300` |
-  | destructive | `#dc2626` | `#f87171` |
+  | brand-ink (amber as text, focus ring) | `#b45309` | `#fbbf24` |
+  | destructive | `#b91c1c` | `#f87171` |
+  | destructive-foreground | `#ffffff` | `#09090b` |
 
-  Final values may shift only to pass the AA contrast check.
-- The existing eight tag hues are ported as tokens with the same contrast guarantees.
-- Components added: button, card, badge, input, textarea, label, select, checkbox, radio-group,
-  switch, tabs, dropdown-menu, sheet, dialog, tooltip, separator, skeleton, sonner (toasts).
-- Type scale: 12 / 13 / 14 / 16 / 18 / 22 / 28 px; page titles 28 px on mobile and desktop,
-  section labels 11 px uppercase muted.
-- A `Chart` component: hand-written SVG bar chart (no library), used from round 3 on.
+- **The whole app changes colour and font in round 1**, not only migrated screens: `app.css`'s
+  own tokens are repointed to the same values (`--bg`, `--surface`, `--surface-2`, `--text`,
+  `--muted`, `--border`, `--control-border`, `--danger`, `--focus`), `--accent` becomes the amber
+  fill with dark text on it, and a new `--accent-ink` replaces `--accent` wherever amber is used
+  as text or an outline (links, the active tab and nav item, outlines of chosen items). The eight
+  tag hues are unchanged.
+- Components are added in the round that first uses them. Round 1 adds button and dropdown-menu.
+- Type scale (Tailwind `text-*`): 12 / 14 / 16 / 18 / 22 / 28 px. Page titles 22 px on mobile,
+  28 px on desktop; section labels 11 px uppercase muted.
 
 **App frame**
 
-- Desktop (≥1024 px): full-height sidebar (fixes the audit's sidebar ending at viewport height),
-  logo at top, four nav items, user and version pinned to the bottom. Active item amber-tinted.
+- The shell keeps its breakpoint (sidebar from 900 px, `width >= 900px` range syntax).
+- Desktop: sidebar with logo at top, four nav items, user and version pinned to the bottom.
+  Active item amber-tinted. (The audit's "sidebar ends at the viewport height" was an artefact of
+  full-page capture of a fixed element, not a bug.)
 - Mobile: bottom nav with the same four items; active item amber.
-- `PageHeader`: title, optional subtitle, actions on the right. Used by every screen.
-- **"+ Log" action** replaces the object page's three floating buttons (audit #4). On mobile it
-  is a floating button that opens a bottom sheet; on desktop a button in the page header that
-  opens a dropdown. It lists only the entry kinds the object's type supports (activity,
-  fill/charge, trip, reading). From the dashboard it first asks for the object.
+- `TopBar` (every screen's header) gains an optional subtitle and the new title sizes.
+- **"+ Log" action** replaces the object page's three floating buttons (audit #4): one floating
+  button. When the object offers only activities it is a plain "+ Log activity" button; when it
+  also offers trips or fills/charges it is "+ Log" and opens a dropdown menu upward, listing
+  "Log activity", "Log trip", "Log fill"/"Log charge"/"Log water" as the object supports them.
+  The dashboard keeps its "+ New object" button (restyled); a dashboard "+ Log" with an object
+  picker comes with round 2's dashboard. Round 3 moves the button into the desktop page header.
 - Every page reserves bottom space so a floating button never covers content.
 
 ## Round 2 — dashboard and objects list (0.20.0)
@@ -123,7 +144,8 @@ month is zero. No UI redesign in this round.
 - Tabs never wrap; badges stay inline (audit #11).
 - Timeline: category icon tile, title, date · counter · quantity, amount right-aligned, tags
   inside the entry, year headings. Category filter chips scroll horizontally with an edge fade.
-- Charts hide empty months; figures that do not apply to the type are not shown (the audit found
+- A `Chart` component (hand-written SVG bar chart, no chart library) is added here. Charts
+  hide empty months; figures that do not apply to the type are not shown (the audit found
   "Distance per charge" on a diesel car).
 
 ## Round 4 — forms (0.22.0)
