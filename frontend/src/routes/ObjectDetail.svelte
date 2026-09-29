@@ -417,7 +417,7 @@
           {#if object.stats.due_reminder_count > 0}
             <!-- The number is for the eye; the words after it are for everyone else. -->
             <span data-testid="tab-due-badge" aria-hidden="true"
-                  class="inline-grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1.5 text-xs font-semibold text-destructive-foreground tabular-nums">{object.stats.due_reminder_count}</span>
+                  class="inline-grid h-5 min-w-5 place-items-center rounded-full bg-destructive px-1 text-xs font-semibold text-destructive-foreground tabular-nums">{object.stats.due_reminder_count}</span>
             <span class="sr-only">{$t('tab.reminders-due', { n: object.stats.due_reminder_count })}</span>
           {/if}
         </Tabs.Trigger>
