@@ -3,6 +3,18 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.19.0: new look, first part
+
+**The app is zinc and amber, set in Inter.** Colours, font and the navigation frame change on
+every screen; layouts do not yet. The font is bundled and precached, so it works offline and
+nothing is fetched from elsewhere. Further releases rework each screen in turn.
+
+**One "+ Log" button on an object's page** replaces the separate trip, fill/charge and activity
+buttons. On an object with only activities it logs an activity directly; otherwise it opens a
+short menu.
+
+No migration.
+
 ## 0.18.1: heating fuel statistic
 
 **Statistics → household heating fuel no longer counts vehicles.** A car's or van's refuels
