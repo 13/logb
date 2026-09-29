@@ -37,7 +37,7 @@
             'max-desk:min-h-14 max-desk:flex-col max-desk:justify-center max-desk:gap-0.5 max-desk:p-1 max-desk:text-xs',
             'desk:min-h-11 desk:gap-3 desk:rounded-md desk:px-3 desk:text-sm',
             active === d.id
-              ? 'font-semibold text-brand-ink desk:bg-primary/15'
+              ? 'font-semibold text-brand-ink desk:bg-primary/10'
               : 'text-muted-foreground hover:text-foreground desk:hover:bg-accent',
           ]}
           aria-current={active === d.id ? 'page' : undefined}

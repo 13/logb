@@ -22,7 +22,7 @@
   <!-- tabindex -1: focusable by script only, so navigation can move focus here (see
        `focusPageHeading` in ./router.ts) without adding a Tab stop. -->
   <div class="min-w-0 flex-1">
-    <h1 tabindex="-1" class="flex items-center gap-2 truncate text-xl font-semibold tracking-tight desk:text-2xl">{#if icon}<Icon name={icon} />{/if}{title}</h1>
+    <h1 tabindex="-1" class="min-w-0 flex items-center gap-2 text-xl font-semibold tracking-tight desk:text-2xl">{#if icon}<Icon name={icon} />{/if}<span class="truncate">{title}</span></h1>
     {#if subtitle}<p class="truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
   </div>
   <!-- In offline mode the user on screen is only the last one remembered here, and what shows is

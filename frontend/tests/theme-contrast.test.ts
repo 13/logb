@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { contrastRatio } from '../src/lib/tags.ts';
@@ -98,4 +99,36 @@ describe('shadcn token contrast', () => {
       });
     }
   }
+});
+
+/** `fg` at `alpha` painted over `bg`, as a hex colour. */
+const blend = (fg: string, bg: string, alpha: number): string => {
+  const ch = (h: string, i: number) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
+  return '#' + [0, 1, 2].map((i) => Math.round(ch(fg, i) * alpha + ch(bg, i) * (1 - alpha)).toString(16).padStart(2, '0')).join('');
+};
+
+describe('tinted highlight contrast', () => {
+  for (const [name, theme] of [['light', twLight], ['dark', twDark]] as const) {
+    it(`${name}: menu text on the highlighted item (primary/15 over popover) (>= 4.5:1)`, () => {
+      const bg = blend(ui('primary', theme), ui('popover', theme), 0.15);
+      expect(contrastRatio(ui('popover-foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ui('destructive', theme), blend(ui('destructive', theme), ui('popover', theme), 0.2))).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${name}: brand-ink on the active nav item (primary/10 over card) (>= 4.5:1)`, () => {
+      const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
+      expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});
+
+describe('generated components', () => {
+  const files = (dir: string): string[] => readdirSync(dir).flatMap((f) => {
+    const p = join(dir, f);
+    return statSync(p).isDirectory() ? files(p) : p.endsWith('.svelte') ? [p] : [];
+  });
+  it('no focus ring or outline is drawn with an alpha (< 3:1); use a full-strength one', () => {
+    const bad = files(fileURLToPath(new URL('../src/lib/components/ui', import.meta.url)))
+      .filter((f) => /(?:ring|outline)-ring\//.test(readFileSync(f, 'utf8')));
+    expect(bad).toEqual([]);
+  });
 });
