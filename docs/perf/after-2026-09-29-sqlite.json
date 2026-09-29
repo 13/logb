@@ -1,0 +1,308 @@
+{
+  "backend": "sqlite",
+  "git": "b1cec99",
+  "date": "2026-09-29T10:53:14.270593558+02:00",
+  "objects": 500,
+  "activities": 20000,
+  "attachments": 2000,
+  "seed_seconds": 15.379166985,
+  "results": [
+    {
+      "name": "objects_all",
+      "runs": 20,
+      "median_ms": 24.513961000000002,
+      "p95_ms": 26.839132000000003,
+      "min_ms": 23.567595999999998,
+      "max_ms": 32.656295,
+      "bytes": 37933
+    },
+    {
+      "name": "objects_all_archived",
+      "runs": 20,
+      "median_ms": 3.7957915,
+      "p95_ms": 4.196326,
+      "min_ms": 3.5280139999999998,
+      "max_ms": 5.443555999999999,
+      "bytes": 3813
+    },
+    {
+      "name": "objects_roots",
+      "runs": 20,
+      "median_ms": 19.3538295,
+      "p95_ms": 20.959874,
+      "min_ms": 17.650934,
+      "max_ms": 22.055396000000002,
+      "bytes": 25511
+    },
+    {
+      "name": "object_detail",
+      "runs": 20,
+      "median_ms": 1.5755575,
+      "p95_ms": 1.73124,
+      "min_ms": 1.368686,
+      "max_ms": 2.249574,
+      "bytes": 502
+    },
+    {
+      "name": "object_children",
+      "runs": 20,
+      "median_ms": 0.7200789999999999,
+      "p95_ms": 1.309836,
+      "min_ms": 0.5226989999999999,
+      "max_ms": 1.895401,
+      "bytes": 858
+    },
+    {
+      "name": "timeline_first_page",
+      "runs": 20,
+      "median_ms": 3.749113,
+      "p95_ms": 4.880441,
+      "min_ms": 3.576589,
+      "max_ms": 5.04244,
+      "bytes": 7429
+    },
+    {
+      "name": "timeline_deep_page",
+      "runs": 20,
+      "median_ms": 4.033991,
+      "p95_ms": 4.534757000000001,
+      "min_ms": 3.700873,
+      "max_ms": 5.193256,
+      "bytes": 7843
+    },
+    {
+      "name": "timeline_category",
+      "runs": 20,
+      "median_ms": 3.8957455000000003,
+      "p95_ms": 4.768457000000001,
+      "min_ms": 3.543838,
+      "max_ms": 5.171425999999999,
+      "bytes": 7145
+    },
+    {
+      "name": "last_done",
+      "runs": 20,
+      "median_ms": 2.0868775,
+      "p95_ms": 2.2927939999999998,
+      "min_ms": 1.872396,
+      "max_ms": 3.1673080000000002,
+      "bytes": 231
+    },
+    {
+      "name": "recent_titles",
+      "runs": 20,
+      "median_ms": 3.7143695,
+      "p95_ms": 4.321788,
+      "min_ms": 3.5160959999999997,
+      "max_ms": 4.548807999999999,
+      "bytes": 545
+    },
+    {
+      "name": "attachments_list",
+      "runs": 20,
+      "median_ms": 2.0108949999999997,
+      "p95_ms": 2.212621,
+      "min_ms": 1.736382,
+      "max_ms": 2.7838619999999996,
+      "bytes": 7790
+    },
+    {
+      "name": "trips_summary",
+      "runs": 20,
+      "median_ms": 1.519722,
+      "p95_ms": 2.6307869999999998,
+      "min_ms": 1.3619789999999998,
+      "max_ms": 2.7574650000000003,
+      "bytes": 125
+    },
+    {
+      "name": "energy",
+      "runs": 20,
+      "median_ms": 3.2219305,
+      "p95_ms": 4.241073,
+      "min_ms": 2.976623,
+      "max_ms": 4.261474000000001,
+      "bytes": 115
+    },
+    {
+      "name": "insights",
+      "runs": 20,
+      "median_ms": 8.822946,
+      "p95_ms": 10.254826999999999,
+      "min_ms": 8.410079000000001,
+      "max_ms": 10.802302999999998,
+      "bytes": 796
+    },
+    {
+      "name": "insights_contents",
+      "runs": 20,
+      "median_ms": 2.9096840000000004,
+      "p95_ms": 3.174498,
+      "min_ms": 2.7296500000000004,
+      "max_ms": 4.24594,
+      "bytes": 561
+    },
+    {
+      "name": "usage",
+      "runs": 20,
+      "median_ms": 0.6727080000000001,
+      "p95_ms": 0.886947,
+      "min_ms": 0.5373519999999999,
+      "max_ms": 0.897525,
+      "bytes": 31
+    },
+    {
+      "name": "search_common",
+      "runs": 20,
+      "median_ms": 4.3493949999999995,
+      "p95_ms": 4.900647,
+      "min_ms": 4.229622,
+      "max_ms": 4.9349169999999996,
+      "bytes": 1413
+    },
+    {
+      "name": "search_rare",
+      "runs": 20,
+      "median_ms": 10.262379,
+      "p95_ms": 11.156875,
+      "min_ms": 10.017003,
+      "max_ms": 12.127599,
+      "bytes": 348
+    },
+    {
+      "name": "stats",
+      "runs": 20,
+      "median_ms": 37.2193685,
+      "p95_ms": 39.799658,
+      "min_ms": 33.995925,
+      "max_ms": 39.971145,
+      "bytes": 7050
+    },
+    {
+      "name": "stats_year",
+      "runs": 20,
+      "median_ms": 18.9128185,
+      "p95_ms": 20.200716,
+      "min_ms": 18.400559,
+      "max_ms": 20.505026,
+      "bytes": 4886
+    },
+    {
+      "name": "stats_energy",
+      "runs": 20,
+      "median_ms": 1.0100095,
+      "p95_ms": 1.2488869999999999,
+      "min_ms": 0.88198,
+      "max_ms": 1.27173,
+      "bytes": 261
+    },
+    {
+      "name": "stats_fuel",
+      "runs": 20,
+      "median_ms": 4.966569,
+      "p95_ms": 6.231013,
+      "min_ms": 4.623335,
+      "max_ms": 6.9443839999999994,
+      "bytes": 1333
+    },
+    {
+      "name": "stats_water",
+      "runs": 20,
+      "median_ms": 13.72008,
+      "p95_ms": 14.599848,
+      "min_ms": 12.710514,
+      "max_ms": 14.986568,
+      "bytes": 582
+    },
+    {
+      "name": "reminders_due",
+      "runs": 20,
+      "median_ms": 9.016577000000002,
+      "p95_ms": 10.697998,
+      "min_ms": 8.592811000000001,
+      "max_ms": 11.47869,
+      "bytes": 3243
+    },
+    {
+      "name": "tags",
+      "runs": 20,
+      "median_ms": 31.360357999999998,
+      "p95_ms": 33.346776,
+      "min_ms": 28.584953,
+      "max_ms": 34.154348,
+      "bytes": 132
+    },
+    {
+      "name": "types",
+      "runs": 20,
+      "median_ms": 0.2988275,
+      "p95_ms": 0.416958,
+      "min_ms": 0.18578799999999998,
+      "max_ms": 0.490188,
+      "bytes": 391
+    },
+    {
+      "name": "auth_me",
+      "runs": 20,
+      "median_ms": 0.17765350000000002,
+      "p95_ms": 0.277402,
+      "min_ms": 0.153552,
+      "max_ms": 0.286382,
+      "bytes": 63
+    },
+    {
+      "name": "thumb",
+      "runs": 20,
+      "median_ms": 0.12666850000000002,
+      "p95_ms": 0.219077,
+      "min_ms": 0.10720600000000001,
+      "max_ms": 0.227904,
+      "bytes": 9614
+    },
+    {
+      "name": "sync_bootstrap",
+      "runs": 20,
+      "median_ms": 623.1728475,
+      "p95_ms": 661.72093,
+      "min_ms": 603.95204,
+      "max_ms": 662.621702,
+      "bytes": 1717792
+    },
+    {
+      "name": "sync_pull_first",
+      "runs": 20,
+      "median_ms": 3.9914825,
+      "p95_ms": 4.995551,
+      "min_ms": 3.623238,
+      "max_ms": 5.050267,
+      "bytes": 14077
+    },
+    {
+      "name": "sync_pull_tail",
+      "runs": 20,
+      "median_ms": 1.9938475,
+      "p95_ms": 2.461179,
+      "min_ms": 1.846382,
+      "max_ms": 3.129203,
+      "bytes": 5317
+    },
+    {
+      "name": "export",
+      "runs": 3,
+      "median_ms": 492.90853699999997,
+      "p95_ms": 494.990211,
+      "min_ms": 490.063329,
+      "max_ms": 494.990211,
+      "bytes": 7531830
+    },
+    {
+      "name": "import",
+      "runs": 3,
+      "median_ms": 11818.390707,
+      "p95_ms": 11898.632199,
+      "min_ms": 11718.039055000001,
+      "max_ms": 11898.632199,
+      "bytes": 7531830
+    }
+  ]
+}
