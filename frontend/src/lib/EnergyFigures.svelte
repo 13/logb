@@ -29,7 +29,8 @@
 </script>
 
 {#if hasAny && energy}
-  <h3>{$t('energy.title')}</h3>
+  <section>
+  <h2 class="m-0 mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{$t('energy.title')}</h2>
   {#if energy.distance_per_charge !== null && unit}
     <p class="muted">{$t('energy.distance-per-charge')}: <b>{counter(energy.distance_per_charge, unit, $locale)}</b></p>
   {/if}
@@ -49,4 +50,5 @@
       {$t('energy.charge-due')}: <b>≈ {energy.battery.remaining_pct} % {#if energy.battery.range_left !== null && unit}· ≈ {counter(energy.battery.range_left, unit, $locale)}{/if}</b>{#if energy.battery.warn} · {$t('energy.charge-soon')}{/if}
     </p>
   {/if}
+  </section>
 {/if}

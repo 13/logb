@@ -214,6 +214,7 @@ export default {
   'object.since-short': 'since {date}',
   'object.per-month': 'Per month',
   'object.figures': 'Figures',
+  'object.breadcrumb': 'Path',
 
   'tab.timeline': 'Timeline',
   'tab.documents': 'Documents',

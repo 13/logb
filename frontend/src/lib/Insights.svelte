@@ -41,18 +41,11 @@
   {#if !spent}
     <p class="muted">{$t('insights.none')}</p>
   {:else}
-    {#if data.by_month.some((b) => b.cost_cents > 0)}
-      <section data-testid="insights-spend">
-        <h3>{$t('insights.spend-by-month')}</h3>
-        <Chart label={$t('insights.spend-by-month')}
-               items={data.by_month.map((b) => ({ key: b.bucket, label: monthLabel(b.bucket, $locale), tick: monthTick(b.bucket, $locale), value: b.cost_cents, display: fmt(b.cost_cents) }))} />
-      </section>
-    {/if}
 
-    <h3>{$t('insights.by-year')}</h3>
+    <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('insights.by-year')}</h3>
     <BarList items={data.by_year.map((b) => ({ key: b.bucket, label: b.bucket, value: b.cost_cents, display: fmt(b.cost_cents) }))} />
 
-    <h3>{$t('insights.by-category')}</h3>
+    <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('insights.by-category')}</h3>
     <BarList items={data.by_category.map((b) => ({ key: b.bucket, label: $t(`cat.${b.bucket}`), value: b.cost_cents, display: fmt(b.cost_cents) }))} />
 
     {#if data.cost_per_counter_milli !== null && unit}
@@ -98,7 +91,7 @@
     <!-- A month the readings cannot measure is left out with the empty ones, rather than drawn
          as a zero it does not know. -->
     <section data-testid="insights-usage">
-      <h3>{$t('insights.usage-by-month')}</h3>
+      <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('insights.usage-by-month')}</h3>
       <Chart label={$t('insights.usage-by-month')} items={data.usage_by_month.map((m) => ({
         key: m.month, label: monthLabel(m.month, $locale), tick: monthTick(m.month, $locale), value: m.amount ?? 0,
         display: m.amount === null ? '—' : counter(m.amount, unit, $locale),
@@ -107,7 +100,7 @@
   {/if}
   {#if data.trip_distance_by_month.some((m) => m.distance > 0) && unit}
     <section data-testid="insights-trip-distance">
-      <h3>{$t('trips.by-month')}</h3>
+      <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('trips.by-month')}</h3>
       <Chart label={$t('trips.by-month')} items={data.trip_distance_by_month.map((m) => ({
         key: m.month, label: monthLabel(m.month, $locale), tick: monthTick(m.month, $locale), value: m.distance, display: counter(m.distance, unit, $locale),
       }))} />
@@ -116,8 +109,8 @@
   {#if data.fuel && data.fuel.fills.length > 0 && unit}
     {@const fuel = data.fuel}
     <section data-testid="insights-by-fill">
-      <h3>{$t('insights.by-fill')}</h3>
-      <p class="muted hint">{$t('insights.by-fill-hint')}</p>
+      <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('insights.by-fill')}</h3>
+      <p class="m-0 mb-2 text-sm text-muted-foreground">{$t('insights.by-fill-hint')}</p>
       <Chart label={$t('insights.by-fill')} items={fuel.fills.map((f, i) => ({
         key: `${f.date}-${i}`, label: fillLabel(f.date, $locale), tick: fillTick(f.date, $locale), value: f.per_100_milli,
         display: `${quantity(f.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 ${unit}`,
@@ -125,8 +118,3 @@
     </section>
   {/if}
 {/if}
-
-<style>
-  h3 { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-base); }
-  .hint { font-size: var(--text-sm); margin: 0 0 var(--space-2); }
-</style>

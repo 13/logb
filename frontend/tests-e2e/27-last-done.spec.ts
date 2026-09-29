@@ -42,13 +42,13 @@ test('the Info tab shows what was last done, and tapping it filters the timeline
   await openInfo(page);
 
   await expect(page.getByRole('heading', { name: 'Last done', exact: true })).toBeVisible();
-  const row = page.locator('.card.entry', { hasText: 'Bremsbeläge vorne' });
+  const row = page.getByTestId('last-done-row').filter({ hasText: 'Bremsbeläge vorne' });
   await expect(row).toBeVisible();
   await expect(row).toContainText('12.05.2026');
   await expect(row).toContainText('3,420 km');
   await expect(row).toContainText('1,230 km ago');
   // "Kette" was logged only once and has no reminder, so it stays below the last-done bar.
-  await expect(page.locator('.card.entry', { hasText: 'Kette' })).toHaveCount(0);
+  await expect(page.getByTestId('last-done-row').filter({ hasText: 'Kette' })).toHaveCount(0);
 
   // Tapping the row switches to the timeline, narrowed to the tapped title.
   await row.click();
@@ -78,7 +78,7 @@ test('a title filter on one object does not follow you to another opened from it
   // Set a title filter on the parent's timeline.
   await page.goto(`/objects/${parent}`);
   await openInfo(page);
-  await page.locator('.card.entry', { hasText: 'Bremsbeläge vorne' }).click();
+  await page.getByTestId('last-done-row').filter({ hasText: 'Bremsbeläge vorne' }).click();
   await expect(page.locator('.tag-filter', { hasText: 'Title: Bremsbeläge vorne' })).toBeVisible();
 
   // Open the child from Contents: the underlying component instance is reused (`App.svelte`

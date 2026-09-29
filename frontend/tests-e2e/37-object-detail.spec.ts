@@ -135,3 +135,61 @@ test('a due reminder in the summary opens the Reminders tab; the cover keeps 16:
   const box = (await cover.boundingBox())!;
   expect(box.width / box.height).toBeCloseTo(1.6, 1);
 });
+
+test('from 1024 px the summary is a sticky pane beside the tabs, with no Info tab', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'the two panes start at 1024 px');
+  await signInFresh(page, '37-panes');
+  const car = await object(page, { name: 'Panes car', type: 'car', counter_unit: 'km', fuel_unit: 'l' });
+  for (let i = 0; i < 30; i++) {
+    await entry(page, car, { date: `2026-0${1 + (i % 8)}-1${i % 10}`, category: 'maintenance', title: `Pane entry ${i}`, cost_cents: 1000 });
+  }
+  await page.goto(`/objects/${car}`);
+
+  const summary = page.getByRole('region', { name: 'Summary' });
+  const tablist = page.getByRole('tablist');
+  await expect(tablist).toBeVisible();
+  await expect(tablist.getByRole('tab', { name: 'Info' })).toHaveCount(0);
+  const s = (await summary.boundingBox())!;
+  const tl = (await tablist.boundingBox())!;
+  expect(s.x + s.width).toBeLessThanOrEqual(tl.x);
+  expect(s.width).toBeGreaterThan(290);
+  expect(s.width).toBeLessThan(320);
+  // What the Info tab held is in the pane.
+  await expect(summary.getByRole('heading', { name: 'Contents' })).toBeVisible();
+  await expect(summary.getByRole('button', { name: /New object inside/ })).toBeVisible();
+
+  // "+ Log" (a menu for a car with fuel) and Edit are in the page header, not floating.
+  const header = page.getByRole('main').locator('header').first();
+  await expect(header.getByTestId('log-menu')).toBeVisible();
+  await expect(header.getByRole('button', { name: 'Edit' })).toBeVisible();
+
+  // The pane stays in view while the timeline scrolls.
+  await page.evaluate(() => window.scrollTo(0, 1500));
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
+  const y = (await summary.boundingBox())!.y;
+  expect(y).toBeGreaterThanOrEqual(60);
+  expect(y).toBeLessThanOrEqual(100);
+
+  // An old ?tab=info link lands on the timeline; the details are already beside it.
+  await page.goto(`/objects/${car}?tab=info`);
+  await expect(page.getByRole('tab', { name: 'Timeline', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page).toHaveURL(new RegExp(`/objects/${car}$`));
+});
+
+test('below 1024 px the summary sits above the tabs and the rest is under Info', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'the one-column layout');
+  await signInFresh(page, '37-one-column');
+  const car = await object(page, { name: 'Column car', type: 'car', counter_unit: 'km', fuel_unit: 'l' });
+  await entry(page, car, { date: '2026-02-01', category: 'maintenance', title: 'Column entry' });
+  await page.goto(`/objects/${car}`);
+
+  const summary = page.getByRole('region', { name: 'Summary' });
+  await expect(page.getByRole('tablist')).toBeVisible();
+  expect((await summary.boundingBox())!.y).toBeLessThan((await page.getByRole('tablist').boundingBox())!.y);
+  await expect(page.getByRole('heading', { name: 'Contents' })).toHaveCount(0);
+  // "+ Log" floats; the header holds only Edit.
+  await expect(page.getByRole('main').locator('header').first().getByTestId('log-menu')).toHaveCount(0);
+  await expect(page.getByTestId('log-menu')).toBeVisible();
+  await page.getByRole('tab', { name: 'Info', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Contents' })).toBeVisible();
+});

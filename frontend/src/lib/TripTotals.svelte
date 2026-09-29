@@ -31,7 +31,7 @@
 </script>
 
 {#if summary && summary.all.trips > 0}
-  <h3>{$t('trips.title')}</h3>
+  <section><h2 class="m-0 mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{$t('trips.title')}</h2>
   <!-- `tabindex="0"` and `aria-label` (the heading text, since the scrolled box has no visible
        heading of its own) let a keyboard/AT user reach and identify the scroller even when the
        table inside it does not overflow at their width. -->
@@ -80,6 +80,7 @@
       </tbody>
     </table>
   </div>
+  </section>
 {/if}
 
 <style>
