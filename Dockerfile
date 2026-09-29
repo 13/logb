@@ -25,8 +25,13 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM rust:1.98.1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS manifest
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-RUN sed -i '0,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
- && sed -i '/^name = "logb"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock
+# `1,/re/` rather than GNU's `0,/re/`: this image's sed is BusyBox's, which does not know the
+# latter and left Cargo.toml unchanged. The greps fail the build if either file was missed,
+# rather than letting `cargo --locked` fail later with a lock file it wants to update.
+RUN sed -i '1,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
+ && sed -i '/^name = "logb"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock \
+ && grep -q '^version = "0.0.0"$' Cargo.toml \
+ && grep -A1 '^name = "logb"$' Cargo.lock | grep -q '^version = "0.0.0"$'
 
 # --- backend (static musl binary) ---
 # Runs on the build machine and cross-compiles to the target, instead of compiling under QEMU,
