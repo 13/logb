@@ -284,3 +284,33 @@ test('a timeline entry: icon, title, date and counter, amount on the right, tags
   await page.getByTestId('timeline-entry').filter({ hasText: 'Brake pads' }).click({ position: { x: 8, y: 8 } });
   await expect(page).toHaveURL(new RegExp(`/objects/${car}/activities/\\d+$`));
 });
+
+test('a due reminder card on the Reminders tab says so, and its actions are full-size', async ({ page }) => {
+  await signInFresh(page, '37-reminders');
+  const car = await object(page, { name: 'Reminder tab car', type: 'car', counter_unit: 'km' });
+  for (const data of [{ title: 'Tab overdue', due_date: '2000-01-01' }, { title: 'Tab later', due_date: '2099-01-01' }]) {
+    expect((await page.request.post(`/api/objects/${car}/reminders`, { data })).ok()).toBe(true);
+  }
+  await page.goto(`/objects/${car}?tab=reminders`);
+
+  const due = page.getByTestId('reminder-card').filter({ hasText: 'Tab overdue' });
+  await expect(due.getByTestId('reminder-status')).toHaveText('Due');
+  await expect(page.getByTestId('reminder-card').filter({ hasText: 'Tab later' }).getByTestId('reminder-status')).toHaveText('Open');
+  for (const name of ['Edit', 'Mark done']) {
+    expect((await due.getByRole('button', { name }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('the category chip fade shows only while the row can scroll further', async ({ page }) => {
+  await signInFresh(page, '37-fade');
+  const car = await object(page, { name: 'Fade car', type: 'car', counter_unit: 'km' });
+  await entry(page, car, { title: 'Any', date: daysAgo(1) });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto(`/objects/${car}`);
+  const row = page.getByTestId('category-chips').locator('> div');
+  await expect(row).toHaveAttribute('data-fade', '');
+  await row.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(row).not.toHaveAttribute('data-fade', '');
+  await page.setViewportSize({ width: 1800, height: 700 });
+  await expect(row).not.toHaveAttribute('data-fade', '');
+});

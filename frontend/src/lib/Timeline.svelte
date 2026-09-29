@@ -104,6 +104,21 @@
     return parts.join(' · ');
   }
 
+  /** The chip row fades at its right edge only while there is more to scroll to. */
+  let chipRow = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    const el = chipRow;
+    chipCategories;
+    if (!el) return;
+    const measure = () => {
+      if (el.scrollWidth - el.clientWidth - el.scrollLeft > 1) el.setAttribute('data-fade', ''); else el.removeAttribute('data-fade');
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', measure); ro.disconnect(); };
+  });
   const focus = 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';
   /** Stretched link, as on the object cards: the title's ::after covers the entry. */
   const stretched = "after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring";
@@ -128,12 +143,13 @@
                   category === value ? 'border-transparent bg-primary text-primary-foreground' : 'border-border bg-card text-foreground hover:bg-muted']}>{label}</button>
 {/snippet}
 
-<!-- The chips are one row that scrolls sideways; the fade at the right edge says there is more.
+<!-- The chips are one row that scrolls sideways; the fade at the right edge (data-fade, set while
+     the row overflows and is not at its end) says there is more.
      The 4 px padding is the focus ring's bleed (2 px outline + 2 px offset), which the scroller
      would otherwise clip, and the fade is dropped while a chip has focus so it does not dim the
      ring. -->
 <div data-testid="category-chips" class="-mx-1 mb-3">
-  <div class="flex gap-2 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,#000_calc(100%_-_24px),transparent)] focus-within:[mask-image:none]">
+  <div bind:this={chipRow} class="flex gap-2 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden data-[fade]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_24px),transparent)] data-[fade]:focus-within:[mask-image:none]">
     {@render chip('', $t('timeline.filter-all'))}
     {#each chipCategories as c (c)}{@render chip(c, $t(`cat.${c}`))}{/each}
   </div>

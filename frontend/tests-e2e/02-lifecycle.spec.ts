@@ -39,7 +39,7 @@ test('an object records activities, photos and reminders', async ({ page }) => {
 
   // documents tab shows the photo
   await page.getByRole('tab', { name: 'Documents' }).click();
-  await expect(page.locator('.thumb-grid img.thumb')).toHaveCount(1);
+  await expect(page.getByTestId('document').locator('img')).toHaveCount(1);
 
   // a counter reminder is already due
   await page.getByRole('tab', { name: /^Reminders/ }).click();
@@ -49,7 +49,7 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await page.getByLabel(/Repeat every \(counter\)/).fill('15000');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Oil change').first()).toBeVisible();
-  await expect(page.locator('.chip.due').first()).toBeVisible();
+  await expect(page.getByTestId('reminder-status').filter({ hasText: 'Due' }).first()).toBeVisible();
 
   // completing it links the activity and schedules the next one
   await page.getByRole('button', { name: /Mark done/ }).click();

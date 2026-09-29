@@ -38,7 +38,7 @@ test('counter and weight reminders offer the same fixed calendar options', async
     await page.getByLabel('Day of month').selectOption('last');
     await expect(page.getByText(/Next dates:/)).toBeVisible();
     await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(page.locator('.card').filter({ hasText: body.name })).toContainText('Last day of month');
+    await expect(page.getByTestId('reminder-card').filter({ hasText: body.name })).toContainText('Last day of month');
     const list = await (await page.request.get(`/api/objects/${object.id}/reminders`)).json();
     expect(list[0]).toMatchObject({ kind: 'reading', schedule: 'monthly:last', every_n: null, every_unit: null });
   }
@@ -86,6 +86,6 @@ test('calendar reminders and the localized first weekday setting work together',
   await page.getByLabel('Tag im Monat').selectOption('last');
   await page.getByRole('button', { name: 'Speichern' }).click();
 
-  const reminder = page.locator('.card').filter({ hasText: 'Monatsende' });
+  const reminder = page.getByTestId('reminder-card').filter({ hasText: 'Monatsende' });
   await expect(reminder).toContainText('Letzter Tag des Monats');
 });

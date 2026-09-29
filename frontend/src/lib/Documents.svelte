@@ -5,6 +5,7 @@
   import { api, fileUrl } from './api';
   import FilePicker from './FilePicker.svelte';
   import Icon from './Icon.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   import { t } from '../i18n';
   import { toInput } from './object-form';
   import type { Attachment, MemObject, ObjectInput } from './types';
@@ -81,6 +82,7 @@
     }
     onchanged?.();
   }
+  const focus = 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';
 </script>
 
 <FilePicker {objectId} onuploaded={() => { load(); onchanged?.(); }} />
@@ -93,42 +95,33 @@
   <!-- The picker sits right above this, so the words only have to say what is worth putting
        into it. Not after a failed load: the error above already says why there is no list. -->
   {#if !error}
-    <div class="empty">
-      <span class="empty-icon"><Icon name="document" size={40} /></span>
-      <p>{$t('docs.empty')}</p>
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <span class="text-muted-foreground opacity-40"><Icon name="document" size={40} /></span>
+      <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('docs.empty')}</p>
     </div>
   {/if}
 {:else}
-  <div class="thumb-grid">
+  <ul role="list" class="m-0 mt-3 grid list-none grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3 p-0">
     {#each items as a (a.id)}
-      <figure>
+      <li data-testid="document" class="flex min-w-0 flex-col gap-1">
         {#if a.kind === 'photo'}
-          <a href={fileUrl(a.file_id)} target="_blank" rel="noopener"><img class="thumb" src={fileUrl(a.file_id, true)} alt={a.caption || a.original_name} loading="lazy" decoding="async" /></a>
+          <a href={fileUrl(a.file_id)} target="_blank" rel="noopener" class={`block rounded-md ${focus}`}>
+            <img class="block aspect-square w-full rounded-md bg-muted object-cover" src={fileUrl(a.file_id, true)} alt={a.caption || a.original_name} loading="lazy" decoding="async" />
+          </a>
         {:else}
-          <a class="doc-icon" href={fileUrl(a.file_id)} target="_blank" rel="noopener" aria-label={a.caption || a.original_name}><Icon name="document" size={32} /></a>
+          <a href={fileUrl(a.file_id)} target="_blank" rel="noopener" aria-label={a.caption || a.original_name}
+             class={`grid aspect-square w-full place-items-center rounded-md bg-muted text-muted-foreground ${focus}`}><Icon name="document" size={32} /></a>
         {/if}
-        <figcaption>
-          <span class="name">{a.caption || a.original_name}</span>
-          <span class="row small">
-            {#if a.kind === 'photo'}
-              {#if a.id === coverAttachmentId}
-                <button class="ghost" onclick={() => setCover(null)}>{$t('object.clear-cover')}</button>
-              {:else}
-                <button class="ghost" onclick={() => setCover(a.id)}>{$t('object.set-cover')}</button>
-              {/if}
-            {/if}
-            <button class="ghost danger-text" onclick={() => remove(a)}>{$t('nav.delete')}</button>
-          </span>
-        </figcaption>
-      </figure>
+        <span class="truncate text-xs text-foreground">{a.caption || a.original_name}</span>
+        <div class="flex flex-wrap gap-1">
+          {#if a.kind === 'photo'}
+            <Button variant="ghost" class="min-h-11 px-2 text-xs" onclick={() => setCover(a.id === coverAttachmentId ? null : a.id)}>
+              {a.id === coverAttachmentId ? $t('object.clear-cover') : $t('object.set-cover')}
+            </Button>
+          {/if}
+          <Button variant="ghost" class="min-h-11 px-2 text-xs text-destructive hover:text-destructive" onclick={() => remove(a)}>{$t('nav.delete')}</Button>
+        </div>
+      </li>
     {/each}
-  </div>
+  </ul>
 {/if}
-
-<style>
-  figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
-  figcaption { font-size: var(--text-xs); display: flex; flex-direction: column; gap: var(--space-1); }
-  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .small button { min-height: 32px; padding: 2px var(--space-2); font-size: var(--text-xs); }
-  .danger-text { color: var(--danger); }
-</style>

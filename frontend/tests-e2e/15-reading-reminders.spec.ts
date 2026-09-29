@@ -24,8 +24,8 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
   await page.getByLabel('Starting').blur();
   await page.getByRole('button', { name: 'Save' }).click();
 
-  const card = page.locator('.card').filter({ hasText: 'Log the counter reading' });
-  await expect(card.locator('.chip.due')).toBeVisible();
+  const card = page.getByTestId('reminder-card').filter({ hasText: 'Log the counter reading' });
+  await expect(card.getByTestId('reminder-status')).toHaveText('Due');
   await expect(card.getByRole('button', { name: 'Mark done' })).toHaveCount(0);
   await expect(card.getByText('No reading yet')).toBeVisible();
 
@@ -39,7 +39,7 @@ test('a reading reminder is satisfied by logging a reading, not by marking it do
 
   await page.getByRole('tab', { name: /^Reminders/ }).click();
   await expect(card.getByText(/Last reading 12,345 km/)).toBeVisible();
-  await expect(card.locator('.chip.due')).toHaveCount(0);
+  await expect(card.getByTestId('reminder-status')).not.toHaveText('Due');
 });
 
 test('a reading lower than the last one asks for a second look before it is saved', async ({ page }) => {
@@ -79,8 +79,8 @@ test('a new object with a counter can ask for a monthly reading reminder on the 
   await expect(page.getByRole('heading', { name: 'Reading Bike' })).toBeVisible();
 
   await page.getByRole('tab', { name: /^Reminders/ }).click();
-  const card = page.locator('.card').filter({ hasText: 'Log the counter reading' });
+  const card = page.getByTestId('reminder-card').filter({ hasText: 'Log the counter reading' });
   await expect(card.getByText('every month')).toBeVisible();
   // It starts a month out, so it is not due yet.
-  await expect(card.locator('.chip.due')).toHaveCount(0);
+  await expect(card.getByTestId('reminder-status')).not.toHaveText('Due');
 });

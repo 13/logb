@@ -263,6 +263,6 @@ test('a reminder shows its object\'s tags on the reminders tab, not on the dashb
   await expect(row.locator('.tag')).toHaveCount(0);
 
   await page.goto(`/objects/${objectId}?tab=reminders`);
-  const card = page.locator('.card', { hasText: 'Kette prüfen' });
+  const card = page.getByTestId('reminder-card').filter({ hasText: 'Kette prüfen' });
   await expect(card.locator('.tag', { hasText: 'E-Bike' })).toBeVisible();
 });

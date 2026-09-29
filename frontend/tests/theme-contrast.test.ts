@@ -30,7 +30,7 @@ const varIn = (decl: string, prop: string) => decl.match(new RegExp(`(?:^|[\\s;{
 
 describe('theme contrast', () => {
   for (const [name, theme] of [['light', light], ['dark', dark]] as const) {
-    for (const chip of ['.chip.due', '.chip.pending', '.chip.dead']) {
+    for (const chip of ['.chip.pending', '.chip.dead']) {
       it(`${name}: ${chip} text is readable (>= 4.5:1)`, () => {
         const r = rule(chip);
         const bg = varIn(r, 'background'); const fg = varIn(r, 'color');
@@ -130,6 +130,14 @@ describe('tinted highlight contrast', () => {
       for (const fg of ['destructive', 'foreground', 'muted-foreground']) {
         expect(contrastRatio(ui(fg, theme), bg)).toBeGreaterThanOrEqual(4.5);
       }
+    });
+    // An outline button on a due reminder card: in dark mode its fill is input/30 painted over
+    // the card's destructive/10 over the page. Light mode's is plain background; the stricter
+    // blend is checked for both.
+    it(`${name}: text on an outline button inside a due card (>= 4.5:1)`, () => {
+      const card = blend(ui('destructive', theme), ui('background', theme), 0.1);
+      const button = blend(ui('input', theme), card, 0.3);
+      expect(contrastRatio(ui('foreground', theme), button)).toBeGreaterThanOrEqual(4.5);
     });
     // The object page's summary reuses that pair for its due reminders, and puts its figures on cards.
     it(`${name}: text on the summary's due reminder (destructive/10 over background) and figures (card) (>= 4.5:1)`, () => {

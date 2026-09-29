@@ -11,6 +11,7 @@
   import { locale, t } from '../i18n';
   import { splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
@@ -137,84 +138,90 @@
 </script>
 
 {#if error}<p class="error" role="alert">{error}</p>{/if}
-{#if toast}<p class="muted">{toast}</p>{/if}
+{#if toast}<p class="m-0 mb-3 text-sm text-muted-foreground">{toast}</p>{/if}
 
 <!-- Not `items.length === 0`: an empty list before the first answer is what the component was
-     initialised with, not what the server said, and the empty state is a whole block -- icon,
-     sentence and a primary button -- to flash and take away. -->
+     initialised with, not what the server said. -->
 {#if loaded && items.length === 0}
-  <div class="empty">
-    <span class="empty-icon"><Icon name="repeat" size={40} /></span>
-    <p>{$t('reminder.empty')}</p>
-    <button class="primary" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+  <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+    <span class="text-muted-foreground opacity-40"><Icon name="repeat" size={40} /></span>
+    <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('reminder.empty')}</p>
+    <Button class="min-h-11" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</Button>
     {#if unit || body}
-      <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t(body ? 'weight.reminder' : 'reminder.new-reading')}</button>
+      <Button variant="outline" class="min-h-11" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t(body ? 'weight.reminder' : 'reminder.new-reading')}</Button>
     {/if}
   </div>
 {/if}
 
-<div class="list">
+<!-- A due reminder's card is tinted like the dashboard's, so what needs doing reads first. -->
+<ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
   {#each [...groups.due, ...groups.open] as r (r.id)}
-    <div class="card">
-      <div class="row head">
-        <b>{r.title}</b>
+    <li data-testid="reminder-card"
+        class={['flex flex-col gap-1 rounded-lg border p-3 shadow-xs', r.due ? 'border-destructive/30 bg-destructive/10' : 'border-border bg-card']}>
+      <div class="flex items-start gap-2">
+        <span class="min-w-0 flex-1 break-words font-semibold text-foreground">{r.title}</span>
         {#if r.pending}
           <!-- Only in the outbox so far: the server has not computed whether it is due. -->
-          <span class="chip pending-chip">{$t('timeline.pending')}</span>
+          <span class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{$t('timeline.pending')}</span>
         {:else}
-          <span class="chip" class:due={r.due} class:snoozed={!r.due && r.snoozed_until}>
+          <span data-testid="reminder-status"
+                class={['shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', r.due ? 'bg-destructive text-destructive-foreground' : 'bg-muted text-muted-foreground']}>
             {r.due ? $t('reminder.due') : r.snoozed_until ? $t('reminder.snoozed') : $t('reminder.open')}
           </span>
         {/if}
       </div>
-      <TagChips tags={r.object_tags ?? []} />
+      {#if (r.object_tags ?? []).length > 0}<div class="w-fit"><TagChips tags={r.object_tags ?? []} /></div>{/if}
       {#if r.kind === 'reading'}
-        <div class="muted"><span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span> {every(r)}</div>
-        <div class="muted tnum">{reading(r)}</div>
+        <p class="m-0 flex items-center gap-1 text-sm text-muted-foreground"><span class="inline-flex" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span> {every(r)}</p>
+        <p class="m-0 text-sm text-muted-foreground tabular-nums">{reading(r)}</p>
       {:else}
-        <div class="muted">{when(r)}{#if r.repeat_months || r.repeat_counter} · <span class="repeat-icon" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}</div>
+        <p class="m-0 text-sm text-muted-foreground">
+          {when(r)}{#if r.repeat_months || r.repeat_counter}{' · '}<span class="inline-flex align-middle" role="img" aria-label={$t('activity.repeat')}><Icon name="repeat" size={14} /></span>{/if}
+        </p>
         {#if r.estimated_due_date}
-          <div class="muted">{$t('reminder.estimated', { date: fmtDate(r.estimated_due_date, $dateFormat) })}</div>
+          <p class="m-0 text-sm text-muted-foreground">{$t('reminder.estimated', { date: fmtDate(r.estimated_due_date, $dateFormat) })}</p>
         {/if}
       {/if}
       {#if !r.due && r.snoozed_until}
-        <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so
-             `when(r)` above can still read as overdue while the reminder is suppressed -- this
-             line is what actually says so. -->
-        <div class="row snoozed-until">
-          <span class="muted">{$t('reminder.snoozed-until', { date: fmtDate(r.snoozed_until, $dateFormat) })}</span>
-          <button class="ghost" onclick={() => unsnooze(r)}>{$t('reminder.unsnooze')}</button>
+        <!-- `due_date`/`due_counter` never change on snooze (see src/api/reminders.rs), so the line
+             above can still read as overdue while the reminder is suppressed -- this one says so. -->
+        <div class="mt-1 flex items-center gap-2">
+          <span class="min-w-0 flex-1 text-sm text-muted-foreground">{$t('reminder.snoozed-until', { date: fmtDate(r.snoozed_until, $dateFormat) })}</span>
+          <Button variant="outline" class="min-h-11 shrink-0" onclick={() => unsnooze(r)}>{$t('reminder.unsnooze')}</Button>
         </div>
       {/if}
-      {#if r.notes}<p class="notes">{r.notes}</p>{/if}
+      {#if r.notes}<p class="m-0 mt-1 whitespace-pre-wrap text-sm text-foreground">{r.notes}</p>{/if}
       <!-- A pending reminder has no server row yet, so nothing here could address it. -->
       {#if !r.pending}
-      <div class="row actions">
-        <button class="ghost" onclick={() => go(`/objects/${objectId}/reminders/${r.id}`)}>{$t('nav.edit')}</button>
-        {#if r.kind === 'reading'}
-          <!-- No "done": logging the reading is what satisfies it, from here or anywhere else. -->
-          {#if r.due}<button class="ghost" onclick={() => skip(r)}>{$t('reminder.skip')}</button>{/if}
-          <button class="primary" onclick={() => go(`/objects/${objectId}/reading`)}>{$t(body ? 'weight.log' : 'reminder.record')}</button>
-        {:else}
-          <button class="primary" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</button>
-        {/if}
-      </div>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <Button variant="outline" class="min-h-11" onclick={() => go(`/objects/${objectId}/reminders/${r.id}`)}>{$t('nav.edit')}</Button>
+          {#if r.kind === 'reading'}
+            <!-- No "done": logging the reading is what satisfies it, from here or anywhere else. -->
+            {#if r.due}<Button variant="outline" class="min-h-11" onclick={() => skip(r)}>{$t('reminder.skip')}</Button>{/if}
+            <Button class="min-h-11" onclick={() => go(`/objects/${objectId}/reading`)}>{$t(body ? 'weight.log' : 'reminder.record')}</Button>
+          {:else}
+            <Button class="min-h-11" onclick={() => openDone(r)}>{$t('reminder.mark-done')}</Button>
+          {/if}
+        </div>
       {/if}
-    </div>
+    </li>
   {/each}
-</div>
+</ul>
 
 {#if groups.done.length > 0}
-  <button class="ghost more" onclick={() => (showDone = !showDone)}>{showDone ? '▾' : '▸'} {$t('reminder.history')} ({groups.done.length})</button>
+  <Button variant="ghost" class="mt-4 min-h-11 w-full justify-start text-muted-foreground" aria-expanded={showDone} onclick={() => (showDone = !showDone)}>
+    {showDone ? '▾' : '▸'} {$t('reminder.history')} ({groups.done.length})
+  </Button>
   {#if showDone}
-    <div class="list">
+    <!-- Muted fill rather than faded opacity: faded text would drop below 4.5:1. -->
+    <ul role="list" class="m-0 mt-2 flex list-none flex-col gap-2 p-0">
       {#each groups.done as r (r.id)}
-        <div class="card done">
-          <b>{r.title}</b>
-          <div class="muted">{$t('reminder.done')} · {fmtDate(r.done_at, $dateFormat)}</div>
-        </div>
+        <li data-testid="reminder-done" class="flex flex-col gap-0.5 rounded-lg bg-muted p-3">
+          <span class="font-semibold text-foreground">{r.title}</span>
+          <span class="text-sm text-muted-foreground">{$t('reminder.done')} · {fmtDate(r.done_at, $dateFormat)}</span>
+        </li>
       {/each}
-    </div>
+    </ul>
   {/if}
 {/if}
 
@@ -240,18 +247,3 @@
     <button class="primary" onclick={confirmDone} disabled={doneBusy}>{$t('reminder.done')}</button>
   </div>
 </dialog>
-
-<style>
-  .head { justify-content: space-between; }
-  .head b { flex: 1; }
-  .head .chip { flex: none; }
-  .chip.snoozed { background: var(--surface-2); color: var(--muted); }
-  .snoozed-until { margin-top: var(--space-1); justify-content: space-between; }
-  .snoozed-until span { flex: 1; }
-  .snoozed-until button { flex: none; }
-  .notes { font-size: var(--text-sm); white-space: pre-wrap; margin-top: var(--space-1); }
-  .repeat-icon { display: inline-flex; vertical-align: -2px; }
-  .actions { margin-top: var(--space-2); }
-  .more { margin-top: var(--space-4); width: 100%; text-align: left; color: var(--muted); }
-  .done { opacity: .7; }
-</style>
