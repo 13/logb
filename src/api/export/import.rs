@@ -433,6 +433,9 @@ pub(super) async fn import(
             counts.reminders += 1;
         }
     }
+    // Every row inserted above, folded for search in one pass rather than one per INSERT.
+    crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::UnfoldedOf(user.id)).await?;
+    crate::search_text::refresh_activities(&mut tx, crate::search_text::Rows::UnfoldedOf(user.id)).await?;
     tx.commit().await?;
     Ok(Json(counts))
 }

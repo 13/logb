@@ -876,6 +876,7 @@ async fn create(
         }
         Err(e) => return Err(e.into()),
     };
+    crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::Id(row.id)).await?;
     record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(with_stats(&state, &user, row).await?)))
@@ -1124,6 +1125,7 @@ async fn update(
     .bind(energy_price_milli).bind(body.weight_unit.as_deref().unwrap_or(&existing.weight_unit)).bind(fuel_capacity_milli)
     .bind(&resource_unit).bind(&resource_kind).bind(&measurement_mode).bind(monthly_target_milli).bind(low_level_pct).bind(private).bind(id)
     .execute(&mut *tx).await?;
+    crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::Id(id)).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Object, id).await?;
         record::record_update(

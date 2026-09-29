@@ -137,6 +137,7 @@ pub(crate) async fn create(
         }
         Err(e) => return Err(e.into()),
     };
+    crate::search_text::refresh_activities(&mut tx, crate::search_text::Rows::Id(row.id)).await?;
     record::record_create(
         &mut tx,
         user.id,
@@ -489,6 +490,7 @@ pub(crate) async fn update(
     .bind(&period_start).bind(&period_end).bind(estimated).bind(meter_reset)
     .bind(id)
     .execute(&mut *tx).await?;
+    crate::search_text::refresh_activities(&mut tx, crate::search_text::Rows::Id(id)).await?;
     if !changed.is_empty() {
         let uuid = record::uuid_of(&mut tx, Entity::Activity, id).await?;
         // The clock records when the edit was made, so a still-older queued edit arriving after

@@ -4,11 +4,12 @@
 //! next person can read the whole surface of the difference in under a minute, rather than
 //! discovering it one failing query at a time.
 //!
-//! There are six, and only items 2 to 4 need code here:
+//! There are seven, and items 2 to 4 and 7 need code here:
 //!
 //! 1. Case-insensitive matching. Neither backend folds accents in SQL (SQLite's `LIKE` is
 //!    ASCII-only; PostgreSQL's `ILIKE` follows the cluster collation), so search folds in
-//!    Rust with `domain::tags::fold` and needs nothing here.
+//!    Rust with `domain::tags::fold`, stores the result (`search_text`), and asks SQL only
+//!    whether one already-folded string contains another -- item 7.
 //! 2. Case-insensitive sorting of names -- `name_order`.
 //! 3. How a transaction that intends to write begins -- `begin_write`.
 //! 4. How a write transaction claims the right to be the only one -- `write_lock`. SQLite
@@ -27,6 +28,8 @@
 //! 6. Seeding. The SQLite migrations wrote the `currency` and `sync_epoch` settings rows with
 //!    `INSERT ... randomblob()`; the PostgreSQL schema seeds nothing, and `db::seed_settings`
 //!    now writes both on first start on either backend.
+//! 7. "Does this column contain this string" -- `contains`. The same question, spelled so each
+//!    backend answers it exactly and as fast as it can.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -93,6 +96,46 @@ impl Backend {
             Self::Postgres => format!("lower({column})"),
         }
     }
+
+    /// A predicate: `column` contains the text bound at `param`, character for character --
+    /// both sides are already folded by `domain::tags::fold`, so no case rule may apply on top.
+    /// The value bound must come from `contains_param`.
+    ///
+    /// SQLite uses `instr`, an exact substring test. `LIKE` would be wrong twice over there: it
+    /// folds ASCII case on its own, and it refuses a pattern longer than
+    /// `SQLITE_MAX_LIKE_PATTERN_LENGTH` (50 000 bytes) with an error, where a long term should
+    /// simply find nothing. No index serves either spelling, and none is needed: the scan is
+    /// over one narrow column of one user's rows.
+    ///
+    /// PostgreSQL uses `LIKE` with the term's wildcards escaped: its `LIKE` is case-sensitive
+    /// and has no pattern limit, and it is the spelling a `pg_trgm` index can serve, which
+    /// `strpos` is not.
+    pub fn contains(&self, column: &str, param: &str) -> String {
+        match self {
+            Self::Sqlite => format!("instr({column}, {param}) > 0"),
+            Self::Postgres => format!("{column} LIKE {param} ESCAPE '\\'"),
+        }
+    }
+
+    /// The value to bind for `contains`'s parameter: the term itself on SQLite, and on
+    /// PostgreSQL a `LIKE` pattern with `\`, `%` and `_` escaped so each matches only itself.
+    pub fn contains_param(&self, folded: &str) -> String {
+        match self {
+            Self::Sqlite => folded.to_string(),
+            Self::Postgres => {
+                let mut pattern = String::with_capacity(folded.len() + 2);
+                pattern.push('%');
+                for c in folded.chars() {
+                    if matches!(c, '\\' | '%' | '_') {
+                        pattern.push('\\');
+                    }
+                    pattern.push(c);
+                }
+                pattern.push('%');
+                pattern
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +156,14 @@ mod tests {
         assert_eq!(Backend::Postgres.name_order("name"), "lower(name)");
         // Qualified columns are passed through whole, since the search joins two tables.
         assert_eq!(Backend::Postgres.name_order("o.name"), "lower(o.name)");
+    }
+
+    #[test]
+    fn each_backend_asks_contains_its_own_way() {
+        assert_eq!(Backend::Sqlite.contains("t", "$2"), "instr(t, $2) > 0");
+        assert_eq!(Backend::Postgres.contains("t", "$2"), "t LIKE $2 ESCAPE '\\'");
+        assert_eq!(Backend::Sqlite.contains_param("50%_a\\b"), "50%_a\\b");
+        assert_eq!(Backend::Postgres.contains_param("50%_a\\b"), "%50\\%\\_a\\\\b%");
     }
 
     /// `BEGIN IMMEDIATE` is SQLite's spelling and PostgreSQL rejects it outright, so this is

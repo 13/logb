@@ -14,6 +14,7 @@ pub mod object_type;
 pub mod pointer;
 pub mod push;
 pub mod restore;
+pub mod search_text;
 pub mod spa;
 pub mod state;
 pub mod sync;
@@ -244,6 +245,11 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         shutdown: tokio_util::sync::CancellationToken::new(),
         telegram_key: std::sync::OnceLock::new(),
     });
+    // Before the first request: a row whose `search_text` is still NULL -- one that existed
+    // before the column did, or all of them after the folding changed -- is invisible to search.
+    // Batched, so even a large backfill holds the write lock only briefly at a time.
+    search_text::backfill(&state).await?;
+    search_text::ensure_trigram_indexes(&state).await;
     // Once per start, and a directory read once there is nothing left to move. A failure is
     // logged rather than fatal: an unmoved thumbnail costs a 404 on one /thumb, while refusing
     // to start costs the whole instance.

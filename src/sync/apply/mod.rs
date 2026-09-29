@@ -937,6 +937,13 @@ pub async fn apply_op(
                 // back with it, so the savepoint needs no unwinding of its own.
                 Err(e) => return Err(e.into()),
             }
+            if crate::search_text::is_searched(op.entity, field) {
+                let row = crate::search_text::Rows::Uuid(&op.entity_uuid);
+                match op.entity {
+                    Entity::Object => crate::search_text::refresh_objects(&mut *tx, row).await?,
+                    _ => crate::search_text::refresh_activities(&mut *tx, row).await?,
+                };
+            }
 
             record::stamp_field_clock(
                 &mut *tx,
