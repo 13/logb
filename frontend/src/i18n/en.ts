@@ -128,6 +128,7 @@ export default {
   'login.logout': 'Sign out',
 
   'dash.title': 'My objects',
+  'dash.show': 'Show',
   'dash.empty': 'LogB keeps the history of the things you own — a car, a bike, the washing machine, your own body — so every repair, service and receipt has one place to live.',
   'dash.none-archived': 'Nothing is archived.',
   'dash.new': 'New object',

@@ -128,6 +128,7 @@ export default {
   'login.logout': 'Abmelden',
 
   'dash.title': 'Meine Objekte',
+  'dash.show': 'Anzeigen',
   'dash.empty': 'LogB führt Buch über die Dinge, die dir gehören — Auto, Fahrrad, Waschmaschine, dein eigener Körper — damit jede Reparatur, jede Wartung und jeder Beleg einen festen Platz haben.',
   'dash.none-archived': 'Es ist nichts archiviert.',
   'dash.new': 'Neues Objekt',

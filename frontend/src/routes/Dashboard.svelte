@@ -147,6 +147,8 @@
   const subtitle = $derived(activeCount === 0 ? null
     : (activeCount === 1 ? $t('dash.subtitle-one', { spend: money(activeSpend(active), $currency, $locale) })
       : $t('dash.subtitle', { n: activeCount, spend: money(activeSpend(active), $currency, $locale) })));
+  /** What "+ Log" can offer: an archived or still-queued object cannot be logged against. */
+  const pickable = $derived(pickerOrder(active, $locale));
   const nothingYet = $derived(active.length === 0 && archivedKnown && archived.length === 0);
 
   /** A snoozed reminder leaves the due list at once, and its object's due count with it; only the
@@ -196,10 +198,10 @@
           {#each SORT_KEYS as key (key)}<option value={key}>{$t(`dash.sort-${key}`)}</option>{/each}
         </select>
       </label>
-      <div class="flex rounded-md bg-muted p-1" role="group" aria-label={$t('dash.title')}>
+      <div class="flex rounded-md bg-muted p-1" role="group" aria-label={$t('dash.show')}>
         {#each [['active', $t('dash.tab-active'), activeCount], ['archived', $t('dash.tab-archived'), archivedKnown ? archived.length : '']] as [key, label, count] (key)}
           <button data-slot="dash-tab" aria-pressed={tab === key} onclick={() => (tab = key as ListTab)}
-                  class={['min-h-9 cursor-pointer rounded px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring',
+                  class={['max-desk:min-h-11 desk:min-h-9 cursor-pointer rounded px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring',
                           tab === key ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground']}>
             {label} <span class="ml-1 tabular-nums text-muted-foreground">{count}</span>
           </button>
@@ -239,7 +241,7 @@
     {/if}
   {/if}
 
-  {#if !nothingYet}
-    <LogPicker objects={pickerOrder(active, $locale)} onpick={(o) => go(quickLogPath(o))} />
+  {#if pickable.length > 0}
+    <LogPicker objects={pickable} onpick={(o) => go(quickLogPath(o))} />
   {/if}
 </main>
