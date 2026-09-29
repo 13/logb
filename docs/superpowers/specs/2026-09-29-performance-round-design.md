@@ -117,3 +117,46 @@ by bundle size and by the number of sequential requests before the dashboard sho
 - Timeline virtualisation: only matters past about a thousand visible entries.
 - Precompressed embedded assets: compression runs once per response on a 113 KB gzip bundle,
   and the service worker keeps repeat visits off the network.
+
+## Track C — decisions
+
+- **What is stored.** `objects.search_text` and `activities.search_text` (nullable TEXT, SQLite
+  0030 / PostgreSQL 0021) hold exactly what the old per-request loop folded: object `name`,
+  `description` and each tag; activity `title`, `notes`, `from_place`, `to_place` and each tag.
+  Each field is folded by `domain::tags::fold` and the fields are joined by U+001F, so a hit
+  still has to lie inside one field. A term containing U+001F (or a NUL, which PostgreSQL
+  refuses) answers nothing without a query. Tags live as JSON in the row itself, so there is no
+  tag rename to follow; `type` and parent/object names are not searched, so renaming a type or
+  an object refreshes nothing else.
+- **Who writes it.** `src/search_text.rs` is the one place that knows the fields. Every write
+  path calls `refresh_objects`/`refresh_activities` inside its write transaction, reading back
+  what it stored: REST create and update of objects and activities, a sync `set` of a searched
+  field, and an import (one pass over the user's still-NULL rows before commit). Deletes and
+  cascades only set `deleted_at`, which search already filters. `--copy-to` copies the column
+  like any other (the fold is the same Rust on both sides) along with the `settings` row.
+  Writes are batched (`UPDATE ... FROM (VALUES ...)`, 500 rows per statement) and skipped when
+  the text did not change. Each path has a test in `tests/it/search.rs` (copy in
+  `tests/it/copy.rs`).
+- **Backfill and versioning.** At startup, after the migrations, rows with NULL are folded 500 at
+  a time, one short write transaction per batch. `search_text::FOLD_VERSION` is recorded in
+  `settings` (`search_fold_version`); when it differs, the column is cleared first and refilled,
+  so changing the fold or the field list is a constant bump.
+- **Query.** Same order, paging and `has_more` as before, now in SQL: objects unarchived first
+  then by name (ties now broken by id rather than left to the database), activities by date and
+  id descending, `LIMIT limit+1 OFFSET offset` per list. The predicate is `dialect::contains`:
+  `instr(search_text, $2) > 0` on SQLite -- exact, and without `LIKE`'s ASCII case folding and
+  its 50 000-byte pattern limit -- and `search_text LIKE $2 ESCAPE '\'` with `\`, `%`, `_`
+  escaped on PostgreSQL, the form `pg_trgm` can serve.
+- **Acceleration.** PostgreSQL: `CREATE EXTENSION IF NOT EXISTS pg_trgm` and GIN
+  `gin_trgm_ops` indexes on both columns, from Rust at startup rather than in a migration, so a
+  refused extension is an INFO line and a plain scan instead of a server that will not start.
+  Not in the schema, so `schema_parity` does not see it. With 20k activities the activities
+  query's scan takes about 10 ms; the index takes a rare term to about 1 ms, and the planner
+  scans as before for terms under three characters. SQLite: no FTS5. The scan of one narrow
+  column over one user's rows is about 10 ms at 20k activities (`instr` and `LIKE` measured the
+  same), and FTS5 would add a second copy of the text, shadow tables that `copy::TABLES` and
+  `schema_parity` would have to learn about, and a second place to keep in step.
+- **Timings** (debug build, `GET /search` end to end, 500 objects and 20k activities, median of
+  15): SQLite 176-290 ms before, 3-12 ms after; PostgreSQL 116-230 ms before, 2.5-21 ms after
+  (with the trigram index and fresh statistics). The one-off backfill of those 20.5k rows took
+  0.4 s on SQLite and 2 s on PostgreSQL.

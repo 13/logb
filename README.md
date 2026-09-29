@@ -513,8 +513,11 @@ not a conversion. Amounts are formatted in each user's own locale.
 `GET /api/search?q=...` returns the caller's own objects and activities whose
 name, description, tags, title, notes or trip places contain the term (`limit`,
 default 25, caps at 100). The magnifier on the dashboard opens the same thing.
-It is a substring scan, not a full-text index: instant at household scale, and
-it ignores case and accents on both databases, so `olwechsel` finds `Ölwechsel`.
+It is a substring match, not a full-text index: it ignores case and accents on
+both databases, so `olwechsel` finds `Ölwechsel`. Each row keeps a folded copy
+of its searchable text, filled in at the first start after an upgrade; on
+PostgreSQL a `pg_trgm` index speeds it up when the extension can be created,
+and search works the same without it.
 
 ## Statistics
 
