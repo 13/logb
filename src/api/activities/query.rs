@@ -209,30 +209,20 @@ pub(crate) async fn recent_titles(
     Path(object_id): Path<i64>,
 ) -> Result<Json<Vec<TitleSuggestion>>, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
-    // The correlated subqueries pick the newest occurrence explicitly. SQLite would also
-    // hand back a bare column from the MAX() row, but that behaviour is a quirk to rely on,
-    // not a contract.
-    //
-    // `a.object_id` is in the GROUP BY only so the subqueries may name it: PostgreSQL refuses
-    // an ungrouped outer column inside a subquery, while SQLite allows it. It groups nothing
-    // differently -- the WHERE clause has already pinned `object_id` to a single value -- so
-    // the rows are the same on both backends.
+    // `ROW_NUMBER()` picks the newest occurrence of each (title, category) explicitly, in one
+    // pass over the object's rows. It replaced four correlated subqueries per group, one per
+    // column, each re-reading the object's activities. SQLite would also hand back a bare
+    // column from the MAX() row of a GROUP BY, but that behaviour is a quirk to rely on, not a
+    // contract. The newest row's date is the group's MAX(date), since the window orders by
+    // date first.
     let rows = sqlx::query_as::<_, TitleSuggestion>(
-        "SELECT a.title, a.category, MAX(a.date) AS last_date, \
-           (SELECT x.cost_cents FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
-              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_cost_cents, \
-           (SELECT x.counter_value FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
-              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_counter, \
-           (SELECT x.from_place FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
-              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_from_place, \
-           (SELECT x.to_place FROM activities x WHERE x.object_id = a.object_id \
-              AND x.title = a.title AND x.category = a.category AND x.deleted_at IS NULL \
-              ORDER BY x.date DESC, x.id DESC LIMIT 1) AS last_to_place \
-         FROM activities a WHERE a.object_id = $1 AND a.deleted_at IS NULL \
-         GROUP BY a.object_id, a.title, a.category ORDER BY last_date DESC LIMIT $2",
+        "SELECT title, category, date AS last_date, cost_cents AS last_cost_cents, \
+           counter_value AS last_counter, from_place AS last_from_place, to_place AS last_to_place \
+         FROM ( \
+           SELECT title, category, date, cost_cents, counter_value, from_place, to_place, \
+             ROW_NUMBER() OVER (PARTITION BY title, category ORDER BY date DESC, id DESC) AS n \
+           FROM activities WHERE object_id = $1 AND deleted_at IS NULL \
+         ) newest WHERE n = 1 ORDER BY last_date DESC LIMIT $2",
     )
     .bind(object_id)
     .bind(SUGGESTION_LIMIT)
