@@ -44,7 +44,7 @@ describe('theme contrast', () => {
     });
 
     it(`${name}: a form control's border can be seen (>= 3:1)`, () => {
-      const border = varIn(rule('input, select, textarea'), 'border')!;
+      const border = varIn(rule(':is(input, select, textarea):where(:not([data-slot]))'), 'border')!;
       for (const bg of ['bg', 'surface']) expect(contrastRatio(token(border, theme), token(bg, theme)), bg).toBeGreaterThanOrEqual(3);
     });
   }

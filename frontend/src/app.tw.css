@@ -1,0 +1,101 @@
+/* The stylesheet entry. Tailwind and the shadcn tokens, with the old app.css in a layer of its
+   own between Tailwind's reset and its utilities: an old rule beats the reset, a utility class
+   beats an old rule. That is what lets screens move over one round at a time -- see
+   docs/superpowers/specs/2026-09-29-ui-overhaul-design.md. The first @layer statement fixes
+   the order; the imports below only fill the layers. */
+@layer theme, base, legacy, components, utilities;
+@import 'tailwindcss';
+@import '@fontsource-variable/inter/wght.css';
+@import './app.css' layer(legacy);
+
+/* LogB keys its theme on `data-theme` (src/lib/theme.ts), not on a `.dark` class. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* shadcn's tokens, prefixed: app.css already has a --muted (a text colour) and an --accent (the
+   brand fill) that mean something else. Every pair is checked by tests/theme-contrast.test.ts. */
+:root {
+  --ui-radius: 0.75rem;
+  --ui-background: #fafafa;
+  --ui-foreground: #18181b;
+  --ui-card: #ffffff;
+  --ui-card-foreground: #18181b;
+  --ui-popover: #ffffff;
+  --ui-popover-foreground: #18181b;
+  --ui-primary: #f59e0b;
+  --ui-primary-foreground: #1c1300;
+  --ui-secondary: #f4f4f5;
+  --ui-secondary-foreground: #18181b;
+  --ui-muted: #f4f4f5;
+  --ui-muted-foreground: #6b6b74;
+  --ui-accent: #f4f4f5;
+  --ui-accent-foreground: #18181b;
+  --ui-destructive: #b91c1c;
+  --ui-destructive-foreground: #ffffff;
+  --ui-border: #e4e4e7;
+  --ui-input: #8a8a93;
+  --ui-ring: #b45309;
+  /* Amber as text or an outline. The fill (#f59e0b) is 2.1:1 on the page, too faint for either. */
+  --ui-brand-ink: #b45309;
+}
+:root[data-theme='dark'] {
+  --ui-background: #09090b;
+  --ui-foreground: #fafafa;
+  --ui-card: #18181b;
+  --ui-card-foreground: #fafafa;
+  --ui-popover: #18181b;
+  --ui-popover-foreground: #fafafa;
+  --ui-primary: #fbbf24;
+  --ui-primary-foreground: #1c1300;
+  --ui-secondary: #27272a;
+  --ui-secondary-foreground: #fafafa;
+  --ui-muted: #27272a;
+  --ui-muted-foreground: #a1a1aa;
+  --ui-accent: #27272a;
+  --ui-accent-foreground: #fafafa;
+  --ui-destructive: #f87171;
+  --ui-destructive-foreground: #09090b;
+  --ui-border: #27272a;
+  --ui-input: #71717a;
+  --ui-ring: #fbbf24;
+  --ui-brand-ink: #fbbf24;
+}
+
+@theme inline {
+  --color-background: var(--ui-background);
+  --color-foreground: var(--ui-foreground);
+  --color-card: var(--ui-card);
+  --color-card-foreground: var(--ui-card-foreground);
+  --color-popover: var(--ui-popover);
+  --color-popover-foreground: var(--ui-popover-foreground);
+  --color-primary: var(--ui-primary);
+  --color-primary-foreground: var(--ui-primary-foreground);
+  --color-secondary: var(--ui-secondary);
+  --color-secondary-foreground: var(--ui-secondary-foreground);
+  --color-muted: var(--ui-muted);
+  --color-muted-foreground: var(--ui-muted-foreground);
+  --color-accent: var(--ui-accent);
+  --color-accent-foreground: var(--ui-accent-foreground);
+  --color-destructive: var(--ui-destructive);
+  --color-destructive-foreground: var(--ui-destructive-foreground);
+  --color-border: var(--ui-border);
+  --color-input: var(--ui-input);
+  --color-ring: var(--ui-ring);
+  --color-brand-ink: var(--ui-brand-ink);
+  --radius-sm: calc(var(--ui-radius) - 4px);
+  --radius-md: calc(var(--ui-radius) - 2px);
+  --radius-lg: var(--ui-radius);
+  --radius-xl: calc(var(--ui-radius) + 4px);
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme {
+  /* The shell's breakpoint (app.css), so `desk:` and `max-desk:` switch exactly where the
+     sidebar does. Tailwind writes these as range queries, which is what app.css requires. */
+  --breakpoint-desk: 900px;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+}

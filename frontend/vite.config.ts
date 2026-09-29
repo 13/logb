@@ -1,8 +1,10 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { pwaIcons } from './scripts/pwa-icons.ts';
 import { files, householdData, neverCached, otherApi, thumbnails } from './src/lib/sw-routes.ts';
@@ -23,6 +25,7 @@ function buildCommit(): string {
 
 export default defineConfig({
   plugins: [
+    tailwindcss(),
     svelte(),
     VitePWA({
       // Prompt, not autoUpdate: an automatic reload landed mid-form and lost what was typed.
@@ -32,14 +35,18 @@ export default defineConfig({
         name: 'LogB',
         short_name: 'LogB',
         description: 'Complete history of your owned objects',
-        theme_color: '#1f6f5f',
-        background_color: '#f7f7f5',
+        theme_color: '#f59e0b',
+        background_color: '#fafafa',
         display: 'standalone',
         start_url: '/',
         icons: pwaIcons,
       },
       workbox: {
         navigateFallback: '/index.html',
+        // Inter ships a file per script; only the two a German or English household uses are
+        // precached, so the font is there offline without caching Cyrillic and Greek nobody
+        // downloads.
+        globPatterns: ['**/*.{js,css,html}', 'assets/inter-latin-wght-normal-*.woff2', 'assets/inter-latin-ext-wght-normal-*.woff2'],
         // Still claim the page on the FIRST install, as autoUpdate did, so offline works from the
         // first visit. An update is unaffected: it waits until the user accepts it, and only
         // then activates and claims.
@@ -107,6 +114,8 @@ export default defineConfig({
       },
     }),
   ],
+  // shadcn-svelte's generated components import from `$lib`, SvelteKit's name for src/lib.
+  resolve: { alias: { $lib: fileURLToPath(new URL('./src/lib', import.meta.url)) } },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_DATE__: JSON.stringify(new Date().toISOString()),

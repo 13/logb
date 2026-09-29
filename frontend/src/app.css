@@ -52,7 +52,7 @@
      invisible, which is exactly where focus matters most. */
   --focus: #1c1c1a;
   --transition: 150ms ease;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: 'Inter Variable', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
 
   /* Tag chips: eight hues picked by a hash of the tag's name. Every pair is checked for at least
@@ -94,6 +94,28 @@
   --tag-6-bg: #123c47; --tag-6-fg: #bae6fd;
   --tag-7-bg: #2b313a; --tag-7-fg: #e5e7eb;
 }
+/* --- Tailwind's reset, undone for screens not yet migrated ------------------------------ */
+/* This file sits in the `legacy` layer, after Tailwind's `base` (see app.tw.css). The reset
+   there strips things these screens were built on; `revert` hands each back to the browser's
+   own default. Migrated markup sets these with utility classes, which win over this layer.
+   Deleted with this file in the last UI round. */
+h1, h2, h3, h4, h5, h6 { font-size: revert; font-weight: revert; }
+ul, ol, menu { list-style: revert; padding: revert; }
+img, svg, video, canvas, audio, iframe, embed, object { display: revert; vertical-align: revert; }
+img, video { max-width: revert; height: revert; }
+a { text-decoration: revert; }
+fieldset, legend, td, th, hr { padding: revert; border: revert; }
+table { border-collapse: revert; text-indent: revert; border-color: revert; }
+/* Beyond the elements above, the reset also sets a 1.5 line height on the page, its own
+   placeholder colour, a full-size monospace face and a smaller <small>, and takes the padding
+   off Chrome's date editor -- each of which moved text on these screens. */
+html { line-height: revert; }
+::placeholder { color: revert; opacity: revert; }
+code, kbd, samp, pre { font-family: revert; font-feature-settings: revert; font-variation-settings: revert; font-size: revert; }
+small { font-size: revert; }
+::-webkit-date-and-time-value { min-height: revert; text-align: revert; }
+::-webkit-datetime-edit, ::-webkit-datetime-edit-fields-wrapper, ::-webkit-datetime-edit-year-field,
+::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field { padding-block: revert; }
 * { box-sizing: border-box; margin: 0; }
 html, body { min-height: 100%; }
 /* `overscroll-behavior-y: contain` turns off Chrome on Android's pull-to-refresh. Overscrolling
@@ -120,23 +142,23 @@ main.auth > p { margin-top: var(--space-1); }
 main.auth form { width: 100%; margin-top: var(--space-4); }
 main.auth form button.primary { width: 100%; }
 h1 { font-size: var(--text-xl); } h2 { font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); }
-button, input, select, textarea { font: inherit; color: inherit; line-height: 1.25; }
+:is(button, input, select, textarea):where(:not([data-slot])) { font: inherit; color: inherit; line-height: 1.25; }
 /* `.button-like` is an anchor that acts as a button -- a download link, mostly. It shares the
    button's box rather than approximating it: two copies of that approximation had drifted to a
    different radius and no min-height, so an export link stood 2px taller than the buttons
    beside it. */
-button, .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: var(--control); cursor: pointer; background: var(--surface-2); }
+button:where(:not([data-slot])), .button-like { border: none; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); min-height: var(--control); cursor: pointer; background: var(--surface-2); }
 .button-like { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; width: 100%; }
-button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
-button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-button.ghost { background: transparent; }
-button:disabled { opacity: .5; cursor: default; }
+button.primary:where(:not([data-slot])) { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.danger:where(:not([data-slot])) { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+button.ghost:where(:not([data-slot])) { background: transparent; }
+button:where(:not([data-slot])):disabled { opacity: .5; cursor: default; }
 .field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
 .field label { font-size: var(--text-sm); color: var(--muted); }
 /* Controls are styled because they exist, not because someone remembered to wrap them in
    `.field`. The search box was the one input nobody wrapped, and it fell through to the
    browser's own look -- square corners and a blue clear button, in an app with neither. */
-input, select, textarea {
+:is(input, select, textarea):where(:not([data-slot])) {
   background: var(--surface);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
@@ -150,7 +172,7 @@ input, select, textarea {
    50px select and a 48px date field beside a 46px text field. A single-line control has one
    right height, so it is given one -- the textarea is excluded because it is the one control
    that is meant to grow, and checkbox and radio below keep their own size. */
-input, select { height: var(--control); }
+:is(input, select):where(:not([data-slot])) { height: var(--control); }
 /* `appearance: none` does not reach this: Chrome draws its own ✕ inside a search input, in its
    own blue. Ours is a button beside the field, in the app's colours. */
 input[type='search']::-webkit-search-cancel-button { appearance: none; display: none; }

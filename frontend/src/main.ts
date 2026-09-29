@@ -1,7 +1,7 @@
 import { mount } from 'svelte';
 import { get } from 'svelte/store';
 import { registerSW } from 'virtual:pwa-register';
-import './app.css';
+import './app.tw.css';
 import App from './App.svelte';
 import UpdateBanner from './lib/UpdateBanner.svelte';
 import { flushOutbox } from './lib/api';
