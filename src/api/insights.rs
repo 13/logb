@@ -14,7 +14,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -201,44 +201,172 @@ async fn read(
     let scope = scope(q.contents.unwrap_or(false));
     let today = NaiveDate::parse_from_str(&db::today(), "%Y-%m-%d")
         .expect("server-generated date is always valid");
+    let user_today = user.today();
 
+    // The statements below are independent reads, so they run concurrently on the read pool
+    // rather than one after another; the cost rollups over the scope -- by year, by category,
+    // the running total and by month -- come from a single grouped pass (`groups`) instead of
+    // four. On SQLite at most the read pool's four connections are taken, and the rest wait
+    // their turn in the pool.
+    //
     // Every `SUM` here is cast back to BIGINT: PostgreSQL widens a sum over a BIGINT column to
     // NUMERIC, which sqlx's `Any` driver cannot decode. SQLite is unaffected by the cast.
-    let by_year_sql = format!(
-        "{scope}SELECT substr(date, 1, 4) AS bucket, COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) AS cost_cents, \
-         COUNT(*) AS count FROM activities WHERE object_id IN (SELECT id FROM scope) AND deleted_at IS NULL \
-         GROUP BY bucket ORDER BY bucket DESC"
-    );
-    let by_year = sqlx::query_as::<_, Bucket>(sqlx::AssertSqlSafe(by_year_sql))
+    let groups = async {
+        // One row per (month, category) of the scope's activities. `sum` is NULL for a group
+        // whose every cost is NULL, which the by-month series leaves out, as its own `WHERE
+        // cost_cents IS NOT NULL` did.
+        let sql = format!(
+            "{scope}SELECT substr(date, 1, 7), category, CAST(SUM(cost_cents) AS BIGINT), COUNT(*) \
+             FROM activities WHERE object_id IN (SELECT id FROM scope) AND deleted_at IS NULL \
+             GROUP BY substr(date, 1, 7), category"
+        );
+        let rows: Vec<(String, String, Option<i64>, i64)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(object_id).fetch_all(&state.db).await?;
+        Ok::<_, AppError>(rows)
+    };
+    let own = async {
+        let row: (Option<i64>, Option<i64>, Option<i64>, i64) = sqlx::query_as(
+            "SELECT MIN(counter_value), MAX(counter_value), MIN(start_counter), \
+               COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) \
+             FROM activities WHERE object_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(object_id)
+        .fetch_one(&state.db)
+        .await?;
+        Ok::<_, AppError>(row)
+    };
+    let scoped_objects = async {
+        let sql = format!(
+            "{scope}SELECT id, parent_id, name, type, archived_at, purchase_date, purchase_price_cents, created_at \
+             FROM objects WHERE id IN (SELECT id FROM scope)"
+        );
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(i64, Option<i64>, String, String, Option<String>, Option<String>, Option<i64>, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(object_id).fetch_all(&state.db).await?;
+        Ok::<_, AppError>(rows)
+    };
+    // A purchase entry with a cost is the purchase; see `stats::purchase_spend`.
+    let purchased = async {
+        let sql = format!(
+            "{scope}SELECT DISTINCT object_id FROM activities WHERE object_id IN (SELECT id FROM scope) \
+             AND deleted_at IS NULL AND category = 'purchase' AND cost_cents > 0"
+        );
+        let rows: Vec<(i64,)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(object_id).fetch_all(&state.db).await?;
+        Ok::<_, AppError>(rows)
+    };
+    // Trip distance is the object's own, regardless of `contents`, exactly like `usage_by_month`
+    // and `counter_per_day_milli` -- a child's trips are not this object's counter moving.
+    let trip_months = async {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT substr(date, 1, 7), CAST(SUM(counter_value - start_counter) AS BIGINT) FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category = 'trip' \
+             AND start_counter IS NOT NULL AND counter_value IS NOT NULL GROUP BY substr(date, 1, 7)",
+        )
         .bind(object_id)
         .fetch_all(&state.db)
         .await?;
-
-    // Readings are left out: they never carry a cost, and a monthly reading habit would put
-    // an empty "Reading" bar at the bottom of every car's breakdown.
-    let by_category_sql = format!(
-        "{scope}SELECT category AS bucket, COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) AS cost_cents, \
-         COUNT(*) AS count FROM activities WHERE object_id IN (SELECT id FROM scope) AND deleted_at IS NULL \
-         AND category <> 'reading' GROUP BY category ORDER BY cost_cents DESC"
-    );
-    let by_category = sqlx::query_as::<_, Bucket>(sqlx::AssertSqlSafe(by_category_sql))
+        Ok::<_, AppError>(rows)
+    };
+    let children = async {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM objects WHERE parent_id = $1 AND deleted_at IS NULL")
+                .bind(object_id)
+                .fetch_one(&state.db)
+                .await?;
+        Ok::<_, AppError>(n)
+    };
+    let fills = async {
+        let rows: Vec<(String, i64, i64, Option<i64>)> = sqlx::query_as(
+            "SELECT date, counter_value, quantity_milli, cost_cents FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND category IN ('fuel','usage') AND counter_value IS NOT NULL \
+             AND quantity_milli IS NOT NULL ORDER BY counter_value",
+        )
         .bind(object_id)
         .fetch_all(&state.db)
         .await?;
+        Ok::<_, AppError>(rows)
+    };
+    let usage = async {
+        Ok::<_, AppError>(
+            usage_by_object(&state, ObjectScope::Ids(&[object_id]), user_today)
+                .await?
+                .get(&object_id)
+                .map(|u| u.rate_milli),
+        )
+    };
+    let readings = async {
+        if object.counter_unit.is_none() {
+            return Ok::<_, AppError>(Vec::new());
+        }
+        // Every reading, not a window: the first month of the chart is measured from whatever
+        // reading came before it, however long ago that was. A household object has a few dozen.
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT date, counter_value FROM activities \
+             WHERE object_id = $1 AND deleted_at IS NULL AND counter_value IS NOT NULL AND date <= $2",
+        )
+        .bind(object_id)
+        .bind(super::reminders::reading_horizon(user_today))
+        .fetch_all(&state.db)
+        .await?;
+        Ok(rows)
+    };
+    let (
+        groups,
+        (min_counter, max_counter, min_start_counter, total_cost),
+        object_rows,
+        purchased,
+        trip_month_totals,
+        children,
+        fill_rows,
+        counter_per_day_milli,
+        reading_rows,
+    ) = tokio::try_join!(
+        groups,
+        own,
+        scoped_objects,
+        purchased,
+        trip_months,
+        children,
+        fills,
+        usage,
+        readings
+    )?;
 
-    let (min_counter, max_counter, min_start_counter, total_cost): (
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        i64,
-    ) = sqlx::query_as(
-        "SELECT MIN(counter_value), MAX(counter_value), MIN(start_counter), \
-           COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) \
-         FROM activities WHERE object_id = $1 AND deleted_at IS NULL",
-    )
-    .bind(object_id)
-    .fetch_one(&state.db)
-    .await?;
+    // By year, newest first; by category, readings left out -- they never carry a cost, and a
+    // monthly reading habit would put an empty "Reading" bar at the bottom of every car's
+    // breakdown -- largest first, equal amounts by name; by month, for the last twelve.
+    let mut years: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+    let mut categories: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut running_cents = 0;
+    let mut month_totals: Vec<(String, i64)> = Vec::new();
+    for (month, category, sum, count) in groups {
+        let cents = sum.unwrap_or(0);
+        running_cents += cents;
+        let year: String = month.chars().take(4).collect();
+        let entry = years.entry(year).or_default();
+        entry.0 += cents;
+        entry.1 += count;
+        if category != "reading" {
+            let entry = categories.entry(category).or_default();
+            entry.0 += cents;
+            entry.1 += count;
+        }
+        if let Some(sum) = sum {
+            month_totals.push((month, sum));
+        }
+    }
+    let by_year: Vec<Bucket> = years
+        .into_iter()
+        .rev()
+        .map(|(bucket, (cost_cents, count))| Bucket { bucket, cost_cents, count })
+        .collect();
+    let mut by_category: Vec<Bucket> = categories
+        .into_iter()
+        .map(|(bucket, (cost_cents, count))| Bucket { bucket, cost_cents, count })
+        .collect();
+    by_category.sort_by(|a, b| b.cost_cents.cmp(&a.cost_cents).then_with(|| a.bucket.cmp(&b.bucket)));
+    let by_month = months_ending(today, USAGE_MONTHS, &month_totals);
 
     // A trip's `start_counter` is a real counter reading too, often the earliest one on record
     // (the object's counter was already there before the first trip was ever logged) -- so
@@ -260,33 +388,6 @@ async fn read(
         .unwrap_or(0);
     let overall_cost_per_counter_milli = cost_per_counter_milli(total_cost, span);
 
-    let running_sql = format!(
-        "{scope}SELECT COALESCE(CAST(SUM(cost_cents) AS BIGINT), 0) FROM activities \
-         WHERE object_id IN (SELECT id FROM scope) AND deleted_at IS NULL"
-    );
-    let (running_cents,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(running_sql))
-        .bind(object_id)
-        .fetch_one(&state.db)
-        .await?;
-
-    let scoped_objects_sql = format!(
-        "{scope}SELECT id, parent_id, name, type, archived_at, purchase_date, purchase_price_cents, created_at \
-         FROM objects WHERE id IN (SELECT id FROM scope)"
-    );
-    #[allow(clippy::type_complexity)]
-    let object_rows: Vec<(
-        i64,
-        Option<i64>,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        String,
-    )> = sqlx::query_as(sqlx::AssertSqlSafe(scoped_objects_sql))
-        .bind(object_id)
-        .fetch_all(&state.db)
-        .await?;
     let scoped: Vec<stats::ObjectRow> = object_rows
         .into_iter()
         .map(
@@ -311,15 +412,6 @@ async fn read(
             },
         )
         .collect();
-    // A purchase entry with a cost is the purchase; see `stats::purchase_spend`.
-    let purchased_sql = format!(
-        "{scope}SELECT DISTINCT object_id FROM activities WHERE object_id IN (SELECT id FROM scope) \
-         AND deleted_at IS NULL AND category = 'purchase' AND cost_cents > 0"
-    );
-    let purchased: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(purchased_sql))
-        .bind(object_id)
-        .fetch_all(&state.db)
-        .await?;
     let purchased: HashSet<i64> = purchased.into_iter().map(|(id,)| id).collect();
     let purchase_cents: i64 = purchase_spend(&scoped, &purchased)
         .iter()
@@ -341,30 +433,9 @@ async fn read(
         .unwrap_or(today);
     let ownership = stats::ownership(running_cents, purchase_cents, since, until);
 
-    let months_sql = format!(
-        "{scope}SELECT substr(date, 1, 7), CAST(SUM(cost_cents) AS BIGINT) FROM activities \
-         WHERE object_id IN (SELECT id FROM scope) AND deleted_at IS NULL AND cost_cents IS NOT NULL \
-         GROUP BY substr(date, 1, 7)"
-    );
-    let month_totals: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(months_sql))
-        .bind(object_id)
-        .fetch_all(&state.db)
-        .await?;
-    let by_month = months_ending(today, USAGE_MONTHS, &month_totals);
-
-    // Trip distance is the object's own, regardless of `contents`, exactly like `usage_by_month`
-    // and `counter_per_day_milli` above -- a child's trips are not this object's counter moving.
     // `months_ending` is reused (rather than a bespoke grouping) so this series lines up with
     // `by_month` and `usage_by_month` month for month; its `Amount.cost_cents` field is just
     // renamed to `distance` below, this being a distance total and not a cost one.
-    let trip_month_totals: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT substr(date, 1, 7), CAST(SUM(counter_value - start_counter) AS BIGINT) FROM activities \
-         WHERE object_id = $1 AND deleted_at IS NULL AND category = 'trip' \
-         AND start_counter IS NOT NULL AND counter_value IS NOT NULL GROUP BY substr(date, 1, 7)",
-    )
-    .bind(object_id)
-    .fetch_all(&state.db)
-    .await?;
     let trip_distance_by_month: Vec<MonthDistance> =
         months_ending(today, USAGE_MONTHS, &trip_month_totals)
             .into_iter()
@@ -373,21 +444,6 @@ async fn read(
                 distance: a.cost_cents,
             })
             .collect();
-
-    let (children,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM objects WHERE parent_id = $1 AND deleted_at IS NULL")
-            .bind(object_id)
-            .fetch_one(&state.db)
-            .await?;
-
-    let fill_rows: Vec<(String, i64, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT date, counter_value, quantity_milli, cost_cents FROM activities \
-         WHERE object_id = $1 AND deleted_at IS NULL AND category IN ('fuel','usage') AND counter_value IS NOT NULL \
-         AND quantity_milli IS NOT NULL ORDER BY counter_value",
-    )
-    .bind(object_id)
-    .fetch_all(&state.db)
-    .await?;
 
     let fuel = if fill_rows.is_empty() {
         None
@@ -421,23 +477,8 @@ async fn read(
         })
     };
 
-    let counter_per_day_milli = usage_by_object(&state, ObjectScope::Ids(&[object_id]), user.today())
-        .await?
-        .get(&object_id)
-        .map(|u| u.rate_milli);
-
     let usage_by_month = if object.counter_unit.is_some() {
-        // Every reading, not a window: the first month of the chart is measured from whatever
-        // reading came before it, however long ago that was. A household object has a few dozen.
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT date, counter_value FROM activities \
-             WHERE object_id = $1 AND deleted_at IS NULL AND counter_value IS NOT NULL AND date <= $2",
-        )
-        .bind(object_id)
-        .bind(super::reminders::reading_horizon(user.today()))
-        .fetch_all(&state.db)
-        .await?;
-        let readings: Vec<Reading> = rows
+        let readings: Vec<Reading> = reading_rows
             .into_iter()
             .filter_map(|(date, counter)| {
                 NaiveDate::parse_from_str(&date, "%Y-%m-%d")
