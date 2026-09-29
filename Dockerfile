@@ -17,6 +17,17 @@ COPY frontend ./
 ARG LOGB_BUILD_COMMIT=""
 RUN npm run build
 
+# --- dependency manifest ---
+# Cargo.toml and Cargo.lock with LogB's own version replaced by a constant, so that bumping it
+# for a release leaves the files -- and so the cached dependency layer below -- unchanged. Only
+# the first `version =` in Cargo.toml is the package's (dependencies spell theirs inline), and
+# in Cargo.lock only the one right after `name = "logb"`.
+FROM --platform=$BUILDPLATFORM rust:1.98.1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS manifest
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+RUN sed -i '0,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
+ && sed -i '/^name = "logb"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock
+
 # --- backend (static musl binary) ---
 # Runs on the build machine and cross-compiles to the target, instead of compiling under QEMU,
 # which for a release build with LTO is the difference between minutes and an hour. A native
@@ -35,11 +46,24 @@ RUN case "$TARGETARCH" in \
  && echo "$triple" > /target-triple \
  && rustup target add "$triple"
 WORKDIR /app
+# Dependencies first, against placeholder sources, so this layer depends on the dependency list
+# alone: a change to LogB's own code -- or a release, which changes nothing but its version --
+# reuses the cached layer (the release workflow caches layers with `cache-to: type=gha,mode=max`)
+# and recompiles one crate instead of every dependency.
+COPY --from=manifest /app/Cargo.toml /app/Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs \
+ && triple=$(cat /target-triple) \
+ && if [ "$TARGETARCH" = "$BUILDARCH" ]; then build=build; else build=zigbuild; fi \
+ && cargo "$build" --release --locked --target "$triple" \
+ && rm -rf src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
 COPY --from=frontend /app/frontend/dist ./frontend/dist
-RUN triple=$(cat /target-triple) \
+# `touch`, so cargo sees the real sources as newer than the placeholders it built above even
+# when the checkout's timestamps say otherwise.
+RUN touch src/main.rs src/lib.rs \
+ && triple=$(cat /target-triple) \
  && if [ "$TARGETARCH" = "$BUILDARCH" ]; then build=build; else build=zigbuild; fi \
  && cargo "$build" --release --locked --target "$triple" \
  && cp "target/$triple/release/logb" /logb
