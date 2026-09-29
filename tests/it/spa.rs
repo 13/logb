@@ -103,6 +103,38 @@ async fn responses_carry_a_request_id() {
     assert_ne!(hostile.headers()["x-request-id"], "a b c; drop");
 }
 
+/// A `no-cache` asset is revalidated on every load, so it carries a strong ETag and a matching
+/// `If-None-Match` answers 304 with no body. `icon.svg` because CI builds without the frontend
+/// and puts only that file in `frontend/dist`; `index.html` too when it is there.
+#[tokio::test]
+async fn embedded_assets_revalidate_with_an_etag() {
+    let app = common::spawn().await;
+    let root = app.base.trim_end_matches("/api").to_string();
+    let client = reqwest::Client::new();
+    for path in ["/icon.svg", "/", "/objects/42"] {
+        let res = client.get(format!("{root}{path}")).send().await.unwrap();
+        if res.status() == 503 {
+            continue; // index.html is not built here
+        }
+        assert_eq!(res.status(), 200, "{path}");
+        assert_eq!(res.headers()["cache-control"], "no-cache", "{path}");
+        let etag = res.headers()["etag"].to_str().unwrap().to_string();
+        assert!(etag.starts_with('"') && etag.ends_with('"') && etag.len() > 2, "{path}: {etag}");
+        let body = res.bytes().await.unwrap();
+        assert!(!body.is_empty());
+
+        let again = client.get(format!("{root}{path}"))
+            .header("if-none-match", &etag).send().await.unwrap();
+        assert_eq!(again.status(), 304, "{path}");
+        assert_eq!(again.headers()["etag"].to_str().unwrap(), etag);
+        assert!(again.bytes().await.unwrap().is_empty());
+
+        let stale = client.get(format!("{root}{path}"))
+            .header("if-none-match", "\"not-this-one\"").send().await.unwrap();
+        assert_eq!(stale.status(), 200, "{path}");
+    }
+}
+
 /// API responses are compressed with brotli or zstd when a client asks for one, and gzip still
 /// works for one that does not.
 #[tokio::test]
