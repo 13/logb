@@ -445,7 +445,14 @@ async fn seed(inst: &Instance, c: &reqwest::Client, args: &Args) -> Seeded {
         objects.push(Obj { id, kind });
     }
 
-    // Activities: skewed so a handful of objects carry long histories, as real ones do.
+    // Activities: skewed so a handful of objects carry long histories, as real ones do. The
+    // first object of each of these kinds is one of them, and the timed per-object endpoints
+    // below ask about exactly those.
+    let first_of = |kind: Kind| objects.iter().position(|o| o.kind == kind);
+    let long_histories: Vec<usize> = [Kind::Car, Kind::Home, Kind::EBike, Kind::WaterMeter]
+        .into_iter()
+        .filter_map(first_of)
+        .collect();
     let weights: Vec<u64> = objects
         .iter()
         .enumerate()
@@ -455,7 +462,7 @@ async fn seed(inst: &Instance, c: &reqwest::Client, args: &Args) -> Seeded {
                 Kind::Home => 8,
                 _ => 2,
             };
-            if i < 4 { base * 25 } else { base }
+            if long_histories.contains(&i) { base * 25 } else { base }
         })
         .collect();
     let wsum: u64 = weights.iter().sum();
@@ -594,7 +601,8 @@ async fn seed(inst: &Instance, c: &reqwest::Client, args: &Args) -> Seeded {
         }
     }
 
-    let busy_object = objects[0].id;
+    // The car with the long history: fuel, trips, readings and repairs, like a real one.
+    let busy_object = objects.iter().find(|o| o.kind == Kind::Car).map_or(objects[0].id, |o| o.id);
     let home_with_contents = objects.iter().find(|o| o.kind == Kind::Home).map_or(busy_object, |o| o.id);
     let ebike = objects.iter().find(|o| o.kind == Kind::EBike).map_or(busy_object, |o| o.id);
     let thumb_file = files.iter().copied().find(|f| *f > 0).unwrap_or(0);
