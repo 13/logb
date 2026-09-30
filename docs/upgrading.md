@@ -3,6 +3,37 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.22.0: new look, the forms
+
+**Every form has the same shape**: a label, the field, a hint where one helps, and an error
+under the field it is about, with the cursor moved there. Units sit inside their field ("km"),
+not in the label. Save and Cancel stay at the bottom of the screen (above the tab bar on a
+phone), so Save is visible as soon as a form opens. Form buttons are all 48 px tall.
+
+**Reading, reminder, object and activity forms were rebuilt** on that pattern, with new date,
+tag and file inputs.
+
+**Optional fields wait under "More details"**, which opens by itself when you edit an entry
+that uses any of them: notes, tags, a trip's places, duration and battery, an object's resource
+settings, "Inside", description, purchase details, Archive and Private.
+
+**New object**: the type comes first, as a grid of icon tiles, and none is chosen for you; Save
+asks for one. Templates follow under "Or start from a template", then the name.
+
+**New reminder**: "Due by: Date / Counter / Both" says which fields the reminder watches. A
+reminder due by both is due at whichever comes first. Switching sides keeps what you typed until
+you save; only the side you chose is saved.
+
+**Log activity**: one "Notes" field, smaller section headings.
+
+Checkboxes and choices are restyled; drop-down lists stay the phone's own pickers.
+
+**Fixes**: an object's page fetches its reminders once, and starting the app offline no longer
+ends on the browser's error page when a page's code isn't cached yet; it waits and reloads once
+you are back online.
+
+No migration.
+
 ## 0.21.0: new look, the object page
 
 **On a wide screen (1024 px and up) an object's page has two panes.** The left one holds the

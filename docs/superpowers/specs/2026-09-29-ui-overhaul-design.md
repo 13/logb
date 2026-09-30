@@ -50,6 +50,7 @@ below; its findings are cited where a round fixes them.
   Round 1's JavaScript limit was raised from 25 KB when it measured +49.9 KB: nearly all of it is
   bits-ui's shared core (menus, focus handling, floating positioning), in the lazily loaded object
   page chunk, and later rounds reuse it rather than pay for it again.
+  Round 4 measured +10.29 KB (54 B over) and was accepted: the shared field/bits-ui chunk moved out of ObjectDetail, which shrank by 21.7 KB.
 - **Accessibility.** Text meets WCAG AA contrast in both themes. Every interactive element has a
   visible focus ring (amber), a 44×44 px minimum touch target on mobile, and a name that
   `getByRole` can find. Motion is 150 ms and off under `prefers-reduced-motion`.
