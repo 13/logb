@@ -661,7 +661,7 @@ async fn unsnoozing_another_users_reminder_is_not_found() {
 }
 
 /// The dashboard's `stats.due_reminder_count` has its own hand-written SQL encoding of
-/// dueness (see src/api/objects.rs), so un-snoozing must be checked against it explicitly
+/// dueness (see src/api/objects/query.rs), so un-snoozing must be checked against it explicitly
 /// rather than assumed to agree with `is_due`.
 #[tokio::test]
 async fn unsnoozing_makes_the_object_count_it_as_due_again() {
