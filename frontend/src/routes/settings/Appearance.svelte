@@ -29,6 +29,8 @@
       : fmtDate(EXAMPLE, id as DateFormat);
 
   let error = $state('');
+  /** Set when the page is left: an answer that comes back later must not write to a page that is gone. */
+  let left = false;
   // Read from the store itself, so the box follows the stored record.
   const overridden = $derived(!!$appearance[String($user?.id)]?.override);
 
@@ -40,8 +42,8 @@
     const saved = await api<LocalSettings>('PUT', '/me/appearance', value, undefined, opts);
     applyAccountAppearance(me.id, saved, value);
   }, {
-    onsaved: () => { error = ''; toast($t('object.saved')); },
-    onerror: (e) => { error = errorMessage(e, $t); },
+    onsaved: () => { if (left) return; error = ''; toast($t('object.saved')); },
+    onerror: (e) => { if (left) return; error = errorMessage(e, $t); },
   });
 
   /** A setting applies at once (the store is what the app reads) and is saved to the account,
@@ -79,8 +81,8 @@
     // Otherwise an offline start right after this change would show the old currency.
     rememberCurrentCurrency(s.currency);
   }, {
-    onsaved: () => { instanceError = ''; toast($t('object.saved')); },
-    onerror: (e) => { instanceError = errorMessage(e, $t); },
+    onsaved: () => { if (left) return; instanceError = ''; toast($t('object.saved')); },
+    onerror: (e) => { if (left) return; instanceError = errorMessage(e, $t); },
   });
 
   /** Currency and timezone go together, as the server takes them; a currency that cannot be one
@@ -108,7 +110,7 @@
   // A change made just before leaving still reaches the server: on a route change (destroy) and
   // when the tab or app is closed (pagehide).
   const flushAll = () => { void accountSave.flush(); void instanceSave.flush(); };
-  onDestroy(flushAll);
+  onDestroy(() => { left = true; flushAll(); });
 
   const card = 'flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs';
 </script>
@@ -121,7 +123,7 @@
     {#if error}
       <div class="flex flex-wrap items-center gap-3">
         <p role="alert" class={errorClass}>{error}</p>
-        <Button variant="outline" class="min-h-11" onclick={accountSave.retry}>{$t('outbox.retry')}</Button>
+        <Button variant="outline" class="h-12" onclick={accountSave.retry}>{$t('outbox.retry')}</Button>
       </div>
     {/if}
 
@@ -177,7 +179,7 @@
         {#if instanceError}
           <div class="flex flex-wrap items-center gap-3">
             <p role="alert" class={errorClass}>{instanceError}</p>
-            <Button variant="outline" class="min-h-11" onclick={instanceSave.retry}>{$t('outbox.retry')}</Button>
+            <Button variant="outline" class="h-12" onclick={instanceSave.retry}>{$t('outbox.retry')}</Button>
           </div>
         {/if}
       </section>

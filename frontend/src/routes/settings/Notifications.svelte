@@ -115,27 +115,29 @@
 
   let hourError = $state('');
   let urlError = $state('');
+  /** Set when the page is left: an answer that comes back later must not write to a page that is gone. */
+  let left = false;
   let hourFailed = $state(false);
   let urlFailed = $state(false);
 
   const hourSave = autosave<{ hour: number; timezone: string | null }>(async (body, opts) => {
     data = await api<NotificationSettings>('PUT', '/me/notifications/hour', body, undefined, opts);
   }, {
-    onsaved: () => { hourError = ''; hourFailed = false; toast($t('object.saved')); },
-    onerror: (e) => { hourError = errorMessage(e, $t); hourFailed = true; },
+    onsaved: () => { if (left) return; hourError = ''; hourFailed = false; toast($t('object.saved')); },
+    onerror: (e) => { if (left) return; hourError = errorMessage(e, $t); hourFailed = true; },
   });
 
   const webhookSave = autosave<{ url: string | null; format: 'text' | 'json' }>(async (body, opts) => {
     data = await api<NotificationSettings>('PUT', '/me/notifications', body, undefined, opts);
   }, {
-    onsaved: () => { urlError = ''; urlFailed = false; toast($t('object.saved')); },
-    onerror: (e) => { urlError = errorMessage(e, $t); urlFailed = true; },
+    onsaved: () => { if (left) return; urlError = ''; urlFailed = false; toast($t('object.saved')); },
+    onerror: (e) => { if (left) return; urlError = errorMessage(e, $t); urlFailed = true; },
   });
 
   // A change made just before leaving still reaches the server: on a route change (destroy) and
   // when the tab or app is closed (pagehide).
   const flushAll = () => { void hourSave.flush(); void webhookSave.flush(); };
-  onDestroy(flushAll);
+  onDestroy(() => { left = true; flushAll(); });
 
   /** The hour and its timezone are one setting on the server. An hour that cannot be one is
    *  refused here, under its field. */
@@ -151,7 +153,6 @@
   }
 
   const card = 'flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs';
-  const heading = 'm-0 text-base font-semibold text-foreground';
 </script>
 
 <svelte:window onpagehide={flushAll} />
@@ -162,11 +163,10 @@
     {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
 
     <section aria-labelledby="notify-digest" class={card}>
-      <h2 id="notify-digest" class={heading}>{$t('notify.digest-title')}</h2>
+      <h2 id="notify-digest" class={sectionHeadingClass}>{$t('notify.digest-title')}</h2>
       <Field id="delivery-hour" label={$t('notify.delivery-hour')} error={hourError}>
         <Input type="number" min={0} max={23} inputmode="numeric" bind:value={hour} onchange={saveHour} />
       </Field>
-      {#if hourFailed}<Button variant="outline" class="min-h-11 self-start" onclick={hourSave.retry}>{$t('outbox.retry')}</Button>{/if}
       <Field id="delivery-timezone" label={$t('notify.delivery-timezone')} hint={$t('notify.delivery-timezone-hint')}>
         {#if zones.length > 0}
           <NativeSelect bind:value={() => timezone, (v) => { timezone = v ?? ''; saveHour(); }}>
@@ -179,6 +179,7 @@
           <Input bind:value={timezone} placeholder={$t('notify.instance-timezone')} onchange={saveHour} />
         {/if}
       </Field>
+      {#if hourFailed}<Button variant="outline" class="h-12 self-start" onclick={hourSave.retry}>{$t('outbox.retry')}</Button>{/if}
       {#if data?.deliveries?.length}
         <div class="flex flex-col gap-1">
           <h3 class={sectionHeadingClass}>{$t('notify.delivery-status')}</h3>
@@ -194,7 +195,7 @@
     </section>
 
     <section aria-labelledby="notify-push" class={card}>
-      <h2 id="notify-push" class={heading}>{$t('notify.push-title')}</h2>
+      <h2 id="notify-push" class={sectionHeadingClass}>{$t('notify.push-title')}</h2>
       {#if data}<p class={hintClass}>{$t('notify.push-hint', { hour: data.hour })}</p>{/if}
       {#if push === 'unsupported'}
         <p class={hintClass}>{$t('notify.push-unsupported')}</p>
@@ -213,7 +214,7 @@
     </section>
 
     <section aria-labelledby="notify-telegram" class={card}>
-      <h2 id="notify-telegram" class={heading}>{$t('notify.telegram-title')}</h2>
+      <h2 id="notify-telegram" class={sectionHeadingClass}>{$t('notify.telegram-title')}</h2>
       {#if !data?.telegram_configured}
         <p class={hintClass}>{$t('notify.telegram-setup')}</p>
         <Field id="telegram-token" label={$t('notify.telegram-token')}>
@@ -259,12 +260,12 @@
     </section>
 
     <section aria-labelledby="notify-webhook" class={card}>
-      <h2 id="notify-webhook" class={heading}>{$t('notify.webhook-title')}</h2>
+      <h2 id="notify-webhook" class={sectionHeadingClass}>{$t('notify.webhook-title')}</h2>
       <p class={hintClass}>{data?.instance_webhook ? $t('notify.webhook-hint-instance') : $t('notify.webhook-hint')}</p>
       <Field id="wu" label={$t('notify.webhook-url')} error={urlError}>
         <Input type="url" inputmode="url" autocomplete="off" placeholder="https://ntfy.sh/…" bind:value={url} onchange={saveWebhook} />
       </Field>
-      {#if urlFailed}<Button variant="outline" class="min-h-11 self-start" onclick={webhookSave.retry}>{$t('outbox.retry')}</Button>{/if}
+      {#if urlFailed}<Button variant="outline" class="h-12 self-start" onclick={webhookSave.retry}>{$t('outbox.retry')}</Button>{/if}
       <Field id="wf" label={$t('notify.format')}>
         <NativeSelect bind:value={() => format, (v) => { format = v as 'text' | 'json'; saveWebhook(); }}>
           <option value="text">{$t('notify.format-text')}</option>

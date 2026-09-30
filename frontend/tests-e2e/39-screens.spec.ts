@@ -123,10 +123,20 @@ test('a change made just before leaving the page still reaches the server', asyn
   await signInFresh(page, '39-flush');
   await page.goto('/settings/appearance');
   await page.getByLabel('Date format').selectOption('iso');
-  // Away within the 300 ms debounce, by the app's own back button.
-  await page.getByRole('main').getByRole('button', { name: 'Back' }).click();
-  await expect(page).toHaveURL(/\/settings$/);
-  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json()).dateFormat).toBe('iso');
+  // A real document navigation inside the 300 ms debounce: the timer dies with the page, so only
+  // the pagehide flush (with keepalive) can deliver the save.
+  await page.goto('/settings');
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json())?.dateFormat).toBe('iso');
   await page.goto('/settings/appearance');
   await expect(page.getByLabel('Date format')).toHaveValue('iso');
+});
+
+test('leaving by the in-app Back button sends a waiting change at once, not after the debounce', async ({ page }) => {
+  await signInFresh(page, '39-flush-destroy');
+  await page.goto('/settings/appearance');
+  const sent = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith('/api/me/appearance'), { timeout: 200 });
+  await page.getByLabel('Date format').selectOption('iso');
+  await page.getByRole('main').getByRole('button', { name: 'Back' }).click();
+  await sent;
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json())?.dateFormat).toBe('iso');
 });

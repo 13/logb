@@ -110,6 +110,10 @@ export default defineConfig({
           // Anything else under /api: network only, so a new endpoint is never cached by
           // accident.
           { urlPattern: otherApi, handler: 'NetworkOnly', method: 'GET' },
+          // A setting saved while its page is being left (autosave's flush, `keepalive`): the
+          // worker sends it itself. Left to the browser's fallback, the request needs a round trip
+          // to the worker from the dying page, and Chromium drops it.
+          { urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith('/api/'), handler: 'NetworkOnly', method: 'PUT' },
         ],
       },
     }),
