@@ -218,20 +218,21 @@
     </div>
   {/if}
 
-  {#if error}<p class="error">{error}</p>{/if}
-  {#if tab === 'archived' && !archivedKnown && archivedFailure && !error}<p class="error">{archivedFailure}</p>{/if}
+  {#if error}<p class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
+  {#if tab === 'archived' && !archivedKnown && archivedFailure && !error}<p class="m-0 mb-3 text-sm font-medium text-destructive">{archivedFailure}</p>{/if}
   {#if loading || (tab === 'archived' && !archivedKnown && !error && !archivedFailure)}
-    <p class="muted">{$t('nav.loading')}</p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p>
   {:else if tab === 'active' && nothingYet}
     <!-- The one screen in the app that can say what LogB is for: it is what a new user sees
          the moment setup finishes. -->
-    <div class="empty">
-      <span class="empty-icon"><Icon name="object" size={40} /></span>
-      <p>{$t('dash.empty')}</p>
-      <button class="primary" onclick={() => go('/objects/new')}>+ {$t('dash.new')}</button>
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <span class="text-muted-foreground opacity-40" aria-hidden="true"><Icon name="object" size={40} /></span>
+      <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('dash.empty')}</p>
+      <button data-slot="dash-action" onclick={() => go('/objects/new')}
+              class="inline-flex h-12 cursor-pointer items-center justify-center rounded-lg bg-primary px-4 text-base font-semibold text-primary-foreground hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring">+ {$t('dash.new')}</button>
     </div>
   {:else if tab === 'archived' && archived.length === 0}
-    <div class="empty"><p>{$t('dash.none-archived')}</p></div>
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center"><p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('dash.none-archived')}</p></div>
   {:else}
     {#if tagFilter !== null}
       <div data-testid="tag-filter" class="mb-3 flex flex-wrap items-center gap-2">
@@ -241,7 +242,7 @@
       </div>
     {/if}
     {#if rows.length === 0}
-      <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
+      <p class="m-0 text-sm text-muted-foreground">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
       <div data-testid="object-list" class="grid grid-cols-1 gap-3 wide:grid-cols-2 min-[1440px]:grid-cols-3">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}

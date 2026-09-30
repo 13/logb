@@ -94,7 +94,8 @@
 <main>
   <TopBar title={$t('search.title')} backTo="/" />
 
-  <div class="relative mb-4">
+  <!-- mt-1: room for the focus ring below the sticky top bar. -->
+  <div class="relative mt-1 mb-4">
     <SearchIcon aria-hidden="true" class="pointer-events-none absolute top-1/2 left-3 size-5 -translate-y-1/2 text-muted-foreground" />
     <!-- svelte-ignore a11y_autofocus -->
     <input type="search" data-slot="search" autofocus aria-label={$t('search.placeholder')} placeholder={$t('search.placeholder')}

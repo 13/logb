@@ -6,7 +6,7 @@ export function isDark(pref: ThemePref, systemDark: boolean): boolean {
 }
 
 /**
- * Switches the palette (app.css keys it on `data-theme`) and paints the browser's own bar --
+ * Switches the palette (app.tw.css keys it, and the `dark:` variant, on `data-theme`) and paints the browser's own bar --
  * `<meta name="theme-color">` -- in the page background of that palette, read back from
  * app.tw.css's `--ui-background` so the colour has one source. index.html ships one meta per system scheme for the
  * first paint; once the app knows the actual theme (which may differ from the system's, when

@@ -73,7 +73,7 @@
   const eager = (comp: Page): Loader => () => Promise.resolve({ default: comp });
   const routes: Array<[string, Loader]> = [
     ['/', eager(Dashboard)],
-    // Signed out only: their own small chunk, so a signed-in start never downloads them.
+    // Signed out only: their own small chunk, so an ordinary signed-in start never downloads them.
     ['/login', () => import('./routes/Login.svelte')],
     ['/setup', () => import('./routes/Setup.svelte')],
     ['/objects/new', () => import('./routes/ObjectForm.svelte')],
@@ -165,14 +165,15 @@
 </script>
 
 {#if $user === undefined}
-  <main class="p-3"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
+  <!-- Outside the shell, so the column's width is set here: .app-content > main's (app.tw.css). -->
+  <main class="mx-auto w-full max-w-[720px] p-3 desk:max-w-[1100px]"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
 {:else if $path === '/setup' || $path === '/login'}
   <!-- The same loader as every page: a failed chunk reloads once, "Loading…" only if slow. -->
   {#if current && page?.pattern === current.pattern}
     {@const Page = page.comp}
     <Page />
   {:else if slow}
-    <main class="p-3"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
+    <main class="mx-auto w-full max-w-[720px] p-3 desk:max-w-[1100px]"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
   {/if}
 {:else if $user}
   <!-- The shell is for signed-in users. There is nowhere to navigate to before you are signed
@@ -184,9 +185,12 @@
         {@const Page = page.comp}
         <Page {...current.params} />
       {:else if current}
-        {#if slow}<main><p class="muted">{$t('nav.loading')}</p></main>{/if}
+        {#if slow}<main><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>{/if}
       {:else}
-        <main><p class="muted">404</p><a href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>{$t('dash.title')}</a></main>
+        <main>
+          <p class="m-0 mb-2 text-sm text-muted-foreground">404</p>
+          <a data-slot="not-found-home" href="/" class="text-brand-ink underline underline-offset-4" onclick={(e) => { e.preventDefault(); go('/'); }}>{$t('dash.title')}</a>
+        </main>
       {/if}
     </div>
   </div>

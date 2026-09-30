@@ -8,6 +8,9 @@
   import { locale, t } from '../i18n';
   import type { QueuedOp } from './outbox';
   import type { WeightUnit } from './types';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Field } from '$lib/components/ui/field/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
   let { objectId, unit }: { objectId: number; unit: WeightUnit } = $props();
   let history = $state<WeightPoint[]>([]);
   let pending = $state<QueuedOp[]>([]);
@@ -52,64 +55,84 @@
   function y(p: WeightPoint) { return high === low ? 90 : 145 - 110 * (p.weight_grams - low) / (high - low); }
   const line = $derived(visible.map(p => `${x(p)},${y(p)}`).join(' '));
   const focused = $derived(visible.find(p => p.id === selected) ?? visible.at(-1));
+  const label = 'text-sm text-muted-foreground';
+  const figure = 'text-lg font-semibold text-foreground tabular-nums';
+  const focus = 'focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';
 </script>
 
-<section class="weight-history" aria-label={$t('weight.history')}>
-  <div class="heading">
-    <h2>{$t('weight.history')}</h2>
-    <button class="primary" onclick={() => go(`/objects/${objectId}/activities/new?category=weight`)}>{$t('weight.log')}</button>
+<section aria-label={$t('weight.history')} class="my-3 flex flex-col gap-3 rounded-lg border border-border bg-card p-3 shadow-xs">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h2 class="m-0 text-base font-semibold text-foreground">{$t('weight.history')}</h2>
+    <Button class="min-h-11" onclick={() => go(`/objects/${objectId}/activities/new?category=weight`)}>{$t('weight.log')}</Button>
   </div>
   {#if latest}
-    <div class="summary">
-      <div><span class="muted">{$t('weight.latest')}</span><strong class="tnum">{formatWeight(latest.weight_grams, unit, $locale)}</strong><span class="muted">{fmtDate(latest.date, $dateFormat)}{#if latest.pending} · {$t('weight.pending')}{/if}</span></div>
-      {#if previous}<div><span class="muted">{$t('weight.change')}</span><strong class="tnum">{latest.weight_grams > previous.weight_grams ? '+' : ''}{formatWeight(latest.weight_grams - previous.weight_grams, unit, $locale)}</strong></div>{/if}
-      {#if summary?.average_grams != null}<div><span class="muted">{$t('weight.average')}</span><strong class="tnum">{formatWeight(summary.average_grams, unit, $locale)}</strong></div>{/if}
+    <div class="flex flex-wrap gap-x-6 gap-y-2">
+      <div class="flex flex-col gap-0.5">
+        <span class={label}>{$t('weight.latest')}</span>
+        <strong class={figure}>{formatWeight(latest.weight_grams, unit, $locale)}</strong>
+        <span class={label}>{fmtDate(latest.date, $dateFormat)}{#if latest.pending} · {$t('weight.pending')}{/if}</span>
+      </div>
+      {#if previous}
+        <div class="flex flex-col gap-0.5">
+          <span class={label}>{$t('weight.change')}</span>
+          <strong class={figure}>{latest.weight_grams > previous.weight_grams ? '+' : ''}{formatWeight(latest.weight_grams - previous.weight_grams, unit, $locale)}</strong>
+        </div>
+      {/if}
+      {#if summary?.average_grams != null}
+        <div class="flex flex-col gap-0.5">
+          <span class={label}>{$t('weight.average')}</span>
+          <strong class={figure}>{formatWeight(summary.average_grams, unit, $locale)}</strong>
+        </div>
+      {/if}
     </div>
-  {:else if loaded && !failed}<p class="muted">{$t('weight.empty')}</p>
-  {:else if !loaded}<p class="muted">{$t('nav.loading')}</p>{/if}
-  {#if failed}<p role="status">{$t('weight.unavailable')}</p>{/if}
+  {:else if loaded && !failed}
+    <p class={`m-0 ${label}`}>{$t('weight.empty')}</p>
+  {:else if !loaded}
+    <p class={`m-0 ${label}`}>{$t('nav.loading')}</p>
+  {/if}
+  {#if failed}<p role="status" class="m-0 text-sm text-foreground">{$t('weight.unavailable')}</p>{/if}
   {#if all.length > 0}
-    <div class="ranges" aria-label={$t('weight.history')}>
-      {#each [1, 3, 0] as months}<button class="ghost" aria-pressed={range === months} onclick={() => { range = months as 1 | 3 | 0; selected = null; }}>{$t(months === 1 ? 'weight.month' : months === 3 ? 'weight.three-months' : 'weight.all')}</button>{/each}
+    <!-- The dashboard's segmented control: the chosen range on a card-coloured segment. -->
+    <div role="group" aria-label={$t('weight.history')} class="flex w-fit gap-1 rounded-md bg-muted p-1">
+      {#each [1, 3, 0] as months (months)}
+        <button type="button" data-slot="weight-range" aria-pressed={range === months}
+                onclick={() => { range = months as 1 | 3 | 0; selected = null; }}
+                class={['min-h-11 cursor-pointer rounded px-3 text-sm font-medium', focus, range === months ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground']}>
+          {$t(months === 1 ? 'weight.month' : months === 3 ? 'weight.three-months' : 'weight.all')}
+        </button>
+      {/each}
     </div>
     {#if visible.length}
-      <svg viewBox="0 0 500 185" role="img" aria-label={$t('weight.history')}>
+      <svg viewBox="0 0 500 185" role="img" aria-label={$t('weight.history')} class="block max-h-[230px] w-full text-brand-ink">
         <title>{$t('weight.history')} ({unit})</title>
-        <text x="4" y="38">{weightValue(high, unit).toFixed(1)}</text>
-        {#if high !== low}<text x="4" y="148">{weightValue(low, unit).toFixed(1)}</text>{/if}
+        <text x="4" y="38" class="fill-muted-foreground text-xs">{weightValue(high, unit).toFixed(1)}</text>
+        {#if high !== low}<text x="4" y="148" class="fill-muted-foreground text-xs">{weightValue(low, unit).toFixed(1)}</text>{/if}
         <polyline points={line} fill="none" stroke="currentColor" stroke-width="2" />
         {#each visible as point (point.id)}
           <circle cx={x(point)} cy={y(point)} r={focused?.id === point.id ? 6 : 4} fill="currentColor" />
         {/each}
-        <text x="48" y="178">{fmtDate(visible[0].date, $dateFormat)}</text>
-        {#if visible.length > 1}<text x="458" y="178" text-anchor="end">{fmtDate(visible[visible.length - 1].date, $dateFormat)}</text>{/if}
+        <text x="48" y="178" class="fill-muted-foreground text-xs">{fmtDate(visible[0].date, $dateFormat)}</text>
+        {#if visible.length > 1}<text x="458" y="178" text-anchor="end" class="fill-muted-foreground text-xs">{fmtDate(visible[visible.length - 1].date, $dateFormat)}</text>{/if}
       </svg>
-      <label for="weight-point-chooser" class="muted">{$t('weight.chart-hint')}</label>
-      <select id="weight-point-chooser" value={focused?.id} onchange={(e) => selected = Number(e.currentTarget.value)}>
-        {#each visible as point (point.id)}<option value={point.id}>{fmtDate(point.date, $dateFormat)} · {formatWeight(point.weight_grams, unit, $locale)}{point.pending ? ` · ${$t('weight.pending')}` : ''}</option>{/each}
-      </select>
-      <ol class="history-list" aria-label={$t('weight.history')}>
+      <Field id="weight-point-chooser" label={$t('weight.chart-hint')}>
+        <NativeSelect bind:value={() => focused?.id, (v) => (selected = Number(v))}>
+          {#each visible as point (point.id)}<option value={point.id}>{fmtDate(point.date, $dateFormat)} · {formatWeight(point.weight_grams, unit, $locale)}{point.pending ? ` · ${$t('weight.pending')}` : ''}</option>{/each}
+        </NativeSelect>
+      </Field>
+      <ol aria-label={$t('weight.history')} class="m-0 flex list-none flex-col gap-1 p-0">
         {#each visible as point (point.id)}
-          <li><button class:chosen={focused?.id === point.id} class="ghost" onclick={() => selected = point.id} aria-label={$t('weight.chart-point')}>
-            <span>{fmtDate(point.date, $dateFormat)}</span><strong>{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="muted"> · {$t('weight.pending')}</span>{/if}
-          </button></li>
+          <li>
+            <button type="button" data-slot="weight-point" aria-label={$t('weight.chart-point')} onclick={() => (selected = point.id)}
+                    class={['flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md px-3 text-left text-sm text-foreground hover:bg-accent', focus, focused?.id === point.id && 'outline-2 outline-solid outline-brand-ink']}>
+              <span>{fmtDate(point.date, $dateFormat)}</span>
+              <span><strong class="font-semibold tabular-nums">{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="text-muted-foreground"> · {$t('weight.pending')}</span>{/if}</span>
+            </button>
+          </li>
         {/each}
       </ol>
-    {:else}<p class="muted">{$t('weight.no-range')}</p>{/if}
+    {:else}
+      <p class={`m-0 ${label}`}>{$t('weight.no-range')}</p>
+    {/if}
   {/if}
-  <button class="ghost reminder" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t('weight.reminder')}</button>
+  <Button variant="outline" class="min-h-11 self-start" onclick={() => go(`/objects/${objectId}/reminders/new?kind=reading`)}>{$t('weight.reminder')}</Button>
 </section>
-
-<style>
-  .weight-history { margin-block: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-  .heading, .summary, .ranges { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
-  .heading { justify-content: space-between; } h2 { margin: 0; }
-  .summary { margin-top: var(--space-3); } .summary > div { display: flex; flex-direction: column; gap: var(--space-1); }
-  strong { font-size: var(--text-lg); } .ranges { margin-top: var(--space-3); gap: var(--space-1); }
-  [aria-pressed="true"] { background: var(--surface-2); box-shadow: inset 0 -2px currentColor; }
-  svg { display: block; width: 100%; max-height: 230px; } text { fill: var(--muted); font-size: var(--text-xs); }
-  select { width: 100%; } .reminder { margin-top: var(--space-2); }
-  .history-list { list-style: none; padding: 0; margin: var(--space-2) 0 0; display: grid; gap: var(--space-1); }
-  .history-list button { width: 100%; display: flex; justify-content: space-between; text-align: left; }
-  .history-list .chosen { outline: 2px solid var(--accent-ink); }
-</style>

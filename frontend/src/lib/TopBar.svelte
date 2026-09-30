@@ -15,29 +15,22 @@
   const dead = $derived($outboxCounts.dead);
 </script>
 
-<header class="topbar">
+<header class="sticky top-0 z-[5] flex items-center gap-2 bg-background py-2">
   {#if backTo !== null}
-    <button class="ghost" aria-label={$t('nav.back')} onclick={() => (backTo ? go(backTo) : back())}><Icon name="back" /></button>
+    <button data-slot="topbar-back" aria-label={$t('nav.back')} onclick={() => (backTo ? go(backTo) : back())}
+            class="grid size-11 shrink-0 cursor-pointer place-items-center rounded-md text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"><Icon name="back" /></button>
   {/if}
-  <!-- tabindex -1: focusable by script only, so navigation can move focus here (see
-       `focusPageHeading` in ./router.ts) without adding a Tab stop. -->
+  <!-- tabindex -1: focusable by script only (`focusPageHeading` in ./router.ts), no Tab stop and
+       no ring -- it is not a control. -->
   <div class="min-w-0 flex-1">
-    <h1 tabindex="-1" class="min-w-0 flex items-center gap-2 text-xl font-semibold tracking-tight desk:text-2xl">{#if icon}<Icon name={icon} />{/if}<span class="truncate">{title}</span></h1>
-    {#if subtitle}<p class="truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
+    <h1 tabindex="-1" class="m-0 flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight focus:outline-none desk:text-2xl">{#if icon}<Icon name={icon} />{/if}<span class="truncate">{title}</span></h1>
+    {#if subtitle}<p class="m-0 truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
   </div>
-  <!-- In offline mode the user on screen is only the last one remembered here, and what shows is
-       what was cached -- worth saying, so stale data is not taken for current. `servingSaved`
-       covers the other way this happens: online and signed in, but the network took long enough
-       that the service worker answered from `logb-api` instead (see `servedFromCache` in ./api.ts). -->
-  {#if $offline || $servingSaved}<span class="offline-note muted" role="status">{$t('nav.offline-mode')}</span>{/if}
-  {#if pending > 0}<span class="chip pending">{$t('outbox.pending', { n: pending })}</span>{/if}
-  {#if dead > 0}<span class="chip dead">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
+  <!-- In offline mode what shows is what was cached -- worth saying. `servingSaved` covers the
+       other way this happens (see `servedFromCache` in ./api.ts). -->
+  {#if $offline || $servingSaved}<span role="status" class="min-w-0 shrink truncate text-xs whitespace-nowrap text-muted-foreground">{$t('nav.offline-mode')}</span>{/if}
+  {#if pending > 0}<span class="shrink-0 rounded-full bg-warn px-3 py-0.5 text-xs whitespace-nowrap text-background">{$t('outbox.pending', { n: pending })}</span>{/if}
+  {#if dead > 0}<span class="shrink-0 rounded-full bg-destructive px-3 py-0.5 text-xs whitespace-nowrap text-destructive-foreground">{$t('outbox.dead-chip', { n: dead })}</span>{/if}
   {#if children}{@render children()}{/if}
   <AccountMenu />
 </header>
-
-<style>
-  /* Focus lands here on navigation, for screen readers -- it is not a control, so no ring. */
-  h1:focus { outline: none; }
-  .offline-note { font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-</style>

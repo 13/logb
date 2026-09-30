@@ -12,6 +12,8 @@
   import { splitReminders } from './reminder-form';
   import Icon from './Icon.svelte';
   import { Button } from '$lib/components/ui/button/index.js';
+  import { Field } from '$lib/components/ui/field/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
   import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
@@ -138,7 +140,7 @@
   }
 </script>
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<p role="alert" class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
 {#if toast}<p class="m-0 mb-3 text-sm text-muted-foreground">{toast}</p>{/if}
 
 <!-- Not `items.length === 0`: an empty list before the first answer is what the component was
@@ -231,20 +233,22 @@
   <Button class="fab-pos h-12 rounded-full px-5 text-base font-semibold shadow-lg" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</Button>
 {/if}
 
-<dialog bind:this={dialog} aria-labelledby="reminder-done-title">
-  <h2 id="reminder-done-title">{$t('reminder.done-title')}</h2>
-  {#if doneError}<p class="error" role="alert">{doneError}</p>{/if}
-  <div class="field">
-    <label for="link">{$t('reminder.done-link')}</label>
-    <select id="link" bind:value={linkId}>
-      <option value="">{$t('reminder.done-none')}</option>
-      {#each linkable as a (a.id)}
-        <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {activityTitle(a.title, a.category, $t)}</option>
-      {/each}
-    </select>
-  </div>
-  <div class="row">
-    <button class="ghost" onclick={() => dialog?.close()}>{$t('nav.cancel')}</button>
-    <button class="primary" onclick={confirmDone} disabled={doneBusy}>{$t('reminder.done')}</button>
+<dialog bind:this={dialog} aria-labelledby="reminder-done-title"
+        class="m-auto w-[min(92vw,28rem)] rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-xl backdrop:bg-black/45">
+  <div class="flex flex-col gap-4 p-4">
+    <h2 id="reminder-done-title" class="m-0 text-lg font-semibold">{$t('reminder.done-title')}</h2>
+    {#if doneError}<p role="alert" class="m-0 text-sm font-medium text-destructive">{doneError}</p>{/if}
+    <Field id="link" label={$t('reminder.done-link')}>
+      <NativeSelect bind:value={linkId}>
+        <option value="">{$t('reminder.done-none')}</option>
+        {#each linkable as a (a.id)}
+          <option value={String(a.id)}>{fmtDate(a.date, $dateFormat)} — {activityTitle(a.title, a.category, $t)}</option>
+        {/each}
+      </NativeSelect>
+    </Field>
+    <div class="flex justify-end gap-2">
+      <Button variant="outline" class="h-12" onclick={() => dialog?.close()}>{$t('nav.cancel')}</Button>
+      <Button class="h-12" onclick={confirmDone} disabled={doneBusy}>{$t('reminder.done')}</Button>
+    </div>
   </div>
 </dialog>

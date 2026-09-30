@@ -87,10 +87,10 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
   const clearance = 24;
 
   // The design spec: the FAB sits at the bottom-right of the content pane, clear of the
-  // sidebar -- a constant `--space-5` from `main`'s right edge, not drifting further out in the
+  // sidebar -- a constant 24px from `main`'s right edge, not drifting further out in the
   // gutter that opens once `main` hits its 1100px cap. A `position: fixed` FAB measures `right`
   // from the viewport, so on a wide screen that constant gap has to be computed deliberately
-  // rather than falling out of a plain `right: var(--space-5)`.
+  // rather than falling out of a plain `right: 1.5rem`.
   const gap = mainBox.x + mainBox.width - clearance - (fabBox.x + fabBox.width);
   expect(
     Math.abs(gap),

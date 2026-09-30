@@ -89,7 +89,7 @@
 
 <FilePicker {objectId} onuploaded={() => { load(); onchanged?.(); }} />
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<p role="alert" class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
 
 {#if !loaded}
   <!-- Nothing: the request is still out. -->

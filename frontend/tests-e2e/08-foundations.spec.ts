@@ -25,8 +25,9 @@ test('keyboard focus is visible', async ({ page }) => {
 
   // Chromium's own default focus ring already satisfies "has some outline" (outlineStyle:
   // 'auto', 1px, no offset), so that's not proof this app styles focus. What the app's rule
-  // in app.css actually adds -- and the browser default does not -- is a *solid* 2px outline
-  // with a 2px offset. Assert on those, not on "not none" / "> 0".
+  // (app.tw.css's base layer, and every component's `focus-visible:` utilities) adds -- and the
+  // browser default does not -- is a *solid* 2px outline with a 2px offset. Assert on those, not
+  // on "not none" / "> 0".
   expect(ring!.style, `${ring!.tag} outline should be 'solid' (the app's rule), not the browser default 'auto'`).toBe(
     'solid'
   );
@@ -35,38 +36,31 @@ test('keyboard focus is visible', async ({ page }) => {
     '2px'
   );
 
-  // A regression that drops `var(--focus)` -- leaving bare `outline: 2px solid` -- resolves to
-  // `currentColor` and would still pass all three assertions above. On the plain-text control
-  // focused above that's not even a visible regression, since `--focus` and the inherited text
-  // colour are, by design, the same token (see app.css) -- so `currentColor` would coincidentally
-  // match there regardless of whether the rule is right. The one place that coincidence doesn't
-  // hold is a filled accent button, whose own text colour (`--accent-text`) is deliberately far
-  // from `--focus`: that's also exactly the control the offset exists to keep legible (see the
-  // comment above `:focus-visible` in app.css), so it's the right place to pin the ring colour.
-  // Keep tabbing (real presses, not .focus()) until reaching it.
+  // A regression that drops the ring's colour -- bare `outline: 2px solid` -- resolves to
+  // `currentColor` and would still pass the checks above. The one place that coincidence does not
+  // hold is a filled amber button, whose text colour is far from the ring, and it is also the
+  // control the offset exists for: tab to one (the empty dashboard's "+ New object") and pin the
+  // ring colour there. Both colours are resolved from the live tokens, not hard-coded.
+  const resolve = (value: string, prop: 'color' | 'backgroundColor') => page.evaluate(([v, p]) => {
+    const probe = document.createElement('div');
+    probe.style[p] = v;
+    document.body.appendChild(probe);
+    const out = getComputedStyle(probe)[p];
+    probe.remove();
+    return out;
+  }, [value, prop] as const);
+  const amber = await resolve('var(--ui-primary)', 'backgroundColor');
+
   let onAccentButton = false;
   for (let i = 0; i < 40 && !onAccentButton; i++) {
     await page.keyboard.press('Tab');
-    onAccentButton = await page.evaluate(
-      () => (document.activeElement as HTMLElement | null)?.classList.contains('primary') ?? false
-    );
+    onAccentButton = await page.evaluate((fill) => {
+      const el = document.activeElement as HTMLElement | null;
+      return !!el && el.tagName === 'BUTTON' && getComputedStyle(el).backgroundColor === fill;
+    }, amber);
   }
-  expect(onAccentButton, 'expected to reach a filled accent (.primary) button by tabbing').toBe(true);
+  expect(onAccentButton, 'expected to reach a filled amber button by tabbing').toBe(true);
 
-  const colors = await page.evaluate(() => {
-    const el = document.activeElement as HTMLElement;
-    // Resolve the expected colour from the live `--focus` custom property at runtime, via a
-    // scratch element, rather than hardcoding a hex -- so a deliberate palette change doesn't
-    // fail this test, while an accidental loss of the variable still does.
-    const probe = document.createElement('div');
-    probe.style.color = 'var(--focus)';
-    document.body.appendChild(probe);
-    const expected = getComputedStyle(probe).color;
-    probe.remove();
-    return { outline: getComputedStyle(el).outlineColor, expected };
-  });
-  expect(
-    colors.outline,
-    `accent button outline colour should be the app's --focus token (${colors.expected}), not currentColor`
-  ).toBe(colors.expected);
+  const outline = await page.evaluate(() => getComputedStyle(document.activeElement as HTMLElement).outlineColor);
+  expect(outline, "the amber button's ring is the ring token, not currentColor").toBe(await resolve('var(--ui-ring)', 'color'));
 });
