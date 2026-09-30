@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { logEntry, signInFresh } from './helpers';
+import { logEntry, openMoreDetails, signInFresh } from './helpers';
 
 /** The app's own example date, pinned so nothing here depends on when it actually runs (mirrors
  *  `FIXED_NOW` in `26-date-format.spec.ts`). Nothing in this spec asserts on a date directly, but
@@ -36,6 +36,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   await page.getByLabel(/^Distance/).fill('200');
   await expect(page.getByLabel(/^End/)).toHaveValue('600');
 
+  await openMoreDetails(page);
   await page.getByLabel(/^From/).fill('Home');
   await page.getByLabel(/^To/).fill('Office');
   await page.getByLabel(/^Duration/).fill('1:15');
@@ -87,6 +88,7 @@ test('logging a trip, editing one, filtering by it, and the end-below-start erro
   // Battery used has no native `min`/`max` (see ActivityForm.svelte) precisely so a value past
   // 100 reaches the app's own message instead of being silently refused by the browser.
   await page.getByLabel(/^End/).fill('600');
+  await openMoreDetails(page);
   await page.getByLabel(/Battery used/).fill('101');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Battery used must be 0–100 %')).toBeVisible();

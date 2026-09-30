@@ -249,7 +249,6 @@ export default {
   'lastdone.clear': 'Clear title filter',
 
   'activity.new': 'Log activity',
-  'activity.details': 'Details',
   'activity.edit': 'Edit activity',
   'activity.date': 'Date',
   'activity.category': 'Category',

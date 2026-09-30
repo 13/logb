@@ -253,3 +253,30 @@ export function optimisticActivity(tempId: number, oid: number, body: ActivityIn
     created_at: now, updated_at: now, attachments: [], pending: true,
   };
 }
+
+/** Whether an entry uses anything the form keeps under "More details": the form opens that
+ *  section for it. A session's place and duration stay in view (they are what a session is),
+ *  so `from_place`/`duration_minutes` only count for a trip. */
+export function activityHasDetails(a: ActivityInput): boolean {
+  const trip = a.category === 'trip'
+    && (!!a.from_place || !!a.to_place || a.duration_minutes != null || a.battery_used_pct != null);
+  return a.notes.trim() !== '' || (a.tags ?? []).length > 0 || trip || a.fuel_level_pct != null
+    || a.estimated === 1 || a.meter_reset === 1 || !!a.period_start || !!a.period_end;
+}
+
+/** The activity form's field for each key `validateActivity` returns. */
+export const ACTIVITY_FIELD_IDS: Readonly<Record<string, string>> = {
+  'activity.date': 'd',
+  'activity.title': 'ti',
+  'weight.invalid': 'weight',
+  'activity.cost': 'co',
+  'activity.counter': 'cv',
+  'activity.quantity': 'qt',
+  'activity.fuel-level-error': 'fuel-level',
+  'activity.meter-reading': 'meter-reading',
+  'activity.period-start': 'period-start',
+  'trip.start': 'tst',
+  'trip.end': 'ten',
+  'trip.duration': 'tdu',
+  'trip.battery': 'tba',
+};

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { logEntry, signInFresh } from './helpers';
+import { logEntry, openMoreDetails, signInFresh } from './helpers';
 
 /** Pinned so every entry logged through the form (its date defaults to "today") lands on the
  *  same day, and the maths in this spec's own comments below don't depend on when it runs --
@@ -47,6 +47,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}/activities/new\\?category=trip`));
   await expect(page.getByLabel(/^Start/)).toHaveValue('1000');
   await page.getByLabel(/^Distance/).fill('200');
+  await openMoreDetails(page);
   await page.getByLabel(/Battery used/).fill('40');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}$`));
@@ -116,6 +117,7 @@ test('logging charges and trips, and the Energy section they produce', async ({ 
   await logEntry(page, /Log trip/);
   await expect(page.getByLabel(/^Start/)).toHaveValue('1400');
   await page.getByLabel(/^Distance/).fill('50');
+  await openMoreDetails(page);
   await page.getByLabel(/Battery used/).fill('85');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page).toHaveURL(new RegExp(`/objects/${bike}$`));

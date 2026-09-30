@@ -14,8 +14,17 @@
   import { go, back } from '../lib/router';
   import { centsToInput, counter as fmtCounter, fmtDate, todayIso } from '../lib/format';
   import { dateFormat } from '../stores/date-format';
-  import { activityTitle, activityToFormText, buildActivityInput, changeWeightUnitState, counterBelowLast, emptyActivity, firstExifDate, hashToNegativeId, optimisticActivity, parseCategoryParam, resolveCategory, suggestionsFor, toActivityInput, validateActivity, weightDeviates } from '../lib/activity-form';
-  import { fieldError } from '../lib/form-error';
+  import { activityTitle, activityToFormText, buildActivityInput, changeWeightUnitState, counterBelowLast, emptyActivity, firstExifDate, hashToNegativeId, optimisticActivity, parseCategoryParam, resolveCategory, suggestionsFor, toActivityInput, validateActivity, weightDeviates, activityHasDetails, ACTIVITY_FIELD_IDS } from '../lib/activity-form';
+  import { fieldError, fieldErrorAt, type FieldError } from '../lib/form-error';
+  import FormActions from '../lib/FormActions.svelte';
+  import MoreDetails from '../lib/MoreDetails.svelte';
+  import { revealField } from '../lib/reveal-field';
+  import { CheckField, Field } from '$lib/components/ui/field/index.js';
+  import { chipClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Textarea } from '$lib/components/ui/textarea/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
   import { linkTripDistance, linkTripEnd, linkTripStart, type TripLink } from '../lib/trip';
   import { energyLabelKey, fuelUnitLabel } from '../lib/energy';
   import { categoriesFor, customTypes } from '../lib/type-registry';
@@ -59,6 +68,16 @@
   let saved = $state<Activity | null>(null);
   let error = $state('');
   let busy = $state(false);
+  /** A save refused by `validateActivity`, shown under the field it names. */
+  let fieldErr = $state<FieldError | null>(null);
+  const errorFor = (fid: string): string => (fieldErr?.id === fid ? fieldErr.message : '');
+  /** The Save bar's line: anything that is not about one field. */
+  const formError = $derived(error || (fieldErr?.id === null ? fieldErr.message : ''));
+  /** "More details": opened for an entry that already uses any of its fields. */
+  let moreOpen = $state(false);
+  /** True until the object (and, when editing, the entry) has been applied to the form
+   *  (`aria-busy`): "More details" may still open itself until then. */
+  let loading = $state(true);
   let allSuggestions = $state<TitleSuggestion[]>([]);
   /** Tags already in use, offered while typing one. */
   let tagCounts = $state<TagCount[]>([]);
@@ -81,6 +100,9 @@
   const counterWarn = $derived(counterBelowLast(counterText, lastCounter));
   const weightWarn = $derived(weightDeviates(input.category, weightText, weightUnit, object?.stats.latest_weight_grams));
   const photoDate = $derived(firstExifDate(attachments));
+  const previousWeight = $derived(object?.stats.latest_weight_grams != null
+    ? `${$t('weight.previous')}: ${formatWeight(object.stats.latest_weight_grams, weightUnit, $locale)} · ${fmtDate(object.stats.latest_weight_date ?? null, $dateFormat)}`
+    : '');
 
   /** The `?category=` query parameter of a `.../activities/new` link -- ObjectDetail's "+ Log
    *  trip" button uses it (see Step 4 of the trip-log task). A garbage or unknown value is
@@ -91,6 +113,10 @@
   }
 
   onMount(async () => {
+    try { await load(); } finally { loading = false; }
+  });
+
+  async function load() {
     // Not awaited, and a failure is ignored: this form has to work offline, and suggestions are
     // only a convenience. `tags` itself travels in `input`, so the outbox carries it like `notes`.
     api<TagCount[]>('GET', '/tags').then((list) => (tagCounts = list), () => {});
@@ -142,6 +168,7 @@
         durationText = f.durationText; distance = f.distance;
         originalWeightText = weightText; originalWeightUnit = weightUnit; originalWeight = a.weight_grams ?? null;
         attachments = a.attachments;
+        moreOpen = activityHasDetails(input);
         ready = true;
       } catch (e) {
         // The row could not be loaded, so the form is showing empty defaults on an EDIT url.
@@ -152,7 +179,7 @@
     } else if (object && object.stats.current_counter !== null) {
       counterText = String(object.stats.current_counter);
     }
-  });
+  }
 
   // Re-check whenever the object context arrives. Svelte derived values update on the next
   // reactive pass, so reading `resourceUnit` immediately after assigning `object` in onMount can
@@ -299,10 +326,23 @@
     // ever set on a trip suggestion in the first place (see `TitleSuggestion` on the backend).
     if (s.last_from_place !== null) fromText = s.last_from_place;
     if (s.last_to_place !== null) toText = s.last_to_place;
+    if (s.last_from_place !== null || s.last_to_place !== null) moreOpen = true;
+  }
+
+  async function reject(key: string) {
+    const at = fieldErrorAt(key, $t, ACTIVITY_FIELD_IDS);
+    fieldErr = at;
+    if (at.id !== null && !(await revealField(at.id))) fieldErr = { id: null, message: at.message };
+  }
+
+  /** The first "+ Add photos or files": saves the draft the files will hang on (`ensureSaved`). */
+  async function addFiles() {
+    try { await ensureSaved(); error = ''; } catch (e) { error = errorMessage(e, $t); }
   }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    fieldErr = null;
     if (editing && !saved) {
       // On an edit url with no loaded row: `onMount`'s GET failed (offline, a 5xx). Falling
       // through would take the `else` branch below and CREATE a second activity -- the user
@@ -312,7 +352,7 @@
     }
     const body = buildInput();
     const bad = validateActivity(body);
-    if (bad) { error = fieldError(bad, $t); return; }
+    if (bad) { await reject(bad); return; }
     busy = true; error = '';
     try {
       if (saved?.pending) {
@@ -401,213 +441,184 @@
 
 <main>
   <TopBar title={editing ? $t('activity.edit') : input.category === 'weight' ? $t('weight.log') : $t('activity.new')} backTo={`/objects/${oid}`} />
-  <form onsubmit={submit}>
-    <div class="row">
-      <div class="field"><label for="d">{$t('activity.date')}</label><DateInput id="d" bind:value={input.date} max={input.category === 'weight' ? todayIso() : undefined} required /></div>
-      <div class="field">
-        <label for="c">{$t('activity.category')}</label>
-        <select id="c" bind:value={input.category} onchange={() => (categoryTouched = true)}>
-          {#each offered as c}<option value={c}>{$t(`cat.${c}`)}</option>{/each}
-        </select>
-      </div>
+  <form onsubmit={submit} aria-busy={loading} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
+    <div class="grid grid-cols-2 gap-3">
+      <Field id="d" label={$t('activity.date')} error={errorFor('d')}>
+        <DateInput id="d" bind:value={input.date} max={input.category === 'weight' ? todayIso() : undefined} required />
+      </Field>
+      <Field id="c" label={$t('activity.category')}>
+        <NativeSelect bind:value={() => input.category, (v: Category) => { input.category = v; categoryTouched = true; }}>
+          {#each offered as c (c)}<option value={c}>{$t(`cat.${c}`)}</option>{/each}
+        </NativeSelect>
+      </Field>
     </div>
     {#if photoDate && photoDate !== input.date}
-      <button type="button" class="ghost hintbtn" onclick={() => (input.date = photoDate)}>{$t('activity.use-exif-date', { date: fmtDate(photoDate, $dateFormat) })}</button>
-    {/if}
-    {#if input.category !== 'weight' && !editing && suggestions.length > 0}
-      <div class="chips">
-        {#each suggestions.slice(0, 3) as s (s.title + s.category)}
-          <button type="button" class="chip" onclick={() => repeat(s)}>{$t('activity.repeat')}: {s.title}</button>
-        {/each}
-      </div>
-    {/if}
-    {#if input.category === 'weight'}
-      <h2 class="section-title">{$t('activity.details')}</h2>
-      <div class="row">
-        <div class="field"><label for="weight">{$t('cat.weight')}</label><input id="weight" type="text" inputmode="decimal" bind:value={weightText} required /></div>
-        <div class="field"><label for="weight-unit">{$t('weight.unit')}</label><select id="weight-unit" bind:value={() => weightUnit, changeWeightUnit}><option value="kg">kg</option><option value="lb">lb</option></select></div>
-      </div>
-      {#if object?.stats.latest_weight_grams != null}
-        <p class="hint">{$t('weight.previous')}: {formatWeight(object.stats.latest_weight_grams, weightUnit, $locale)} · {fmtDate(object.stats.latest_weight_date ?? null, $dateFormat)}</p>
-      {/if}
-      {#if weightWarn}<p class="hint warning" role="status">{$t('weight.large-change')}</p>{/if}
-    {:else}
-    <h2 class="section-title">{$t('activity.details')}</h2>
-    <div class="field">
-      <label for="ti">{$t('activity.title')}</label>
-      <!-- Optional only for a trip or a charge (spec: "defaults to $t('cat.trip') when empty",
-           and a charge to "Charged"/"Geladen" or the petrol wording) -- shown as the placeholder
-           rather than pre-filled, so it stays plainly a hint and not text the user has to notice
-           and delete. `activityTitle` (also what Timeline.svelte falls back to for an
-           untitled row) is reused here so the two can never disagree about the fallback word. -->
-      <input id="ti" list="titles" bind:value={input.title} required={input.category !== 'trip' && input.category !== 'fuel' && input.category !== 'usage'}
-             placeholder={activityTitle('', input.category, $t, object?.fuel_unit ?? undefined) || undefined} />
-      <datalist id="titles">
-        {#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}
-      </datalist>
-    </div>
-    {/if}
-    {#if input.category === 'usage' && object?.resource_kind === 'water'}
-      {#if object.measurement_mode === 'meter'}
-        <div class="field">
-          <label for="meter-reading">{$t('water.meter-reading')} ({fuelUnitLabel(resourceUnit)})</label>
-          <input id="meter-reading" type="text" inputmode="decimal" bind:value={meterReadingText} required />
-        </div>
-        <label class="row toggle"><input type="checkbox" bind:checked={() => input.meter_reset === 1, (v) => (input.meter_reset = v ? 1 : 0)} /> {$t('water.meter-reset')}</label>
-      {:else}
-        <div class="row">
-          <div class="field"><label for="period-start">{$t('water.period-start')}</label><DateInput id="period-start" bind:value={() => input.period_start ?? '', (v) => (input.period_start = v || null)} /></div>
-          <div class="field"><label for="period-end">{$t('water.period-end')}</label><DateInput id="period-end" bind:value={() => input.period_end ?? '', (v) => (input.period_end = v || null)} /></div>
-        </div>
-      {/if}
-      <label class="row toggle"><input type="checkbox" bind:checked={() => input.estimated === 1, (v) => (input.estimated = v ? 1 : 0)} /> {$t('water.estimated')}</label>
-    {/if}
-    {#if input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')}
-      <!-- "Charged full" for a kWh object, "Filled up" for petrol/diesel -- topping up a tank
-           is not "charging" it. Picked the same way every other charge/fill string is
-           (energyLabelKey), so this checkbox and the "+ Log charge"/"+ Log fill" button that
-           opened this form never disagree about which of the two this object does. The
-           timeline's own short "full"/"voll" stays unit-agnostic -- it reads fine either way. -->
-      <label class="row toggle">
-        <input type="checkbox" bind:checked={chargedFull} />
-        {$t(energyLabelKey(resourceUnit) === 'energy.charged' ? 'activity.charged-full' : 'activity.filled-full')}
-      </label>
-      {#if resourceUnit === 'l' || resourceUnit === 'gal'}
-        <div class="field">
-          <label for="fuel-level">{$t('activity.fuel-level')}</label>
-          <input id="fuel-level" type="number" inputmode="numeric" min="0" max="100" bind:value={input.fuel_level_pct} />
-          <span class="hint">{$t('activity.fuel-level-hint')}</span>
-        </div>
-      {/if}
-    {/if}
-    {#if input.category === 'trip'}
-      <!-- `object?.counter_unit` (not a plain `object.counter_unit`): an existing trip must
-           still be editable offline even if the object itself failed to load (no cache either),
-           the same reason `object?.counter_unit` gates the generic Counter field's `label` --
-           these labels just show no unit in that rare case instead of throwing on `object.`. -->
-      <div class="row">
-        <div class="field">
-          <label for="tst">{$t('trip.start')} ({object?.counter_unit ?? ''})</label>
-          <input id="tst" type="number" inputmode="numeric" min="0" bind:value={input.start_counter} oninput={onTripStartChange} />
-        </div>
-        <div class="field">
-          <label for="ten">{$t('trip.end')} ({object?.counter_unit ?? ''})</label>
-          <input id="ten" type="number" inputmode="numeric" min="0" bind:value={input.counter_value} oninput={onTripEndChange} />
-        </div>
-      </div>
-      <div class="field">
-        <label for="tds">{$t('trip.distance')} ({object?.counter_unit ?? ''})</label>
-        <!-- No `min="0"` (unlike Start/End): distance is `end - start`, so an end typed below
-             start makes it negative -- exactly the mistake `trip.error-end` exists to explain.
-             A native `min` would instead block the browser's own submit outright before that
-             message ever runs, leaving Save looking like it silently does nothing.
-             No `step` either, on purpose: the default (whole numbers only) matches Start/End,
-             which are themselves whole counter units, so a decimal distance could never actually
-             be reached by any real start/end pair -- typing one is simply refused by the field,
-             the same way Start/End already refuse one. -->
-        <input id="tds" type="number" inputmode="numeric" bind:value={distance} oninput={onTripDistanceChange} />
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="tfr">{$t('trip.from')}</label>
-          <input id="tfr" list="trip-from" maxlength="80" bind:value={fromText} />
-          <datalist id="trip-from">{#each tripPlaces.from as p (p)}<option value={p}></option>{/each}</datalist>
-        </div>
-        <div class="field">
-          <label for="tto">{$t('trip.to')}</label>
-          <input id="tto" list="trip-to" maxlength="80" bind:value={toText} />
-          <datalist id="trip-to">{#each tripPlaces.to as p (p)}<option value={p}></option>{/each}</datalist>
-        </div>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="tdu">{$t('trip.duration')}</label>
-          <input id="tdu" type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} />
-        </div>
-        <div class="field">
-          <label for="tba">{$t('trip.battery')} (%)</label>
-          <!-- No `min`/`max`: same reason the Distance field below has no `min="0"` -- a native
-               bound would block the browser's own submit before `validateActivity`'s own
-               `trip.error-battery` message ever ran, so typing 101 would look like Save
-               silently did nothing instead of showing that message. -->
-          <input id="tba" type="number" inputmode="numeric" bind:value={input.battery_used_pct} />
-        </div>
-      </div>
-    {/if}
-    {#if input.category === 'session'}
-      <div class="row">
-        <div class="field"><label for="session-location">{$t('session.location')}</label><input id="session-location" maxlength="80" bind:value={fromText} /></div>
-        <div class="field"><label for="session-duration">{$t('session.duration')}</label><input id="session-duration" type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} /></div>
-      </div>
-    {/if}
-    {#if input.category !== 'weight'}
-    <div class="row">
-      {#if object?.counter_unit && input.category !== 'trip'}
-        <div class="field">
-          <label for="cv">{$t('activity.counter')} ({object.counter_unit})</label>
-          <input id="cv" type="number" inputmode="numeric" min="0" bind:value={counterText} />
-          {#if counterWarn}<span class="warn">{$t('activity.counter-warn', { last: fmtCounter(lastCounter, object.counter_unit, $locale) })}</span>{/if}
-        </div>
-      {/if}
-      <div class="field"><label for="co">{$t('activity.cost')}</label><input id="co" type="text" inputmode="decimal" bind:value={costText} /></div>
-    </div>
-    {/if}
-    {#if (input.category === 'fuel' || (input.category === 'usage' && object?.measurement_mode !== 'meter')) && resourceUnit}
-      <div class="field">
-        <!-- A bare label, not an invented "l"/"gal", once the object declares no fuel unit at
-             all -- matches the bare number Timeline.svelte now shows for the same case. -->
-        <label for="qt">{$t('activity.quantity')} ({fuelUnitLabel(resourceUnit)})</label>
-        <input id="qt" type="text" inputmode="decimal" bind:value={quantityText} />
-      </div>
-    {/if}
-    <h2 class="section-title">{$t('activity.notes')}</h2>
-    <div class="field"><label for="no">{$t('activity.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
-    <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
-
-    <h2>{$t('activity.photos')}</h2>
-    {#if attachments.length > 0}
-      <div class="thumb-strip">
-        {#each attachments as a (a.id)}
-          <div class="strip-item" class:pending={a.pending}>
-            {#if a.kind === 'photo'}
-              <img src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" loading="lazy" decoding="async" />
-            {:else}
-              <span class="doc-chip"><Icon name="document" size={28} /></span>
-            {/if}
-            {#if a.pending}<span class="chip pending-chip">{$t('timeline.pending')}</span>{/if}
-          </div>
-        {/each}
-      </div>
-    {/if}
-    {#if saved}
-      <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
-    {:else if ready}
-      <button type="button" class="ghost pickerlike" onclick={async () => { try { await ensureSaved(); error = ''; } catch (e) { error = errorMessage(e, $t); } }}>
-        + {$t('activity.add-files')}
+      <button type="button" data-slot="photo-date" onclick={() => (input.date = photoDate)}
+              class="-mt-3 min-h-11 w-fit cursor-pointer text-left text-sm font-medium text-brand-ink underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring">
+        {$t('activity.use-exif-date', { date: fmtDate(photoDate, $dateFormat) })}
       </button>
     {/if}
+    {#if input.category !== 'weight' && !editing && suggestions.length > 0}
+      <div class="-mx-1 -mt-2 flex gap-2 overflow-x-auto px-1 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {#each suggestions.slice(0, 3) as s (s.title + s.category)}
+          <button type="button" data-slot="repeat-chip" class={chipClass} onclick={() => repeat(s)}>{$t('activity.repeat')}: {s.title}</button>
+        {/each}
+      </div>
+    {/if}
 
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <div class="row actions">
-      <button type="button" class="ghost" onclick={cancel}>{$t('nav.cancel')}</button>
-      <button class="primary" disabled={busy}>{$t('nav.save')}</button>
-    </div>
+    {#if input.category === 'weight'}
+      <div class="grid grid-cols-[1fr_7rem] gap-3">
+        <Field id="weight" label={$t('cat.weight')} hint={previousWeight} warn={weightWarn ? $t('weight.large-change') : ''} error={errorFor('weight')}>
+          <Input type="text" inputmode="decimal" bind:value={weightText} required />
+        </Field>
+        <Field id="weight-unit" label={$t('weight.unit')}>
+          <NativeSelect bind:value={() => weightUnit, changeWeightUnit}><option value="kg">kg</option><option value="lb">lb</option></NativeSelect>
+        </Field>
+      </div>
+    {:else}
+      <!-- Optional only for a trip, a charge or a usage: the fallback word is the placeholder,
+           not pre-filled text to notice and delete. `activityTitle` is what the timeline shows
+           for an untitled row, so the two never disagree. -->
+      <Field id="ti" label={$t('activity.title')} error={errorFor('ti')}>
+        <Input list="titles" bind:value={input.title} required={input.category !== 'trip' && input.category !== 'fuel' && input.category !== 'usage'}
+               placeholder={activityTitle('', input.category, $t, object?.fuel_unit ?? undefined) || undefined} />
+        <datalist id="titles">{#each suggestions as s (s.title + s.category)}<option value={s.title}></option>{/each}</datalist>
+      </Field>
+    {/if}
+
+    {#if input.category === 'usage' && object?.resource_kind === 'water' && object.measurement_mode === 'meter'}
+      <Field id="meter-reading" label={$t('water.meter-reading')} unit={fuelUnitLabel(resourceUnit)} error={errorFor('meter-reading')}>
+        <Input type="text" inputmode="decimal" bind:value={meterReadingText} required />
+      </Field>
+    {/if}
+    {#if input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')}
+      <!-- "Charged full" for a kWh object, "Filled up" for a tank, picked like every other
+           charge/fill string (energyLabelKey). -->
+      <CheckField id="charged-full" label={$t(energyLabelKey(resourceUnit) === 'energy.charged' ? 'activity.charged-full' : 'activity.filled-full')} bind:checked={chargedFull} />
+    {/if}
+
+    {#if input.category === 'trip'}
+      <!-- `object?.counter_unit`: an existing trip must stay editable offline even when the
+           object could not be loaded; the fields then show no unit. -->
+      <div class="grid grid-cols-2 gap-3">
+        <Field id="tst" label={$t('trip.start')} unit={object?.counter_unit ?? null} error={errorFor('tst')}>
+          <Input type="number" inputmode="numeric" min="0" bind:value={() => input.start_counter, (v) => { input.start_counter = v; onTripStartChange(); }} />
+        </Field>
+        <Field id="ten" label={$t('trip.end')} unit={object?.counter_unit ?? null} error={errorFor('ten')}>
+          <Input type="number" inputmode="numeric" min="0" bind:value={() => input.counter_value, (v) => { input.counter_value = v; onTripEndChange(); }} />
+        </Field>
+      </div>
+      <!-- No `min` on Distance: an end below start makes it negative, which is exactly what
+           `trip.error-end` explains; a native bound would block the submit before it could. -->
+      <Field id="tds" label={$t('trip.distance')} unit={object?.counter_unit ?? null}>
+        <Input type="number" inputmode="numeric" bind:value={() => distance, (v) => { distance = v; onTripDistanceChange(); }} />
+      </Field>
+    {/if}
+    {#if input.category === 'session'}
+      <div class="grid grid-cols-2 gap-3">
+        <Field id="session-location" label={$t('session.location')}><Input maxlength={80} bind:value={fromText} /></Field>
+        <Field id="session-duration" label={$t('session.duration')}><Input type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} /></Field>
+      </div>
+    {/if}
+
+    {#if input.category !== 'weight'}
+      {@const withCounter = !!object?.counter_unit && input.category !== 'trip'}
+      <div class="grid grid-cols-2 gap-3">
+        {#if withCounter && object?.counter_unit}
+          <Field id="cv" label={$t('activity.counter')} unit={object.counter_unit} error={errorFor('cv')}
+                 warn={counterWarn ? $t('activity.counter-warn', { last: fmtCounter(lastCounter, object.counter_unit, $locale) }) : ''}>
+            <Input type="number" inputmode="numeric" min="0" bind:value={counterText} />
+          </Field>
+        {/if}
+        <Field id="co" label={$t('activity.cost')} error={errorFor('co')} class={withCounter ? '' : 'col-span-2'}>
+          <Input type="text" inputmode="decimal" bind:value={costText} />
+        </Field>
+      </div>
+    {/if}
+    {#if (input.category === 'fuel' || (input.category === 'usage' && object?.measurement_mode !== 'meter')) && resourceUnit}
+      <Field id="qt" label={$t('activity.quantity')} unit={fuelUnitLabel(resourceUnit)} error={errorFor('qt')}>
+        <Input type="text" inputmode="decimal" bind:value={quantityText} />
+      </Field>
+    {/if}
+
+    <section aria-labelledby="activity-photos" class="flex flex-col gap-3">
+      <h2 id="activity-photos" class={sectionHeadingClass}>{$t('activity.photos')}</h2>
+      {#if attachments.length > 0}
+        <ul data-testid="entry-attachments" role="list" class="m-0 flex list-none gap-2 overflow-x-auto p-0">
+          {#each attachments as a (a.id)}
+            <!-- The item is the image's own size: a positioning context for the "pending" label.
+                 Only the thumbnail fades while queued; the label stays solid (muted-foreground on
+                 muted, the tested pair). -->
+            <li data-testid="attachment" data-pending={a.pending ? '' : undefined} class="group relative shrink-0">
+              {#if a.kind === 'photo'}
+                <img class="block size-16 rounded-md object-cover group-data-pending:opacity-60" src={a.pending ? a.previewUrl : fileUrl(a.file_id, true)} alt="" loading="lazy" decoding="async" />
+              {:else}
+                <span class="grid size-16 place-items-center rounded-md bg-muted text-muted-foreground group-data-pending:opacity-60"><Icon name="document" size={28} /></span>
+              {/if}
+              {#if a.pending}<span class="absolute inset-x-0.5 bottom-0.5 rounded-sm bg-muted px-0.5 text-center text-xs leading-tight text-muted-foreground">{$t('timeline.pending')}</span>{/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if saved}
+        <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
+      {:else if ready}
+        <Button variant="outline" class="min-h-11 w-full border-dashed" onclick={addFiles}>+ {$t('activity.add-files')}</Button>
+      {/if}
+    </section>
+
+    <MoreDetails bind:open={moreOpen}>
+      <Field id="no" label={$t('activity.notes')}><Textarea bind:value={input.notes} /></Field>
+      <TagInput bind:tags={() => input.tags ?? [], (v) => (input.tags = v)} suggestions={tagCounts} label={$t('tags.label')} id="tags" />
+      {#if input.category === 'trip'}
+        <div class="grid grid-cols-2 gap-3">
+          <Field id="tfr" label={$t('trip.from')}>
+            <Input list="trip-from" maxlength={80} bind:value={fromText} />
+            <datalist id="trip-from">{#each tripPlaces.from as p (p)}<option value={p}></option>{/each}</datalist>
+          </Field>
+          <Field id="tto" label={$t('trip.to')}>
+            <Input list="trip-to" maxlength={80} bind:value={toText} />
+            <datalist id="trip-to">{#each tripPlaces.to as p (p)}<option value={p}></option>{/each}</datalist>
+          </Field>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <Field id="tdu" label={$t('trip.duration')} error={errorFor('tdu')}>
+            <Input type="text" inputmode="numeric" placeholder="h:mm" bind:value={durationText} />
+          </Field>
+          <!-- No `min`/`max`: 101 must reach `trip.error-battery` instead of a silent refusal. -->
+          <Field id="tba" label={$t('trip.battery')} unit="%" error={errorFor('tba')}>
+            <Input type="number" inputmode="numeric" bind:value={input.battery_used_pct} />
+          </Field>
+        </div>
+      {/if}
+      {#if (input.category === 'fuel' || (input.category === 'usage' && object?.resource_kind !== 'water')) && (resourceUnit === 'l' || resourceUnit === 'gal')}
+        <Field id="fuel-level" label={$t('activity.fuel-level')} hint={$t('activity.fuel-level-hint')} error={errorFor('fuel-level')}>
+          <Input type="number" inputmode="numeric" min="0" max="100" bind:value={input.fuel_level_pct} />
+        </Field>
+      {/if}
+      {#if input.category === 'usage' && object?.resource_kind === 'water'}
+        {#if object.measurement_mode === 'meter'}
+          <CheckField id="meter-reset" label={$t('water.meter-reset')} bind:checked={() => input.meter_reset === 1, (v) => (input.meter_reset = v ? 1 : 0)} />
+        {:else}
+          <div class="grid grid-cols-2 gap-3">
+            <Field id="period-start" label={$t('water.period-start')} error={errorFor('period-start')}>
+              <DateInput id="period-start" bind:value={() => input.period_start ?? '', (v) => (input.period_start = v || null)} />
+            </Field>
+            <Field id="period-end" label={$t('water.period-end')}>
+              <DateInput id="period-end" bind:value={() => input.period_end ?? '', (v) => (input.period_end = v || null)} />
+            </Field>
+          </div>
+        {/if}
+        <CheckField id="estimated" label={$t('water.estimated')} bind:checked={() => input.estimated === 1, (v) => (input.estimated = v ? 1 : 0)} />
+      {/if}
+    </MoreDetails>
+
+    <FormActions {busy} error={formError} oncancel={cancel} />
   </form>
   {#if editing}
-    <button class="danger" onclick={remove}>{$t('nav.delete')}</button>
+    <section aria-labelledby="activity-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
+      <h2 id="activity-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
+      <Button variant="destructive" class="min-h-11 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
+    </section>
   {/if}
 </main>
-
-<style>
-  .hintbtn { font-size: var(--text-sm); color: var(--accent-ink); padding: var(--space-1) 0; text-align: left; }
-  .pickerlike { border: 1px dashed var(--border); width: 100%; }
-  .doc-chip { display: grid; place-items: center; width: 64px; height: 64px; background: var(--surface-2); border-radius: var(--radius-sm); }
-  .actions { margin-top: var(--space-2); }
-  .section-title { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-lg); }
-  /* A positioning context for the pending badge, not a thumbnail. It was called `thumb`, which
-     collided with the global grid-image rule in app.css and inflated it to a full-width square
-     around a 64px image. */
-  .strip-item { position: relative; flex: none; }
-  .strip-item.pending { opacity: .55; }
-  .strip-item .pending-chip { position: absolute; left: 2px; right: 2px; bottom: 2px; text-align: center; font-size: var(--text-xs); padding: 1px 2px; line-height: 1.2; }
-</style>

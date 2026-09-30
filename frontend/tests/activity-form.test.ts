@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { activityTitle, emptyActivity, toActivityInput, validateActivity, groupByYear, exifDate, suggestionsFor } from '../src/lib/activity-form';
-import { hashToNegativeId, resolveCategory, parseCategoryParam, counterBelowLast, weightDeviates, firstExifDate, activityToFormText, changeWeightUnitState, buildActivityInput, optimisticActivity } from '../src/lib/activity-form';
+import { hashToNegativeId, resolveCategory, parseCategoryParam, counterBelowLast, weightDeviates, firstExifDate, activityToFormText, changeWeightUnitState, buildActivityInput, optimisticActivity, activityHasDetails, ACTIVITY_FIELD_IDS } from '../src/lib/activity-form';
 import { categoriesFor } from '../src/lib/type-registry';
-import type { Activity, MemObject, TitleSuggestion } from '../src/lib/types';
+import type { Activity, ActivityInput, MemObject, TitleSuggestion } from '../src/lib/types';
 
 function a(id: number, date: string): Activity {
   return {
@@ -328,5 +328,33 @@ describe('optimisticActivity', () => {
     const out = optimisticActivity(-7, 3, { ...emptyActivity(), title: 'x' });
     expect(out).toMatchObject({ id: -7, object_id: 3, title: 'x', pending: true, attachments: [], charged_full: 0, estimated: 0, meter_reset: 0, tags: [] });
     expect(typeof out.created_at).toBe('string');
+  });
+});
+
+describe('activity form: More details', () => {
+  it('stays closed for a new entry', () => {
+    expect(activityHasDetails(emptyActivity())).toBe(false);
+  });
+
+  it('opens for notes, tags, a trip\'s extras, the remaining level and the water flags', () => {
+    const cases: Partial<ActivityInput>[] = [
+      { notes: 'Torque 120 Nm' }, { tags: ['Winter'] },
+      { category: 'trip', from_place: 'Home' }, { category: 'trip', to_place: 'Office' },
+      { category: 'trip', duration_minutes: 75 }, { category: 'trip', battery_used_pct: 32 },
+      { fuel_level_pct: 40 }, { estimated: 1 }, { meter_reset: 1 },
+      { period_start: '2026-01-01' }, { period_end: '2026-02-01' },
+    ];
+    for (const c of cases) expect(activityHasDetails({ ...emptyActivity(), ...c }), JSON.stringify(c)).toBe(true);
+  });
+
+  it('keeps a session\'s place and duration in view', () => {
+    expect(activityHasDetails({ ...emptyActivity(), category: 'session', from_place: 'Gym', duration_minutes: 45 })).toBe(false);
+  });
+
+  it('names a field for every key validateActivity returns', () => {
+    for (const key of ['activity.date', 'activity.title', 'weight.invalid', 'activity.cost', 'activity.counter', 'activity.quantity',
+      'activity.fuel-level-error', 'activity.meter-reading', 'activity.period-start', 'trip.start', 'trip.end', 'trip.duration', 'trip.battery']) {
+      expect(ACTIVITY_FIELD_IDS[key], key).toBeTruthy();
+    }
   });
 });

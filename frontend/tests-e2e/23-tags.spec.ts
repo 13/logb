@@ -29,6 +29,7 @@ test('an entry created and edited through the form keeps its tags on the timelin
 
   await page.getByRole('button', { name: /Log/ }).first().click();
   await page.getByLabel('Title').fill('Bremsbeläge vorne');
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('BBV');
   await tagInput.press('Enter');
@@ -41,6 +42,7 @@ test('an entry created and edited through the form keeps its tags on the timelin
   await page.getByTestId('timeline-entry').filter({ hasText: 'Bremsbeläge vorne' }).getByRole('button', { name: 'Bremsbeläge vorne' }).click();
   await expect(page.getByLabel('Title')).toHaveValue('Bremsbeläge vorne');
   await expect(page.getByTestId('tag-input').locator('.tag', { hasText: 'BBV' })).toBeVisible();
+  await openMoreDetails(page);
   await tagInput.fill('Bremse');
   await tagInput.press('Enter');
   await page.getByRole('button', { name: 'Save' }).click();
@@ -55,6 +57,7 @@ test('a tag typed but not committed with Enter is saved with the entry', async (
   const objectId = await newObject(page, 'Blur Tag Bike');
   await page.getByRole('button', { name: /Log/ }).first().click();
   await page.getByLabel('Title').fill('Kette');
+  await openMoreDetails(page);
   await page.getByLabel('Tags', { exact: true }).fill('Antrieb');
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(new RegExp(`/objects/${objectId}$`));
@@ -69,6 +72,7 @@ test('an entry logged offline keeps its tag while queued and once it syncs', asy
 
   await context.setOffline(true);
   await page.getByLabel('Title').fill('Bremsbeläge hinten');
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('BBH');
   await tagInput.press('Enter');
@@ -92,7 +96,8 @@ test('a draft made by adding a file first keeps the tag added before saving', as
   // The first click saves the draft; the same-labelled button is FilePicker's afterwards.
   await page.getByRole('button', { name: /Add photos or files/ }).click();
   await page.setInputFiles('input[type=file]', pngPayload());
-  await expect(page.locator('.thumb-strip .strip-item')).toHaveCount(1);
+  await expect(page.getByTestId('attachment')).toHaveCount(1);
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('Service');
   await tagInput.press('Enter');
@@ -186,6 +191,7 @@ test('a tag still being typed when the form is submitted without leaving the fie
   const objectId = await newObject(page, 'Submit Tag Bike');
   await page.getByRole('button', { name: /Log/ }).first().click();
   await page.getByLabel('Title').fill('Schlauch');
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('Reifen');
   // An Android keyboard's Enter often arrives as key "Unidentified": the field's own keydown
@@ -203,6 +209,7 @@ test('a typed tag that cannot be added stops the submit and keeps its error', as
   const objectId = await newObject(page, 'Bad Tag Bike');
   await page.getByRole('button', { name: /Log/ }).first().click();
   await page.getByLabel('Title').fill('Zu lang');
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('x'.repeat(33));
   await page.locator('form').evaluate((f: HTMLFormElement) => f.requestSubmit());

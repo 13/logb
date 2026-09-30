@@ -197,3 +197,47 @@ test('the Save bar stays on screen while the form scrolls, and never covers the 
   const last = (await page.getByLabel('Private object').boundingBox())!;
   expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
 });
+
+test('the activity form: one Notes label, headings under the title, details on request', async ({ page }) => {
+  await signInFresh(page, '38-activity');
+  const id = await object(page, { name: 'Activity form car', type: 'car', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/activities/new`);
+
+  const size = async (loc: ReturnType<Page['locator']>) => loc.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  const title = await size(page.getByRole('heading', { level: 1 }));
+  expect(await size(page.getByRole('heading', { name: 'Photos & documents' }))).toBeLessThan(title);
+  await expect(page.getByRole('heading', { name: 'Notes' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Details' })).toHaveCount(0);
+  await expectSaveOnScreen(page);
+
+  // The unit sits in the field; the label is words.
+  await expect(page.getByLabel(/^Counter reading \(km\)$/)).toBeVisible();
+
+  await expect(page.getByLabel('Notes')).toBeHidden();
+  await openMoreDetails(page);
+  await expect(page.getByText('Notes', { exact: true })).toHaveCount(1);
+  await page.getByLabel('Title').fill('Wheel bolts');
+  await page.getByLabel('Notes').fill('Torque 120 Nm');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}$`));
+
+  // Opening it again: its notes are there, so the section is open.
+  await page.getByTestId('timeline-entry').filter({ hasText: 'Wheel bolts' }).getByRole('button', { name: 'Wheel bolts' }).click();
+  await expect(page.getByRole('button', { name: 'More details' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByLabel('Notes')).toHaveValue('Torque 120 Nm');
+});
+
+test('a refused field inside a closed "More details" is shown and focused', async ({ page }) => {
+  await signInFresh(page, '38-activity-reveal');
+  const id = await object(page, { name: 'Reveal bike', type: 'e_bike', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/activities/new?category=trip`);
+  await page.getByLabel(/^Start/).fill('100');
+  await page.getByLabel(/^End/).fill('150');
+  await openMoreDetails(page);
+  await page.getByLabel(/Battery used/).fill('101');
+  await page.getByRole('button', { name: 'More details' }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'More details' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByLabel(/Battery used/)).toBeFocused();
+  await expect(page.getByRole('alert')).toHaveText('Battery used must be 0–100 %');
+});

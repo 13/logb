@@ -249,7 +249,6 @@ export default {
   'lastdone.clear': 'Titel-Filter aufheben',
 
   'activity.new': 'Aktivität eintragen',
-  'activity.details': 'Details',
   'activity.edit': 'Aktivität bearbeiten',
   'activity.date': 'Datum',
   'activity.category': 'Kategorie',

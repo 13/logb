@@ -238,37 +238,9 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 .tag-6 { background: var(--tag-6-bg); color: var(--tag-6-fg); }
 .tag-7 { background: var(--tag-7-bg); color: var(--tag-7-fg); }
 .tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-/* The row scrolls; without the mask it just looks cut off. The fade is the affordance -- a
-   scrollbar is invisible on a touch device, and an arrow would need a tap target for something
-   a swipe already does. Horizontal padding equal to the ring's bleed (2px outline + 2px offset
-   = 4px = --space-1) keeps the focus ring on the first chip from being cut off by
-   `overflow-x: auto`, which clips paint at its own edge -- and the mask below clips paint too,
-   which is why :focus-within removes it. The last chip's ring is intact once the row is
-   scrolled to its end; Chromium will not scroll an already-partially-visible element the rest
-   of the way into view on focus, so getting there needs an actual scroll, not just a tab. */
-.chips {
-  display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
-  padding: 0 var(--space-1) var(--space-1);
-  scrollbar-width: none;
-  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-  /* A filter row is not part of the list it filters. Without this the chips sat flush against
-     the first card: 8px of air above them (the topbar's own padding) and 4px below, and that
-     4px is the focus ring's bleed rather than anything chosen. 4px of bleed plus 4px of margin
-     is the 8px above it, so the row sits in the middle of its own gap instead of leaning on
-     the content. */
-  margin-bottom: var(--space-1);
-}
-.chips::-webkit-scrollbar { display: none; }
-/* The fade is a scroll affordance; it has no business dimming a focus ring. */
-.chips:focus-within { mask-image: none; }
-.chips button:where(:not([data-slot])) { min-height: 32px; padding: var(--space-1) var(--space-3); white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
 .topbar button:where(:not([data-slot])) { min-width: 44px; padding: var(--space-2); }
 .fab { position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); z-index: 6; border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
-.thumb-strip { display: flex; gap: var(--space-2); overflow-x: auto; margin-top: var(--space-2); }
-.thumb-strip img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); }
 /* Figures line up when stacked. A column of costs in proportional numerals does not, and this
    app is mostly costs, odometer readings and dates read down a list. Tabular figures are a
    property of the existing family, not a second typeface. */

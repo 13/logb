@@ -29,7 +29,9 @@
 </script>
 
 <div data-slot="field" class={cn('flex min-w-0 flex-col gap-1.5', className)}>
-  <label for={id} class={labelClass}>{label}{#if unit}<span class="sr-only"> ({unit})</span>{/if}</label>
+  <!-- The unit's leading space is an expression, not literal text: Svelte trims a literal one at
+       the start of the `if` block, and the label's text read "Counter reading(km)". -->
+  <label for={id} class={labelClass}>{label}{#if unit}<span class="sr-only">{` (${unit})`}</span>{/if}</label>
   {#if unit}
     <div class="relative">
       {@render children()}
