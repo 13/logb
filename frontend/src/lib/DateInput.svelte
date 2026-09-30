@@ -215,7 +215,7 @@
             aria-label={dateTimeFormat($locale, { dateStyle: 'full', timeZone: 'UTC' }).format(day)}
             aria-pressed={isoDate(day) === value} aria-disabled={!!rangeMessage(isoDate(day), $dateFormat)}
             class={[
-              'min-h-11 min-w-0 cursor-pointer rounded-md text-sm tabular-nums not-aria-pressed:hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring aria-pressed:bg-primary aria-pressed:font-semibold aria-pressed:text-primary-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-40',
+              'min-h-11 min-w-0 cursor-pointer rounded-md text-sm tabular-nums not-aria-pressed:hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring aria-pressed:bg-primary aria-pressed:outline-primary-foreground aria-pressed:font-semibold aria-pressed:text-primary-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-40',
               day.getUTCMonth() !== view.getUTCMonth() && 'text-muted-foreground',
             ]}
             onkeydown={(e) => calendarKey(e, day)} onclick={() => { if (!rangeMessage(isoDate(day), $dateFormat)) pick(day); }}>{day.getUTCDate()}</button>

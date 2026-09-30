@@ -58,8 +58,8 @@
 <div data-slot="tag-field" class="flex min-w-0 flex-col gap-1.5">
   <label for={id} class={labelClass}>{label}</label>
   <!-- Looks like one text field: the chips sit inside the box, and the box shows the focus. -->
-  <div data-testid="tag-input"
-       class="flex min-h-12 flex-wrap items-center gap-1 rounded-lg border border-input bg-card px-2 py-1.5 focus-within:outline-2 focus-within:outline-solid focus-within:outline-offset-2 focus-within:outline-ring">
+  <div data-testid="tag-input" data-invalid={error ? '' : undefined}
+       class="data-invalid:border-destructive flex min-h-12 flex-wrap items-center gap-1 rounded-lg border border-input bg-card px-2 py-1.5 focus-within:outline-2 focus-within:outline-solid focus-within:outline-offset-2 focus-within:outline-ring">
     {#each tags as tag (tag)}
       <span class={`tag tag-${tagColorIndex(tag)}`}>{tag}
         <!-- A 32 px tall hit area around the bare glyph: it reaches left over the chip's own text
@@ -70,7 +70,7 @@
     {/each}
     <input {id} data-slot="tag-text" bind:this={field} bind:value={text} {onkeydown} {oninput} onblur={() => text.trim() && add(text)}
            placeholder={$t('tags.placeholder')} autocomplete="off" list={`${id}-list`}
-           aria-describedby={error ? `${id}-error` : undefined}
+           aria-describedby={error ? `${id}-error` : undefined} aria-invalid={error ? true : undefined}
            class="h-9 min-w-32 flex-1 scroll-my-24 border-0 bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none" />
     <datalist id={`${id}-list`}>{#each offered as s (s)}<option value={s}></option>{/each}</datalist>
   </div>

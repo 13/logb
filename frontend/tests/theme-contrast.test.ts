@@ -154,6 +154,15 @@ describe('tinted highlight contrast', () => {
         expect(contrastRatio(ui(fg, theme), ui('card', theme))).toBeGreaterThanOrEqual(4.5);
       }
     });
+    // The calendar's selected day is filled with primary and gets the keyboard focus when the
+    // popup opens: its inset ring must show against that fill, and a day of the neighbouring
+    // month (muted-foreground) must stay readable under the pointer (hover:bg-accent).
+    it(`${name}: focus ring on the calendar's selected day (primary-foreground on primary) (>= 3:1)`, () => {
+      expect(contrastRatio(ui('primary-foreground', theme), ui('primary', theme))).toBeGreaterThanOrEqual(3);
+    });
+    it(`${name}: muted-foreground on the accent hover fill (outside-month calendar day) (>= 4.5:1)`, () => {
+      expect(contrastRatio(ui('muted-foreground', theme), ui('accent', theme))).toBeGreaterThanOrEqual(4.5);
+    });
     it(`${name}: brand-ink on an icon tile -- object card, timeline entry (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
