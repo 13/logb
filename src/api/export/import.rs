@@ -319,10 +319,11 @@ pub(super) async fn import(
         }
         attachments.extend(o.attachments.iter().map(|x| (oi, None, x)));
     }
-    let files = insert_files(&mut tx, &mut stored, user.id, &attachments).await?;
+    let mut files = insert_files(&mut tx, &mut stored, user.id, &attachments).await?;
     let attachments: Vec<NewAttachment> = attachments
         .into_iter()
-        .filter_map(|(object, activity, x)| {
+        .enumerate()
+        .filter_map(|(i, (object, activity, x))| {
             let file_id = *files.ids.get(x.sha256.as_str())?;
             Some(NewAttachment {
                 object,
@@ -330,6 +331,9 @@ pub(super) async fn import(
                 x,
                 uuid: uuid::Uuid::new_v4().to_string(),
                 file_id,
+                // Taken here, by the attachment's index before those without a blob were left
+                // out: an index into the shortened list would shift at every one dropped.
+                logs_file: files.logged_at.remove(&i),
             })
         })
         .collect();
@@ -343,7 +347,9 @@ pub(super) async fn import(
         let own = attachments
             .iter()
             .zip(&attachment_ids)
-            .find(|(a, _)| a.object == oi && a.activity.is_none() && &a.x.sha256 == sha);
+            // The last match, as the one-at-a-time import chose when two of an object's own
+            // attachments share the cover's blob.
+            .rfind(|(a, _)| a.object == oi && a.activity.is_none() && &a.x.sha256 == sha);
         covers[oi] = match own {
             Some((_, id)) => Some(*id),
             None => {
@@ -373,7 +379,7 @@ pub(super) async fn import(
     let (mut next_activity, mut next_attachment, mut next_reminder) = (0, 0, 0);
     let mut log_attachments = |log: &mut record::Log, oi: usize, activity: Option<usize>| {
         while let Some(a) = attachments.get(next_attachment).filter(|a| a.object == oi && a.activity == activity) {
-            if let Some(file_uuid) = files.logged_at.get(&next_attachment) {
+            if let Some(file_uuid) = &a.logs_file {
                 log.create(Entity::File, file_uuid.clone());
             }
             log.create(Entity::Attachment, a.uuid.clone());
@@ -665,6 +671,9 @@ struct NewAttachment<'a> {
     x: &'a AttachmentExport,
     uuid: String,
     file_id: i64,
+    /// The uuid of the `files` row this import created for it, when it is the first attachment
+    /// to name that row -- the place the row's own `create` is logged.
+    logs_file: Option<String>,
 }
 
 /// The new attachments' ids, in the order of `attachments`.

@@ -1952,9 +1952,12 @@ async fn an_import_logs_every_row_in_archive_order_on_one_clock() {
         activity("A0", json!([attachment(&photo_sha, "p.png", "image/png", "photo", "a0-photo")])),
         activity("A1", json!([attachment(&photo_sha, "p.png", "image/png", "document", "a1-doc")])),
     ]);
+    // The attachment whose blob is nowhere comes first, so every attachment after it sits one
+    // place earlier once it is left out -- the file it names must still be logged where it is
+    // first stored, not where that shifted index happens to point.
     golf["attachments"] = json!([
-        attachment(&doc_sha, "m.txt", "text/plain", "document", "golf-doc"),
         attachment(&missing_sha, "gone.txt", "text/plain", "document", "missing"),
+        attachment(&doc_sha, "m.txt", "text/plain", "document", "golf-doc"),
     ]);
     // No object-level attachment carries the cover, so it is found among the activities' photos.
     golf["cover_sha256"] = json!(photo_sha);
