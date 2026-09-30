@@ -1,5 +1,6 @@
 <script lang="ts">
   import { go } from '../lib/router';
+  import { errorMessage, isUnauthenticated } from '../lib/api-error';
   import Logo from '../lib/Logo.svelte';
   import PasswordInput from '../lib/PasswordInput.svelte';
   import { controlClass, errorClass, labelClass, primaryButtonClass } from '$lib/components/ui/field/classes.js';
@@ -16,8 +17,10 @@
     try {
       await login(username, password);
       go('/', true);
-    } catch {
-      error = $t('login.failed');
+    } catch (err) {
+      // Only a 401 means the name or password is wrong. A rate limit, no connection or a server
+      // error says what it is: "wrong password" there sends somebody retyping a correct one.
+      error = isUnauthenticated(err) ? $t('login.failed') : errorMessage(err, $t);
     } finally { busy = false; }
   }
 </script>
