@@ -425,7 +425,7 @@ async fn insert_rows<'a, T>(
 ) -> Result<HashMap<String, i64>, AppError> {
     let mut ids = HashMap::with_capacity(rows.len());
     for chunk in rows.chunks(record::rows_per_statement(width)) {
-        let sql = format!("{head} VALUES {} {tail}", record::values_list(chunk.len(), width));
+        let sql = format!("{head} VALUES {} {tail}", record::values_list(tx, chunk.len(), width));
         let mut query: Returning<'a> = sqlx::query_as(sqlx::AssertSqlSafe(sql));
         for row in chunk {
             query = bind(query, row);

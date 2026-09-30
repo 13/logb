@@ -166,15 +166,10 @@ pub(crate) fn rows_per_statement(width: usize) -> usize {
     (MAX_PARAMS / width).max(1)
 }
 
-/// `VALUES ($1, ..., $width), ($width+1, ...), ...` for `rows` rows of `width` parameters each.
-pub(crate) fn values_list(rows: usize, width: usize) -> String {
-    (0..rows)
-        .map(|r| {
-            let row: Vec<String> = (1..=width).map(|c| format!("${}", r * width + c)).collect();
-            format!("({})", row.join(", "))
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+/// `VALUES`'s rows for `rows` rows of `width` parameters each, spelled for the backend `tx`
+/// talks to (see `dialect::Backend::values_list`).
+pub(crate) fn values_list(tx: &sqlx::AnyConnection, rows: usize, width: usize) -> String {
+    crate::dialect::Backend::of_connection(tx).values_list(rows, width)
 }
 
 /// Inserts `changes` rows, as few statements as `rows_per_statement` allows rather than one per
@@ -217,7 +212,7 @@ async fn insert_changes(
              (entity, entity_uuid, op, field, value, edited_at, applied_at, user_id, \
               device_id, client_op_id) \
              VALUES {}",
-            values_list(chunk.len(), 10)
+            values_list(tx, chunk.len(), 10)
         );
         let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for change in chunk {
@@ -304,7 +299,7 @@ async fn stamp_clocks(
              VALUES {} \
              ON CONFLICT(entity, entity_uuid, field) \
              DO UPDATE SET edited_at = excluded.edited_at, device_id = excluded.device_id",
-            values_list(chunk.len(), 5)
+            values_list(tx, chunk.len(), 5)
         );
         let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (entity, entity_uuid, field) in chunk {
