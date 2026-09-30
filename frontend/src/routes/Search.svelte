@@ -11,6 +11,10 @@
   import { locale, t } from '../i18n';
   import type { SearchResults } from '../lib/types';
   import { customTypes, typeIcon, typeLabel, typesLoaded } from '../lib/type-registry';
+  import SearchIcon from '@lucide/svelte/icons/search';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { controlClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import CategoryIcon from '../lib/CategoryIcon.svelte';
   import Icon from '../lib/Icon.svelte';
   import TagChips from '../lib/TagChips.svelte';
 
@@ -78,86 +82,84 @@
   }
 
   const empty = $derived(results !== null && results.objects.length === 0 && results.activities.length === 0);
+
+  // The dashboard's object card (ObjectCard.svelte): one box, an icon tile, the name as the
+  // button that opens it, stretched over the whole card; tag chips are raised above it.
+  const card = 'relative isolate flex gap-3 rounded-lg border border-border bg-card p-3 shadow-xs transition-colors hover:border-input';
+  const tile = 'grid size-12 shrink-0 place-items-center rounded-md bg-primary/10 text-brand-ink';
+  const open = "min-w-0 cursor-pointer line-clamp-2 break-words text-left text-base font-semibold text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring";
+  const facts = 'm-0 text-sm text-muted-foreground tabular-nums';
 </script>
 
 <main>
   <TopBar title={$t('search.title')} backTo="/" />
 
-  <!-- svelte-ignore a11y_autofocus -->
-  <input
-    type="search"
-    autofocus
-    aria-label={$t('search.placeholder')}
-    placeholder={$t('search.placeholder')}
-    bind:value={q}
-  />
+  <div class="relative mb-4">
+    <SearchIcon aria-hidden="true" class="pointer-events-none absolute top-1/2 left-3 size-5 -translate-y-1/2 text-muted-foreground" />
+    <!-- svelte-ignore a11y_autofocus -->
+    <input type="search" data-slot="search" autofocus aria-label={$t('search.placeholder')} placeholder={$t('search.placeholder')}
+           bind:value={q} class={`${controlClass} appearance-none pl-10`} />
+  </div>
 
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<p role="alert" class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
   {#if loading && !results}
-    <p class="muted">{$t('nav.loading')}</p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p>
   {:else if empty}
     <!-- A report about a query, not an invitation: it names what was searched for, and there is
-         no action to offer. Before anything is typed `results` is null and nothing is drawn at
-         all -- "no matches" ahead of a query would be a claim about a search nobody ran. -->
-    <div class="empty">
-      <p>{$t('search.none', { q: searched })}</p>
+         no action to offer. Before anything is typed nothing is drawn at all. -->
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('search.none', { q: searched })}</p>
     </div>
   {:else if results}
     {#if results.objects.length > 0}
-      <h2>{$t('search.objects')}</h2>
-      <div class="list">
-        {#each results.objects as o (o.id)}
-          <!-- The chips can be buttons, and a button cannot sit inside the hit's button, so they
-               sit below it; `.hit-row` keeps the two together, as `.entry-row` does on the timeline. -->
-          <div class="hit-row">
-            <button class="hit" onclick={() => go(`/objects/${o.id}`)}>
-              <span class="hit-title">{o.name}</span>
-              <span class="muted small type-row">
-                <Icon name={typeIcon(o.type, $customTypes)} size={14} />
-                {typeLabel(o.type, $customTypes, $t, $typesLoaded)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
-              </span>
-            </button>
-            {#if (o.tags ?? []).length > 0}
-              <div class="hit-tags"><!-- Plain labels: an object's own tag is rarely on its entries, so a tap would open an empty
-                   timeline under a "Show entries tagged" label. -->
-              <TagChips tags={o.tags} /></div>
-            {/if}
-          </div>
-        {/each}
-      </div>
+      <section aria-labelledby="search-objects" class="mb-6 flex flex-col gap-2">
+        <h2 id="search-objects" class={sectionHeadingClass}>{$t('search.objects')}</h2>
+        <ul role="list" class="m-0 grid list-none grid-cols-1 gap-3 p-0 wide:grid-cols-2">
+          {#each results.objects as o (o.id)}
+            <li data-testid="search-hit" class={card}>
+              <span data-testid="hit-icon" class={tile} aria-hidden="true"><Icon name={typeIcon(o.type, $customTypes)} size={22} /></span>
+              <div class="flex min-w-0 flex-1 flex-col gap-1">
+                <button data-slot="hit-open" class={open} onclick={() => go(`/objects/${o.id}`)}>{o.name}</button>
+                <p class={facts}>
+                  {typeLabel(o.type, $customTypes, $t, $typesLoaded)}{o.parent_name ? ` · ${$t('search.in-parent', { name: o.parent_name })}` : ''}{o.archived_at ? ` · ${$t('search.archived')}` : ''}
+                </p>
+                {#if (o.tags ?? []).length > 0}
+                  <!-- Plain labels: an object's own tag is rarely on its entries, so a tap would
+                       open an empty timeline under a "Show entries tagged" label. -->
+                  <div class="relative z-10 mt-1 w-fit"><TagChips tags={o.tags} /></div>
+                {/if}
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </section>
     {/if}
     {#if results.activities.length > 0}
-      <h2>{$t('search.activities')}</h2>
-      <div class="list">
-        {#each results.activities as a (a.id)}
-          <div class="hit-row">
-            <button class="hit" onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>
-              <span class="hit-title">{activityTitle(a.title, a.category, $t)}</span>
-              <span class="muted small tnum">
-                {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{a.weight_grams !== null ? ` · ${a.weight_grams} g` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
-              </span>
-            </button>
-            {#if (a.tags ?? []).length > 0}
-              <!-- A tapped chip opens the entry's object with its timeline narrowed to that tag. -->
-              <div class="hit-tags"><TagChips navigates tags={a.tags} onselect={(tag) => go(`/objects/${a.object_id}?tag=${encodeURIComponent(tag)}`)} /></div>
-            {/if}
-          </div>
-        {/each}
-      </div>
+      <section aria-labelledby="search-activities" class="mb-6 flex flex-col gap-2">
+        <h2 id="search-activities" class={sectionHeadingClass}>{$t('search.activities')}</h2>
+        <ul role="list" class="m-0 grid list-none grid-cols-1 gap-3 p-0 wide:grid-cols-2">
+          {#each results.activities as a (a.id)}
+            <li data-testid="search-hit" class={card}>
+              <span data-testid="hit-icon" class={tile} aria-hidden="true"><CategoryIcon category={a.category} size={22} /></span>
+              <div class="flex min-w-0 flex-1 flex-col gap-1">
+                <button data-slot="hit-open" class={open} onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>{activityTitle(a.title, a.category, $t)}</button>
+                <p class={facts}>
+                  {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{a.weight_grams !== null ? ` · ${a.weight_grams} g` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
+                </p>
+                {#if (a.tags ?? []).length > 0}
+                  <!-- A tapped chip opens the entry's object with its timeline narrowed to that tag. -->
+                  <div class="relative z-10 mt-1 w-fit">
+                    <TagChips navigates tags={a.tags} onselect={(tag) => go(`/objects/${a.object_id}?tag=${encodeURIComponent(tag)}`)} />
+                  </div>
+                {/if}
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </section>
     {/if}
     {#if results.has_more}
-      <button class="ghost more" disabled={loadingMore} onclick={loadMore}>{loadingMore ? $t('nav.loading') : $t('search.more')}</button>
+      <Button variant="outline" class="min-h-11 w-full" disabled={loadingMore} onclick={loadMore}>{loadingMore ? $t('nav.loading') : $t('search.more')}</Button>
     {/if}
   {/if}
 </main>
-
-<style>
-  /* Full width inside its `.hit-row`, as it was when it sat in the list directly. */
-  .hit { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); text-align: left; background: var(--surface-2); width: 100%; }
-  .hit-title { font-weight: 600; }
-  .hit-tags { margin-top: var(--space-1); padding-left: var(--space-3); }
-  .small { font-size: var(--text-xs); }
-  .type-row { display: flex; align-items: center; gap: var(--space-1); }
-  .type-row :global(svg) { flex: none; }
-  .more { width: 100%; margin-top: var(--space-3); }
-</style>

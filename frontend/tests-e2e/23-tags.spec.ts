@@ -234,11 +234,11 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
   }
 
   await page.goto('/search?q=Such');
-  const objectHit = page.locator('.hit-row', { hasText: 'Suchrad Tagged' });
+  const objectHit = page.getByTestId('search-hit').filter({ hasText: 'Suchrad Tagged' });
   await expect(objectHit.locator('.tag', { hasText: 'Pendeln' })).toBeVisible();
-  const entryHit = page.locator('.hit-row', { hasText: 'Suchkette geölt' });
+  const entryHit = page.getByTestId('search-hit').filter({ hasText: 'Suchkette geölt' });
   await expect(entryHit.locator('.tag', { hasText: 'Antrieb' })).toBeVisible();
-  await expect(page.locator('.hit-row', { hasText: 'Suchlicht getauscht' }).locator('.tag')).toHaveCount(0);
+  await expect(page.getByTestId('search-hit').filter({ hasText: 'Suchlicht getauscht' }).locator('.tag')).toHaveCount(0);
   // It leads elsewhere rather than toggling a filter here, so it says where and is no toggle.
   const searchChip = entryHit.getByRole('button', { name: 'Show entries tagged Antrieb' });
   await expect(searchChip).toBeVisible();
@@ -253,9 +253,9 @@ test('search shows tags on hits, and a tapped chip opens the object narrowed to 
   // An object hit's own tags are plain labels: they are rarely on its entries, so a link would
   // open an empty timeline.
   await page.goto('/search?q=Such');
-  const objectChip = page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).locator('.tag', { hasText: 'Pendeln' });
+  const objectChip = page.getByTestId('search-hit').filter({ hasText: 'Suchrad Tagged' }).locator('.tag', { hasText: 'Pendeln' });
   await expect(objectChip).toBeVisible();
-  await expect(page.locator('.hit-row', { hasText: 'Suchrad Tagged' }).getByRole('button', { name: /Pendeln/ })).toHaveCount(0);
+  await expect(page.getByTestId('search-hit').filter({ hasText: 'Suchrad Tagged' }).getByRole('button', { name: /Pendeln/ })).toHaveCount(0);
 });
 
 test('a reminder shows its object\'s tags on the reminders tab, not on the dashboard', async ({ page }) => {

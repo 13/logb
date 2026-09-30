@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signIn, signInFresh } from './helpers';
+import { signInFresh } from './helpers';
 
 async function object(page: Page, data: Record<string, unknown>): Promise<number> {
   const res = await page.request.post('/api/objects', { data: { description: '', ...data } });
@@ -35,4 +35,25 @@ test("the browser's bar takes the page background of the theme chosen", async ({
   await expect(page.locator('meta[name="theme-color"]').first()).toHaveAttribute('content', '#09090b');
   await page.getByLabel('Theme', { exact: true }).selectOption('light');
   await expect(page.locator('meta[name="theme-color"]').first()).toHaveAttribute('content', '#fafafa');
+});
+
+test('search hits are cards like the dashboard: icon tile, name, facts, tags inside', async ({ page }) => {
+  await signInFresh(page, '39-search');
+  const id = await object(page, { name: 'Kartenrad', type: 'bike', tags: ['Kartentag'] });
+  expect((await page.request.post(`/api/objects/${id}/activities`, {
+    data: { date: '2026-03-01', category: 'repair', title: 'Kartenschlauch', notes: '', cost_cents: 1250, tags: ['Kartentag'] },
+  })).ok()).toBe(true);
+
+  await page.goto('/search?q=Karten');
+  const hits = page.getByTestId('search-hit');
+  await expect(hits).toHaveCount(2);
+  for (const title of ['Kartenrad', 'Kartenschlauch']) {
+    const hit = hits.filter({ has: page.getByRole('button', { name: title, exact: true }) });
+    await expect(hit.getByTestId('hit-icon')).toBeVisible();
+    await expect(hit.locator('.tag', { hasText: 'Kartentag' })).toBeVisible();
+  }
+  // The whole card opens the entry, not only its title.
+  const box = (await hits.filter({ has: page.getByRole('button', { name: 'Kartenschlauch', exact: true }) }).boundingBox())!;
+  await page.mouse.click(box.x + box.width - 12, box.y + 12);
+  await expect(page.getByLabel('Title')).toHaveValue('Kartenschlauch');
 });
