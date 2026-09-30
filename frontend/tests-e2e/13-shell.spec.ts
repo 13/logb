@@ -130,7 +130,7 @@ test('who is signed in, and the way out, are one step away', async ({ page }, te
     await signIn(page);
     await page.getByRole('navigation', { name: /Main|Hauptnavigation/ }).getByRole('button', { name: 'Settings' }).click();
     // The card, not the page: the Account row below it shows the username too.
-    const card = page.locator('main .signed-in');
+    const card = page.getByRole('main').getByTestId('signed-in');
     await expect(card.getByText('Signed in as')).toBeVisible();
     await expect(card.getByText('ben', { exact: true })).toBeVisible();
     await card.getByRole('button', { name: 'Sign out', exact: true }).click();
@@ -141,7 +141,7 @@ test('who is signed in, and the way out, are one step away', async ({ page }, te
 test('Settings says which build this is', async ({ page }) => {
   await signIn(page);
   await page.goto('/settings');
-  const about = page.locator('main dl.about');
+  const about = page.getByTestId('about');
   await expect(about).toContainText('Version');
   await expect(about).toContainText('Built');
   // The server answers /api/health with its own version; the e2e build and server are the same

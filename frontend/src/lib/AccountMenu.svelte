@@ -42,51 +42,22 @@
   });
 </script>
 
-<!-- A phone's way to see who is signed in and to sign out, from any screen: the initial sits at
-     the end of the top bar, and the panel it opens is the same card the sidebar and Settings
-     show. Hidden on desktop, where the sidebar's foot already carries all of it. -->
 {#if $user}
-  <div class="account-menu" bind:this={root}>
-    <button
-      class="avatar"
-      bind:this={avatar}
-      aria-label={$t('account.menu', { name: $user.username })}
-      aria-expanded={open}
-      aria-haspopup="true"
-      onclick={() => (open ? hide(false) : show())}
-    >{$user.username.slice(0, 1).toUpperCase()}</button>
+  <!-- Zero layout height, so the 44 px button overhangs the bar's centre line instead of making
+       the top bar taller. Hidden on desktop, where the sidebar's foot carries all of it. -->
+  <div class="relative flex h-0 shrink-0 items-center desk:hidden" bind:this={root}>
+    <button data-slot="account-avatar" bind:this={avatar} aria-label={$t('account.menu', { name: $user.username })}
+            aria-expanded={open} aria-haspopup="true" onclick={() => (open ? hide(false) : show())}
+            class="grid size-11 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring">
+      <span aria-hidden="true" class="grid size-9 place-items-center rounded-full bg-primary text-sm font-bold text-primary-foreground">{$user.username.slice(0, 1).toUpperCase()}</span>
+    </button>
     {#if open}
-      <div class="panel" role="group" aria-label={$t('account.menu', { name: $user.username })} bind:this={panel}>
-        <SignedIn />
-        <button class="ghost settings" onclick={() => { hide(false); go('/settings/account'); }}>{$t('account.settings')}</button>
+      <div role="group" aria-label={$t('account.menu', { name: $user.username })} bind:this={panel}
+           class="absolute top-[calc(22px+0.25rem)] right-0 z-20 flex w-[min(320px,calc(100vw-1.5rem))] flex-col gap-2 rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-xl">
+        <SignedIn framed={false} />
+        <button data-slot="account-settings" onclick={() => { hide(false); go('/settings/account'); }}
+                class="flex min-h-11 w-full cursor-pointer items-center rounded-md px-3 text-left text-sm font-medium text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">{$t('account.settings')}</button>
       </div>
     {/if}
   </div>
 {/if}
-
-<style>
-  /* Zero layout height, so the 44px button overhangs the bar's centre line equally above and
-     below instead of making the top bar taller: on a screen whose bar holds only a title, a
-     taller bar pushed everything under it down and off its spacing. */
-  .account-menu { position: relative; flex: none; height: 0; display: flex; align-items: center; }
-  /* A 44px tap target (the floor for a touch control) around a 36px circle. The circle is the
-     button's background, clipped to its content box by the transparent padding. */
-  .avatar {
-    width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: var(--space-1);
-    border-radius: var(--radius-full); background: var(--accent); background-clip: content-box;
-    color: var(--accent-text); font-weight: 700; font-size: var(--text-sm);
-  }
-  .panel {
-    /* Measured from the zero-height wrapper's centre line: half the button, plus a step. */
-    position: absolute; right: 0; top: calc(22px + var(--space-1)); z-index: 20;
-    width: min(320px, calc(100vw - 2 * var(--space-3)));
-    display: flex; flex-direction: column; gap: var(--space-2);
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
-    padding: var(--space-2); box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
-  }
-  .panel :global(.signed-in) { border: none; padding: var(--space-1); }
-  .settings { width: 100%; text-align: left; }
-  @media (width >= 900px) {
-    .account-menu { display: none; }
-  }
-</style>

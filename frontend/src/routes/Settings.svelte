@@ -13,6 +13,8 @@
   import type { ApiToken, DbDescription, NotificationSettings, User } from '../lib/types';
   import type { QueuedOp } from '../lib/outbox';
   import { describeFailedWrite } from '../lib/failed-write';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
 
   let dead = $state<QueuedOp[]>([]);
   let tokenCount = $state<number | null>(null);
@@ -91,69 +93,68 @@
     await discardDeadOp(id);
     dead = await deadOps();
   }
+
+  const you = $derived(rows.filter((r) => r.group === 'you'));
+  const instance = $derived(rows.filter((r) => r.group === 'instance'));
+  const group = 'm-0 list-none divide-y divide-border overflow-hidden rounded-lg border border-border bg-card p-0 shadow-xs';
+  const pair = 'flex justify-between gap-3';
+  const value = 'm-0 text-right text-foreground tabular-nums [overflow-wrap:anywhere]';
 </script>
 
 <main>
   <TopBar title={$t('settings.title')} backTo="/" />
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
+    <!-- A failed write is an alert and the only time-sensitive thing here, absent when the queue is
+         clean. It expands in place rather than behind a route of its own. -->
+    {#if dead.length > 0}
+      <section aria-labelledby="settings-failed" class="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+        <h2 id="settings-failed" class="m-0 text-base font-semibold text-destructive">{$t('outbox.failed')}</h2>
+        <ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
+          {#each dead as op (op.id)}
+            {@const d = describeFailedWrite(op, $t)}
+            <li data-testid="failed-write" class="flex items-center gap-3 rounded-md bg-card p-3">
+              <span class="flex min-w-0 flex-1 flex-col gap-1 [overflow-wrap:anywhere]">
+                <b class="font-semibold text-foreground">{d.what}{#if d.name}: {d.name}{/if}</b>
+                {#if d.reason}<span class="text-sm text-destructive">{d.reason}</span>{/if}
+              </span>
+              <Button variant="ghost" class="min-h-11 shrink-0 text-destructive" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</Button>
+            </li>
+          {/each}
+        </ul>
+        <Button class="h-12 self-start" onclick={retryOutbox}>{$t('outbox.retry')}</Button>
+      </section>
+    {/if}
 
-  <!-- Not a row in a group: a failed write is an alert, it is the only time-sensitive thing on
-       this screen, and it is absent entirely when the queue is clean. It expands here rather
-       than behind a route of its own -- a URL for a screen that is almost always empty would be
-       a seventh destination that exists to be blank. -->
-  {#if dead.length > 0}
-    <div class="banner">
-      <b>{$t('outbox.failed')}</b>
-    </div>
-    <div class="list">
-      {#each dead as op (op.id)}
-        {@const d = describeFailedWrite(op, $t)}
-        <div class="card row">
-          <span class="failed">
-            <b>{d.what}{#if d.name}: {d.name}{/if}</b>
-            {#if d.reason}<span class="error small">{d.reason}</span>{/if}
-          </span>
-          <button class="ghost danger-text" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</button>
-        </div>
-      {/each}
-    </div>
-    <button onclick={retryOutbox}>{$t('outbox.retry')}</button>
-  {/if}
+    <!-- Who this is, and the way out, first: on a phone this screen is one tap from the tab bar. -->
+    <SignedIn />
 
-  <!-- Who this is, and the way out, before anything else: on a phone this screen is the one tap
-       from the tab bar that answers both. -->
-  <div class="whoami"><SignedIn /></div>
+    <section class="flex flex-col gap-2">
+      <h2 id="settings-you" class={sectionHeadingClass}>{$t('settings.you')}</h2>
+      <ul role="list" aria-labelledby="settings-you" class={group}>
+        {#each you as row (row.id)}<li><SettingsRow {row} /></li>{/each}
+      </ul>
+    </section>
 
-  <h2>{$t('settings.you')}</h2>
-  <div class="settings-grid">
-    {#each rows.filter((r) => r.group === 'you') as row (row.id)}<SettingsRow {row} />{/each}
+    {#if isAdmin}
+      <section class="flex flex-col gap-2">
+        <h2 id="settings-instance" class={sectionHeadingClass}>{$t('settings.instance')}</h2>
+        <ul role="list" aria-labelledby="settings-instance" class={group}>
+          {#each instance as row (row.id)}<li><SettingsRow {row} /></li>{/each}
+        </ul>
+      </section>
+    {/if}
+
+    <section class="flex flex-col gap-2">
+      <h2 id="settings-about" class={sectionHeadingClass}>{$t('settings.about')}</h2>
+      <dl data-testid="about" aria-labelledby="settings-about" class="m-0 flex flex-col gap-2 rounded-lg border border-border bg-card p-4 text-sm shadow-xs">
+        <div class={pair}><dt class="text-muted-foreground">{$t('settings.version')}</dt><dd class={value}>{__APP_VERSION__}</dd></div>
+        <div class={pair}><dt class="text-muted-foreground">{$t('settings.built')}</dt><dd class={value}>{built}</dd></div>
+        {#if __BUILD_COMMIT__}<div class={pair}><dt class="text-muted-foreground">{$t('settings.commit')}</dt><dd class={value}><code class="font-mono text-xs">{__BUILD_COMMIT__}</code></dd></div>{/if}
+        {#if serverVersion}<div class={pair}><dt class="text-muted-foreground">{$t('settings.server')}</dt><dd class={value}>{serverVersion}{#if backendLabel}{` · ${backendLabel}`}{/if}</dd></div>{/if}
+      </dl>
+      {#if serverVersion && serverVersion !== __APP_VERSION__}
+        <p class={hintClass}>{$t('settings.server-differs', { version: serverVersion })}</p>
+      {/if}
+    </section>
   </div>
-
-  {#if isAdmin}
-    <h2>{$t('settings.instance')}</h2>
-    <div class="settings-grid">
-      {#each rows.filter((r) => r.group === 'instance') as row (row.id)}<SettingsRow {row} />{/each}
-    </div>
-  {/if}
-
-  <h2>{$t('settings.about')}</h2>
-  <dl class="about card">
-    <div><dt class="muted">{$t('settings.version')}</dt><dd class="tnum">{__APP_VERSION__}</dd></div>
-    <div><dt class="muted">{$t('settings.built')}</dt><dd class="tnum">{built}</dd></div>
-    {#if __BUILD_COMMIT__}<div><dt class="muted">{$t('settings.commit')}</dt><dd><code>{__BUILD_COMMIT__}</code></dd></div>{/if}
-    {#if serverVersion}<div><dt class="muted">{$t('settings.server')}</dt><dd class="tnum">{serverVersion}{#if backendLabel} · {backendLabel}{/if}</dd></div>{/if}
-  </dl>
-  {#if serverVersion && serverVersion !== __APP_VERSION__}
-    <p class="hint">{$t('settings.server-differs', { version: serverVersion })}</p>
-  {/if}
 </main>
-
-<style>
-  .row > button { flex: none; }
-  .danger-text { color: var(--danger); }
-  .failed { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
-  .whoami { margin-top: var(--space-2); }
-  .about { display: grid; gap: var(--space-2); margin: 0; }
-  .about div { display: flex; justify-content: space-between; gap: var(--space-3); }
-  .about dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-  .hint { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-2); }
-</style>

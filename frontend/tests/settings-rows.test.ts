@@ -19,8 +19,14 @@ describe('settingsRows', () => {
   it('gives every user a Types row', () => {
     for (const isAdmin of [false, true]) {
       const row = settingsRows(input({ isAdmin })).find((r) => r.id === 'types');
-      expect(row).toEqual({ id: 'types', path: '/settings/types', icon: 'object', label: 'settings.types', value: null, group: 'you' });
+      expect(row).toEqual({ id: 'types', path: '/settings/types', icon: 'shapes', label: 'settings.types', value: null, group: 'you' });
     }
+  });
+
+  // The audit found one cube for Objects, Types and Data: every row draws its own icon.
+  it('gives every row an icon of its own', () => {
+    const icons = settingsRows(input({ isAdmin: true })).map((r) => r.icon);
+    expect(new Set(icons).size).toBe(icons.length);
   });
 
   it('adds the instance group for an administrator, after the personal rows', () => {

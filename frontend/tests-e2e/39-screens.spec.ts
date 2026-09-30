@@ -90,3 +90,15 @@ test('statistics lead with the year: spent, change against the same months last 
   await summary.getByRole('button', { name: 'Summary House' }).click();
   await page.waitForURL(`**/objects/${house}`);
 });
+
+test('the settings hub groups its rows, each with its own icon, and says who is signed in', async ({ page }) => {
+  await signInFresh(page, '39-hub');
+  await page.goto('/settings');
+  const rows = page.getByRole('list', { name: 'You' }).getByRole('button');
+  await expect(rows).toHaveCount(6);
+  const icons = await rows.evaluateAll((els) => els.map((e) => e.querySelector('svg')?.innerHTML ?? ''));
+  expect(new Set(icons).size, 'every row draws a different icon').toBe(6);
+  for (const h of await rows.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))) expect(h).toBeGreaterThanOrEqual(44);
+  await expect(page.getByRole('main').getByTestId('signed-in')).toContainText('Signed in as');
+  await expect(page.getByTestId('about')).toContainText('Version');
+});

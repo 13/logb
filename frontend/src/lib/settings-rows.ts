@@ -1,4 +1,6 @@
-import type { IconName } from './Icon.svelte';
+/** A row's icon, drawn by SettingsRow.svelte from lucide (the settings chunk, not the eager
+ *  Icon.svelte). Every row has its own. */
+export type SettingsIcon = 'palette' | 'user' | 'bell' | 'shapes' | 'key' | 'archive' | 'users' | 'database';
 
 export type SettingsGroup = 'you' | 'instance';
 
@@ -7,7 +9,7 @@ export type SettingsGroup = 'you' | 'instance';
 export type SettingsRowModel = {
   id: string;
   path: string;
-  icon: IconName;
+  icon: SettingsIcon;
   label: string;
   value: string | null;
   group: SettingsGroup;
@@ -46,7 +48,7 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
       value: `${input.themeLabel} · ${input.localeLabel}`, group: 'you',
     },
     {
-      id: 'account', path: '/settings/account', icon: 'person', label: 'settings.account',
+      id: 'account', path: '/settings/account', icon: 'user', label: 'settings.account',
       value: input.username, group: 'you',
     },
     {
@@ -55,7 +57,7 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
     },
     {
       // Per user, like everything in this group: nobody sees anyone else's types.
-      id: 'types', path: '/settings/types', icon: 'object', label: 'settings.types',
+      id: 'types', path: '/settings/types', icon: 'shapes', label: 'settings.types',
       value: null, group: 'you',
     },
     {
@@ -66,14 +68,14 @@ export function settingsRows(input: SettingsRowsInput): SettingsRowModel[] {
       value: input.tokenLabel, group: 'you',
     },
     {
-      id: 'data', path: '/settings/data', icon: 'box', label: 'settings.data',
+      id: 'data', path: '/settings/data', icon: 'archive', label: 'settings.data',
       value: null, group: 'you',
     },
   ];
   if (!input.isAdmin) return rows;
   rows.push(
     {
-      id: 'people', path: '/settings/people', icon: 'people', label: 'settings.users',
+      id: 'people', path: '/settings/people', icon: 'users', label: 'settings.users',
       value: input.userLabel, group: 'instance',
     },
     {

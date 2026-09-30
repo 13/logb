@@ -89,6 +89,8 @@ describe('shadcn token contrast', () => {
       ['muted-foreground', 'background'], ['muted-foreground', 'card'], ['muted-foreground', 'muted'],
       ['accent-foreground', 'accent'], ['destructive-foreground', 'destructive'],
       ['destructive', 'background'], ['destructive', 'card'],
+      // A ghost button in destructive text on its hover fill (Discard, Remove, Revoke, Delete).
+      ['destructive', 'muted'],
       ['brand-ink', 'background'], ['brand-ink', 'card'],
       ['warn', 'background'], ['warn', 'card'],
     ];

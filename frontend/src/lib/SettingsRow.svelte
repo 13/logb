@@ -1,31 +1,32 @@
 <script lang="ts">
-  import Icon from './Icon.svelte';
+  import Archive from '@lucide/svelte/icons/archive';
+  import Bell from '@lucide/svelte/icons/bell';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Database from '@lucide/svelte/icons/database';
+  import KeyRound from '@lucide/svelte/icons/key-round';
+  import Palette from '@lucide/svelte/icons/palette';
+  import Shapes from '@lucide/svelte/icons/shapes';
+  import UserRound from '@lucide/svelte/icons/user-round';
+  import UsersRound from '@lucide/svelte/icons/users-round';
   import { go } from './router';
   import { t } from '../i18n';
-  import type { SettingsRowModel } from './settings-rows';
+  import type { SettingsIcon, SettingsRowModel } from './settings-rows';
 
   let { row }: { row: SettingsRowModel } = $props();
+  const ICONS: Record<SettingsIcon, typeof Bell> = {
+    palette: Palette, user: UserRound, bell: Bell, shapes: Shapes, key: KeyRound,
+    archive: Archive, users: UsersRound, database: Database,
+  };
+  const Glyph = $derived(ICONS[row.icon]);
 </script>
 
-<button class="settings-row" onclick={() => go(row.path)}>
-  <span class="icon"><Icon name={row.icon} /></span>
-  <span class="label">{$t(row.label)}</span>
-  <!-- A row with no value renders no element at all, rather than an empty one: an empty span
-       still takes its grid column and leaves the chevron sitting away from the edge, which
-       reads as a value that failed to load rather than one that was never there. -->
-  {#if row.value}<span class="value muted">{row.value}</span>{/if}
-  <span class="chev muted"><Icon name="chevron" size={18} /></span>
+<!-- One row of a grouped list: the icon tile, the name, the current value, a chevron. The whole
+     row is the button, so its name is "Account ben" and the e2e suite finds it by /Account/.
+     A row with no value renders no value element at all, rather than an empty one. -->
+<button data-slot="settings-row" onclick={() => go(row.path)}
+        class="flex min-h-14 w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">
+  <span aria-hidden="true" class="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-brand-ink"><Glyph class="size-5" /></span>
+  <span class="min-w-0 flex-1 truncate text-base font-medium text-foreground">{$t(row.label)}</span>
+  {#if row.value}<span class="min-w-0 max-w-[45%] truncate text-sm text-muted-foreground">{row.value}</span>{/if}
+  <ChevronRight aria-hidden="true" class="size-4 shrink-0 text-muted-foreground" />
 </button>
-
-<style>
-  .settings-row {
-    display: grid; grid-template-columns: auto 1fr auto auto;
-    align-items: center; gap: var(--space-3);
-    width: 100%; text-align: left; background: var(--surface);
-    border: 1px solid var(--border); border-radius: var(--radius-md);
-    padding: var(--space-3); min-height: var(--control);
-  }
-  .icon { display: flex; color: var(--muted); }
-  .value { font-size: var(--text-sm); }
-  .chev { display: flex; }
-</style>

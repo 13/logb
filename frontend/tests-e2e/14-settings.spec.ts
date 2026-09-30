@@ -116,7 +116,7 @@ test('the failed-sync banner appears only when the queue holds a dead operation'
     await expect(page.getByText('Could not be sent', { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass();
 
-  const deadRow = page.locator('.card.row', { hasText: 'Doomed entry' });
+  const deadRow = page.getByTestId('failed-write').filter({ hasText: 'Doomed entry' });
   await expect(deadRow).toBeVisible();
 
   page.once('dialog', (d) => d.accept());
