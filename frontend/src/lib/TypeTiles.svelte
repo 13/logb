@@ -16,23 +16,25 @@
 
   /** An own type deleted elsewhere (not synced here yet) still shows as chosen, as "Unknown type". */
   const missing = $derived(value.startsWith('custom:') && !$customTypes.some((c) => c.key === value));
+  /** Where a refused save puts the focus (`OBJECT_FIELD_IDS`): the chosen tile, else the first. */
+  const focusKey = $derived(picked ? value : OBJECT_TYPES[0]);
   const tile = 'relative flex min-h-18 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-input bg-card p-2 text-center text-xs font-medium text-foreground transition-colors hover:not-has-checked:bg-accent has-checked:border-brand-ink has-checked:bg-primary/10 has-checked:text-brand-ink has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-offset-2 has-focus-visible:outline-ring';
 </script>
 
 {#snippet option(key: string, label: string)}
   <label class={tile}>
-    <input type="radio" data-slot="type-tile" name="object-type" value={key} checked={picked && value === key}
+    <input type="radio" data-slot="type-tile" name="object-type" value={key} id={key === focusKey ? 'object-type' : undefined} checked={picked && value === key}
            onchange={() => onpick(key as ObjectType)}
-           class="absolute inset-0 m-0 size-full cursor-pointer appearance-none rounded-lg opacity-0" />
+           class="absolute inset-0 m-0 size-full scroll-my-24 cursor-pointer appearance-none rounded-lg opacity-0" />
     <Icon name={typeIcon(key, $customTypes)} size={22} />
     <span class="line-clamp-2 break-words">{label}</span>
   </label>
 {/snippet}
 
 <fieldset data-slot="type-tiles" class="m-0 min-w-0 border-0 p-0" aria-describedby={error ? 'object-type-error' : undefined}>
-  <legend class={`${labelClass} mb-1.5 p-0`}>{$t('object.type')}</legend>
-  <!-- tabindex -1: where a refused save moves the focus (`OBJECT_FIELD_IDS`). -->
-  <div id="object-type" tabindex="-1" class="grid scroll-my-24 grid-cols-3 gap-2 outline-none desk:grid-cols-5">
+  <legend id="object-type-legend" class={`${labelClass} mb-1.5 p-0`}>{$t('object.type')}</legend>
+  <div role="radiogroup" aria-labelledby="object-type-legend" aria-invalid={error ? true : undefined} aria-describedby={error ? 'object-type-error' : undefined}
+       class="grid grid-cols-3 gap-2 desk:grid-cols-5">
     {#each OBJECT_TYPES as ty (ty)}{@render option(ty, $t(`type.${ty}`))}{/each}
     {#if missing}{@render option(value, $typesLoaded ? $t('types.unknown') : $t('types.loading'))}{/if}
   </div>

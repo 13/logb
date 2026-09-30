@@ -20,7 +20,7 @@
   import MoreDetails from '../lib/MoreDetails.svelte';
   import { revealField } from '../lib/reveal-field';
   import { CheckField, Field } from '$lib/components/ui/field/index.js';
-  import { chipClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import { chipClass, errorClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { NativeSelect } from '$lib/components/ui/native-select/index.js';
@@ -67,6 +67,8 @@
   let attachments = $state<Attachment[]>([]);
   let saved = $state<Activity | null>(null);
   let error = $state('');
+  /** A refused Delete, shown next to the Delete button rather than in the Save bar. */
+  let deleteError = $state('');
   let busy = $state(false);
   /** A save refused by `validateActivity`, shown under the field it names. */
   let fieldErr = $state<FieldError | null>(null);
@@ -428,12 +430,13 @@
 
   async function remove() {
     if (!saved || !confirm($t('nav.confirm-delete'))) return;
+    deleteError = '';
     // Sibling of the same fix already made in cancel(): a failed DELETE used to throw with
     // nothing surfaced, silently stranding the user with no idea the delete never happened.
     try {
       await api('DELETE', `/activities/${saved.id}`);
     } catch (e) {
-      error = errorMessage(e, $t);
+      deleteError = errorMessage(e, $t);
       return;
     }
     go(`/objects/${oid}`, true);
@@ -620,6 +623,7 @@
     <section aria-labelledby="activity-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
       <h2 id="activity-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
       <Button variant="destructive" class="h-12 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
+      {#if deleteError}<p role="alert" class={errorClass}>{deleteError}</p>{/if}
     </section>
   {/if}
 </main>

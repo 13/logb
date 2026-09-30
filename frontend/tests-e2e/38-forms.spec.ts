@@ -112,6 +112,29 @@ test('a counter field typed and then hidden is not saved', async ({ page }) => {
   expect(rows.find((r) => r.title === 'Brake fluid')).toMatchObject({ due_date: '2031-01-01', due_counter: null });
 });
 
+test('a failed save leaves no stale error behind when the next save is refused by a field', async ({ page }) => {
+  await signInFresh(page, '38-stale-error');
+  const id = await object(page, { name: 'Stale error car', type: 'car', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/reminders/new`);
+  let failed = false;
+  await page.route(`**/api/objects/${id}/reminders`, (route) => {
+    if (route.request().method() === 'POST' && !failed) { failed = true; return route.fulfill({ status: 422, contentType: 'application/json', body: '{"error":"boom"}' }); }
+    return route.continue();
+  });
+  await page.getByLabel('Title').fill('Stale check');
+  await page.getByLabel('Due date', { exact: true }).fill('01/01/2031');
+  const bar = page.getByTestId('form-actions');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(bar.getByRole('alert')).toBeVisible();
+
+  // The date is now refused: only the field's own message shows, and the Save bar is clean.
+  await page.getByLabel('Due date', { exact: true }).fill('');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#dd-error')).toBeVisible();
+  await expect(bar.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(1);
+});
+
 test('notes wait under "More details", which opens by itself for a reminder that has them', async ({ page }) => {
   await signInFresh(page, '38-reminder-notes');
   const id = await object(page, { name: 'Notes car', type: 'other' });

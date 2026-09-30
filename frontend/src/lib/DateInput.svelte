@@ -14,7 +14,7 @@
     { id: string; value?: string; min?: string; max?: string; required?: boolean; label?: string } = $props();
 
   /** The `Field` around this input, if any: its id, hint and error describe the field too. The
-   *  input's own format error, while shown, is what describes it (one id: see 26-date-format). */
+   *  input's own format error, while shown, is what describes it (its own `-format-error` id, distinct from the Field's `-error`: see 26-date-format). */
   const fieldCtx = getFieldContext();
   const inputId = $derived(fieldCtx?.id ?? id);
 
@@ -194,7 +194,7 @@
   <input id={inputId} bind:this={field} data-slot="date-text" type="text" inputmode="numeric" autocomplete="off" {required} aria-label={label}
          placeholder={datePlaceholder($dateFormat, $locale)} bind:value={text}
          aria-invalid={!!error || fieldCtx?.invalid || undefined}
-         aria-describedby={error ? `${inputId}-error` : fieldCtx?.describedBy}
+         aria-describedby={error ? `${inputId}-format-error` : fieldCtx?.describedBy}
          class={cn(controlClass, 'pr-12 tabular-nums')}
          onfocus={() => (focused = true)} onblur={() => { focused = false; commit(); }} onchange={commit} />
   <!-- Inside the field's box, at its right edge: beside it, it squeezed the text to "MM/DD/YYY". -->
@@ -225,5 +225,5 @@
   {/if}
 </div>
 {#if error}
-  <span id={`${inputId}-error`} class="text-sm font-medium text-destructive" aria-live="polite">{error}</span>
+  <span id={`${inputId}-format-error`} class="text-sm font-medium text-destructive" aria-live="polite">{error}</span>
 {/if}

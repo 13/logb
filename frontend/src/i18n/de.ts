@@ -665,6 +665,6 @@ export default {
   'reminder.due-by': 'Fällig nach',
   'reminder.due-by-date': 'Datum',
   'reminder.due-by-counter': 'Zählerstand',
-  'reminder.due-by-both': 'Beidem',
+  'reminder.due-by-both': 'Beides',
   'reminder.due-by-both-hint': 'Fällig bei dem, was zuerst eintritt.',
 } as Record<string, string>;

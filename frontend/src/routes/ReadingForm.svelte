@@ -26,6 +26,8 @@
   let rate = $state<number | null>(null);
   let valueInput = $state<HTMLInputElement | null>(null);
   let error = $state('');
+  /** A refused value, shown under the reading field. */
+  let valueError = $state('');
   let busy = $state(false);
   /** The warning the user has already been shown for exactly this value and date. Saving again
    *  unchanged is the confirmation; editing either field asks again. */
@@ -68,7 +70,12 @@
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (!object || !Number.isInteger(value) || value < 0) { error = $t('reading.value', { unit: object?.counter_unit ?? '' }); return; }
+    error = ''; valueError = '';
+    if (!object || !Number.isInteger(value) || value < 0) {
+      valueError = $t('form.check-field', { field: $t('reading.value', { unit: object?.counter_unit ?? '' }) });
+      valueInput?.focus();
+      return;
+    }
     const key = `${value}|${date}`;
     if (warning && (acknowledged?.warning !== warning || acknowledged.key !== key)) {
       acknowledged = { warning, key };
@@ -90,7 +97,7 @@
   <TopBar title={$t('reading.title')} subtitle={object?.name ?? null} backTo={`/objects/${oid}`} />
   {#if object}
     <form onsubmit={submit} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
-      <Field id="rv" label={$t('reading.value', { unit: object.counter_unit ?? '' })} hint={lastHint}>
+      <Field id="rv" label={$t('reading.value', { unit: object.counter_unit ?? '' })} hint={lastHint} error={valueError}>
         <Input type="number" inputmode="numeric" min="0" step="1" bind:ref={valueInput} bind:value={valueText} required class="h-14 text-2xl tabular-nums" />
       </Field>
       <Field id="rd" label={$t('activity.date')}><DateInput id="rd" bind:value={date} max={todayIso()} required /></Field>

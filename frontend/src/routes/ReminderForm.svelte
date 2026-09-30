@@ -15,7 +15,7 @@
   import MoreDetails from '../lib/MoreDetails.svelte';
   import { revealField } from '../lib/reveal-field';
   import { Field } from '$lib/components/ui/field/index.js';
-  import { hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import { errorClass, hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { NativeSelect } from '$lib/components/ui/native-select/index.js';
@@ -31,6 +31,8 @@
   let object = $state<MemObject | null>(null);
   let input = $state<ReminderInput>(emptyReminder());
   let error = $state('');
+  /** A refused Delete, shown next to the Delete button rather than in the Save bar. */
+  let deleteError = $state('');
   let busy = $state(false);
   let recurrence = $state<'none' | 'interval' | 'daily' | 'weekly' | 'monthly' | 'yearly'>('none');
   let weekday = $state(1);
@@ -128,7 +130,7 @@
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
-    fieldErr = null;
+    fieldErr = null; error = '';
     const body = normalized();
     const bad = validateReminder(body);
     if (bad) { await reject(bad); return; }
@@ -142,12 +144,12 @@
 
   async function remove() {
     if (!rid || busy || !confirm($t('nav.confirm-delete'))) return;
-    busy = true; error = '';
+    busy = true; deleteError = '';
     try {
       await api('DELETE', `/reminders/${rid}`);
       go(`/objects/${oid}?tab=reminders`, true);
     } catch (e) {
-      error = errorMessage(e, $t);
+      deleteError = errorMessage(e, $t);
     } finally { busy = false; }
   }
 </script>
@@ -263,7 +265,8 @@
   {#if editing}
     <section aria-labelledby="reminder-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
       <h2 id="reminder-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
-      <Button variant="destructive" class="min-h-11 w-fit" disabled={busy} onclick={remove}>{$t('nav.delete')}</Button>
+      <Button variant="destructive" class="h-12 w-fit" disabled={busy} onclick={remove}>{$t('nav.delete')}</Button>
+      {#if deleteError}<p role="alert" class={errorClass}>{deleteError}</p>{/if}
     </section>
   {/if}
 </main>

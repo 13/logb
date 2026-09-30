@@ -107,6 +107,7 @@ export function objectHasDetails(input: ObjectInput): boolean {
  *  a new object has no type until one is picked). */
 export const OBJECT_FIELD_IDS: Readonly<Record<string, string>> = {
   'object.type': 'object-type',
+  'weight.invalid': 'sw',
   'object.name': 'n',
   'object.purchase-price': 'pp',
   'object.energy-price-error': 'ep',

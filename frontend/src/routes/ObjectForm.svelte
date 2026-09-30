@@ -258,7 +258,7 @@
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
-    fieldErr = null;
+    fieldErr = null; error = '';
     if (loadFailed) { error = $t('object.not-loaded'); return; }
     if (!typePicked) { await reject('object.type'); return; }
     input.purchase_price_cents = parseMoney(priceText);
@@ -272,7 +272,7 @@
     const bad = validate(input);
     if (bad) { await reject(bad); return; }
     const grams = !editing && input.type === 'body' && startingWeight.trim() ? parseWeight(startingWeight, input.weight_unit ?? 'kg') : null;
-    if (grams !== null && !Number.isFinite(grams)) { error = $t('weight.invalid'); return; }
+    if (grams !== null && !Number.isFinite(grams)) { await reject('weight.invalid'); return; }
     busy = true; error = '';
     try {
       if (!input.purchase_date) input.purchase_date = null;
@@ -471,7 +471,7 @@
     </MoreDetails>
 
     {#if !editing && input.name.trim()}
-      <Button variant="outline" class="min-h-11 w-fit" onclick={() => (savedTemplates = saveObjectTemplate(userId(), $state.snapshot(input)))}>{$t('template.save')}</Button>
+      <Button variant="outline" class="h-12 w-fit" onclick={() => (savedTemplates = saveObjectTemplate(userId(), $state.snapshot(input)))}>{$t('template.save')}</Button>
     {/if}
 
     <FormActions {busy} error={formError} oncancel={() => back(editing ? `/objects/${id}` : '/')} />
@@ -480,7 +480,7 @@
     <section aria-labelledby="object-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
       <h2 id="object-delete" class={sectionHeadingClass}>{$t('object.delete')}</h2>
       <p class={hintClass}>{$t('object.delete-hint')}</p>
-      <Button variant="destructive" class="min-h-11 w-fit" disabled={busy} onclick={remove}>{$t('object.delete')}</Button>
+      <Button variant="destructive" class="h-12 w-fit" disabled={busy} onclick={remove}>{$t('object.delete')}</Button>
       {#if deleteError}<p role="alert" class={errorClass}>{deleteError}</p>{/if}
     </section>
   {/if}

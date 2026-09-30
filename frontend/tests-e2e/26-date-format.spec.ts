@@ -91,7 +91,7 @@ test('the date format setting is used everywhere, and the typed date field valid
   const errorText = page.getByText('Enter a date like 15.09.2026');
   await expect(errorText).toBeVisible();
   const describedBy = await dateField.getAttribute('aria-describedby');
-  expect(describedBy).toBeTruthy();
+  expect(describedBy).toMatch(/-format-error$/);
   await expect(page.locator(`#${describedBy}`)).toHaveText('Enter a date like 15.09.2026');
   // Not just our own rendered error text: the field's native `validationMessage` must be
   // non-empty too, since that -- not our own markup -- is what actually withholds the submit.
