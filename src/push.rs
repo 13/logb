@@ -10,7 +10,7 @@ use crate::state::App;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
-use rand::RngExt;
+use p256::elliptic_curve::Generate as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
@@ -90,25 +90,14 @@ fn encode_key(kp: &SigningKey) -> String {
     Base64UrlUnpadded::encode_string(&kp.to_bytes())
 }
 
-/// A new random key.
-///
-/// `p256` wants an RNG from `rand_core` 0.6, and this project's `rand` is built on a later one,
-/// so rather than bridge the two it draws 32 bytes the way the rest of the app draws randomness
-/// and uses them as the secret scalar. A draw that is zero or not below the curve order is no
-/// key; that happens about once in 2^32 draws, and drawing again is all it takes.
+/// A new random key, drawn from the same thread-local CSPRNG the rest of the app uses.
 fn generate_key() -> SigningKey {
-    loop {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill(&mut bytes);
-        if let Ok(kp) = SigningKey::from_bytes(&bytes.into()) {
-            return kp;
-        }
-    }
+    SigningKey::generate_from_rng(&mut rand::rng())
 }
 
 /// The public half, as `applicationServerKey` takes it: an uncompressed P-256 point, base64url.
 pub fn public_key(kp: &SigningKey) -> String {
-    Base64UrlUnpadded::encode_string(kp.verifying_key().to_encoded_point(false).as_bytes())
+    Base64UrlUnpadded::encode_string(kp.verifying_key().to_sec1_point(false).as_bytes())
 }
 
 /// Who push services should contact about this sender. VAPID asks for a `mailto:` or `https:`
