@@ -116,6 +116,17 @@
     if (known) { page = { pattern: route.pattern, comp: known }; slow = false; return; }
     let live = true;
     const timer = setTimeout(() => { if (live) slow = true; }, 300);
+    // A chunk that cannot be fetched (a deploy replaced it while this tab was open, say): a
+    // reload asks for the current build's. Once only per tab -- if that did not help, a reload
+    // loop would not either, and "Loading…" stays up instead.
+    const reloadOnce = () => {
+      if (!live) return;
+      try {
+        if (sessionStorage.getItem('logb.chunk-reload')) return;
+        sessionStorage.setItem('logb.chunk-reload', '1');
+      } catch { return; }
+      location.reload();
+    };
     const attempt = () => route.load().then(async (m) => {
       loaded.set(route.pattern, m.default);
       if (!live) return;
@@ -129,20 +140,14 @@
       if (!live) return;
       slow = true;
       // Offline, a reload would land on the browser's own error page and strand any queued
-      // write with no app left to replay it. "Loading…" stays up and the import is tried again
-      // when the connection returns.
-      if (!navigator.onLine) { addEventListener('online', attempt, { once: true }); return; }
-      // A chunk that cannot be fetched while online (a deploy replaced it while this tab was
-      // open, say): a reload asks for the current build's. Once only per tab -- if that did not
-      // help, a reload loop would not either, and "Loading…" stays up instead.
-      try {
-        if (sessionStorage.getItem('logb.chunk-reload')) return;
-        sessionStorage.setItem('logb.chunk-reload', '1');
-      } catch { return; }
-      location.reload();
+      // write with no app left to replay it, so "Loading…" stays up until the connection
+      // returns. Then the page reloads (not a second import: the bundler's preload helper
+      // skips a stylesheet it already tried, so a retried route would render unstyled).
+      if (!navigator.onLine) { addEventListener('online', reloadOnce, { once: true }); return; }
+      reloadOnce();
     });
     attempt();
-    return () => { live = false; clearTimeout(timer); removeEventListener('online', attempt); };
+    return () => { live = false; clearTimeout(timer); removeEventListener('online', reloadOnce); };
   });
 
   // Once the first screen is up, the other pages are fetched while nothing else is going on, so

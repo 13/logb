@@ -248,7 +248,7 @@ test.describe('a route chunk that cannot be fetched', () => {
     // The Statistics chunk never arrives, not even from the idle-time warm-up, so it is not in
     // hand when the person opens the page.
     let blocked = true;
-    await page.route('**/assets/Stats-*.js', (route) => (blocked ? route.abort() : route.continue()));
+    await page.route(/\/assets\/Stats-[^/]*\.(js|css)$/, (route) => (blocked ? route.abort() : route.continue()));
     await page.goto('/');
     await expect(page.getByRole('button', { name: 'Statistics' })).toBeVisible();
     await page.evaluate(() => sessionStorage.removeItem('logb.chunk-reload'));
@@ -257,8 +257,9 @@ test.describe('a route chunk that cannot be fetched', () => {
     await page.getByRole('button', { name: 'Statistics' }).click();
     await expect(page.getByText('Loading…')).toBeVisible();
     // Long enough for a reload, if the app still did one, to have landed on the browser's error page.
-    await page.waitForTimeout(1_500);
-    expect(page.url()).not.toMatch(/^chrome-error:/);
+    // For a second the page stays the app: a reload gone wrong ends on the browser's error page.
+    const since = Date.now();
+    await expect.poll(() => (page.url().startsWith('chrome-error:') ? -1 : Date.now() - since), { intervals: [100], timeout: 5_000 }).toBeGreaterThan(1_000);
     await expect(page.getByText('Loading…')).toBeVisible();
     expect(await page.evaluate(() => sessionStorage.getItem('logb.chunk-reload'))).toBeNull();
 
@@ -266,5 +267,9 @@ test.describe('a route chunk that cannot be fetched', () => {
     await context.setOffline(false);
     await expect(page.getByRole('heading', { name: 'Statistics' })).toBeVisible();
     expect(page.url()).toContain('/stats');
+    // Styled, not merely present: the app's CSS gives the heading its size and weight.
+    const h1 = await page.getByRole('heading', { name: 'Statistics' }).evaluate((el) => { const c = getComputedStyle(el); return { size: parseFloat(c.fontSize), weight: Number(c.fontWeight) }; });
+    expect(h1.size).toBeGreaterThanOrEqual(20);
+    expect(h1.weight).toBeGreaterThanOrEqual(600);
   });
 });
