@@ -1,10 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 async function newCar(page: Page, name: string) {
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill(name);
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByLabel('Counter').selectOption('km');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name })).toBeVisible();
@@ -70,7 +70,7 @@ test('a new object with a counter can ask for a monthly reading reminder on the 
   await signInFresh(page, '15-reading-reminders');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Reading Bike');
-  await page.getByLabel('Type').selectOption('e_bike');
+  await chooseType(page, 'e_bike');
   const optIn = page.getByLabel(/Log the counter reading/);
   await expect(optIn).toHaveCount(0);
   await page.getByLabel('Counter').selectOption('km');

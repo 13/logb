@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 /** Reads the queue straight out of IndexedDB, which is where the ordering actually lives. */
 async function queue(page: import('@playwright/test').Page) {
@@ -27,7 +27,7 @@ test('two tabs queueing at once never hand out the same seq', async ({ context }
   await signInFresh(a, '06-outbox-order');
   await a.getByRole('button', { name: /New object/ }).click();
   await a.getByLabel('Name').fill('Workshop');
-  await a.getByLabel('Type').selectOption('other');
+  await chooseType(a, 'other');
   await a.getByRole('button', { name: 'Save' }).click();
   await expect(a.getByRole('heading', { name: 'Workshop' })).toBeVisible();
   const objectId = a.url().match(/\/objects\/(\d+)/)?.[1];
@@ -71,7 +71,7 @@ test('a newly queued op sorts after a record that predates seq', async ({ page, 
   await signInFresh(page, '06-outbox-order');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Shed');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Shed' })).toBeVisible();
 

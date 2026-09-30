@@ -54,7 +54,7 @@ export default {
   "cat.session": "Session",
   "session.location": "Location",
   "session.duration": "Duration",
-  "object.quick-templates": "Quick templates",
+  "object.quick-templates": "Or start from a template",
   "template.object-football": "Football training",
   "template.object-electricity": "Electricity meter",
   "template.object-heating-oil": "Heating oil tank",

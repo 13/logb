@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openMoreDetails, signInFresh } from './helpers';
+import { chooseType, openMoreDetails, signInFresh, typeTile } from './helpers';
 
 /** The forms as round 4 of the UI overhaul left them. Seeds through the API so each test drives
  *  only the form it is about. */
@@ -135,4 +135,65 @@ test('notes wait under "More details", which opens by itself for a reminder that
   await expect(page.getByRole('alert')).toHaveText('Check “Title”: it is missing or not valid.');
   await expect(page.getByLabel('Title')).toBeFocused();
   await expect(page.getByLabel('Title')).toHaveAttribute('aria-invalid', 'true');
+});
+
+test('a new object starts with the type as tiles, nothing chosen, then templates, then the name', async ({ page }) => {
+  await signInFresh(page, '38-type-tiles');
+  await page.goto('/objects/new');
+
+  const types = page.getByRole('group', { name: 'Type', exact: true });
+  await expect(types.getByRole('radio')).toHaveCount(9);
+  await expect(types.getByRole('radio', { checked: true })).toHaveCount(0);
+  for (const radio of await types.getByRole('radio').all()) expect((await radio.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  const templates = page.getByRole('region', { name: 'Or start from a template' });
+  const typesBox = (await types.boundingBox())!;
+  const templatesBox = (await templates.boundingBox())!;
+  const nameBox = (await page.getByLabel('Name').boundingBox())!;
+  expect(typesBox.y).toBeLessThan(templatesBox.y);
+  expect(templatesBox.y).toBeLessThan(nameBox.y);
+  await expectSaveOnScreen(page);
+
+  // No type, no save: the message is under the tiles.
+  await page.getByLabel('Name').fill('Unfiled thing');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Check “Type”: it is missing or not valid.');
+  await expect(page).toHaveURL(/\/objects\/new$/);
+  await chooseType(page, 'tool');
+  await expect(typeTile(page, 'tool')).toBeChecked();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Unfiled thing' })).toBeVisible();
+});
+
+test('object details wait under "More details", which opens for an object that uses them', async ({ page }) => {
+  await signInFresh(page, '38-object-details');
+  const toggle = page.getByRole('button', { name: 'More details' });
+  await page.goto('/objects/new');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByLabel('Description')).toBeHidden();
+
+  const plain = await object(page, { name: 'Plain drill', type: 'tool' });
+  const described = await object(page, { name: 'Grey car', type: 'car', description: 'grey' });
+  await page.goto(`/objects/${plain}/edit`);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(typeTile(page, 'tool')).toBeChecked();
+  await page.goto(`/objects/${described}/edit`);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByLabel('Description')).toHaveValue('grey');
+  // A real checkbox, full-size target.
+  const archive = page.getByRole('checkbox', { name: 'Archive' });
+  await expect(archive).not.toBeChecked();
+});
+
+test('the Save bar stays on screen while the form scrolls, and never covers the last field', async ({ page }) => {
+  await signInFresh(page, '38-sticky');
+  await page.goto('/objects/new');
+  await openMoreDetails(page);
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await expectSaveOnScreen(page);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await expectSaveOnScreen(page);
+  const bar = (await page.getByTestId('form-actions').boundingBox())!;
+  const last = (await page.getByLabel('Private object').boundingBox())!;
+  expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
 });

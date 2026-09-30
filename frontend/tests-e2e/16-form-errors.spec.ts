@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 /// Snapping the receipt comes before naming the entry. Adding files saves the draft, which needs
 /// a title -- so the category stands in as one, visibly, instead of the click being refused.
@@ -7,6 +7,7 @@ test('adding files before a title starts the draft under the category name', asy
   await signInFresh(page, 'form-errors');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Form errors car');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Form errors car' })).toBeVisible();
 
@@ -25,6 +26,7 @@ test('a field that does not validate is named in a sentence', async ({ page }) =
   await signInFresh(page, 'form-errors');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Form errors bike');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Form errors bike' })).toBeVisible();
 

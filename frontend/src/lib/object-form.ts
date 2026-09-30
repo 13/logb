@@ -94,3 +94,21 @@ export function pendingObject(body: ObjectInput, opts: { tempId: number; userId?
     pending: true,
   };
 }
+
+/** Whether an object uses anything the form keeps under "More details": the form opens that
+ *  section for it, so nothing already filled in sits out of sight. */
+export function objectHasDetails(input: ObjectInput): boolean {
+  return !!input.resource_kind || input.parent_id != null || input.description.trim() !== ''
+    || (input.tags ?? []).length > 0 || input.purchase_date != null || input.purchase_price_cents != null
+    || !!input.archived || !!input.private;
+}
+
+/** The object form's field for each key `validate` returns, plus the type (checked by the form:
+ *  a new object has no type until one is picked). */
+export const OBJECT_FIELD_IDS: Readonly<Record<string, string>> = {
+  'object.type': 'object-type',
+  'object.name': 'n',
+  'object.purchase-price': 'pp',
+  'object.energy-price-error': 'ep',
+  'object.fuel-capacity-error': 'capacity',
+};

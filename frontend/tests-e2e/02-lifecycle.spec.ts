@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { pngPayload, signInFresh } from './helpers';
+import { chooseType, pngPayload, signInFresh } from './helpers';
 
 test('an object records activities, photos and reminders', async ({ page }) => {
   await signInFresh(page, '02-lifecycle');
@@ -7,7 +7,7 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   // create the object
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Golf');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByLabel('Counter').selectOption('km');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Golf' })).toBeVisible();

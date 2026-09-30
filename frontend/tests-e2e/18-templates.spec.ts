@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 test('a new car starts with the reminders ticked for it, measured from its current reading', async ({ page }) => {
   await signInFresh(page, '18-templates');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Template Golf');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByLabel('Counter').selectOption('km');
 
   // Offered, never ticked for you.

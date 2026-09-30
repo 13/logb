@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 test('an edit saved without a connection is sent once it is back', async ({ page, context }) => {
   await signInFresh(page, '19-offline-edit');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Offline edit bike');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Offline edit bike' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)![1];

@@ -54,7 +54,7 @@ export default {
   "cat.session": "Termin",
   "session.location": "Ort",
   "session.duration": "Dauer",
-  "object.quick-templates": "Schnellvorlagen",
+  "object.quick-templates": "Oder mit einer Vorlage beginnen",
   "template.object-football": "Fußballtraining",
   "template.object-electricity": "Stromzähler",
   "template.object-heating-oil": "Heizöltank",

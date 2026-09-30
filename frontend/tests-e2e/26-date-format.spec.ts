@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { jpegWithExifPayload, signInFresh } from './helpers';
+import { chooseType, jpegWithExifPayload, signInFresh } from './helpers';
 
 /** Fixed at noon on the app's own example date (2026-09-15), so the max-date coverage below
  *  (item 4/2 of the review) reads its "today" from this pinned clock rather than the real one --
@@ -32,7 +32,7 @@ test('the date format setting is used everywhere, and the typed date field valid
   await nav(page, 'Objects');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Date Format Golf');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   // A counter unit, so the max-date coverage below (item 2 of the review) has a reading form to
   // exercise -- its date field is the one field in the app bound with a `max`.
   await page.getByLabel('Counter').selectOption('km');
@@ -140,7 +140,7 @@ test('an outside value change reaches the field even mid-error, and clears it', 
   await nav(page, 'Objects');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Outside Change Car');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Outside Change Car' })).toBeVisible();
 

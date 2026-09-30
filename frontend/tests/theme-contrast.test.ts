@@ -95,7 +95,7 @@ describe('shadcn token contrast', () => {
       });
     }
     // Chart bars (Chart.svelte) are brand-ink on a card: a meaningful graphic, 1.4.11.
-    for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card'], ['brand-ink', 'card']] as const) {
+    for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card'], ['brand-ink', 'card'], ['background', 'brand-ink']] as const) {
       it(`${name}: ${fg} against ${bg} (>= 3:1)`, () => {
         expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(3);
       });
@@ -127,6 +127,13 @@ describe('tinted highlight contrast', () => {
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(3);
       expect(contrastRatio(ui('ring', theme), bg)).toBeGreaterThanOrEqual(3);
       expect(contrastRatio(ui('foreground', theme), ui('accent', theme))).toBeGreaterThanOrEqual(4.5);
+    });
+    // The destructive button (Delete object/entry/reminder): light paints destructive/10 and
+    // destructive/15 on hover (/20 was 4.41:1), dark paints destructive/20 and /30 on hover.
+    it(`${name}: destructive text on a destructive button, at rest and on hover (>= 4.5:1)`, () => {
+      const at = (a: number) => contrastRatio(ui('destructive', theme), blend(ui('destructive', theme), ui('background', theme), a));
+      const fills = name === 'light' ? [0.1, 0.15] : [0.2, 0.3];
+      for (const a of fills) expect(at(a), `destructive/${a * 100}`).toBeGreaterThanOrEqual(4.5);
     });
     // The object card's due badge sits on the card.
     it(`${name}: destructive text on the object card's due badge (destructive/10 over card) (>= 4.5:1)`, () => {

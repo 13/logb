@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { logEntry, signInFresh } from './helpers';
+import { chooseType, logEntry, signInFresh } from './helpers';
 
 // The search box was the one input in the app nobody wrapped in `.field`, so it fell through to
 // Chrome's own styling: square corners, a hard focus rectangle, and a blue clear button in a
@@ -54,7 +54,7 @@ test('an object card is one box with an icon and no quick-log action', async ({ 
   await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Row shape probe');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByRole('button', { name: 'Save' }).click();
   // Waiting for the object's heading closes the window in which "Back" would hit the form's own
   // Back button.
@@ -86,7 +86,7 @@ test('every control in a form is the same height', async ({ page }) => {
   await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Control height probe');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByRole('button', { name: 'Save' }).click();
   // Same race the two geometry tests below had: Save navigates after its POST resolves, not
   // when the click fires, so a "Back" click sent before then lands on the form's own Back
@@ -125,7 +125,7 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await signInFresh(page, '11-controls');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Chip gap probe');
-  await page.getByLabel('Type').selectOption('bike');
+  await chooseType(page, 'bike');
   await page.getByRole('button', { name: 'Save' }).click();
   // Save's own navigation to the object page happens after its POST resolves, not when the
   // click event fires -- clicking "Back" before that lands the click on the *form's* Back
@@ -182,7 +182,7 @@ test.describe('empty state timing', () => {
     await signInFresh(page, '11-controls');
     await page.getByRole('button', { name: /New object/ }).click();
     await page.getByLabel('Name').fill('Empty flash probe');
-    await page.getByLabel('Type').selectOption('bike');
+    await chooseType(page, 'bike');
     await page.getByRole('button', { name: 'Save' }).click();
 
     // Hold both answers back long enough that a premature empty state would be on screen.

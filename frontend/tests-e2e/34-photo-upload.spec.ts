@@ -1,9 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { jpegWithExifPayload, pngPayload, signInFresh } from './helpers';
+import { chooseType, jpegWithExifPayload, pngPayload, signInFresh } from './helpers';
 
 async function newActivity(page: Page, object: string) {
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill(object);
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: object })).toBeVisible();
   await page.getByRole('button', { name: /Log activity/ }).click();

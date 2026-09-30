@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 /** The dashboard's reminder area: one card per due reminder with a real snooze button, calm rows
  *  for what is coming up, and no object tags on either (they belong to the object, not the
@@ -150,7 +150,7 @@ test('a reload after an outbox flush keeps the search box, its focus and its tex
   await context.setOffline(true);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Flush queued');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page).toHaveURL(/\/objects\/-?\d+$/);
   await nav.getByRole('button', { name: 'Objects' }).click();

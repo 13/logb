@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { openInfo, signInFresh } from './helpers';
+import { openMoreDetails, chooseType, openInfo, signInFresh } from './helpers';
 
 test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }) => {
   await signInFresh(page, '12-object-hierarchy');
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Hierarchy House');
-  await page.getByLabel('Type').selectOption('home');
+  await chooseType(page, 'home');
   await page.getByRole('button', { name: 'Save' }).click();
   // Wait for the save to land: going to '/' at once can abort the create, and the next form's
   // "Inside" picker then never offers the object this test just made.
@@ -15,7 +15,8 @@ test('a house shows its rooms, and a room shows its breadcrumb', async ({ page }
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Hierarchy Garage');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
+  await openMoreDetails(page);
   await page.getByLabel('Inside').selectOption({ label: 'Hierarchy House' });
   await page.getByRole('button', { name: 'Save' }).click();
 
@@ -34,7 +35,7 @@ test('an archived object deep inside the tree is still reachable from the archiv
 
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Attic Nest House');
-  await page.getByLabel('Type').selectOption('home');
+  await chooseType(page, 'home');
   await page.getByRole('button', { name: 'Save' }).click();
   // Wait for the save to land: going to '/' at once can abort the create, and the next form's
   // "Inside" picker then never offers the object this test just made.
@@ -43,6 +44,8 @@ test('an archived object deep inside the tree is still reachable from the archiv
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Attic Nest Garage');
+  await chooseType(page, 'other');
+  await openMoreDetails(page);
   await page.getByLabel('Inside').selectOption({ label: 'Attic Nest House' });
   await page.getByRole('button', { name: 'Save' }).click();
   // Wait for the save to land: going to '/' at once can abort the create, and the next form's
@@ -52,6 +55,8 @@ test('an archived object deep inside the tree is still reachable from the archiv
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Attic Nest Bulb');
+  await chooseType(page, 'other');
+  await openMoreDetails(page);
   // The picker says which object each candidate sits inside, so two garages cannot be
   // confused: the option is the name plus its parent's, the same idiom the search hits use.
   await expect(page.getByLabel('Inside').locator('option', { hasText: 'Attic Nest Garage' }))
@@ -62,6 +67,9 @@ test('an archived object deep inside the tree is still reachable from the archiv
 
   // Archive the bulb: two levels down, inside a garage, inside a house.
   await page.getByRole('button', { name: 'Edit' }).first().click();
+  // The edit form opens "More details" itself once the object has loaded (it sits inside a garage).
+  await expect(page.getByLabel('Name')).toHaveValue('Attic Nest Bulb');
+  await openMoreDetails(page);
   await page.getByLabel('Archive').check();
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { forgetObjectDraft, safeReturnPath, saveObjectDraft, takeObjectDraft } from '../src/lib/object-draft';
+import { forgetObjectDraft, safeReturnPath, saveObjectDraft, takeObjectDraft, takeObjectDraftState } from '../src/lib/object-draft';
 import type { ObjectInput } from '../src/lib/types';
 
 describe('object-draft: safeReturnPath', () => {
@@ -102,6 +102,16 @@ describe('object-draft: save and take', () => {
     saveObjectDraft('/objects/new', input);
     expect(takeObjectDraft('/objects/new', 'not-the-token')).toBeNull();
     expect(storage.has('logb.object-draft')).toBe(false);
+  });
+
+  it('keeps whether a type was chosen', () => {
+    const token = saveObjectDraft('/objects/new', input, false);
+    expect(takeObjectDraftState('/objects/new', token)).toEqual({ input, typePicked: false });
+  });
+
+  it('counts a draft saved without the flag as chosen', () => {
+    storage.set('logb.object-draft', JSON.stringify({ path: '/objects/new', token: 't', input }));
+    expect(takeObjectDraftState('/objects/new', 't')).toEqual({ input, typePicked: true });
   });
 
   it('forgetObjectDraft clears a stored draft outright', () => {

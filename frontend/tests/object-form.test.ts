@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { clearsPriceOn, emptyInput, formText, milliToText, pendingObject, toInput, validate } from '../src/lib/object-form';
-import type { MemObject } from '../src/lib/types';
+import { clearsPriceOn, emptyInput, formText, milliToText, objectHasDetails, OBJECT_FIELD_IDS, pendingObject, toInput, validate } from '../src/lib/object-form';
+import type { MemObject, ObjectInput } from '../src/lib/types';
 
 const obj = {
   id: 1, user_id: 1, name: 'Golf', type: 'car', counter_unit: 'km', fuel_unit: 'l', description: 'grey',
@@ -84,5 +84,29 @@ describe('object form', () => {
     expect(o.tags).toEqual(['Lease']);
     expect(pendingObject({ ...input, archived: true }, { tempId: -7, now }).archived_at).toBe(now);
     expect(pendingObject(input, { tempId: -7, now }).user_id).toBe(0);
+  });
+});
+
+describe('object form: More details', () => {
+  it('stays closed for a new object', () => {
+    expect(objectHasDetails(emptyInput())).toBe(false);
+  });
+
+  it('opens for any optional field that is set', () => {
+    const cases: Partial<ObjectInput>[] = [
+      { resource_kind: 'water' }, { parent_id: 3 }, { description: 'grey' }, { tags: ['Lease'] },
+      { purchase_date: '2020-03-01' }, { purchase_price_cents: 100 }, { archived: true }, { private: true },
+    ];
+    for (const c of cases) expect(objectHasDetails({ ...emptyInput(), ...c }), JSON.stringify(c)).toBe(true);
+  });
+
+  it('does not count a description of spaces, or the fields that stay in view', () => {
+    expect(objectHasDetails({ ...emptyInput(), description: '   ', name: 'Golf', type: 'car', counter_unit: 'km' })).toBe(false);
+  });
+
+  it('names a field for every key validate returns, and for the type', () => {
+    for (const key of ['object.type', 'object.name', 'object.purchase-price', 'object.energy-price-error', 'object.fuel-capacity-error']) {
+      expect(OBJECT_FIELD_IDS[key], key).toBeTruthy();
+    }
   });
 });

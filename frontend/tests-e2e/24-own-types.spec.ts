@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openInfo, signInFresh } from './helpers';
+import { chooseType, openInfo, signInFresh, typeTile } from './helpers';
 
 // `/api/types` is matched by the service worker's `householdData` route (NetworkFirst), and a
 // request it handles never reaches `page.route` -- this test delays that request to check the
@@ -32,9 +32,8 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   // New object: the type sits under "Your types" and brings its counter unit along.
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Scooter One');
-  await expect(page.locator('#c optgroup[label="Your types"] option', { hasText: 'E-Scooter' })).toHaveCount(1);
-  // exact: the "Your types" optgroup is labelled too.
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: 'E-Scooter' });
+  await expect(page.getByRole('group', { name: 'Your types' }).getByRole('radio', { name: 'E-Scooter', exact: true })).toHaveCount(1);
+  await chooseType(page, 'E-Scooter');
   await expect(page.getByLabel('Counter', { exact: true })).toHaveValue('km');
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);
@@ -97,7 +96,7 @@ test('"+ New type…" on the object form makes a type without losing what was ty
 
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Mein Pedelec');
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await page.getByRole('button', { name: '+ New type…' }).click();
 
   // Lands on Types with the add form already open, and the object form's own path plus a
   // one-time draft token carried as `return`/`draft` -- not chosen, just opened for the
@@ -113,8 +112,8 @@ test('"+ New type…" on the object form makes a type without losing what was ty
   // before the detour survived, and the new type is selected, unit and all.
   await expect(page).toHaveURL(/\/objects\/new$/);
   await expect(page.getByLabel('Name')).toHaveValue('Mein Pedelec');
-  await expect(page.getByLabel('Type', { exact: true })).toHaveValue(/^custom:/);
-  await expect(page.locator('#c option:checked')).toHaveText('Pedelec');
+  await expect(typeTile(page, 'Pedelec')).toBeChecked();
+  await expect(typeTile(page, 'Pedelec')).toHaveAttribute('value', /^custom:/);
   await expect(page.getByLabel('Counter', { exact: true })).toHaveValue('km');
 
   await page.getByRole('button', { name: 'Save' }).click();
@@ -139,8 +138,8 @@ test('Cancel on Types, reached from the shortcut, returns without changing the t
   // A type picked before the detour must still be there after Cancel -- otherwise nothing tells
   // apart "the shortcut changed nothing" from "the shortcut happened to leave the default in
   // place".
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: 'Car' });
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await chooseType(page, 'car');
+  await page.getByRole('button', { name: '+ New type…' }).click();
 
   await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew&draft=/);
   await expect(page.getByRole('button', { name: 'Save type' })).toBeVisible();
@@ -148,7 +147,7 @@ test('Cancel on Types, reached from the shortcut, returns without changing the t
 
   await expect(page).toHaveURL(/\/objects\/new$/);
   await expect(page.getByLabel('Name')).toHaveValue('Mein Auto');
-  await expect(page.getByLabel('Type', { exact: true })).toHaveValue('car');
+  await expect(typeTile(page, 'car')).toBeChecked();
 });
 
 test('the shortcut also works from the edit form, and clears type/draft from the URL', async ({ page }) => {
@@ -157,13 +156,14 @@ test('the shortcut also works from the edit form, and clears type/draft from the
   // An existing object to edit.
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Old Name');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);
   const objectId = Number(new URL(page.url()).pathname.split('/').pop());
 
   await page.goto(`/objects/${objectId}/edit`);
   await page.getByLabel('Name').fill('New Name');
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await page.getByRole('button', { name: '+ New type…' }).click();
   await page.waitForURL(new RegExp(`/settings/types\\?new=1&return=%2Fobjects%2F${objectId}%2Fedit&draft=`));
   await page.getByLabel('Name', { exact: true }).fill('Widget');
   await page.getByLabel('Default counter unit').selectOption('mi');
@@ -174,7 +174,7 @@ test('the shortcut also works from the edit form, and clears type/draft from the
   await expect(page).toHaveURL(new RegExp(`/objects/${objectId}/edit$`));
   expect(page.url()).not.toMatch(/[?&](type|draft)=/);
   await expect(page.getByLabel('Name')).toHaveValue('New Name');
-  await expect(page.locator('#c option:checked')).toHaveText('Widget');
+  await expect(typeTile(page, 'Widget')).toBeChecked();
   await expect(page.getByLabel('Counter', { exact: true })).toHaveValue('mi');
 
   await page.getByRole('button', { name: 'Save' }).click();
@@ -193,12 +193,12 @@ test('abandoning the shortcut leaves a later, plain visit to the object form emp
   // The detour is started (a draft is kept and a token minted) but never finished -- no create,
   // no Cancel click, just leaving Types the way someone closing the tab or typing a new address
   // would.
-  await page.getByLabel('Type', { exact: true }).selectOption({ label: '+ New type…' });
+  await page.getByRole('button', { name: '+ New type…' }).click();
   await page.waitForURL(/\/settings\/types\?new=1&return=%2Fobjects%2Fnew&draft=/);
 
   // A plain, direct visit -- no `draft=` token in its address -- must not resurrect that
   // abandoned input: the form comes up exactly as empty as a fresh one.
   await page.goto('/objects/new');
   await expect(page.getByLabel('Name')).toHaveValue('');
-  await expect(page.getByLabel('Type', { exact: true })).toHaveValue('other');
+  await expect(page.getByRole('group', { name: 'Type', exact: true }).getByRole('radio', { checked: true })).toHaveCount(0);
 });

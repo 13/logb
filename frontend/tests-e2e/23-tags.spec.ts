@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
-import { openInfo, pngPayload, signInFresh } from './helpers';
+import { chooseType, openInfo, openMoreDetails, pngPayload, signInFresh } from './helpers';
 
 /** A fresh object made through the form, and its id. */
 async function newObject(page: Page, name: string): Promise<number> {
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill(name);
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await page.waitForURL(/\/objects\/\d+$/);
   return Number(new URL(page.url()).pathname.split('/').pop());
@@ -110,7 +110,8 @@ test('tag an object and an entry, see coloured chips, and filter by tapping one'
 
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Tag Golf');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
+  await openMoreDetails(page);
   // exact: the avatar's "Signed in as e2e-23tags-…" label contains "tags" too.
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('Lease');
@@ -156,7 +157,8 @@ test('Enter on an empty tags field still submits the form', async ({ page }) => 
   await signInFresh(page, '23-tags-empty');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Empty Tags');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
+  await openMoreDetails(page);
   await page.getByLabel('Tags', { exact: true }).press('Enter');
   await page.waitForURL(/\/objects\/\d+$/);
 });
@@ -165,7 +167,8 @@ test('a tag typed past the character limit shows a described, announced error', 
   await signInFresh(page, '23-tags-toolong');
   await page.goto('/objects/new');
   await page.getByLabel('Name').fill('Long Tag');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
+  await openMoreDetails(page);
   const tagInput = page.getByLabel('Tags', { exact: true });
   await tagInput.fill('x'.repeat(33));
   await tagInput.press('Enter');

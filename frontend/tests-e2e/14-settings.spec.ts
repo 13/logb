@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { chooseType, signIn } from './helpers';
 
 test('the hub lists what there is, and each row opens its own page', async ({ page }) => {
   await signIn(page);
@@ -82,7 +82,7 @@ test('the failed-sync banner appears only when the queue holds a dead operation'
   await page.goto('/');
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Settings dead-op fixture');
-  await page.getByLabel('Type').selectOption('other');
+  await chooseType(page, 'other');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('heading', { name: 'Settings dead-op fixture' })).toBeVisible();
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];

@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { chooseType, signInFresh } from './helpers';
 
 test('Body creation, decreasing weight, unit conversion, editing, chart and reminders', async ({ page }) => {
   await signInFresh(page, '30-weight');
   await page.goto('/objects/new');
   await page.getByLabel('Name', { exact: true }).fill('Weight history test');
-  await page.locator('#c').selectOption('body');
+  await chooseType(page, 'body');
   await expect(page.locator('#u')).toHaveCount(0);
   await expect(page.locator('#pp')).toHaveCount(0);
   await page.getByLabel('Starting weight (optional)').fill('80,5');

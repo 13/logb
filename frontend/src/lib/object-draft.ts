@@ -32,10 +32,10 @@ export function safeReturnPath(raw: string | null): string | null {
  * All storage access is wrapped: a draft is a convenience, and a blocked or full
  * `sessionStorage` must not stop the navigation it is part of.
  */
-export function saveObjectDraft(returnPath: string, input: ObjectInput): string {
+export function saveObjectDraft(returnPath: string, input: ObjectInput, typePicked = true): string {
   const token = newOpId();
   try {
-    sessionStorage.setItem(KEY, JSON.stringify({ path: returnPath, token, input }));
+    sessionStorage.setItem(KEY, JSON.stringify({ path: returnPath, token, input, typePicked }));
   } catch { /* the shortcut still navigates; the form just comes back empty */ }
   return token;
 }
@@ -44,19 +44,26 @@ export function saveObjectDraft(returnPath: string, input: ObjectInput): string 
  * Reads back a draft saved for exactly `returnPath` under exactly `token`, and removes whatever
  * was stored either way -- so it is used at most once, and a mount that carries the wrong token
  * (or none at all) both gets nothing back AND discards the stored draft, rather than leaving it
- * sitting there for a later, unrelated visit to pick up.
+ * sitting there for a later, unrelated visit to pick up. `typePicked` says whether the user had
+ * chosen a type before the detour (a new object has none until they do); a draft stored before
+ * the flag existed counts as chosen.
  */
-export function takeObjectDraft(returnPath: string, token: string | null): ObjectInput | null {
+export function takeObjectDraftState(returnPath: string, token: string | null): { input: ObjectInput; typePicked: boolean } | null {
   try {
     const raw = sessionStorage.getItem(KEY);
     if (raw === null) return null;
     sessionStorage.removeItem(KEY);
-    const parsed = JSON.parse(raw) as { path?: unknown; token?: unknown; input?: unknown };
+    const parsed = JSON.parse(raw) as { path?: unknown; token?: unknown; input?: unknown; typePicked?: unknown };
     if (token === null || parsed.path !== returnPath || parsed.token !== token) return null;
-    return parsed.input as ObjectInput;
+    return { input: parsed.input as ObjectInput, typePicked: parsed.typePicked !== false };
   } catch {
     return null;
   }
+}
+
+/** `takeObjectDraftState`'s input alone. */
+export function takeObjectDraft(returnPath: string, token: string | null): ObjectInput | null {
+  return takeObjectDraftState(returnPath, token)?.input ?? null;
 }
 
 /**

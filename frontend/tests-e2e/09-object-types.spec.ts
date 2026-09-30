@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn } from './helpers';
+import { chooseType, signIn } from './helpers';
 
 // Seeds its own object with a name no other spec uses: one server and one database are shared
 // across the run.
@@ -7,7 +7,7 @@ test('a body object logs a symptom, and is not offered fuel', async ({ page }) =
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Left shoulder');
-  await page.getByLabel('Type').selectOption('body');
+  await chooseType(page, 'body');
   await page.getByRole('button', { name: 'Save' }).click();
 
   await page.getByRole('button', { name: /Log activity/ }).click();
@@ -25,7 +25,7 @@ test('an entry keeps its own category after its object is re-typed', async ({ pa
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Retyped van');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByRole('button', { name: 'Save' }).click();
 
   await page.getByRole('button', { name: /Log activity/ }).click();
@@ -34,7 +34,7 @@ test('an entry keeps its own category after its object is re-typed', async ({ pa
   await page.getByRole('button', { name: 'Save' }).click();
 
   await page.getByRole('button', { name: 'Edit' }).click();
-  await page.getByLabel('Type').selectOption('body');
+  await chooseType(page, 'body');
   await page.getByRole('button', { name: 'Save' }).click();
 
   await page.getByText('Diesel fill').first().click();
@@ -46,7 +46,7 @@ test('a car is not offered health filters, and keeps a chip for what it actually
   await signIn(page);
   await page.getByRole('button', { name: /New object/ }).click();
   await page.getByLabel('Name').fill('Chip test wagon');
-  await page.getByLabel('Type').selectOption('car');
+  await chooseType(page, 'car');
   await page.getByRole('button', { name: 'Save' }).click();
 
   const chips = page.getByTestId('category-chips').getByRole('button');
@@ -70,7 +70,7 @@ test('a car is not offered health filters, and keeps a chip for what it actually
   await page.getByLabel('Title').fill('Filter probe');
   await page.getByRole('button', { name: 'Save' }).click();
   await page.getByRole('button', { name: 'Edit' }).click();
-  await page.getByLabel('Type').selectOption('body');
+  await chooseType(page, 'body');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByTestId('category-chips').getByRole('button')).toContainText(['Fuel / charge']);
 });

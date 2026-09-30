@@ -126,3 +126,18 @@ export async function openMoreDetails(page: Page): Promise<void> {
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 }
+
+const TYPE_LABELS: Record<string, string> = {
+  car: 'Car', e_bike: 'E-bike', bike: 'Bicycle', motorcycle: 'Motorcycle', home: 'Home',
+  appliance: 'Appliance', tool: 'Tool', body: 'Body', other: 'Other',
+};
+
+/** The object form's tile for `type`: a built-in type by key ('car'), an own type by its name. */
+export function typeTile(page: Page, type: string) {
+  return page.getByRole('group', { name: 'Type', exact: true }).getByRole('radio', { name: TYPE_LABELS[type] ?? type, exact: true });
+}
+
+/** Picks the object's type on the object form. A new object has none until one is picked. */
+export async function chooseType(page: Page, type: string): Promise<void> {
+  await typeTile(page, type).check();
+}
