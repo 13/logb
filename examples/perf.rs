@@ -60,6 +60,11 @@ struct Args {
     /// Write the results as JSON to this file.
     #[arg(long)]
     json: Option<std::path::PathBuf>,
+    /// Keep the instance's data directory here instead of a temporary one, so the seeded
+    /// database can be looked at afterwards (`EXPLAIN QUERY PLAN` and the like). SQLite only
+    /// in effect; the directory must not already hold a LogB database.
+    #[arg(long)]
+    keep_data: Option<std::path::PathBuf>,
     /// Compare two JSON result files (before, after) and exit; nothing is seeded.
     #[arg(long, num_args = 2, value_names = ["BEFORE", "AFTER"])]
     compare: Option<Vec<std::path::PathBuf>>,
@@ -129,7 +134,7 @@ impl Rng {
 
 struct Instance {
     base: String,
-    _dir: tempfile::TempDir,
+    _dir: Option<tempfile::TempDir>,
     /// `(server_url, database_name)` of the PostgreSQL scratch database, dropped at the end.
     pg: Option<(String, String)>,
 }
@@ -165,11 +170,21 @@ async fn admin_exec(server_url: &str, sql: String) -> Result<(), sqlx::Error> {
 }
 
 async fn start(args: &Args) -> Instance {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = match &args.keep_data {
+        Some(path) => {
+            std::fs::create_dir_all(path).unwrap();
+            None
+        }
+        None => Some(tempfile::tempdir().unwrap()),
+    };
+    let data_dir = match &dir {
+        Some(d) => d.path().to_path_buf(),
+        None => args.keep_data.clone().unwrap(),
+    };
     // Parsed rather than written out field by field, so a config field added later does not
     // break the benchmark. Everything that matters to it is then set explicitly.
     let mut config = logb::config::Config::parse_from(["logb"]);
-    config.data_dir = dir.path().to_path_buf();
+    config.data_dir = data_dir;
     config.bind = "127.0.0.1".into();
     config.port = 0;
     config.secure_cookie = "false".into();
