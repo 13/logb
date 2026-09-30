@@ -9,6 +9,7 @@ pub mod domain;
 pub mod error;
 pub mod files;
 pub mod files_gc;
+pub mod metrics;
 pub mod notify;
 pub mod object_type;
 pub mod pointer;
@@ -94,9 +95,10 @@ async fn request_id(mut req: Request<axum::body::Body>, next: Next) -> Response 
     let status = res.status().as_u16();
     let latency_ms = started.elapsed().as_millis() as u64;
     let _entered = span.enter();
-    // The container HEALTHCHECK asks every thirty seconds. A healthy answer is not news, and at
-    // info it would be most of the log; anything else about health is logged like any request.
-    if path == "/api/health" && res.status().is_success() {
+    // The container HEALTHCHECK asks every thirty seconds, and a Prometheus scraper as often. A
+    // healthy answer is not news, and at info it would be most of the log; anything else about
+    // either is logged like any request.
+    if (path == "/api/health" || path == "/metrics") && res.status().is_success() {
         tracing::debug!(%method, path = %path, status, latency_ms, "request finished");
     } else {
         tracing::info!(%method, path = %path, status, latency_ms, "request finished");
@@ -244,6 +246,7 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
         backup_verified: Mutex::new(None),
         shutdown: tokio_util::sync::CancellationToken::new(),
         telegram_key: std::sync::OnceLock::new(),
+        metrics: metrics::Metrics::new(),
     });
     // Before the first request: a row whose `search_text` is still NULL -- one that existed
     // before the column did, or all of them after the folding changed -- is invisible to search.
@@ -273,7 +276,11 @@ pub async fn build_with_state(config: Config) -> Result<(Router, App), db::BoxEr
     let cors = state.config.cors_origin_list();
     let base = Router::new()
         .nest("/api", api::router(max_upload, max_import))
+        .merge(metrics::router())
         .fallback(spa::handler)
+        // Innermost of the layers below, so the time it records is the handler's own and not
+        // the compressor's; `Router::layer` runs it after routing, so it sees `MatchedPath`.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), metrics::track))
         // The default predicate already skips images, gRPC and event streams. Export archives
         // are the other already-compressed response LogB serves: gzipping a zip burns CPU on
         // both ends for no gain. An attachment's original advertises `Accept-Ranges`, and is

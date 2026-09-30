@@ -235,14 +235,18 @@ pub async fn connect_writer(url: &str, db: &AnyPool) -> Result<AnyPool, BoxError
 pub async fn begin_write(
     state: &crate::state::App,
 ) -> Result<sqlx::Transaction<'static, sqlx::Any>, crate::error::AppError> {
-    begin_write_on(&state.write_db, state.backend)
-        .await
-        .map_err(|e| match e {
-            // The one writer connection did not come free inside `WRITE_WAIT`. That is this
-            // pool, known here and nowhere else -- `error.rs` cannot tell which pool timed out.
-            sqlx::Error::PoolTimedOut => crate::error::AppError::Busy,
-            other => other.into(),
-        })
+    let started = std::time::Instant::now();
+    let tx = begin_write_on(&state.write_db, state.backend).await;
+    state.metrics.observe_write_wait(
+        started.elapsed(),
+        matches!(tx, Err(sqlx::Error::PoolTimedOut)),
+    );
+    tx.map_err(|e| match e {
+        // The one writer connection did not come free inside `WRITE_WAIT`. That is this
+        // pool, known here and nowhere else -- `error.rs` cannot tell which pool timed out.
+        sqlx::Error::PoolTimedOut => crate::error::AppError::Busy,
+        other => other.into(),
+    })
 }
 
 /// `begin_write` against a pool that is not this instance's own database: the destination of a

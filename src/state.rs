@@ -43,6 +43,9 @@ pub struct AppState {
     /// `telegram.key`, once it has been read or written. It never changes while the instance
     /// runs, and the Telegram loop used to read it from disk on every poll.
     pub telegram_key: std::sync::OnceLock<[u8; 32]>,
+    /// Request and write-lock counters behind `/metrics`. Kept whether or not the endpoint is
+    /// enabled: counting costs a few atomics, and it keeps one code path.
+    pub metrics: crate::metrics::Metrics,
 }
 
 pub type App = Arc<AppState>;

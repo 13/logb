@@ -608,6 +608,7 @@ mod tests {
             cors_origins: String::new(),
             database_url: None,
             db_pool_size: None,
+            metrics_token: None,
             allow_loopback_http_push: false,
         };
         Arc::new(AppState {
@@ -622,6 +623,7 @@ mod tests {
             backup_verified: Mutex::new(None),
             shutdown: tokio_util::sync::CancellationToken::new(),
             telegram_key: std::sync::OnceLock::new(),
+            metrics: crate::metrics::Metrics::new(),
         })
     }
 

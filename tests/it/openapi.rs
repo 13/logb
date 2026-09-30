@@ -35,8 +35,23 @@ fn rust_sources(dir: &str) -> Vec<std::path::PathBuf> {
 /// and its siblings) still declares routes, and a scan that stopped at the top level would
 /// quietly stop covering them -- which is the exact drift this file exists to catch.
 fn declared_routes() -> BTreeMap<String, BTreeSet<String>> {
+    routes_in(rust_sources("src/api"))
+}
+
+/// The routes declared in `src/*.rs` itself, outside `src/api/`: served at the root rather than
+/// under `/api` (`/metrics`), and documented with a path-level `servers` entry of `/`.
+fn declared_root_routes() -> BTreeMap<String, BTreeSet<String>> {
+    let files = std::fs::read_dir("src")
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "rs"))
+        .collect();
+    routes_in(files)
+}
+
+fn routes_in(files: Vec<std::path::PathBuf>) -> BTreeMap<String, BTreeSet<String>> {
     let mut found: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for path in rust_sources("src/api") {
+    for path in files {
         let src = std::fs::read_to_string(&path).unwrap();
         for (i, _) in src.match_indices(".route(") {
             let rest = &src[i + ".route(".len()..];
@@ -64,24 +79,40 @@ fn declared_routes() -> BTreeMap<String, BTreeSet<String>> {
     found
 }
 
-fn documented_routes() -> BTreeMap<String, BTreeSet<String>> {
+/// The documented paths, with their methods. `root` picks the ones served at the root (a
+/// path-level `servers` of `/`) rather than the ones under the document's `/api`.
+fn documented_routes_at(root: bool) -> BTreeMap<String, BTreeSet<String>> {
     let raw = std::fs::read_to_string("docs/openapi.json").expect("docs/openapi.json should exist");
     let spec: Value = serde_json::from_str(&raw).expect("docs/openapi.json should be valid JSON");
     spec["paths"]
         .as_object()
         .expect("the spec should have a `paths` object")
         .iter()
+        .filter(|(_, ops)| (ops["servers"][0]["url"] == "/") == root)
         .map(|(path, ops)| {
             let methods = ops
                 .as_object()
                 .unwrap()
                 .keys()
-                .filter(|k| !k.starts_with('x') && *k != "parameters")
+                .filter(|k| !k.starts_with('x') && *k != "parameters" && *k != "servers")
                 .cloned()
                 .collect();
             (path.clone(), methods)
         })
         .collect()
+}
+
+fn documented_routes() -> BTreeMap<String, BTreeSet<String>> {
+    documented_routes_at(false)
+}
+
+/// `/metrics` lives outside `/api`, so the check above cannot see it; this one holds the root
+/// routes to the same standard.
+#[test]
+fn the_spec_describes_exactly_the_routes_served_at_the_root() {
+    let declared = declared_root_routes();
+    assert!(declared.contains_key("/metrics"), "the scan no longer finds /metrics: {declared:?}");
+    assert_eq!(declared, documented_routes_at(true));
 }
 
 #[test]

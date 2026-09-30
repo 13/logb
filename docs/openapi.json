@@ -3,7 +3,7 @@
   "info": {
     "title": "LogB",
     "version": "0.23.0",
-    "description": "The HTTP API behind LogB, served under `/api`.\n\nTwo credentials work everywhere except issuing and listing tokens: the `logb_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logb_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; issuing and listing tokens deliberately refuse bearer credentials, so a leaked token cannot mint replacements. `DELETE /auth/tokens/{id}` is the one exception: a bearer token may revoke itself, so an app can sign out without ever holding a cookie -- but not any other token. `GET /health` lists `token-self-revoke` in its `features` array so a client can detect support before relying on it.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked against the running router by `tests/openapi.rs`: a route added, removed or renamed without updating it fails the build."
+    "description": "The HTTP API behind LogB, served under `/api`.\n\nTwo credentials work everywhere except issuing and listing tokens: the `logb_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logb_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; issuing and listing tokens deliberately refuse bearer credentials, so a leaked token cannot mint replacements. `DELETE /auth/tokens/{id}` is the one exception: a bearer token may revoke itself, so an app can sign out without ever holding a cookie -- but not any other token. `GET /health` lists `token-self-revoke` in its `features` array so a client can detect support before relying on it.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked by `tests/it/openapi.rs` and `tests/it/openapi_responses.rs`: a route added, removed or renamed without updating it fails the build, and so does an answer whose JSON the schemas here do not describe -- including a property they do not list.\n\n`/metrics` is the one path outside `/api`: a Prometheus scrape target, off unless the operator sets `LOGB_METRICS_TOKEN`."
   },
   "servers": [
     {
@@ -21,21 +21,54 @@
   "paths": {
     "/me/appearance": {
       "get": { "summary": "Read personal appearance preferences (null until saved)", "responses": { "200": { "description": "Account preferences", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Appearance" }, { "type": "null" }] } } } } } },
-      "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences" }, "400": { "description": "Invalid preference" } } }
+      "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences, as `GET` answers them", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "400": { "description": "Invalid preference" } } }
     },
     "/me/notifications/hour": {
       "put": { "summary": "Set personal daily delivery hour, optionally in the recipient's own timezone; the instance webhook keeps its configured hour", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["hour"], "properties": { "hour": { "type": "integer", "minimum": 0, "maximum": 23 }, "timezone": { "type": ["string", "null"], "description": "IANA name such as Europe/Berlin; null uses the instance timezone" } } } } } }, "responses": { "200": { "description": "Notification settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } }, "400": { "description": "Invalid hour" } } }
     },
     "/health": {
       "get": {
-        "summary": "Liveness probe. The only route needing no credential.",
+        "summary": "Liveness probe: answers for the database too, not just the process. Needs no credential.",
         "responses": {
           "200": {
             "description": "The service is up",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "version",
+                    "migrations",
+                    "features"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The server's version; compare with this document's `info.version`."
+                    },
+                    "migrations": {
+                      "type": "integer",
+                      "description": "Schema migrations applied to the database."
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "examples": [
+                        [
+                          "pairing",
+                          "token-self-revoke"
+                        ]
+                      ],
+                      "description": "What this instance can do, for a client that would otherwise infer it from `version`. A missing key means no features."
+                    }
+                  }
                 }
               }
             }
@@ -52,6 +85,54 @@
           }
         },
         "security": []
+      }
+    },
+    "/metrics": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "summary": "Prometheus metrics, in the text exposition format. Off unless `LOGB_METRICS_TOKEN` is set.",
+        "description": "Unset (the default), this answers 404 to everyone. Set, it answers only to `Authorization: Bearer <LOGB_METRICS_TOKEN>`; a session cookie or an API token does not open it. Served at the root, not under `/api`. Metrics: `logb_http_requests_total` and `logb_http_request_duration_seconds` by `route` (the matched route template, `fallback` for anything no route matched), `method` and `status` class; `logb_db_pool_connections`, `logb_db_pool_idle_connections` and `logb_db_pool_max_connections` by `pool` (`read`, `write` -- one pool under both names on PostgreSQL); `logb_db_write_lock_wait_seconds` and `logb_db_write_lock_timeouts_total`; `logb_build_info{version}`; `process_start_time_seconds`.",
+        "security": [
+          {
+            "metricsToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metrics",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Metrics are on, and the request did not carry the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Metrics are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/auth/status": {
@@ -91,7 +172,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "The created admin",
             "content": {
               "application/json": {
@@ -1493,7 +1574,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Reminder"
+                  "$ref": "#/components/schemas/ReminderDone"
                 }
               }
             }
@@ -1580,6 +1661,26 @@
         "summary": "Objects (by name, description and tags) and activities (by title, notes and tags) matching `q`. An object's `type` is an identifier, not searchable text.",
         "description": "Terms containing `[`, `]`, `\"`, `,` or `\\` do not match tags.",
         "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25
+            },
+            "description": "Rows per list, per page. Clamped to 1-100 rather than refused."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Rows to skip in each list; see `has_more`. A negative value counts as 0."
+          },
           {
             "name": "q",
             "in": "query",
@@ -2085,19 +2186,12 @@
         "summary": "Restore an export. Adds to what is there; it does not replace it.",
         "requestBody": {
           "required": true,
+          "description": "The archive itself as the request body -- not a multipart form -- exactly as `GET /export` produced it.",
           "content": {
-            "multipart/form-data": {
+            "application/zip": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "file"
-                ],
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary"
-                  }
-                }
+                "type": "string",
+                "format": "binary"
               }
             }
           }
@@ -2504,7 +2598,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "required": [
+                    "restarting",
+                    "message"
+                  ],
+                  "properties": {
+                    "restarting": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "What happens next, for a person to read."
+                    }
+                  }
                 }
               }
             }
@@ -2631,6 +2739,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "An API token from `POST /auth/tokens`. Does not expire; revoke it to end it."
+      },
+      "metricsToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The operator's `LOGB_METRICS_TOKEN`. Opens `/metrics` and nothing else."
       }
     },
     "schemas": {
@@ -2679,6 +2792,11 @@
       "User": {
         "type": "object",
         "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the account was made. Only in the answers of `/users`; the `/auth` routes leave it out."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -3784,6 +3902,13 @@
       "Attachment": {
         "type": "object",
         "properties": {
+          "client_op_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `client_op_id` the create carried, if it carried one: what a replay of that create is matched against."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -3865,6 +3990,25 @@
       "Reminder": {
         "type": "object",
         "properties": {
+          "object_type": {
+            "$ref": "#/components/schemas/ObjectType",
+            "description": "The reminder's object's type."
+          },
+          "counter_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reminder's object's counter unit; null when it has no counter."
+          },
+          "current_counter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The object's highest counter reading so far; null before its first."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -4022,6 +4166,30 @@
           }
         }
       },
+      "ReminderDone": {
+        "type": "object",
+        "required": [
+          "done",
+          "next"
+        ],
+        "properties": {
+          "done": {
+            "$ref": "#/components/schemas/Reminder",
+            "description": "The reminder, now done."
+          },
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reminder"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The successor a repeating reminder scheduled; null for one that does not repeat."
+          }
+        }
+      },
       "ReminderInput": {
         "type": "object",
         "required": [
@@ -4102,6 +4270,20 @@
       "TitleSuggestion": {
         "type": "object",
         "properties": {
+          "last_from_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest occurrence's start place; null for anything but a trip."
+          },
+          "last_to_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest occurrence's destination; null for anything but a trip."
+          },
           "title": {
             "type": "string"
           },
@@ -5009,6 +5191,10 @@
       "SearchResults": {
         "type": "object",
         "properties": {
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether either list has a row beyond this page: ask again with `offset` advanced by `limit`."
+          },
           "objects": {
             "type": "array",
             "items": {
@@ -5103,8 +5289,10 @@
             ]
           },
           "field": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Required for `set`; must be a syncable column of `entity`."
           },
           "value": {
@@ -5211,13 +5399,17 @@
             ]
           },
           "field": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Null for `create` and `delete`; only a `set` names a field."
           },
           "value": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Double-encoded JSON: this string is itself the JSON-serialized form of the value that was set, so a string value arrives as e.g. `\"\\\"Golf VII\\\"\"` and a client must `JSON.parse` it to recover the real value. Null here is ambiguous by construction: an explicit `value: null` on a `set` (clearing the field) is stored as SQL NULL and is indistinguishable from a `create`/`delete` row, which never carries a value at all. A field cleared through a REST write (a PATCH sending null, or a delete cascade unlinking a reference) is stored as the double-encoded JSON null -- the four-character string \"null\" -- rather than SQL NULL, so a client must treat both as \"clear\"."
           },
           "edited_at": {
@@ -5268,6 +5460,13 @@
       "BootstrapResult": {
         "type": "object",
         "properties": {
+          "object_types": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `object_types` -- the caller's own types -- verbatim, keyed by column name. Newer than the other keys: a client must ignore keys it does not know."
+          },
           "objects": {
             "type": "array",
             "items": {
