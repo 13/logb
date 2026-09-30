@@ -1,140 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
 
-/** Every `<style>` block under src, as (file, css) pairs. */
-function styleBlocks(dir: string): Array<{ rel: string; css: string }> {
-  const out: Array<{ rel: string; css: string }> = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...styleBlocks(full));
-    else if (entry.name.endsWith('.svelte')) {
-      const src = readFileSync(full, 'utf8');
-      const m = src.match(/<style>([\s\S]*?)<\/style>/);
-      if (m) out.push({ rel: relative(SRC, full), css: m[1] });
-    }
-  }
-  return out;
+function svelteFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = join(dir, e.name);
+    return e.isDirectory() ? svelteFiles(full) : e.name.endsWith('.svelte') ? [full] : [];
+  });
 }
 
 /**
- * The declarations that space a box, and the custom properties that alias them. A value
- * laundered through `--space-something: 7px` is still a spacing value the component invented,
- * so the alias is read at its declaration rather than where it is used -- otherwise one line
- * of CSS buys an exemption from the whole scale.
- *
- * The value ends on `[;}]`, not on `;`: CSS lets the last declaration in a block drop its
- * semicolon, and `gap: 7px }` is exactly as much a spacing value as `gap: 7px;` is. Requiring
- * the semicolon made that declaration invisible -- and, where a later one did carry a
- * semicolon, made the match run past the closing brace and report the next rule's selector.
+ * Styling is Tailwind utilities and the tokens and primitives in app.tw.css, nothing else. A
+ * scoped `<style>` block is unlayered and beats every utility, so one left behind silently
+ * overrides the class list beside it. The checks this file used to hold kept those blocks on
+ * app.css's spacing, type and radius scale; the blocks and the scale are both gone.
  */
-const SPACING = /(?:(?:gap|margin|padding)(?:-[a-z]+)*|--space-[\w-]*):\s*([^;}]+)[;}]/g;
-
-/**
- * The third scale. Corners drifted while nothing was watching them: 6px twice, 5px once, and
- * an 8px that is `--radius-sm` spelled out. Same shape of check, same shape of exemption.
- */
-const RADIUS = /(?:border-radius|--radius-[\w-]*):\s*([^;}]+)[;}]/g;
-
-/**
- * The values a declaration writes, with scale references and `calc()` scaffolding taken out.
- * What is left is what the component chose for itself: `calc(44px + var(--space-2) * 2)` is
- * one invented value (`44px`) and one scale reference, not five tokens.
- */
-function values(raw: string, scale: RegExp): string[] {
-  return raw
-    .replace(scale, ' ')
-    // A unitless factor inside a `calc()` is arithmetic on a value, not a value of its own:
-    // the `2` in `var(--space-2) * 2` doubles a scale step rather than inventing a number.
-    .replace(/[*/]\s*[\d.]+|[\d.]+\s*[*/]/g, ' ')
-    .replace(/\bcalc\b|[()*/+]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-const spacingValues = (raw: string) => values(raw, /var\(--space-[\w-]*\)/g);
-const radiusValues = (raw: string) => values(raw, /var\(--radius-[\w-]*\)/g);
-
-/**
- * Values a component may hold despite not being on the scale, each with the reason. Listed by
- * the exact string so an exemption that stops being needed fails loudly, the way the icon
- * test's exclusions do.
- */
-const ALLOWED: Record<string, string> = {
-  '0': 'zero is zero',
-  auto: 'a centring keyword, not a spacing value: `margin: 0 auto` is alignment',
-};
-
-/**
- * Values a component may hold despite not being on the radius scale. Empty, and it has to stay
- * honest rather than convenient: every corner in the app is one of the three steps today, and a
- * genuine exception belongs here with its reason -- which is why the list below is read by the
- * "still needed" test the same way ALLOWED is.
- */
-const RADIUS_ALLOWED: Record<string, string> = {};
-
-/** Every spacing token any component writes, scale values included. */
-function spacingTokens(): string[] {
-  return styleBlocks(SRC).flatMap(({ css }) =>
-    [...css.matchAll(SPACING)].flatMap((m) => spacingValues(m[1])),
-  );
-}
-
-/** Every corner any component writes, token references included. */
-function radiusTokens(): string[] {
-  return styleBlocks(SRC).flatMap(({ css }) =>
-    [...css.matchAll(RADIUS)].flatMap((m) => radiusValues(m[1])),
-  );
-}
-
-describe('the scale', () => {
-  it('no component invents a font size', () => {
-    for (const { rel, css } of styleBlocks(SRC)) {
-      // `[;}]` for the same reason SPACING uses it: `font-size: 13px }` is a font size.
-      const hits = [...css.matchAll(/font-size:\s*([^;}]+)[;}]/g)].map((m) => m[1].trim());
-      const raw = hits.filter((v) => !v.startsWith('var(--text-'));
-      expect(raw, `${rel} sets a font size outside the scale: ${raw.join(', ')}`).toEqual([]);
-    }
+describe('styling', () => {
+  it('no component carries a <style> block', () => {
+    const withStyle = svelteFiles(SRC).filter((f) => /<style[\s>]/.test(readFileSync(f, 'utf8'))).map((f) => relative(SRC, f));
+    expect(withStyle).toEqual([]);
   });
 
-  it('no component invents a spacing value', () => {
-    for (const { rel, css } of styleBlocks(SRC)) {
-      const hits = [...css.matchAll(SPACING)]
-        .flatMap((m) => spacingValues(m[1]))
-        .filter((v) => !(v in ALLOWED));
-      expect(hits, `${rel} sets spacing outside the scale: ${hits.join(', ')}`).toEqual([]);
-    }
+  it('app.css is gone, and app.tw.css keeps no layer or mention of it', () => {
+    expect(existsSync(join(SRC, 'app.css'))).toBe(false);
+    expect(readFileSync(join(SRC, 'app.tw.css'), 'utf8')).not.toMatch(/legacy|app\.css/);
   });
 
-  it('no component invents a corner', () => {
-    for (const { rel, css } of styleBlocks(SRC)) {
-      const hits = [...css.matchAll(RADIUS)]
-        .flatMap((m) => radiusValues(m[1]))
-        .filter((v) => !(v in RADIUS_ALLOWED));
-      expect(hits, `${rel} sets a corner outside the scale: ${hits.join(', ')}`).toEqual([]);
-    }
-  });
-
-  it('every exemption is still needed', () => {
-    // The same guard the icon test carries: an exemption whose value no longer appears anywhere
-    // should come out of ALLOWED rather than sit there excusing nothing. `50%` and `100%` came
-    // out this way -- neither is ever written as a gap, a margin or a padding.
-    const written = new Set(spacingTokens());
-    for (const [value, reason] of Object.entries(ALLOWED)) {
-      expect(
-        written.has(value),
-        `no component writes ${value} as spacing any more (${reason}) -- remove the exemption`,
-      ).toBe(true);
-    }
-    const corners = new Set(radiusTokens());
-    for (const [value, reason] of Object.entries(RADIUS_ALLOWED)) {
-      expect(
-        corners.has(value),
-        `no component writes ${value} as a corner any more (${reason}) -- remove the exemption`,
-      ).toBe(true);
-    }
+  it('no markup uses a class name app.css used to define', () => {
+    const old = /class="(?:[^"]*\s)?(field|row|toggle|hint|warn|warning|error|card|list|muted|empty|empty-icon|chip|banner|button-like|primary|danger|ghost|tnum|small|fab|topbar|auth|settings-grid|thumb-grid)(?:\s[^"]*)?"|class:(primary|ghost|danger)=/;
+    const hits = svelteFiles(SRC).filter((f) => old.test(readFileSync(f, 'utf8'))).map((f) => relative(SRC, f));
+    expect(hits).toEqual([]);
   });
 });

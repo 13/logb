@@ -162,7 +162,7 @@
     <li data-testid="reminder-card"
         class={['flex flex-col gap-1 rounded-lg border p-3 shadow-xs', r.due ? 'border-destructive/30 bg-destructive/10' : 'border-border bg-card']}>
       <div class="flex items-start gap-2">
-        <span class="min-w-0 flex-1 break-words font-semibold text-foreground">{r.title}</span>
+        <span class="min-w-0 flex-1 break-words font-semibold leading-snug text-foreground">{r.title}</span>
         {#if r.pending}
           <!-- Only in the outbox so far: the server has not computed whether it is due. -->
           <span class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{$t('timeline.pending')}</span>
@@ -220,7 +220,7 @@
     <ul role="list" class="m-0 mt-2 flex list-none flex-col gap-2 p-0">
       {#each groups.done as r (r.id)}
         <li data-testid="reminder-done" class="flex flex-col gap-0.5 rounded-lg bg-muted p-3">
-          <span class="font-semibold text-foreground">{r.title}</span>
+          <span class="font-semibold leading-snug text-foreground">{r.title}</span>
           <span class="text-sm text-muted-foreground">{$t('reminder.done')} · {fmtDate(r.done_at, $dateFormat)}</span>
         </li>
       {/each}

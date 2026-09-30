@@ -148,7 +148,8 @@ test('the filter row sits in the middle of its own gap', async ({ page }) => {
   await expect(async () => {
     const result = await page.evaluate(() => {
       const box = (el: Element) => el.getBoundingClientRect();
-      const header = document.querySelector('header.topbar')!;
+      // The page's top bar (TopBar.svelte): the only <header> inside <main>.
+      const header = document.querySelector('main header')!;
       const controls = document.querySelector('[data-testid="dash-toolbar"]')!;
       const search = controls.querySelector('input[type="search"]')!;
       const list = document.querySelector('[data-testid="dash-toolbar"] + [data-testid="object-list"]');

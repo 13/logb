@@ -1,19 +1,19 @@
-/* The stylesheet entry. Tailwind and the shadcn tokens, with the old app.css in a layer of its
-   own between Tailwind's reset and its utilities: an old rule beats the reset, a utility class
-   beats an old rule. That is what lets screens move over one round at a time -- see
-   docs/superpowers/specs/2026-09-29-ui-overhaul-design.md. The first @layer statement fixes
-   the order; the imports below only fill the layers. */
-@layer theme, base, legacy, components, utilities;
+/* The stylesheet entry: Tailwind, the Inter font, and LogB's tokens (shadcn's names as `--ui-*`,
+   the tag hues, the shell's measures). Screens are styled with utilities; the few rules below --
+   the page column, the tag chips, the floating-button position -- are shared primitives. The
+   first @layer statement fixes the order; the imports only fill the layers. */
+@layer theme, base, components, utilities;
 @import 'tailwindcss';
 @import '@fontsource-variable/inter/wght.css';
-@import './app.css' layer(legacy);
 
 /* LogB keys its theme on `data-theme` (src/lib/theme.ts), not on a `.dark` class. */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
-/* shadcn's tokens, prefixed: app.css already has a --muted (a text colour) and an --accent (the
-   brand fill) that mean something else. Every pair is checked by tests/theme-contrast.test.ts. */
+/* shadcn's tokens, prefixed `--ui-*` (the plain names collided with the first stylesheet's).
+   Every pair is checked by tests/theme-contrast.test.ts. */
 :root {
+  /* The browser's own parts -- scrollbars, a date picker's popup, a checkbox -- follow the theme. */
+  color-scheme: light;
   --ui-radius: 0.75rem;
   --ui-background: #fafafa;
   --ui-foreground: #18181b;
@@ -36,7 +36,7 @@
   --ui-ring: #b45309;
   /* Amber as text or an outline. The fill (#f59e0b) is 2.1:1 on the page, too faint for either. */
   --ui-brand-ink: #b45309;
-  /* Warning text (a counter lower than the last one). app.css's --warn, for new markup. */
+  /* Warning text (a counter lower than the last one). */
   --ui-warn: #915700;
   /* The shell's measures: the phone's tab bar, which the Save bar, the floating buttons and the
      toast sit above, and the one control height every form control shares. */
@@ -54,6 +54,7 @@
   --tag-7-bg: #eceef1; --tag-7-fg: #1f2937;
 }
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --ui-background: #09090b;
   --ui-foreground: #fafafa;
   --ui-card: #18181b;
@@ -115,8 +116,8 @@
 }
 
 @theme {
-  /* The shell's breakpoint (app.css), so `desk:` and `max-desk:` switch exactly where the
-     sidebar does. Tailwind writes these as range queries, which is what app.css requires. */
+  /* The shell's breakpoint (`.app-content` below), so `desk:` and `max-desk:` switch exactly
+     where the sidebar does. Tailwind writes these as range queries, which the shell requires. */
   --breakpoint-desk: 900px;
   /* The object page's two panes (routes/ObjectDetail.svelte). In px, not Tailwind's rem `lg`,
      because the page's one script-side query must read the same width: `(width >= 1024px)`. */

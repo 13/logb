@@ -233,7 +233,7 @@
               <CategoryIcon category={a.category} />
             </span>
             <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div class="flex items-baseline gap-2">
+              <div class="flex items-baseline gap-2 leading-snug">
                 <button data-slot="entry-open" disabled={a.pending} onclick={() => go(`/objects/${objectId}/activities/${a.id}`)}
                         class={`min-w-0 flex-1 cursor-pointer break-words text-left font-semibold text-foreground disabled:cursor-default ${stretched}`}>{title(a)}</button>
                 {#if a.cost_cents !== null}<span class="shrink-0 font-semibold text-foreground tabular-nums">{money(a.cost_cents, $currency, $locale)}</span>{/if}

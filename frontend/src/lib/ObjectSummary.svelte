@@ -98,7 +98,7 @@
       <div data-testid="summary-due-reminder" class="relative flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
         <span class="size-2 shrink-0 rounded-full bg-destructive" aria-hidden="true"></span>
         <div class="min-w-0 flex-1">
-          <a href={`/objects/${object.id}?tab=reminders`} class={`block break-words font-semibold text-foreground no-underline ${stretched}`}
+          <a href={`/objects/${object.id}?tab=reminders`} class={`block break-words font-semibold leading-snug text-foreground no-underline ${stretched}`}
              onclick={(e) => { e.preventDefault(); onreminders(); }}>{r.title}</a>
           {#if lateness(r, $t)}<p class="m-0 text-sm text-muted-foreground">{lateness(r, $t)}</p>{/if}
         </div>

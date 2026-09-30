@@ -123,7 +123,7 @@
            until somebody opens a photo, and by then the source machine may be gone. Marked in the
            warning colour so it cannot be read as another hint. -->
       <div class={`${card} border-l-4 border-l-warn`}>
-        <p class="m-0 font-semibold text-warn">{$t('db.blobs-title')}</p>
+        <p class="m-0 font-semibold leading-snug text-warn">{$t('db.blobs-title')}</p>
         <p class="m-0 text-sm text-foreground">{$t('db.blobs')}</p>
       </div>
 
