@@ -46,13 +46,33 @@
   let error = $state('');
   let expanded = $state<Set<number>>(new Set());
 
+  /** `/stats` answers for this visit, per (year, purchases): the summary and the charts often ask
+   *  for the same one, and going back to a selection already seen is instant. A failure is not
+   *  kept, so the next change asks again. Nothing here outlives the page. */
+  const answers = new Map<string, Stats>();
+  const asked = new Map<string, Promise<Stats>>();
+  function stats(path: string): Promise<Stats> {
+    let p = asked.get(path);
+    if (!p) {
+      p = api<Stats>('GET', path).then(
+        (d) => { answers.set(path, d); return d; },
+        (e) => { asked.delete(path); throw e; },
+      );
+      asked.set(path, p);
+    }
+    return p;
+  }
+
   $effect(() => {
     const path = statsPath(year, $includePurchases);
-    // Cleared first: a stale total under a new selection would be a wrong number on screen.
-    data = null;
     error = '';
+    // An answer already in hand is shown at once. Otherwise cleared first: a stale total under a
+    // new selection would be a wrong number on screen.
+    const known = answers.get(path);
+    data = known ?? null;
+    if (known) { years = known.years; return; }
     let current = true;
-    api<Stats>('GET', path)
+    stats(path)
       .then((d) => { if (current) { data = d; years = d.years; } })
       .catch((e) => { if (current) error = errorMessage(e, $t); });
     return () => { current = false; };
@@ -115,25 +135,23 @@
   const today = todayIso();
   const focusYear = $derived(year ?? today.slice(0, 4));
   const beforeYear = $derived(String(Number(focusYear) - 1).padStart(4, '0'));
-  let focusData = $state<Stats | null>(null);
-  let beforeData = $state<Stats | null>(null);
+  /** The cards on screen. The previous year's cards stay until the next year's have arrived
+   *  (`summaryBusy` meanwhile), so changing the year or the toggle does not blank them. */
+  let summary = $state<YearSummary | null>(null);
+  let summaryBusy = $state(false);
+  let summaryError = $state('');
   $effect(() => {
     const purchases = $includePurchases;
-    const own = year === null;
     const fy = focusYear;
     const by = beforeYear;
-    focusData = null;
-    beforeData = null;
     let current = true;
-    const load = (y: string) => api<Stats>('GET', statsPath(y, purchases));
-    Promise.all([own ? load(fy) : Promise.resolve(null), load(by)])
-      .then(([f, b]) => { if (current) { focusData = f; beforeData = b; } })
-      .catch(() => { /* no summary; the charts below report their own failure */ });
+    summaryBusy = true;
+    // With a year chosen, its answer is the one the charts asked for too (`stats` shares it).
+    Promise.all([stats(statsPath(fy, purchases)), stats(statsPath(by, purchases))])
+      .then(([f, b]) => { if (current) { summary = yearSummary(f, b, fy, today); summaryError = ''; } })
+      .catch((e) => { if (current) { summary = null; summaryError = errorMessage(e, $t); } })
+      .finally(() => { if (current) summaryBusy = false; });
     return () => { current = false; };
-  });
-  const summary = $derived.by<YearSummary | null>(() => {
-    const focus = year === null ? focusData : data;
-    return focus && beforeData ? yearSummary(focus, beforeData, focusYear, today) : null;
   });
 
   const pct = (n: number) => numberFormat($locale, { style: 'percent', signDisplay: 'exceptZero', maximumFractionDigits: 0 }).format(n / 100);
@@ -172,9 +190,12 @@
     <CheckField id="stats-purchases" label={$t('stats.purchases')} bind:checked={() => $includePurchases, (on) => includePurchases.set(on)} />
   </div>
 
-  {#if summary && (summary.spent > 0 || summary.previous.cents > 0)}
+  {#if summaryError && !error}
+    <!-- The charts below may still have loaded; the summary says it could not, in its place. -->
+    <p role="alert" class="m-0 mb-4 text-sm font-medium text-destructive">{$t('stats.summary-failed')} {summaryError}</p>
+  {:else if summary && (summary.spent > 0 || summary.previous.cents > 0)}
     {@const s = summary}
-    <section data-testid="stats-summary" aria-label={$t('stats.summary', { year: s.year })} class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <section data-testid="stats-summary" aria-label={$t('stats.summary', { year: s.year })} aria-busy={summaryBusy} class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div data-testid="stats-spent" class={figure}>
         <p class={sectionHeadingClass}>{$t('stats.spent-in', { year: s.year })}</p>
         <p class={figureValue}>{fmt(s.spent)}</p>
@@ -196,7 +217,7 @@
           <button data-slot="stats-top-open" class={open} onclick={() => go(`/objects/${top.id}`)}>{top.name}</button>
           <p class={line}>{fmt(top.cents)} · {sharePct(top.cents, s.spent)}%</p>
         {:else}
-          <p class={figureValue} aria-hidden="true">–</p>
+          <p class={figureValue}><span aria-hidden="true">–</span><span class="sr-only">{$t('stats.top-none')}</span></p>
         {/if}
       </div>
     </section>

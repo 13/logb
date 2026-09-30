@@ -94,4 +94,22 @@ describe('yearSummary', () => {
   it('has no top object in a year without spend', () => {
     expect(yearSummary(stats(0, []), stats(0, []), '2026', '2026-05-01').top).toBeNull();
   });
+
+  it('in January compares with January of the year before only', () => {
+    const before = stats(500_000, [['2025-01', 20_000], ['2025-02', 480_000]]);
+    const s = yearSummary(stats(10_000, []), before, '2026', '2026-01-20');
+    expect(s.previous).toEqual({ year: '2025', cents: 20_000, through: 1 });
+    expect(s.changePct).toBe(-50);
+  });
+
+  it('breaks a tie for the top object by the order the server sent, first one wins', () => {
+    const s = yearSummary(stats(600, [], [[7, 'Bike', 300], [3, 'Boat', 300]]), stats(0, []), '2026', '2026-05-01');
+    expect(s.top).toEqual({ id: 7, name: 'Bike', cents: 300 });
+  });
+
+  it('says -100% for a year with nothing spent after a year with spend', () => {
+    const s = yearSummary(stats(0, []), stats(40_000, [['2024-06', 40_000]]), '2025', '2026-05-01');
+    expect(s.changePct).toBe(-100);
+    expect(s.top).toBeNull();
+  });
 });
