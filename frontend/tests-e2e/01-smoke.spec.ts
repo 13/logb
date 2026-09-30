@@ -18,7 +18,7 @@ test('first run leads to setup, then the dashboard', async ({ page }) => {
 test('signing out returns to the login screen', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
   // sidebar carries its own "Sign out" too.
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
@@ -29,7 +29,7 @@ test('signing out returns to the login screen', async ({ page }) => {
 test('the interface switches to German', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Appearance/ }).click();
+  await page.getByRole('link', { name: /Appearance/ }).click();
   await page.getByLabel('Language').selectOption('de');
   await expect(page.getByRole('heading', { name: 'Darstellung' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
@@ -39,7 +39,7 @@ test('the interface switches to German', async ({ page }) => {
 test('signing out everywhere returns to the login screen', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   page.once('dialog', (d) => d.accept());
   await page.getByRole('button', { name: 'Sign out everywhere' }).click();
   await expect(page).toHaveURL(/\/login$/);

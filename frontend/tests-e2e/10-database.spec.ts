@@ -12,7 +12,7 @@ import { signIn } from './helpers';
 test('the database section shows where the data is, and is admin only', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Database/ }).click();
+  await page.getByRole('link', { name: /Database/ }).click();
   await expect(page.getByRole('heading', { name: /Database/ })).toBeVisible();
   // SQLite is the default, and the section says so rather than showing a connection string.
   await expect(page.getByText(/SQLite/)).toBeVisible();
@@ -21,14 +21,14 @@ test('the database section shows where the data is, and is admin only', async ({
   // such a user and looking again as them -- through the "Add user" form the Users page
   // offers, rather than reaching for a second way to make a user just for this spec.
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Users/ }).click();
+  await page.getByRole('link', { name: /Users/ }).click();
   await page.getByLabel('Username', { exact: true }).fill('database-plain');
   await page.getByLabel('Password', { exact: true }).fill('password123');
   await page.getByRole('button', { name: 'Add user' }).click();
   await expect(page.getByText('database-plain')).toBeVisible();
 
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Username', { exact: true }).fill('database-plain');
@@ -39,7 +39,7 @@ test('the database section shows where the data is, and is admin only', async ({
   // The instance group -- Users, Database -- does not exist on this hub at all for a
   // non-admin, rather than existing and refusing entry.
   await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.getByRole('button', { name: /Database/ })).not.toBeVisible();
+  await expect(page.getByRole('link', { name: /Database/ })).not.toBeVisible();
 });
 
 // The redirect in App.svelte's ADMIN_ONLY guard is only proved by typing the URL directly --
@@ -49,14 +49,14 @@ test('the database section shows where the data is, and is admin only', async ({
 test('a non-administrator reaching /settings/database directly is sent back to the hub', async ({ page }) => {
   await signIn(page);
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Users/ }).click();
+  await page.getByRole('link', { name: /Users/ }).click();
   await page.getByLabel('Username', { exact: true }).fill('database-direct');
   await page.getByLabel('Password', { exact: true }).fill('password123');
   await page.getByRole('button', { name: 'Add user' }).click();
   await expect(page.getByText('database-direct')).toBeVisible();
 
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel('Username', { exact: true }).fill('database-direct');
@@ -74,7 +74,7 @@ test('a non-administrator reaching /settings/database directly is sent back to t
 test('settings says whether backups are being taken', async ({ page }) => {
   await signIn(page);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Database/ }).click();
+  await page.getByRole('link', { name: /Database/ }).click();
   await expect(page.getByRole('heading', { name: /Backup/ })).toBeVisible();
   await expect(page.getByText(/LOGB_BACKUP_DIR/)).toBeVisible();
 });

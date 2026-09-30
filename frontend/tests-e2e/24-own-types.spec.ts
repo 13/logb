@@ -12,7 +12,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
 
   // Settings → Types → add one.
   await page.goto('/settings');
-  await page.getByRole('button', { name: /^Types/ }).click();
+  await page.getByRole('link', { name: /^Types/ }).click();
   await page.waitForURL('**/settings/types');
   await page.getByRole('button', { name: 'Add type' }).click();
   await page.getByLabel('Name', { exact: true }).fill('E-Scooter');

@@ -4,7 +4,7 @@ import { signInFresh } from './helpers';
 test('a person sets their own digest webhook, and the hub row says so', async ({ page }) => {
   await signInFresh(page, '17-notifications');
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Notifications/ }).click();
+  await page.getByRole('link', { name: /Notifications/ }).click();
   await expect(page).toHaveURL(/\/settings\/notifications$/);
 
   // Push is offered, refused, or explained -- which one depends on the browser, not on LogB.
@@ -25,5 +25,5 @@ test('a person sets their own digest webhook, and the hub row says so', async ({
   await page.reload();
   await expect(page.getByLabel('URL')).toHaveValue('https://ntfy.example/logb-e2e');
   await page.goto('/settings');
-  await expect(page.getByRole('button', { name: /Notifications/ })).toContainText('Webhook');
+  await expect(page.getByRole('link', { name: /Notifications/ })).toContainText('Webhook');
 });

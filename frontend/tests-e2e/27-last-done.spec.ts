@@ -11,7 +11,7 @@ async function nav(page: Page, name: string) {
  *  `EXAMPLE`), not tied to whatever "today" is when this runs. */
 async function chooseDateFormat(page: Page, label: string) {
   await nav(page, 'Settings');
-  await page.getByRole('button', { name: /Appearance/ }).click();
+  await page.getByRole('link', { name: /Appearance/ }).click();
   await page.getByLabel('Date format').selectOption({ label });
 }
 

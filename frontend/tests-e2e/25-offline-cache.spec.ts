@@ -93,7 +93,7 @@ test('after signing out, an offline start stays on the loading screen and shows 
   await expect(page.getByText('Private Of Out')).toBeVisible();
   // The app's own sign-out, not an API call: the point is that IT forgets the profile.
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
   // sidebar carries its own "Sign out" too.
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
@@ -155,7 +155,7 @@ test('signing out with no connection says so, and leaves the user signed in', as
 
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
   // sidebar carries its own "Sign out" too.
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
