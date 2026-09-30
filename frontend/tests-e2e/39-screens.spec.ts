@@ -122,6 +122,9 @@ test('appearance saves itself: a change applies at once and says so', async ({ p
 test('a change made just before leaving the page still reaches the server', async ({ page }) => {
   await signInFresh(page, '39-flush');
   await page.goto('/settings/appearance');
+  // The worker must control the page, or this would not cover the path a real visit takes.
+  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
   await page.getByLabel('Date format').selectOption('iso');
   // A real document navigation inside the 300 ms debounce: the timer dies with the page, so only
   // the pagehide flush (with keepalive) can deliver the save.
@@ -133,8 +136,11 @@ test('a change made just before leaving the page still reaches the server', asyn
 
 test('leaving by the in-app Back button sends a waiting change at once, not after the debounce', async ({ page }) => {
   await signInFresh(page, '39-flush-destroy');
+  // A frozen clock: the 300 ms debounce can never fire, so only the destroy flush can send.
+  await page.clock.install({ time: new Date('2026-09-30T10:00:00Z') });
   await page.goto('/settings/appearance');
-  const sent = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith('/api/me/appearance'), { timeout: 200 });
+  await page.clock.pauseAt(new Date('2026-09-30T10:00:05Z'));
+  const sent = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith('/api/me/appearance'));
   await page.getByLabel('Date format').selectOption('iso');
   await page.getByRole('main').getByRole('button', { name: 'Back' }).click();
   await sent;

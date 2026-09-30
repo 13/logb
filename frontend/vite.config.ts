@@ -55,7 +55,8 @@ export default defineConfig({
         // file pulled into the generated worker, so the rest of it stays generated.
         importScripts: ['push-sw.js'],
         navigateFallbackDenylist: [/^\/api\//],
-        // Workbox only routes GETs, so writes always go straight to the network. Workbox tests
+        // Workbox routes only what is listed: GETs, plus the one keepalive PUT route below (a setting
+        // saved while its page is left). Every other write goes straight to the network. Workbox tests
         // a RegExp urlPattern against the whole URL, not just the path, so plain `/^\/api\//`
         // patterns never matched here -- these function matchers check url.pathname instead.
         runtimeCaching: [
@@ -111,9 +112,9 @@ export default defineConfig({
           // accident.
           { urlPattern: otherApi, handler: 'NetworkOnly', method: 'GET' },
           // A setting saved while its page is being left (autosave's flush, `keepalive`): the
-          // worker sends it itself. Left to the browser's fallback, the request needs a round trip
-          // to the worker from the dying page, and Chromium drops it.
-          { urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith('/api/'), handler: 'NetworkOnly', method: 'PUT' },
+          // worker sends it itself. Only keepalive sends take this path. Chromium (observed behaviour,
+          // not the spec) drops a pagehide keepalive PUT that reaches a worker with no matching route.
+          { urlPattern: ({ url, request, sameOrigin }: { url: URL; request: Request; sameOrigin: boolean }) => sameOrigin && request.keepalive && url.pathname.startsWith('/api/'), handler: 'NetworkOnly', method: 'PUT' },
         ],
       },
     }),
