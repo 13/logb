@@ -111,9 +111,10 @@ export default defineConfig({
           // Anything else under /api: network only, so a new endpoint is never cached by
           // accident.
           { urlPattern: otherApi, handler: 'NetworkOnly', method: 'GET' },
-          // A setting saved while its page is being left (autosave's flush, `keepalive`): the
-          // worker sends it itself. Only keepalive sends take this path. Chromium (observed behaviour,
-          // not the spec) drops a pagehide keepalive PUT that reaches a worker with no matching route.
+          // An autosaved setting: autosave sends every PUT with `keepalive`, so one still out (or
+          // flushed) when its page is left is finished. The worker sends it itself; only keepalive
+          // sends take this path. Chromium (observed behaviour, not the spec) drops a pagehide
+          // keepalive PUT that reaches a worker with no matching route.
           { urlPattern: ({ url, request, sameOrigin }: { url: URL; request: Request; sameOrigin: boolean }) => sameOrigin && request.keepalive && url.pathname.startsWith('/api/'), handler: 'NetworkOnly', method: 'PUT' },
         ],
       },

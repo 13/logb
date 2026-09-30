@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autosave } from '../src/lib/autosave';
 
+/** Every send asks for keepalive, so one still out when the page is left is not cancelled. */
+const K = { keepalive: true };
+
 describe('autosave', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
@@ -13,7 +16,7 @@ describe('autosave', () => {
     await vi.advanceTimersByTimeAsync(299);
     expect(save).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(save.mock.calls).toEqual([[3]]);
+    expect(save.mock.calls).toEqual([[3, K]]);
     expect(onsaved).toHaveBeenCalledTimes(1);
   });
 
@@ -26,10 +29,10 @@ describe('autosave', () => {
     await vi.advanceTimersByTimeAsync(0);
     s.push(2); s.push(3);
     await vi.advanceTimersByTimeAsync(0);
-    expect(save.mock.calls).toEqual([[1]]);
+    expect(save.mock.calls).toEqual([[1, K]]);
     release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(save.mock.calls).toEqual([[1], [3]]);
+    expect(save.mock.calls).toEqual([[1, K], [3, K]]);
     // "Saved" once, for the value that is now on the server -- not for the one it replaced.
     expect(onsaved).toHaveBeenCalledTimes(1);
   });
@@ -47,8 +50,7 @@ describe('autosave', () => {
     const s = autosave(save, { delay: 10_000 });
     s.push('x');
     await s.flush();
-    // Changed assertion: a leave-page send asks for keepalive, so it outlives the page.
-    expect(save.mock.calls).toEqual([['x', { keepalive: true }]]);
+    expect(save.mock.calls).toEqual([['x', K]]);
   });
 
   it('does not report an older value failing when a newer one is on its way, and says Saved for the newer', async () => {
@@ -62,7 +64,7 @@ describe('autosave', () => {
     s.push(2);
     reject(new Error('refused'));
     await vi.advanceTimersByTimeAsync(0);
-    expect(save.mock.calls).toEqual([[1], [2]]);
+    expect(save.mock.calls).toEqual([[1, K], [2, K]]);
     expect(onerror).not.toHaveBeenCalled();
     expect(onsaved).toHaveBeenCalledTimes(1);
   });
@@ -77,7 +79,7 @@ describe('autosave', () => {
     expect(onerror).toHaveBeenCalledTimes(1);
     s.push(2);
     await vi.advanceTimersByTimeAsync(0);
-    expect(save.mock.calls).toEqual([[1], [2]]);
+    expect(save.mock.calls).toEqual([[1, K], [2, K]]);
     expect(onsaved).toHaveBeenCalledTimes(1);
   });
 
@@ -93,7 +95,7 @@ describe('autosave', () => {
     fail = false;
     s.retry();
     await vi.advanceTimersByTimeAsync(0);
-    expect(save.mock.calls).toEqual([['a'], ['a']]);
+    expect(save.mock.calls).toEqual([['a', K], ['a', K]]);
     expect(onsaved).toHaveBeenCalledTimes(1);
   });
 
@@ -110,7 +112,7 @@ describe('autosave', () => {
     expect(done).toBe(false);
     release();
     await flushed;
-    expect(save.mock.calls).toEqual([[1], [2, { keepalive: true }]]);
+    expect(save.mock.calls).toEqual([[1, K], [2, K]]);
   });
 
   it('flush with nothing waiting resolves at once and sends nothing', async () => {
@@ -118,5 +120,21 @@ describe('autosave', () => {
     const s = autosave(save);
     await expect(s.flush()).resolves.toBeUndefined();
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it('flush while a send is already running: that send asked for keepalive, so leaving does not cancel it', async () => {
+    let release!: () => void;
+    const save = vi.fn((_v: number, _o?: { keepalive: true }) => new Promise<void>((r) => { release = r; }));
+    const onsaved = vi.fn();
+    const s = autosave(save, { delay: 0, onsaved });
+    s.push(1);
+    await vi.advanceTimersByTimeAsync(0);
+    // The request is out before the page is left: nothing is waiting, flush only waits for it.
+    const flushed = s.flush();
+    expect(save.mock.calls).toEqual([[1, K]]);
+    release();
+    await flushed;
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(onsaved).toHaveBeenCalledTimes(1);
   });
 });

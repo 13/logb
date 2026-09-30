@@ -265,8 +265,8 @@ export const SAVE_TIMEOUT_MS = 10_000;
  * succeeded.
  *
  * `opts.signal` lets a caller drop a request nobody will read any more (a superseded search).
- * `opts.keepalive` lets a request outlive the page that sent it: a setting saved while its page is
- * being left (see `flush` in ./autosave.ts). The browser caps keepalive bodies at 64 KB, far above
+ * `opts.keepalive` lets a request outlive the page that sent it: every autosaved setting (see
+ * ./autosave.ts), so one still out, or flushed, when its page is left is not cancelled. The browser caps keepalive bodies at 64 KB, far above
  * any setting.
  */
 export type RequestOptions = { signal?: AbortSignal; keepalive?: boolean };
