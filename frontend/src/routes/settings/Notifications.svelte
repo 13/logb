@@ -43,6 +43,8 @@
         format = data?.format ?? 'text';
         hour = data?.hour ?? 8;
         timezone = data?.timezone ?? '';
+        hourSent = hourKey();
+        webhookSent = webhookKey();
       } catch (e) { error = errorMessage(e, $t); }
       push = await pushState();
     })();
@@ -101,7 +103,9 @@
     } catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
   }
 
+  /** Destructive: the bot and its link are gone, so it asks first, like every other removal. */
   async function removeTelegram() {
+    if (!confirm($t('notify.telegram-remove-confirm'))) return;
     busy = true; error = '';
     try { await api('DELETE', '/me/notifications/telegram'); telegramToken = ''; telegramLink = null; await load(); }
     catch (e) { error = errorMessage(e, $t); } finally { busy = false; }
@@ -134,9 +138,23 @@
     onerror: (e) => { if (left) return; urlError = errorMessage(e, $t); urlFailed = true; },
   });
 
+  /** The hour and the webhook as last loaded or pushed. A text field left while it still has
+   *  focus never fired `change`: leaving the page saves it (validated first) when it differs. */
+  let hourSent = '';
+  let webhookSent = '';
+  const hourKey = () => `${hour}|${timezone}`;
+  const webhookKey = () => `${url.trim()}|${format}`;
+
   // A change made just before leaving still reaches the server: on a route change (destroy) and
   // when the tab or app is closed (pagehide).
-  const flushAll = () => { void hourSave.flush(); void webhookSave.flush(); };
+  const flushAll = () => {
+    if (data) {
+      if (hourKey() !== hourSent) saveHour();
+      if (webhookKey() !== webhookSent) saveWebhook();
+    }
+    void hourSave.flush();
+    void webhookSave.flush();
+  };
   onDestroy(() => { left = true; flushAll(); });
 
   /** The hour and its timezone are one setting on the server. An hour that cannot be one is
@@ -144,11 +162,13 @@
   function saveHour() {
     if (hour === null || !Number.isInteger(hour) || hour < 0 || hour > 23) { hourError = $t('notify.hour-invalid'); hourFailed = false; return; }
     hourError = '';
+    hourSent = hourKey();
     hourSave.push({ hour, timezone: timezone || null });
   }
 
   /** A bad URL comes back from the server ("http or https") and stays under the field. */
   function saveWebhook() {
+    webhookSent = webhookKey();
     webhookSave.push({ url: url.trim() || null, format });
   }
 

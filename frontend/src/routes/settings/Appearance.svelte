@@ -74,6 +74,10 @@
   let timezone = $state('');
   let timezoneLocked = $state(false);
   let instanceLoaded = $state(false);
+  /** Currency and timezone as last loaded or pushed: leaving the page saves the fields when they
+   *  differ, since a text field still focused never fired `change`. */
+  let instanceSent = '';
+  const instanceKey = () => `${currencyText.trim().toUpperCase()}|${timezone.trim()}`;
 
   const instanceSave = autosave<Record<string, string>>(async (body, opts) => {
     const s = await api<Settings>('PUT', '/settings', body, undefined, opts);
@@ -94,6 +98,7 @@
     currencyText = code;
     const body: Record<string, string> = { currency: code };
     if (!timezoneLocked && timezone.trim()) body.timezone = timezone.trim();
+    instanceSent = instanceKey();
     instanceSave.push(body);
   }
 
@@ -105,11 +110,18 @@
       timezone = s.timezone;
       timezoneLocked = s.timezone_locked;
     } catch { /* the field stays empty and saving leaves the timezone alone */ }
+    instanceSent = instanceKey();
     instanceLoaded = true;
   });
   // A change made just before leaving still reaches the server: on a route change (destroy) and
-  // when the tab or app is closed (pagehide).
-  const flushAll = () => { void accountSave.flush(); void instanceSave.flush(); };
+  // when the tab or app is closed (pagehide). A text field left while it still has focus never
+  // fired `change`, so its value is saved here (validated first) when it differs from what was
+  // last loaded or sent.
+  const flushAll = () => {
+    if (isAdmin && instanceLoaded && instanceKey() !== instanceSent) saveInstance();
+    void accountSave.flush();
+    void instanceSave.flush();
+  };
   onDestroy(() => { left = true; flushAll(); });
 
   const card = 'flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs';
@@ -120,13 +132,6 @@
 <main>
   <TopBar title={$t('settings.appearance')} backTo="/settings" />
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
-    {#if error}
-      <div class="flex flex-wrap items-center gap-3">
-        <p role="alert" class={errorClass}>{error}</p>
-        <Button variant="outline" class="h-12" onclick={accountSave.retry}>{$t('outbox.retry')}</Button>
-      </div>
-    {/if}
-
     <section aria-labelledby="appearance-you" class={card}>
       <h2 id="appearance-you" class={sectionHeadingClass}>{$t('settings.you')}</h2>
       <Field id="set-language" label={$t('settings.language')}>
@@ -156,6 +161,11 @@
       </Field>
       <CheckField id="set-device-only" label={$t('settings.device-only')} hint={$t('settings.device-only-hint')}
                   bind:checked={() => overridden, (on) => setOverride(on)} />
+      <!-- Under the settings it belongs to, as on Notifications: the error, then "Try again". -->
+      {#if error}
+        <p role="alert" class={errorClass}>{error}</p>
+        <Button variant="outline" class="h-12 self-start" onclick={accountSave.retry}>{$t('outbox.retry')}</Button>
+      {/if}
     </section>
 
     {#if isAdmin}
@@ -177,10 +187,8 @@
           {/if}
         </Field>
         {#if instanceError}
-          <div class="flex flex-wrap items-center gap-3">
-            <p role="alert" class={errorClass}>{instanceError}</p>
-            <Button variant="outline" class="h-12" onclick={instanceSave.retry}>{$t('outbox.retry')}</Button>
-          </div>
+          <p role="alert" class={errorClass}>{instanceError}</p>
+          <Button variant="outline" class="h-12 self-start" onclick={instanceSave.retry}>{$t('outbox.retry')}</Button>
         {/if}
       </section>
     {/if}

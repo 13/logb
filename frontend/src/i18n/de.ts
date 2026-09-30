@@ -683,4 +683,11 @@ export default {
   'login.show-password': 'Passwort anzeigen',
   'setup.password-hint': 'Mindestens 8 Zeichen.',
   'setup.username-hint': 'Mindestens 3 Zeichen.',
+  'notify.telegram-remove-confirm': 'Bot entfernen? Telegram-Nachrichten kommen erst wieder, wenn ein Bot eingerichtet ist.',
+  'stats.summary-failed': 'Die Übersicht für dieses Jahr konnte nicht geladen werden.',
+  'stats.top-none': 'Keines',
+  'search.count': '{n} Treffer',
+  'search.count-one': '1 Treffer',
+  'search.count-more': 'Mehr als {n} Treffer',
+  'settings.export-title': 'Export und Import',
 } as Record<string, string>;
