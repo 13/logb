@@ -21,7 +21,9 @@
 
   const pairing = createPairing();
   const pair = pairing.state;
-  onDestroy(pairing.stop);
+  /** Set when the page is left: an answer that comes back later must not toast on the next page. */
+  let left = false;
+  onDestroy(() => { left = true; pairing.stop(); });
 
   async function signOutEverywhere() {
     if (!confirm($t('settings.logout-all-confirm'))) return;
@@ -38,9 +40,10 @@
     busy = true; passwordError = '';
     try {
       await api('PATCH', `/users/${$user.id}`, { password: ownPass, current_password: currentPass });
+      if (left) return;
       currentPass = ''; ownPass = '';
       toast($t('settings.password-changed'));
-    } catch (err) { passwordError = errorMessage(err, $t); } finally { busy = false; }
+    } catch (err) { if (!left) passwordError = errorMessage(err, $t); } finally { if (!left) busy = false; }
   }
 
   async function requestPairCode() {

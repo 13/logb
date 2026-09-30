@@ -32,7 +32,7 @@
       await api('POST', '/users', { username: newName, password: newPass, is_admin: newAdmin });
       newName = ''; newPass = ''; newAdmin = false;
       await loadUsers();
-    } catch (e) { error = errorMessage(e, $t); }
+    } catch (err) { error = errorMessage(err, $t); }
   }
 
   async function removeUser(u: User) {

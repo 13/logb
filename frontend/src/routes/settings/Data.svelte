@@ -1,5 +1,6 @@
 <script lang="ts">
   import { errorMessage } from '../../lib/api-error';
+  import { onDestroy } from 'svelte';
   import TopBar from '../../lib/TopBar.svelte';
   import { discardDeadOp, deadOps, outboxPending, retryDead, uploadRaw } from '../../lib/api';
   import type { QueuedOp } from '../../lib/outbox';
@@ -12,6 +13,9 @@
   import type { ImportCounts } from '../../lib/types';
 
   let fileEl: HTMLInputElement;
+  /** Set when the page is left: an answer that comes back later must not toast on the next page. */
+  let left = false;
+  onDestroy(() => (left = true));
   let error = $state('');
   let excludeBody = $state(false);
   let pending = $state(0);
@@ -43,8 +47,9 @@
     if (!files || files.length === 0) return;
     try {
       const counts = await uploadRaw<ImportCounts>('/import', files[0], 'application/zip');
+      if (left) return;
       toast($t('settings.import-done', counts as unknown as Record<string, number>), 8000);
-    } catch (e) { error = errorMessage(e, $t); } finally { fileEl.value = ''; }
+    } catch (e) { if (!left) error = errorMessage(e, $t); } finally { fileEl.value = ''; }
   }
 </script>
 
@@ -73,7 +78,7 @@
       {#if failed.length === 0}
         <p class={hintClass}>{$t('settings.sync-clear')}</p>
       {:else}
-        <p class={errorClass}>{$t('settings.sync-failed', { n: failed.length })}</p>
+        <p role="alert" class={errorClass}>{$t('settings.sync-failed', { n: failed.length })}</p>
         <ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
           {#each failed as op (op.id)}
             <li class="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">

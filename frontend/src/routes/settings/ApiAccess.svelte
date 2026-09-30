@@ -39,7 +39,7 @@
       freshToken = made.token;
       tokenName = '';
       await loadTokens();
-    } catch (e) { error = errorMessage(e, $t); }
+    } catch (err) { error = errorMessage(err, $t); }
   }
 
   async function copyToken() {

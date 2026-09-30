@@ -12,6 +12,8 @@
     required?: boolean; minlength?: number; describedby?: string;
   } = $props();
   let shown = $state(false);
+  // A cleared field (after a successful change) hides again: the next password starts hidden.
+  $effect(() => { if (value === '') shown = false; });
 </script>
 
 <div data-slot="password" class="relative min-w-0">
@@ -20,7 +22,7 @@
   <!-- Named by its text, not `aria-label`: `getByLabel(/Password|Passwort/)` must find only the
        field, and "Passwort anzeigen" would match it. The name stays; `aria-pressed` says whether
        the password is shown. 48 px square, the field's own height. -->
-  <button type="button" data-slot="password-toggle" aria-pressed={shown} aria-controls={id} onclick={() => (shown = !shown)}
+  <button type="button" data-slot="password-toggle" aria-pressed={shown} aria-controls={id} onpointerdown={(e) => e.preventDefault()} onclick={() => (shown = !shown)}
           class="absolute inset-y-0 right-0 grid w-12 cursor-pointer place-items-center rounded-r-lg text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring">
     <span class="sr-only">{$t('login.show-password')}</span>
     <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

@@ -154,7 +154,7 @@ test('changing the password is one explicit action, and a password field can sho
   const fresh = page.getByLabel('New password');
   await fresh.fill('password456');
   await expect(fresh).toHaveAttribute('type', 'password');
-  const show = page.getByRole('button', { name: 'Show password' }).nth(1);
+  const show = page.locator('div[data-slot="password"]', { has: fresh }).getByRole('button', { name: 'Show password' });
   await expect(show).toHaveAttribute('aria-pressed', 'false');
   await show.click();
   await expect(fresh).toHaveAttribute('type', 'text');
