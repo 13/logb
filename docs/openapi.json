@@ -21,21 +21,54 @@
   "paths": {
     "/me/appearance": {
       "get": { "summary": "Read personal appearance preferences (null until saved)", "responses": { "200": { "description": "Account preferences", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Appearance" }, { "type": "null" }] } } } } } },
-      "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences" }, "400": { "description": "Invalid preference" } } }
+      "put": { "summary": "Save appearance across devices", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "responses": { "200": { "description": "Saved preferences, as `GET` answers them", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Appearance" } } } }, "400": { "description": "Invalid preference" } } }
     },
     "/me/notifications/hour": {
       "put": { "summary": "Set personal daily delivery hour, optionally in the recipient's own timezone; the instance webhook keeps its configured hour", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["hour"], "properties": { "hour": { "type": "integer", "minimum": 0, "maximum": 23 }, "timezone": { "type": ["string", "null"], "description": "IANA name such as Europe/Berlin; null uses the instance timezone" } } } } } }, "responses": { "200": { "description": "Notification settings", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSettings" } } } }, "400": { "description": "Invalid hour" } } }
     },
     "/health": {
       "get": {
-        "summary": "Liveness probe. The only route needing no credential.",
+        "summary": "Liveness probe: answers for the database too, not just the process. Needs no credential.",
         "responses": {
           "200": {
             "description": "The service is up",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "version",
+                    "migrations",
+                    "features"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The server's version; compare with this document's `info.version`."
+                    },
+                    "migrations": {
+                      "type": "integer",
+                      "description": "Schema migrations applied to the database."
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "examples": [
+                        [
+                          "pairing",
+                          "token-self-revoke"
+                        ]
+                      ],
+                      "description": "What this instance can do, for a client that would otherwise infer it from `version`. A missing key means no features."
+                    }
+                  }
                 }
               }
             }
@@ -139,7 +172,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "The created admin",
             "content": {
               "application/json": {
@@ -1541,7 +1574,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Reminder"
+                  "$ref": "#/components/schemas/ReminderDone"
                 }
               }
             }
@@ -1628,6 +1661,26 @@
         "summary": "Objects (by name, description and tags) and activities (by title, notes and tags) matching `q`. An object's `type` is an identifier, not searchable text.",
         "description": "Terms containing `[`, `]`, `\"`, `,` or `\\` do not match tags.",
         "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25
+            },
+            "description": "Rows per list, per page. Clamped to 1-100 rather than refused."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Rows to skip in each list; see `has_more`. A negative value counts as 0."
+          },
           {
             "name": "q",
             "in": "query",
@@ -2133,19 +2186,12 @@
         "summary": "Restore an export. Adds to what is there; it does not replace it.",
         "requestBody": {
           "required": true,
+          "description": "The archive itself as the request body -- not a multipart form -- exactly as `GET /export` produced it.",
           "content": {
-            "multipart/form-data": {
+            "application/zip": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "file"
-                ],
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary"
-                  }
-                }
+                "type": "string",
+                "format": "binary"
               }
             }
           }
@@ -2552,7 +2598,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "required": [
+                    "restarting",
+                    "message"
+                  ],
+                  "properties": {
+                    "restarting": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "What happens next, for a person to read."
+                    }
+                  }
                 }
               }
             }
@@ -2732,6 +2792,11 @@
       "User": {
         "type": "object",
         "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the account was made. Only in the answers of `/users`; the `/auth` routes leave it out."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -3837,6 +3902,13 @@
       "Attachment": {
         "type": "object",
         "properties": {
+          "client_op_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `client_op_id` the create carried, if it carried one: what a replay of that create is matched against."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -3918,6 +3990,25 @@
       "Reminder": {
         "type": "object",
         "properties": {
+          "object_type": {
+            "$ref": "#/components/schemas/ObjectType",
+            "description": "The reminder's object's type."
+          },
+          "counter_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reminder's object's counter unit; null when it has no counter."
+          },
+          "current_counter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The object's highest counter reading so far; null before its first."
+          },
           "id": {
             "type": "integer",
             "format": "int64"
@@ -4075,6 +4166,30 @@
           }
         }
       },
+      "ReminderDone": {
+        "type": "object",
+        "required": [
+          "done",
+          "next"
+        ],
+        "properties": {
+          "done": {
+            "$ref": "#/components/schemas/Reminder",
+            "description": "The reminder, now done."
+          },
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reminder"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The successor a repeating reminder scheduled; null for one that does not repeat."
+          }
+        }
+      },
       "ReminderInput": {
         "type": "object",
         "required": [
@@ -4155,6 +4270,20 @@
       "TitleSuggestion": {
         "type": "object",
         "properties": {
+          "last_from_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest occurrence's start place; null for anything but a trip."
+          },
+          "last_to_place": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest occurrence's destination; null for anything but a trip."
+          },
           "title": {
             "type": "string"
           },
@@ -5062,6 +5191,10 @@
       "SearchResults": {
         "type": "object",
         "properties": {
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether either list has a row beyond this page: ask again with `offset` advanced by `limit`."
+          },
           "objects": {
             "type": "array",
             "items": {
@@ -5156,8 +5289,10 @@
             ]
           },
           "field": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Required for `set`; must be a syncable column of `entity`."
           },
           "value": {
@@ -5264,13 +5399,17 @@
             ]
           },
           "field": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Null for `create` and `delete`; only a `set` names a field."
           },
           "value": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Double-encoded JSON: this string is itself the JSON-serialized form of the value that was set, so a string value arrives as e.g. `\"\\\"Golf VII\\\"\"` and a client must `JSON.parse` it to recover the real value. Null here is ambiguous by construction: an explicit `value: null` on a `set` (clearing the field) is stored as SQL NULL and is indistinguishable from a `create`/`delete` row, which never carries a value at all. A field cleared through a REST write (a PATCH sending null, or a delete cascade unlinking a reference) is stored as the double-encoded JSON null -- the four-character string \"null\" -- rather than SQL NULL, so a client must treat both as \"clear\"."
           },
           "edited_at": {
@@ -5321,6 +5460,13 @@
       "BootstrapResult": {
         "type": "object",
         "properties": {
+          "object_types": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every live row from `object_types` -- the caller's own types -- verbatim, keyed by column name. Newer than the other keys: a client must ignore keys it does not know."
+          },
           "objects": {
             "type": "array",
             "items": {
