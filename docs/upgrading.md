@@ -3,6 +3,14 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.22.1: dependency fixes
+
+**0.22.0 was tagged but never published**, because advisories against two build-time npm
+packages (`brace-expansion`, `fast-uri`, pulled in by the service-worker build tooling) appeared
+the same day and the release checks refuse a known advisory. 0.22.1 is 0.22.0 with those
+packages updated. Neither ships in the app. Upgrading from 0.21.0 gets everything described
+under 0.22.0 below. No migration.
+
 ## 0.22.0: new look, the forms
 
 **Every form has the same shape**: a label, the field, a hint where one helps, and an error
