@@ -9,6 +9,13 @@ describe('i18n', () => {
     const b = Object.keys(de).sort();
     expect(b).toEqual(a);
   });
+  // With no dictionary in the entry chunk, a key the active language lacks has no English to fall
+  // back on (only the key itself), so these two tests are what the fallback used to be.
+  it('every key has the same {placeholders} in en and de', () => {
+    const names = (s: string) => [...new Set(s.match(/\{[^{}]+\}/g) ?? [])].sort();
+    const ed: Record<string, string> = de;
+    for (const [k, v] of Object.entries(en)) expect(names(ed[k] ?? ''), k).toEqual(names(v));
+  });
   it('no empty translations', () => {
     for (const d of [en, de]) for (const [k, v] of Object.entries(d)) expect(v, k).not.toBe('');
   });
