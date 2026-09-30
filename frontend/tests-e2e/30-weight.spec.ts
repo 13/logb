@@ -43,7 +43,9 @@ test('offline weight is queued once and appears after reconnection', async ({ pa
   expect(response.ok()).toBeTruthy();
   const { id } = await response.json();
   await page.goto(`/objects/${id}`);
-  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  // The worker must control the page before the connection drops. `serviceWorker.ready` resolves
+  // on activation, before `clientsClaim()` takes this page over, so wait for the controller.
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   await page.getByRole('button', {name:'Log weight', exact:true}).click();
   await page.getByLabel('Weight', {exact:true}).fill('72.35');
   await context.setOffline(true);

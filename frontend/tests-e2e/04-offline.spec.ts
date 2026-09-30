@@ -275,7 +275,7 @@ test('a queued write survives somebody else signing in on the same device', asyn
 
   // The owner comes back, and their entry is still there to send.
   await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('link', { name: /Account/ }).click();
   // Exact: the account page also offers "Sign out everywhere". Inside `main`: on desktop the
   // sidebar carries its own "Sign out" too.
   await page.locator('main').getByRole('button', { name: 'Sign out', exact: true }).click();
@@ -308,7 +308,9 @@ test('a write queued before an offline boot still sends when the connection retu
   const objectId = page.url().match(/\/objects\/(\d+)/)?.[1];
 
   // The reload below has to be served by the service worker, so wait for it to take control.
-  await page.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
+  // `serviceWorker.ready` resolves when the worker is active, before `clientsClaim()` has made it
+  // this page's controller, so the controller itself is what is waited for.
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
 
   await context.setOffline(true);
   await page.getByRole('button', { name: /Log/ }).first().click();

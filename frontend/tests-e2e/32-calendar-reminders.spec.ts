@@ -54,7 +54,9 @@ test('a calendar reading reminder queued offline replays once', async ({ page, c
   // with no app left to replay the queued write. The idle-time chunk warm-up usually wins that
   // race, but not on a busy machine, where the worker is also still installing. So the worker
   // is active before the form is opened: a page loaded under an active worker is controlled.
-  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  // `serviceWorker.ready` resolves on activation, before `clientsClaim()` takes the page over;
+  // the controller is what the offline part needs.
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   const response = await page.request.post('/api/objects', { data: { name: 'Offline calendar meter', type: 'car', counter_unit: 'km' } });
   const object = await response.json();
   await page.goto(`/objects/${object.id}/reminders/new?kind=reading`);

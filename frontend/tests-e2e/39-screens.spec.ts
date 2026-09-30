@@ -58,6 +58,23 @@ test('search hits are cards like the dashboard: icon tile, name, facts, tags ins
   await expect(page.getByLabel('Title')).toHaveValue('Kartenschlauch');
 });
 
+test("a weight hit is in its object's unit, and the number of matches is announced", async ({ page }) => {
+  await signInFresh(page, '39-search-weight');
+  const id = await object(page, { name: 'Pfundkoerper', type: 'body', weight_unit: 'lb' });
+  expect((await page.request.post(`/api/objects/${id}/activities`, {
+    data: { date: '2026-03-01', category: 'weight', title: 'Pfundwiegen', notes: '', weight_grams: 81_647 },
+  })).ok()).toBe(true);
+
+  await page.goto('/search?q=Pfundwiegen');
+  const hit = page.getByTestId('search-hit');
+  await expect(hit).toHaveCount(1);
+  await expect(hit).toContainText('180 lb');
+  const status = page.getByRole('status');
+  await expect(status).toHaveText('1 match');
+  await page.getByRole('searchbox').fill('Pfundwiegen-nirgends');
+  await expect(status).toHaveText(/^No matches for “Pfundwiegen-nirgends”/);
+});
+
 test('statistics lead with the year: spent, change against the same months last year, top object', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-09-15T12:00:00'));
   await signInFresh(page, '39-stats');
@@ -94,8 +111,10 @@ test('statistics lead with the year: spent, change against the same months last 
 test('the settings hub groups its rows, each with its own icon, and says who is signed in', async ({ page }) => {
   await signInFresh(page, '39-hub');
   await page.goto('/settings');
-  const rows = page.getByRole('list', { name: 'You' }).getByRole('button');
+  const rows = page.getByRole('list', { name: 'You' }).getByRole('link');
   await expect(rows).toHaveCount(6);
+  // Real links: a middle click or "Open in new tab" opens the page.
+  await expect(rows.first()).toHaveAttribute('href', '/settings/appearance');
   const icons = await rows.evaluateAll((els) => els.map((e) => e.querySelector('svg')?.innerHTML ?? ''));
   expect(new Set(icons).size, 'every row draws a different icon').toBe(6);
   for (const h of await rows.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))) expect(h).toBeGreaterThanOrEqual(44);
@@ -147,6 +166,62 @@ test('leaving by the in-app Back button sends a waiting change at once, not afte
   await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json())?.dateFormat).toBe('iso');
 });
 
+test('a text field still focused when the page is left is saved: Back in the app, and a real navigation', async ({ page }) => {
+  await signInFresh(page, '39-flush-text');
+  await page.goto('/settings');
+  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  const notifications = async () => (await (await page.request.get('/api/me/notifications')).json());
+
+  // The browser's Back while the URL field still has focus: `change` never fires.
+  await page.getByRole('link', { name: /Notifications/ }).click();
+  const url = page.getByLabel('URL');
+  await expect(url).toHaveValue('');
+  await url.fill('https://ntfy.example/focused-back');
+  await expect(url).toBeFocused();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect.poll(async () => (await notifications()).url).toBe('https://ntfy.example/focused-back');
+
+  // A document navigation while the hour field has focus: only the pagehide flush can send it.
+  await page.getByRole('link', { name: /Notifications/ }).click();
+  const hour = page.getByLabel('Daily delivery hour');
+  await expect(hour).toHaveValue('8');
+  await hour.fill('19');
+  await expect(hour).toBeFocused();
+  await page.goto('/settings');
+  await expect.poll(async () => (await notifications()).hour).toBe(19);
+});
+
+test("an administrator's currency typed and left with Back, or by a real navigation, is saved", async ({ page }) => {
+  await signIn(page);
+  const before = (await (await page.request.get('/api/settings')).json()).currency as string;
+  const next = before === 'CHF' ? 'SEK' : 'CHF';
+  try {
+    await page.goto('/settings');
+    await page.getByRole('link', { name: /Appearance/ }).click();
+    const field = page.getByLabel('Currency');
+    await expect(field).toHaveValue(before);
+    await field.fill(next.toLowerCase());
+    await expect(field).toBeFocused();
+    await page.goBack();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect.poll(async () => (await (await page.request.get('/api/settings')).json()).currency).toBe(next);
+
+    // And a document navigation with the field still focused: only the pagehide flush sends it.
+    if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+    await page.getByRole('link', { name: /Appearance/ }).click();
+    await expect(field).toHaveValue(next);
+    await field.fill('nok');
+    await expect(field).toBeFocused();
+    await page.goto('/settings');
+    await expect.poll(async () => (await (await page.request.get('/api/settings')).json()).currency).toBe('NOK');
+  } finally {
+    expect((await page.request.put('/api/settings', { data: { currency: before } })).ok()).toBe(true);
+  }
+});
+
 test('changing the password is one explicit action, and a password field can show what was typed', async ({ page }) => {
   const username = await signInFresh(page, '39-account');
   await page.goto('/settings/account');
@@ -185,6 +260,23 @@ test('signing in is a centred card, and the password can be shown while typing',
   expect(box.height).toBeGreaterThanOrEqual(44);
 });
 
+test('sign-in says "wrong password" only for a 401, and what really happened otherwise', async ({ page }) => {
+  await signIn(page); // an instance with an administrator, so /login is the sign-in card
+  await page.request.post('/api/auth/logout');
+  await page.goto('/login');
+  await expect(page.getByTestId('auth-form')).toBeVisible();
+  const answer = { status: 429, body: { error: 'too_many_requests', message: 'too many requests' } };
+  await page.route('**/api/auth/login', (route) => route.fulfill({ status: answer.status, json: answer.body }));
+  await page.getByLabel(/^(Username|Benutzername)$/).fill('nobody-39');
+  await page.getByLabel(/^(Password|Passwort)$/).fill('whatever words');
+  await page.getByRole('button', { name: /^(Sign in|Anmelden)$/ }).click();
+  await expect(page.getByRole('alert')).toHaveText(/Too many attempts|Zu viele/);
+
+  answer.status = 401; answer.body = { error: 'unauthorized', message: 'authentication required' };
+  await page.getByRole('button', { name: /^(Sign in|Anmelden)$/ }).click();
+  await expect(page.getByRole('alert')).toHaveText(/Wrong username or password|Benutzername oder Passwort/);
+});
+
 test.describe('the sign-in chunk not yet fetched', () => {
   // No service worker: its precache would serve the chunk, and this is about the start it cannot.
   test.use({ serviceWorkers: 'block' });
@@ -217,23 +309,30 @@ test.describe('the sign-in chunk not yet fetched', () => {
   });
 });
 
-test('no settings page shows more than one primary button', async ({ page }) => {
+test('no settings page shows more than one primary button, in either theme', async ({ page }) => {
   await signIn(page); // the administrator sees every page
   const pages = ['/settings', '/settings/appearance', '/settings/account', '/settings/notifications', '/settings/types',
     '/settings/api', '/settings/data', '/settings/people', '/settings/database'];
-  for (const path of pages) {
-    await page.goto(path);
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-    await page.waitForLoadState('networkidle');
-    const primaries = await page.getByRole('main').locator('button, a').evaluateAll((els) => {
-      const probe = document.createElement('div');
-      probe.style.backgroundColor = 'var(--ui-primary)';
-      document.body.append(probe);
-      const amber = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-      return els.filter((e) => (e as HTMLElement).offsetParent !== null && getComputedStyle(e).backgroundColor === amber).length;
-    });
-    expect(primaries, path).toBeLessThanOrEqual(1);
+  // Counted in the state a visit lands in: a page's one primary has to be visible there to be
+  // counted at all (`offsetParent`), so a primary that only appears later (Types' "Save type"
+  // with the form open, the hub's "Try again" after failed saves) is not what this checks.
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const path of pages) {
+      await page.goto(path);
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await page.waitForLoadState('networkidle');
+      expect(await page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches), `${path} ${colorScheme}`).toBe(colorScheme === 'dark');
+      const primaries = await page.getByRole('main').locator('button, a').evaluateAll((els) => {
+        const probe = document.createElement('div');
+        probe.style.backgroundColor = 'var(--ui-primary)';
+        document.body.append(probe);
+        const amber = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return els.filter((e) => (e as HTMLElement).offsetParent !== null && getComputedStyle(e).backgroundColor === amber).length;
+      });
+      expect(primaries, `${path} (${colorScheme})`).toBeLessThanOrEqual(1);
+    }
   }
 });
 
