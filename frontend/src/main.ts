@@ -17,9 +17,9 @@ const updateSW = registerSW({
 });
 void flushOutbox();
 
-// The active language is its own chunk unless it is the fallback (see ./i18n): mounted only once
-// it is in hand, so the first screen is never drawn in the wrong language. It is precached by
-// the service worker, so this is a local read on every start but the very first.
+// Every language is its own chunk (see ./i18n): mounted only once the active one is in hand, so
+// the first screen is never drawn in the wrong language or as bare keys. The chunks are precached
+// by the service worker, so this is a local read on every start but the very first.
 await ensureLocale(get(locale));
 
 mount(UpdateBanner, { target: document.body });
