@@ -169,6 +169,16 @@ describe('tinted highlight contrast', () => {
         expect(contrastRatio(ui(fg, theme), ui('card', theme))).toBeGreaterThanOrEqual(4.5);
       }
     });
+    // Tag chips on a due reminder card (Reminders tab). The chip is opaque, so its own pair holds;
+    // its text must also read on the card's tint, where the chip's rounded edge meets it.
+    it(`${name}: tag text on its chip and on the due card's tint (destructive/10 over background) (>= 4.5:1)`, () => {
+      const legacy = name === 'light' ? light : dark;
+      const card = blend(ui('destructive', theme), ui('background', theme), 0.1);
+      for (let n = 0; n < 8; n++) {
+        expect(contrastRatio(token(`tag-${n}-fg`, legacy), token(`tag-${n}-bg`, legacy)), `tag-${n} chip`).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(token(`tag-${n}-fg`, legacy), card), `tag-${n} on card`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
     // The calendar's selected day is filled with primary and gets the keyboard focus when the
     // popup opens: its inset ring must show against that fill, and a day of the neighbouring
     // month (muted-foreground) must stay readable under the pointer (hover:bg-accent).

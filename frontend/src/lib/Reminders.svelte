@@ -15,8 +15,8 @@
   import TagChips from './TagChips.svelte';
   import type { Activity, CounterUnit, DoneOut, Reminder } from './types';
 
-  let { objectId, unit, activities, onchanged, body = false }:
-    { objectId: number; body?: boolean; unit: CounterUnit; activities: Activity[]; onchanged?: () => void } = $props();
+  let { objectId, unit, activities, onchanged, onloaded, body = false }:
+    { objectId: number; body?: boolean; unit: CounterUnit; activities: Activity[]; onchanged?: () => void; onloaded?: (rows: Reminder[]) => void } = $props();
 
   let items = $state<Reminder[]>([]);
   /** Whether the answer is known -- see Documents.svelte for why an empty list is not one. */
@@ -50,6 +50,7 @@
       const rows = await api<Reminder[]>('GET', `/objects/${oid}/reminders`);
       if (!loadSeq.current(token)) return;
       items = [...queued, ...rows];
+      onloaded?.(rows);
       error = '';
     } catch (e) {
       if (!loadSeq.current(token)) return;

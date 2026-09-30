@@ -238,3 +238,33 @@ test('shows saved data while online when the network is slower than the cache ti
 
   await context.unrouteAll({ behavior: 'ignoreErrors' });
 });
+
+test.describe('a route chunk that cannot be fetched', () => {
+  // No service worker: its precache would serve every chunk, and this is about the one it cannot.
+  test.use({ serviceWorkers: 'block' });
+
+  test('offline the app stays the app and retries when the connection returns', async ({ page, context }) => {
+    await signInFresh(page, '25-chunk-offline');
+    // The Statistics chunk never arrives, not even from the idle-time warm-up, so it is not in
+    // hand when the person opens the page.
+    let blocked = true;
+    await page.route('**/assets/Stats-*.js', (route) => (blocked ? route.abort() : route.continue()));
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: 'Statistics' })).toBeVisible();
+    await page.evaluate(() => sessionStorage.removeItem('logb.chunk-reload'));
+
+    await context.setOffline(true);
+    await page.getByRole('button', { name: 'Statistics' }).click();
+    await expect(page.getByText('Loading…')).toBeVisible();
+    // Long enough for a reload, if the app still did one, to have landed on the browser's error page.
+    await page.waitForTimeout(1_500);
+    expect(page.url()).not.toMatch(/^chrome-error:/);
+    await expect(page.getByText('Loading…')).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem('logb.chunk-reload'))).toBeNull();
+
+    blocked = false;
+    await context.setOffline(false);
+    await expect(page.getByRole('heading', { name: 'Statistics' })).toBeVisible();
+    expect(page.url()).toContain('/stats');
+  });
+});

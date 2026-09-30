@@ -33,6 +33,8 @@ test('counter and weight reminders offer the same fixed calendar options', async
     expect(response.ok()).toBeTruthy();
     const object = await response.json();
     await page.goto(`/objects/${object.id}/reminders/new?kind=reading`);
+    // The form fills itself from the object once loaded, and a late load would overwrite the title.
+    await expect(page.locator('form:not([aria-busy="true"])')).toBeVisible();
     await page.getByLabel('Title', { exact: true }).fill(body.name);
     await page.getByLabel('Repeat', { exact: true }).selectOption('monthly');
     await page.getByLabel('Day of month').selectOption('last');

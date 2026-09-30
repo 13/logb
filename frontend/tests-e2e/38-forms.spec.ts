@@ -241,3 +241,18 @@ test('a refused field inside a closed "More details" is shown and focused', asyn
   await expect(page.getByLabel(/Battery used/)).toBeFocused();
   await expect(page.getByRole('alert')).toHaveText('Battery used must be 0–100 %');
 });
+
+test('the Reminders tab asks the server for the reminders once', async ({ page }) => {
+  await signInFresh(page, '38-reminders-once');
+  const id = await object(page, { name: 'Once car', type: 'car', counter_unit: 'km' });
+  expect((await page.request.post(`/api/objects/${id}/reminders`, { data: { title: 'Once overdue', due_date: '2000-01-01' } })).ok()).toBe(true);
+
+  const gets: string[] = [];
+  page.on('request', (r) => { if (r.method() === 'GET' && new URL(r.url()).pathname === `/api/objects/${id}/reminders`) gets.push(r.url()); });
+  await page.goto(`/objects/${id}?tab=reminders`);
+  await expect(page.getByTestId('reminder-card')).toHaveCount(1);
+  // The summary's due reminder comes from the same answer.
+  await expect(page.getByTestId('summary-due-reminder')).toContainText('Once overdue');
+  await page.waitForLoadState('networkidle');
+  expect(gets).toHaveLength(1);
+});

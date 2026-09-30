@@ -243,7 +243,7 @@
     {#if rows.length === 0}
       <p class="muted">{$t('dash.no-match', { q: filterQuery.trim() || (tagFilter ?? '') })}</p>
     {:else}
-      <div data-testid="object-list" class="grid grid-cols-1 gap-3 min-[1024px]:grid-cols-2 min-[1440px]:grid-cols-3">
+      <div data-testid="object-list" class="grid grid-cols-1 gap-3 wide:grid-cols-2 min-[1440px]:grid-cols-3">
         {#each rows as row (row.object.id)}<ObjectCard object={row.object} parentName={row.parentName} ontag={(tag) => (tagFilter = tag)} activeTag={tagFilter} />{/each}
       </div>
     {/if}

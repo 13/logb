@@ -235,7 +235,7 @@ test.describe('with the service worker blocked', () => {
     await openInfo(page);
     await expect(page.getByRole('heading', { name: 'Contents' })).toBeVisible();
     await expect(page.getByText('Nothing inside yet.')).toBeVisible();
-    await expect(page.locator('main > p.error')).toHaveCount(0);
+    await expect(page.getByTestId('page-error')).toHaveCount(0);
   });
 
   test('one "+ Log" at a time on desktop, while the timeline loads and once it is empty', async ({ page }, info) => {

@@ -32,10 +32,10 @@
   <section>
   <h2 class="m-0 mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{$t('energy.title')}</h2>
   {#if energy.distance_per_charge !== null && unit}
-    <p class="muted">{$t('energy.distance-per-charge')}: <b>{counter(energy.distance_per_charge, unit, $locale)}</b></p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('energy.distance-per-charge')}: <b class="font-semibold text-foreground tabular-nums">{counter(energy.distance_per_charge, unit, $locale)}</b></p>
   {/if}
   {#if energy.distance_per_unit_milli !== null && energy.unit && unit}
-    <p class="muted">{$t('energy.distance-per-unit')}: <b>{formatPerUnit(energy.distance_per_unit_milli, fuelUnitLabel(energy.unit), unit, $locale)}</b></p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('energy.distance-per-unit')}: <b class="font-semibold text-foreground tabular-nums">{formatPerUnit(energy.distance_per_unit_milli, fuelUnitLabel(energy.unit), unit, $locale)}</b></p>
   {/if}
   {#if energy.cost_per_counter_milli !== null && unit}
     <!-- Per 100 units, not per single unit: `insights.consumption` already reads "/100 km",
@@ -43,11 +43,11 @@
          claims far less precision than the mean it actually is) and ~40 % off once rounded to
          cents at all -- `cost_per_counter_milli` (600 -> €0.006/km) rounds to €0.01, while the
          same rate over 100 units (60 000 milli -> €0.60) rounds true. -->
-    <p class="muted">{$t('energy.cost-per-100', { unit })}: <b>{perCounter(energy.cost_per_counter_milli * 100, $currency, $locale)}</b></p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('energy.cost-per-100', { unit })}: <b class="font-semibold text-foreground tabular-nums">{perCounter(energy.cost_per_counter_milli * 100, $currency, $locale)}</b></p>
   {/if}
   {#if energy.battery}
-    <p class="muted" data-testid="energy-battery">
-      {$t('energy.charge-due')}: <b>≈ {energy.battery.remaining_pct} % {#if energy.battery.range_left !== null && unit}· ≈ {counter(energy.battery.range_left, unit, $locale)}{/if}</b>{#if energy.battery.warn} · {$t('energy.charge-soon')}{/if}
+    <p class="m-0 text-sm text-muted-foreground" data-testid="energy-battery">
+      {$t('energy.charge-due')}: <b class="font-semibold text-foreground tabular-nums">≈ {energy.battery.remaining_pct} % {#if energy.battery.range_left !== null && unit}· ≈ {counter(energy.battery.range_left, unit, $locale)}{/if}</b>{#if energy.battery.warn} · {$t('energy.charge-soon')}{/if}
     </p>
   {/if}
   </section>

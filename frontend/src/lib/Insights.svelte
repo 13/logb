@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { CheckField } from '$lib/components/ui/field/index.js';
   import BarList from './BarList.svelte';
   import Chart from './Chart.svelte';
   import { counter, money, moneyWhole, perCounter, quantity } from './format';
@@ -22,24 +23,21 @@
 </script>
 
 {#if hasContents}
-  <label class="row toggle">
-    <input type="checkbox" checked={contents} onchange={(e) => oncontents?.(e.currentTarget.checked)} />
-    {$t('insights.contents')}
-  </label>
+  <CheckField id="include-contents" label={$t('insights.contents')} bind:checked={() => contents, (on) => oncontents?.(on)} />
 {/if}
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<p class="m-0 text-sm font-medium text-destructive" role="alert">{error}</p>{/if}
 {#if data}
   {#if data.ownership.total_cents > 0}
     {@const o = data.ownership}
-    <p data-testid="insights-ownership">
-      {$t('insights.ownership')}: <b class="tnum">{fmt(o.total_cents)}</b>
-      <span class="muted">· {o.per_year_cents !== null
+    <p data-testid="insights-ownership" class="m-0">
+      {$t('insights.ownership')}: <b class="font-semibold tabular-nums">{fmt(o.total_cents)}</b>
+      <span class="text-sm text-muted-foreground">· {o.per_year_cents !== null
         ? $t('insights.per-year-since', { amount: moneyWhole(o.per_year_cents, $currency, $locale), since: sinceLabel(o.since, $locale) })
         : $t('insights.since', { since: sinceLabel(o.since, $locale) })}</span>
     </p>
   {/if}
   {#if !spent}
-    <p class="muted">{$t('insights.none')}</p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('insights.none')}</p>
   {:else}
 
     <h3 class="m-0 mt-4 mb-2 text-sm font-semibold text-foreground">{$t('insights.by-year')}</h3>
@@ -49,7 +47,7 @@
     <BarList items={data.by_category.map((b) => ({ key: b.bucket, label: $t(`cat.${b.bucket}`), value: b.cost_cents, display: fmt(b.cost_cents) }))} />
 
     {#if data.cost_per_counter_milli !== null && unit}
-      <p class="muted">{$t('insights.per-counter', { unit })}: <b>{perCounter(data.cost_per_counter_milli, $currency, $locale)}</b></p>
+      <p class="m-0 text-sm text-muted-foreground">{$t('insights.per-counter', { unit })}: <b class="font-semibold text-foreground tabular-nums">{perCounter(data.cost_per_counter_milli, $currency, $locale)}</b></p>
     {/if}
   {/if}
   {#if data.fuel}
@@ -58,9 +56,9 @@
          wording -- `energyLabelKey` also drives the "+ Log charge" button and the Energy
          section's own log button, so a kWh object never mixes the two vocabularies. -->
     {@const charged = energyLabelKey(fuel.unit as FuelUnit) === 'energy.charged'}
-    <p class="muted">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b>{quantity(fuel.quantity_milli, fuelUnitLabel(fuel.unit), $locale)}</b></p>
+    <p class="m-0 text-sm text-muted-foreground">{$t(charged ? 'energy.charged-total' : 'insights.fuel-total')}: <b class="font-semibold text-foreground tabular-nums">{quantity(fuel.quantity_milli, fuelUnitLabel(fuel.unit), $locale)}</b></p>
     {#if fuel.per_100_milli !== null && unit}
-      <p class="muted">{$t('insights.consumption')}: <b>{quantity(fuel.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 {unit}</b></p>
+      <p class="m-0 text-sm text-muted-foreground">{$t('insights.consumption')}: <b class="font-semibold text-foreground tabular-nums">{quantity(fuel.per_100_milli, fuelUnitLabel(fuel.unit), $locale)}/100 {unit}</b></p>
       <!-- Petrol only. `cost_per_counter_milli` is null under exactly the same condition as
            `per_100_milli` (both need >= 2 fills spanning a positive counter distance -- see
            `fuel_cost_per_counter_milli` / `consumption_per_100_milli` in
@@ -74,9 +72,9 @@
            a priced object whose charges carry no cost) reads as a bug, so the authoritative one
            is the only one shown. -->
       {#if !charged}
-        <p class="muted">
+        <p class="m-0 text-sm text-muted-foreground">
           {$t('insights.fuel-per-counter', { unit })}:
-          <b>{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b>
+          <b class="font-semibold text-foreground tabular-nums">{perCounter(fuel.cost_per_counter_milli, $currency, $locale)}</b>
         </p>
       {/if}
     {/if}
@@ -85,7 +83,7 @@
     <!-- A month is the unit people think in for mileage; 30.44 days is the average one. Rounded
          to a whole unit, since the rate is an average and more digits would claim precision it
          does not have. -->
-    <p class="muted">{$t('insights.usage')}: <b>{$t('insights.per-month', { amount: counter(Math.round(data.counter_per_day_milli * 30.44 / 1000), unit, $locale) })}</b></p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('insights.usage')}: <b class="font-semibold text-foreground tabular-nums">{$t('insights.per-month', { amount: counter(Math.round(data.counter_per_day_milli * 30.44 / 1000), unit, $locale) })}</b></p>
   {/if}
   {#if data.usage_by_month.some((m) => (m.amount ?? 0) > 0) && unit}
     <!-- A month the readings cannot measure is left out with the empty ones, rather than drawn

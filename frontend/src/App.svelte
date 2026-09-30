@@ -116,7 +116,7 @@
     if (known) { page = { pattern: route.pattern, comp: known }; slow = false; return; }
     let live = true;
     const timer = setTimeout(() => { if (live) slow = true; }, 300);
-    route.load().then(async (m) => {
+    const attempt = () => route.load().then(async (m) => {
       loaded.set(route.pattern, m.default);
       if (!live) return;
       page = { pattern: route.pattern, comp: m.default };
@@ -126,18 +126,23 @@
       await tick();
       if (live) focusPageHeading();
     }).catch(() => {
-      // A chunk that cannot be fetched (a deploy replaced it while this tab was open, say): a
-      // reload asks for the current build's. Once only per tab -- if that did not help, a reload
-      // loop would not either, and "Loading…" stays up instead.
       if (!live) return;
       slow = true;
+      // Offline, a reload would land on the browser's own error page and strand any queued
+      // write with no app left to replay it. "Loading…" stays up and the import is tried again
+      // when the connection returns.
+      if (!navigator.onLine) { addEventListener('online', attempt, { once: true }); return; }
+      // A chunk that cannot be fetched while online (a deploy replaced it while this tab was
+      // open, say): a reload asks for the current build's. Once only per tab -- if that did not
+      // help, a reload loop would not either, and "Loading…" stays up instead.
       try {
         if (sessionStorage.getItem('logb.chunk-reload')) return;
         sessionStorage.setItem('logb.chunk-reload', '1');
       } catch { return; }
       location.reload();
     });
-    return () => { live = false; clearTimeout(timer); };
+    attempt();
+    return () => { live = false; clearTimeout(timer); removeEventListener('online', attempt); };
   });
 
   // Once the first screen is up, the other pages are fetched while nothing else is going on, so

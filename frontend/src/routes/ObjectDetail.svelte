@@ -387,7 +387,13 @@
   // says "include contents" never sits next to figures that do not include them.
   $effect(() => { const path = insightsUrl; if (serverReady) { insights = null; insightsError = ''; loadInsights(path); } });
   // `dueCount` is derived, so a reload of the object that leaves the count alone does not ask again.
-  $effect(() => { oid; if (dueCount > 0) loadDue(); else { dueSeq.invalidate(); dueReminders = []; } });
+  // On the Reminders tab the tab's own list answers for the summary too (`onloaded` below): one
+  // GET, not two. `untrack`: leaving the tab must not ask again for what it just loaded.
+  $effect(() => {
+    oid;
+    if (dueCount === 0) { dueSeq.invalidate(); dueReminders = []; }
+    else if (untrack(() => shownTab) !== 'reminders') loadDue();
+  });
   // A background replay can succeed while this view is mounted; without this the synthetic
   // pending entry it created keeps rendering next to the now-real row until the next remount.
   //
@@ -480,7 +486,7 @@
 </script>
 
 <main>
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p data-testid="page-error" class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
   {#if object}
     <TopBar title={object.name} icon={typeIcon(object.type, $customTypes)} backTo="/">
       {#if wide.current && headerLog}
@@ -561,7 +567,8 @@
             {#if shownTab === 'reminders'}
               <!-- Completing a reminder can log an entry with a cost, so the Cost data follows. -->
               <Reminders body={object.type === 'body'} objectId={oid} unit={object.counter_unit} {activities}
-                         onchanged={() => { loadObject(); loadActivities('refresh'); refreshInsights(); refreshDetails(); if (dueCount > 0) loadDue(); }} />
+                         onloaded={(rows) => { dueSeq.invalidate(); dueReminders = rows.filter((r) => r.due && r.done_at === null); }}
+                         onchanged={() => { loadObject(); loadActivities('refresh'); refreshInsights(); refreshDetails(); }} />
             {/if}
           </Tabs.Content>
           {#if !wide.current}
@@ -578,7 +585,7 @@
       </div>
     {/if}
   {:else if !error}
-    <p class="muted">{$t('nav.loading')}</p>
+    <p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p>
   {/if}
 </main>
 
