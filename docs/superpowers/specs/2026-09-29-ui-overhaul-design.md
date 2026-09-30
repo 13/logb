@@ -206,6 +206,15 @@ already hides the section when there is nothing to show. No UI redesign in this 
   amber palette.
 - `.fab` still drives `.fab-row`, Reminders' "+ New reminder" and `LogPicker`; all three move
   off it before `app.css` goes.
+- Before deleting `app.css`, move `--navbar`, `--control`, the `--tag-*` tokens and the `.tag*`
+  rules, and the shell padding (`main`, `.app-content`) into `app.tw.css`. `FormActions`
+  (`var(--navbar)`, `-mx-3`), `TagInput` and `TagChips` depend on them.
+- Login and Setup are imported eagerly by `App.svelte`. Migrating them must not pull `cn`,
+  tailwind-merge or the field context into the entry chunk: use the plain class strings from
+  `field/classes.ts` on native elements, or make them lazy routes. The entry-chunk rule ran with a
+  tolerance of at most 200 B gzip in rounds 3 and 4 (entry now 11,788 B gzip).
+- Unverified: the viewport with the on-screen keyboard open (the sticky Save bar may sit behind
+  the keyboard). Check on a real phone, and consider `interactive-widget` in the viewport meta.
 - `BarList` is shared with Statistics; round 3 kept it for "Per year" and "Per category", so
   redoing Statistics decides its fate.
 

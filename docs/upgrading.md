@@ -28,9 +28,9 @@ you save; only the side you chose is saved.
 
 Checkboxes and choices are restyled; drop-down lists stay the phone's own pickers.
 
-**Fixes**: an object's page fetches its reminders once, and starting the app offline no longer
-ends on the browser's error page when a page's code isn't cached yet; it waits and reloads once
-you are back online.
+**Fixes**: an object's page fetches its reminders once, and opening a page offline whose code
+isn't cached yet no longer ends on the browser's error page; it waits and reloads once you are
+back online.
 
 No migration.
 
