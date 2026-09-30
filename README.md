@@ -14,7 +14,7 @@ docker compose up -d --build
 ```
 
 Open http://localhost:8080, create the first (admin) user, add users under
-Settings.
+Settings → Users.
 
 Building the image needs BuildKit (`docker buildx`), which Docker Desktop and Docker's own
 packages include; some distributions package it separately (`docker-buildx` on Arch). The legacy
@@ -150,14 +150,14 @@ Set `LOGB_BACKUP_DIR` to turn on a nightly snapshot, written at `LOGB_BACKUP_HOU
 are kept. Point it at a volume that is itself backed up — a snapshot on the same disk
 protects you from your own mistakes, not from the disk's.
 
-**Settings → Backup says which of these is actually happening**, for an admin, without
+**Settings → Database says which of these is actually happening**, under Backup, for an admin, without
 a shell on the host: where the nightly snapshot goes and when the newest one landed, or
 that none are being taken and `LOGB_BACKUP_DIR` turns them on, or — on PostgreSQL — that
 LogB is taking none and never did. Check it after any change to the backup settings, and
 after moving to PostgreSQL; it is the one place that reports what is true of the running
 instance rather than what was configured.
 
-**Settings → Export is not a database backup.** It writes one zip holding the JSON and
+**The export under Settings → Data is not a database backup.** It writes one zip holding the JSON and
 every file for the account you exported from, self-contained and importable into any LogB
 instance, which makes it the right tool for moving one user's data between instances or
 keeping a copy you can read without LogB at all. LogB is multi-user, and the export is
@@ -250,7 +250,7 @@ the next time it syncs; that is expected and needs nothing from you.
 
 **Your nightly backups do not come with you.** LogB takes no backups of a PostgreSQL
 database — that is PostgreSQL's own tooling's job, and `LOGB_BACKUP_DIR` is ignored once
-you are there, even if it is still set. Settings → Backup says so on the screen, and the
+you are there, even if it is still set. Settings → Database says so on the screen, and the
 server says it once in the log at every start. Set up `pg_dump`, `pg_basebackup` or a
 WAL-level snapshot on the database server before you consider the move done. The other
 property of running here — writes serialising under a global advisory lock — is in
@@ -298,7 +298,7 @@ until it is started by hand.
 | Env                   | Default   |                                                                                                                              |
 |-----------------------|-----------|------------------------------------------------------------------------------------------------------------------------------|
 | `LOGB_DATA_DIR`      | `./data`  | database, files, thumbnails                                                                                                  |
-| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is a supported configuration with two properties worth reading once, which the server also logs once at every start. LogB takes no backups of a PostgreSQL database: `--backup` and `--restore` refuse on purpose, `LOGB_BACKUP_DIR` is ignored, and backing it up is PostgreSQL's own tooling's job -- Settings -> Backup reports which of those applies to the running instance. Every write also takes a global advisory lock, serialising writers -- which is what SQLite does too, there by handing every write transaction one shared connection -- and an import inserts its rows inside that lock, so a large import blocks other writes while it runs (blobs and thumbnails are written to disk before the lock is taken). On SQLite a write waits up to five seconds for the single writer connection and is then answered with 503 and a `Retry-After`; on PostgreSQL it waits on the advisory lock until its turn comes, with no such deadline. Neither is unfinished work; SQLite is still the default, and the more exercised path. Use `logb --copy-to`, or Settings, to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql) |
+| `LOGB_DATABASE_URL`  | unset     | database connection URL; unset means the SQLite file in `LOGB_DATA_DIR`. Files and thumbnails stay there either way. Pointing this at PostgreSQL is a supported configuration with two properties worth reading once, which the server also logs once at every start. LogB takes no backups of a PostgreSQL database: `--backup` and `--restore` refuse on purpose, `LOGB_BACKUP_DIR` is ignored, and backing it up is PostgreSQL's own tooling's job -- Settings -> Database reports which of those applies to the running instance. Every write also takes a global advisory lock, serialising writers -- which is what SQLite does too, there by handing every write transaction one shared connection -- and an import inserts its rows inside that lock, so a large import blocks other writes while it runs (blobs and thumbnails are written to disk before the lock is taken). On SQLite a write waits up to five seconds for the single writer connection and is then answered with 503 and a `Retry-After`; on PostgreSQL it waits on the advisory lock until its turn comes, with no such deadline. Neither is unfinished work; SQLite is still the default, and the more exercised path. Use `logb --copy-to`, or Settings, to bring an existing SQLite database across -- see [Moving to PostgreSQL](#moving-to-postgresql) |
 | `LOGB_DB_POOL_SIZE`  | `4` on SQLite, `16` on PostgreSQL | most connections the main database pool opens. On SQLite that pool serves reads; write transactions always queue for one separate writer connection, which this does not change (so a SQLite instance opens this many plus one), and raising it buys read concurrency, not write throughput. On PostgreSQL the one pool serves reads and writes alike, writers still taking turns on the advisory lock; keep it well below the server's `max_connections`. Rarely worth setting |
 | `LOGB_BACKUP_DIR`    | unset     | directory for a nightly SQLite snapshot, verified before it counts; the newest 14 are kept. Unset takes none; the compose file sets `/data/backups`. Ignored on PostgreSQL -- see [Backup](#backup) |
 | `LOGB_BACKUP_HOUR`   | `3`       | hour (0-23, in the instance timezone) from which the nightly snapshot is written                                             |
@@ -459,9 +459,10 @@ start. Logging a counter value (or weight for a body object) advances its readin
 deleting that entry recalculates the date. Skipping a reading uses its actual next occurrence.
 The picker supports arrow keys, Home/End, Page Up/Down, Enter, and Escape.
 
-Appearance preferences can be saved to the account with **Apply appearance**, including language,
-theme, date format, and first weekday. New devices load those preferences; **Use these preferences
-only on this device** keeps a local override. Preferences remain available offline.
+Appearance preferences -- language, theme, date format and first weekday -- save themselves to the
+account as they are changed, with nothing to press; new devices load them. **Use these preferences
+only on this device** keeps them on this device instead, and turning it off again saves what the
+device shows to the account. Preferences remain available offline.
 
 ## Reminder notifications
 
@@ -543,8 +544,11 @@ and search works the same without it.
 
 ## Statistics
 
-The Statistics screen totals spend across every object you own: over time, by object (a child's
-cost rolls into its parent), by type and by category. `GET /api/stats?year=&purchases=` is the
+The Statistics screen leads with one year -- the one picked, or the current one under "All
+years": what was spent, the change against the year before (the same months of it while the year
+is still running), and the object that cost most. Below, it totals spend for the selection across
+every object you own: over time, by object (a child's cost rolls into its parent), by type and by
+category. `GET /api/stats?year=&purchases=` is the
 same data over the API, both parameters optional. An object's purchase price counts only with the
 `purchases` toggle on, dated by its purchase date or else the day it was created, and is skipped
 when a costed `purchase` activity already records that money.
