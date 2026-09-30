@@ -17,3 +17,7 @@ export const sectionHeadingClass = 'm-0 text-xs font-semibold tracking-wide text
 /** A one-tap suggestion (repeat an entry, start from a template), in a row that scrolls sideways. */
 export const chipClass =
   'inline-flex min-h-11 shrink-0 cursor-pointer items-center whitespace-nowrap rounded-full border border-border bg-card px-3 text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring';
+/** A ghost `Button` whose action removes something (Discard, Remove, Revoke, Delete): destructive
+ *  text that stays destructive on hover, where the ghost variant would turn it foreground. Its hover
+ *  fill (muted, muted/50 in dark, over a card) is contrast-tested in theme-contrast.test.ts. */
+export const destructiveGhostClass = 'text-destructive hover:text-destructive';

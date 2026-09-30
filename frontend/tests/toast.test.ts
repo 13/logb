@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-import { toast, toastMessage } from '../src/lib/toast';
+import { clearToast, toast, toastMessage } from '../src/lib/toast';
 
 describe('toast', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -21,6 +21,21 @@ describe('toast', () => {
     toast('B', 1000);
     vi.advanceTimersByTime(300);
     expect(get(toastMessage)?.text).toBe('B');
+    // B was shown at 800 ms for 1000 ms: still there at 1799, gone at 1800.
+    vi.advanceTimersByTime(699);
+    expect(get(toastMessage)?.text).toBe('B');
+    vi.advanceTimersByTime(1);
+    expect(get(toastMessage)).toBeNull();
+  });
+
+  // The Toaster calls this when its page goes, so "Saved" never shows up on the next page.
+  it('clearToast removes the message and its timer', () => {
+    toast('Saved', 1000);
+    clearToast();
+    expect(get(toastMessage)).toBeNull();
+    toast('Next', 5000);
+    vi.advanceTimersByTime(1000);
+    expect(get(toastMessage)?.text).toBe('Next');
   });
 
   it('the same text twice is two messages, so it is announced twice', () => {

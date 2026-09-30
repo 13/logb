@@ -55,7 +55,7 @@
       remember(term);
       loading = true; error = '';
       try {
-        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}&offset=0`, undefined, undefined, abort.signal);
+        const next = await api<SearchResults>('GET', `/search?q=${encodeURIComponent(term)}&offset=0`, undefined, undefined, { signal: abort.signal });
         if (generation !== requestGeneration) return;
         results = next; searched = term;
       } catch (e) {

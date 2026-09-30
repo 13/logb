@@ -14,7 +14,7 @@
   import type { QueuedOp } from '../lib/outbox';
   import { describeFailedWrite } from '../lib/failed-write';
   import { Button } from '$lib/components/ui/button/index.js';
-  import { hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import { destructiveGhostClass, hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
 
   let dead = $state<QueuedOp[]>([]);
   let tokenCount = $state<number | null>(null);
@@ -117,7 +117,7 @@
                 <b class="font-semibold text-foreground">{d.what}{#if d.name}: {d.name}{/if}</b>
                 {#if d.reason}<span class="text-sm text-destructive">{d.reason}</span>{/if}
               </span>
-              <Button variant="ghost" class="min-h-11 shrink-0 text-destructive" onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</Button>
+              <Button variant="ghost" class={['min-h-11 shrink-0', destructiveGhostClass]} onclick={() => discardOp(op.id)}>{$t('outbox.discard')}</Button>
             </li>
           {/each}
         </ul>

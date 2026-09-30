@@ -89,8 +89,6 @@ describe('shadcn token contrast', () => {
       ['muted-foreground', 'background'], ['muted-foreground', 'card'], ['muted-foreground', 'muted'],
       ['accent-foreground', 'accent'], ['destructive-foreground', 'destructive'],
       ['destructive', 'background'], ['destructive', 'card'],
-      // A ghost button in destructive text on its hover fill (Discard, Remove, Revoke, Delete).
-      ['destructive', 'muted'],
       ['brand-ink', 'background'], ['brand-ink', 'card'],
       ['warn', 'background'], ['warn', 'card'],
     ];
@@ -124,6 +122,13 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('primary', theme), ui('popover', theme), 0.15);
       expect(contrastRatio(ui('popover-foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ui('destructive', theme), blend(ui('destructive', theme), ui('popover', theme), 0.2))).toBeGreaterThanOrEqual(4.5);
+    });
+    // A ghost button in destructive text (`destructiveGhostClass`: Discard, Remove, Revoke,
+    // Delete) on its hover fill, which the ghost variant paints as muted in light and muted/50 in
+    // dark, over the card the button sits on.
+    it(`${name}: destructive text on a ghost button's hover fill (muted${name === 'dark' ? '/50' : ''} over card) (>= 4.5:1)`, () => {
+      const bg = blend(ui('muted', theme), ui('card', theme), name === 'dark' ? 0.5 : 1);
+      expect(contrastRatio(ui('destructive', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
     it(`${name}: brand-ink on the active nav item (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);

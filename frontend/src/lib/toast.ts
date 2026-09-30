@@ -15,3 +15,11 @@ export function toast(text: string, ms = 3000): void {
   toastMessage.set({ id, text });
   timer = setTimeout(() => toastMessage.update((m) => (m?.id === id ? null : m)), ms);
 }
+
+/** Drops whatever is showing. The `Toaster` calls it when its page goes, so a message never
+ *  outlives the page it was about. */
+export function clearToast(): void {
+  clearTimeout(timer);
+  timer = undefined;
+  toastMessage.set(null);
+}

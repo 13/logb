@@ -263,9 +263,16 @@ export const SAVE_TIMEOUT_MS = 10_000;
  * switch, setting it too low is the expensive mistake: the copy would keep running server-side
  * after the client gave up, and the operator would be told a migration failed that in fact
  * succeeded.
+ *
+ * `opts.signal` lets a caller drop a request nobody will read any more (a superseded search).
+ * `opts.keepalive` lets a request outlive the page that sent it: a setting saved while its page is
+ * being left (see `flush` in ./autosave.ts). The browser caps keepalive bodies at 64 KB, far above
+ * any setting.
  */
-export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
-  return (await apiWithStatus<T>(method, path, body, timeoutMs, signal)).body;
+export type RequestOptions = { signal?: AbortSignal; keepalive?: boolean };
+
+export async function api<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, opts?: RequestOptions): Promise<T> {
+  return (await apiWithStatus<T>(method, path, body, timeoutMs, opts)).body;
 }
 
 /**
@@ -274,9 +281,10 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
  * `create` in src/api/activities/write.rs) -- which the outbox needs to tell whether an edit it
  * folded into the queued body ever reached the row.
  */
-export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<{ status: number; body: T }> {
+export async function apiWithStatus<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number, opts?: RequestOptions): Promise<{ status: number; body: T }> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} };
-  // `signal` lets a caller drop a request nobody will read any more (a superseded search).
+  const signal = opts?.signal;
+  if (opts?.keepalive) init.keepalive = true;
   const timeout = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
   if (timeout && signal) init.signal = AbortSignal.any([timeout, signal]);
   else if (timeout ?? signal) init.signal = timeout ?? signal;

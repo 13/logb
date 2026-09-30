@@ -60,6 +60,16 @@ describe('api', () => {
     expect(init.body).toBe('{"name":"x"}');
   });
 
+  // A setting saved while its page is being left (autosave's flush) must outlive the page.
+  it('passes keepalive and a signal through to fetch', async () => {
+    mockFetch(200, {});
+    const abort = new AbortController();
+    await api('PUT', '/me/settings', { a: 1 }, undefined, { keepalive: true, signal: abort.signal });
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(init.keepalive).toBe(true);
+    expect(init.signal).toBe(abort.signal);
+  });
+
   it('returns undefined for 204', async () => {
     mockFetch(204, undefined);
     expect(await api('DELETE', '/objects/1')).toBeUndefined();

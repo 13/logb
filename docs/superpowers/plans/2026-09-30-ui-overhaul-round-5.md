@@ -161,7 +161,10 @@ needs the user.
     them. Eager components use plain class strings written out in place.
   - Entry chunk `index-*.js` ≤ 11,988 B gzip (baseline + 200 B; expected to end near 11.1 KB).
   - Eager JS set (entry + every `modulepreload` in `dist/index.html`) grows by ≤ 1,024 B.
-  - Entry CSS (`index-*.css`) must not grow; it should shrink once app.css is gone.
+  - CSS (controller decision, Task 4 review): CSS is measured as entry CSS and total CSS (sum of
+    all `dist/assets/*.css` gzip). Per task: report both; flag only if total CSS grows by more than
+    ~300 B net. At round end, after app.css is deleted: entry CSS ≤ 12,262 B and total CSS ≤
+    17,081 B. Prefer theme values over arbitrary-value utilities and reuse shared class strings.
   - Round budget: +10 KB gzip JS in total.
 - WCAG AA: text ≥ 4.5:1; focus rings, control outlines, chart bars and state indicators ≥ 3:1, in
   both themes. Every new tinted pair gets a computed-blend test in
