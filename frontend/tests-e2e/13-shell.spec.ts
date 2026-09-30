@@ -71,7 +71,7 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
   // The "+ Log" button only exists once there is an object to log for.
   expect((await page.request.post('/api/objects', { data: { name: 'Shell pane probe', type: 'tool' } })).ok()).toBe(true);
   // Wide enough that `main`'s 1100px cap opens a gutter between it and the viewport edge (see
-  // the comment on `.fab` in app.css). `setViewportSize` overrides the project's own viewport
+  // `fab-pos` in app.tw.css). `setViewportSize` overrides the project's own viewport
   // for this one test.
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.reload();
@@ -83,11 +83,8 @@ test('on a wide desktop viewport, the FAB stays anchored to the content pane, no
   const mainBox = await main.boundingBox();
   const fabBox = await fab.boundingBox();
   if (!mainBox || !fabBox) throw new Error('no main or no FAB box');
-  // The FAB's usual clearance from whatever edge it hugs -- `--space-5` on desktop, the same
-  // value the un-gutted case already uses between the FAB and the bare viewport edge.
-  const clearance = await page.evaluate(() =>
-    parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-5')),
-  );
+  // The FAB's clearance from the pane's edge on a desktop: 1.5rem (`fab-pos` in app.tw.css).
+  const clearance = 24;
 
   // The design spec: the FAB sits at the bottom-right of the content pane, clear of the
   // sidebar -- a constant `--space-5` from `main`'s right edge, not drifting further out in the

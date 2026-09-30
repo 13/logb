@@ -38,7 +38,7 @@
 <!-- A native dialog, not a bits-ui one: this is on the dashboard, the screen every start draws
      first, and bits-ui's shared core would ride along into that chunk. -->
 <button data-slot="dash-fab" onclick={open}
-        class={`fab h-12 cursor-pointer rounded-full bg-primary px-5 text-base font-semibold text-primary-foreground shadow-lg ${focus}`}>+ {$t('dash.log')}</button>
+        class={`fab-pos h-12 cursor-pointer rounded-full bg-primary px-5 text-base font-semibold text-primary-foreground shadow-lg ${focus}`}>+ {$t('dash.log')}</button>
 
 <dialog bind:this={dialog} closedby="any" aria-labelledby="log-picker-title" onclose={() => (isOpen = false)}
         class="m-auto w-[min(92vw,28rem)] rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-xl backdrop:bg-black/45">

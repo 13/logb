@@ -46,6 +46,8 @@ async function seed(request) {
     [house, { date: day(30), category: 'maintenance', title: 'Gutter cleaning', cost_cents: 24000 }],
     [boiler, { date: day(55), category: 'inspection', title: 'Annual boiler service', counter_value: 21350, cost_cents: 16900 }],
     [drill, { date: day(120), category: 'purchase', title: 'Spare 4Ah battery', cost_cents: 6999 }],
+    [car, { date: day(400), category: 'repair', title: 'Clutch replaced', counter_value: 38000, cost_cents: 64000 }],
+    [house, { date: day(380), category: 'maintenance', title: 'Roof inspection', cost_cents: 18000 }],
   ];
   for (const [o, e] of entries) await call('POST', `/objects/${o.id}/activities`, { ...e, client_op_id: crypto.randomUUID() });
   await call('POST', `/objects/${car.id}/reminders`, { title: 'Winter tyres on', due_date: day(6) });
@@ -80,6 +82,12 @@ const SCREENS = [
   ['14-settings', '/settings'],
   ['15-settings-appearance', '/settings/appearance'],
   ['16-settings-notifications', '/settings/notifications'],
+  ['20-settings-account', '/settings/account'],
+  ['21-settings-types', '/settings/types'],
+  ['22-settings-api', '/settings/api'],
+  ['23-settings-data', '/settings/data'],
+  ['24-settings-people', '/settings/people'],
+  ['25-settings-database', '/settings/database'],
 ];
 
 for (const { name, ...opts } of VARIANTS) {

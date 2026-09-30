@@ -228,7 +228,7 @@
 
 <!-- The empty state carries this same action, so only one of the two is ever on screen. -->
 {#if items.length > 0}
-  <button class="primary fab" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</button>
+  <Button class="fab-pos h-12 rounded-full px-5 text-base font-semibold shadow-lg" onclick={() => go(`/objects/${objectId}/reminders/new`)}>+ {$t('reminder.new')}</Button>
 {/if}
 
 <dialog bind:this={dialog} aria-labelledby="reminder-done-title">

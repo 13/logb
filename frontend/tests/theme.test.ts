@@ -24,7 +24,7 @@ function fakeDoc(bg: Record<string, string>) {
   const doc = {
     documentElement: root,
     querySelectorAll: (sel: string) => (sel === 'meta[name="theme-color"]' ? metas : []),
-    defaultView: { getComputedStyle: () => ({ getPropertyValue: (p: string) => (p === '--bg' ? ` ${bg[root.dataset.theme]}` : '') }) },
+    defaultView: { getComputedStyle: () => ({ getPropertyValue: (p: string) => (p === '--ui-background' ? ` ${bg[root.dataset.theme]}` : '') }) },
   };
   return { doc: doc as unknown as Document, root, metas };
 }

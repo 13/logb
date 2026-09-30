@@ -71,12 +71,15 @@ const tw = readFileSync(fileURLToPath(new URL('../src/app.tw.css', import.meta.u
 const twBlock = (sel: string) => tw.slice(tw.indexOf(sel), tw.indexOf('}', tw.indexOf(sel)));
 const twLight = twBlock(':root {');
 const twDark = twBlock(":root[data-theme='dark'] {");
-const ui = (name: string, theme: string): string => {
-  const own = theme.match(new RegExp(`--ui-${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
-  const value = own ?? twLight.match(new RegExp(`--ui-${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
-  expect(value, `--ui-${name}`).toBeTruthy();
+/** A custom property's hex value in a theme block of app.tw.css, inherited from :root when the
+ *  dark block does not set it. */
+const cssVar = (name: string, theme: string): string => {
+  const own = theme.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
+  const value = own ?? twLight.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
+  expect(value, `--${name}`).toBeTruthy();
   return value!;
 };
+const ui = (name: string, theme: string): string => cssVar(`ui-${name}`, theme);
 
 describe('shadcn token contrast', () => {
   for (const [name, theme] of [['light', twLight], ['dark', twDark]] as const) {
@@ -174,11 +177,10 @@ describe('tinted highlight contrast', () => {
     // Tag chips on a due reminder card (Reminders tab). The chip is opaque, so its own pair holds;
     // its text must also read on the card's tint, where the chip's rounded edge meets it.
     it(`${name}: tag text on its chip and on the due card's tint (destructive/10 over background) (>= 4.5:1)`, () => {
-      const legacy = name === 'light' ? light : dark;
       const card = blend(ui('destructive', theme), ui('background', theme), 0.1);
       for (let n = 0; n < 8; n++) {
-        expect(contrastRatio(token(`tag-${n}-fg`, legacy), token(`tag-${n}-bg`, legacy)), `tag-${n} chip`).toBeGreaterThanOrEqual(4.5);
-        expect(contrastRatio(token(`tag-${n}-fg`, legacy), card), `tag-${n} on card`).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(cssVar(`tag-${n}-fg`, theme), cssVar(`tag-${n}-bg`, theme)), `tag-${n} chip`).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(cssVar(`tag-${n}-fg`, theme), card), `tag-${n} on card`).toBeGreaterThanOrEqual(4.5);
       }
     });
     // The calendar's selected day is filled with primary and gets the keyboard focus when the

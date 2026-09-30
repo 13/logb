@@ -67,11 +67,13 @@ describe('suggestTags', () => {
 });
 
 describe('palette contrast', () => {
-  const css = readFileSync(fileURLToPath(new URL('../src/app.css', import.meta.url)), 'utf8');
-  // Each theme block, as written in app.css.
+  const css = readFileSync(fileURLToPath(new URL('../src/app.tw.css', import.meta.url)), 'utf8');
+  // Each theme block, as written in app.tw.css.
+  const light = ':root {';
+  const dark = ":root[data-theme='dark'] {";
   const blocks = {
-    light: css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {'))),
-    dark: css.slice(css.indexOf(':root[data-theme="dark"] {'), css.indexOf('}', css.indexOf(':root[data-theme="dark"] {'))),
+    light: css.slice(css.indexOf(light), css.indexOf('}', css.indexOf(light))),
+    dark: css.slice(css.indexOf(dark), css.indexOf('}', css.indexOf(dark))),
   };
   for (const [theme, block] of Object.entries(blocks)) {
     for (let n = 0; n < TAG_PALETTE_SIZE; n++) {

@@ -38,13 +38,6 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* One height for every control. A button, a text field, a select and a date field are four
-     different boxes to a browser -- different borders, different internal line boxes -- and
-     left to themselves they stood at 46, 48, 50 and 50 in a single form. This is the height
-     they are all given; 48 clears the 44px tap-target floor with the border included. */
-  --control: 48px;
-  --navbar: 56px;
-
   /* Three steps, not one. A control and a container should not read as the same object. */
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -56,17 +49,6 @@
   --transition: 150ms ease;
   font-family: 'Inter Variable', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
-
-  /* Tag chips: eight hues picked by a hash of the tag's name. Every pair is checked for at least
-     4.5:1 contrast by tests/tags.test.ts, so the colour never costs legibility. */
-  --tag-0-bg: #e3f1ec; --tag-0-fg: #14532d;
-  --tag-1-bg: #e4ecfb; --tag-1-fg: #1e3a8a;
-  --tag-2-bg: #fbe9e3; --tag-2-fg: #7c2d12;
-  --tag-3-bg: #f3e8fb; --tag-3-fg: #581c87;
-  --tag-4-bg: #fdf3d8; --tag-4-fg: #713f12;
-  --tag-5-bg: #fce7ef; --tag-5-fg: #831843;
-  --tag-6-bg: #e0f4f7; --tag-6-fg: #164e63;
-  --tag-7-bg: #eceef1; --tag-7-fg: #1f2937;
 }
 :root[data-theme="dark"] {
   --bg: #09090b;
@@ -87,15 +69,6 @@
   --shadow: none;
   --focus: #fbbf24;
   color-scheme: dark;
-
-  --tag-0-bg: #16392d; --tag-0-fg: #b7f0d2;
-  --tag-1-bg: #1c2d55; --tag-1-fg: #c7d7fe;
-  --tag-2-bg: #4a2417; --tag-2-fg: #fed7c7;
-  --tag-3-bg: #3a1d52; --tag-3-fg: #e9d5ff;
-  --tag-4-bg: #45330c; --tag-4-fg: #fde68a;
-  --tag-5-bg: #4d1a33; --tag-5-fg: #fbcfe8;
-  --tag-6-bg: #123c47; --tag-6-fg: #bae6fd;
-  --tag-7-bg: #2b313a; --tag-7-fg: #e5e7eb;
 }
 /* --- Tailwind's reset, undone for screens not yet migrated ------------------------------ */
 /* This file sits in the `legacy` layer, after Tailwind's `base` (see app.tw.css). The reset
@@ -121,14 +94,6 @@ small { font-size: revert; }
 ::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field { padding-block: revert; }
 * { box-sizing: border-box; margin: 0; }
 html, body { min-height: 100%; }
-/* `overscroll-behavior-y: contain` turns off Chrome on Android's pull-to-refresh. Overscrolling
-   at the top of a timeline is easy to do one-handed, and reloading the app mid-entry is never
-   what was meant -- the queued write survives it, but whatever is typed into the open form does
-   not. Scrolling itself is unaffected. */
-body {
-  background: var(--bg); color: var(--text); -webkit-tap-highlight-color: transparent;
-  overscroll-behavior-y: contain;
-}
 a:where(:not([data-slot])) { color: var(--accent-ink); }
 main { max-width: 720px; margin: 0 auto; padding: var(--space-3) var(--space-3) calc(96px + env(safe-area-inset-bottom)); }
 /* Sign-in and first-run setup render without the shell, so the form IS the page: a narrow
@@ -176,9 +141,6 @@ button:where(:not([data-slot])):disabled { opacity: .5; cursor: default; }
    right height, so it is given one -- the textarea is excluded because it is the one control
    that is meant to grow, and checkbox and radio below keep their own size. */
 :is(input, select):where(:not([data-slot])) { height: var(--control); }
-/* `appearance: none` does not reach this: Chrome draws its own ✕ inside a search input, in its
-   own blue. Ours is a button beside the field, in the app's colours. */
-input[type='search']::-webkit-search-cancel-button { appearance: none; display: none; }
 /* Same reason, one control along: `appearance: none` takes the chevron off a select and Chrome
    draws nothing in its place, so a select with the app's border and radius already on it reads
    as a text field that happens to have words in it. The chevron is the only part of the native
@@ -221,26 +183,8 @@ input[type='checkbox'], input[type='radio'] {
 .chip.active { background: var(--accent); color: var(--accent-text); }
 .chip.pending { background: var(--warn); color: var(--on-warn); flex: none; white-space: nowrap; }
 .chip.dead { background: var(--danger); color: var(--on-danger); flex: none; white-space: nowrap; }
-.tag { display: inline-flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-full); padding: 2px var(--space-2); font-size: var(--text-xs); font-weight: 600; line-height: 1.4; border: 0; min-height: 0; }
-/* A 32px-tall hit area around the ~20px chip without changing how it looks -- short of WCAG 2.2
-   AA's 24x24 minimum target size horizontally, since it must stay inside the chip's own row, but
-   well past it vertically. Horizontally only 2px each side: half the row's `gap`, so neighbouring
-   chips' areas meet but never overlap. */
-button.tag { cursor: pointer; position: relative; }
-button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bottom: calc(50% - 16px); left: calc(var(--space-1) / -2); right: calc(var(--space-1) / -2); }
-.tag.active { outline: 2px solid currentColor; outline-offset: 1px; }
-.tag-0 { background: var(--tag-0-bg); color: var(--tag-0-fg); }
-.tag-1 { background: var(--tag-1-bg); color: var(--tag-1-fg); }
-.tag-2 { background: var(--tag-2-bg); color: var(--tag-2-fg); }
-.tag-3 { background: var(--tag-3-bg); color: var(--tag-3-fg); }
-.tag-4 { background: var(--tag-4-bg); color: var(--tag-4-fg); }
-.tag-5 { background: var(--tag-5-bg); color: var(--tag-5-fg); }
-.tag-6 { background: var(--tag-6-bg); color: var(--tag-6-fg); }
-.tag-7 { background: var(--tag-7-bg); color: var(--tag-7-fg); }
-.tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-2); background: var(--bg); padding: var(--space-2) 0; }
 .topbar button:where(:not([data-slot])) { min-width: 44px; padding: var(--space-2); }
-.fab { position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); z-index: 6; border-radius: var(--radius-full); padding: var(--space-3) var(--space-4); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
 /* Figures line up when stacked. A column of costs in proportional numerals does not, and this
    app is mostly costs, odometer readings and dates read down a list. Tabular figures are a
    property of the existing family, not a second typeface. */
@@ -250,75 +194,9 @@ button.tag::before { content: ''; position: absolute; top: calc(50% - 16px); bot
 dialog { border: none; border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface); color: var(--text); width: min(92vw, 420px); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
 
-/* Nothing in this app styled focus, so keyboard users had no cursor. `:focus-visible` rather
-   than `:focus` so a tap or a click does not leave a ring behind on a touch screen.
-   The offset puts the ring on the page rather than on the control, which is what makes it
-   legible on a filled accent button. */
-:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
 button, a, .chip {
   transition: background-color var(--transition), color var(--transition),
               border-color var(--transition);
-}
-
-/* Motion here only ever answers something the user did. Someone who has asked their system for
-   less of it should get none. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
-/* --- The app shell -------------------------------------------------------------------- */
-
-/* Range syntax (`width < 900px` / `width >= 900px` below), not `max-width: 899px` /
-   `min-width: 900px`: those two are only complementary at whole-number widths, and a viewport
-   is routinely fractional under OS display scaling or browser zoom. At e.g. 899.4px the old
-   pair both failed to match, and `.appnav` -- fixed, but with no inset and no `display` set
-   outside these blocks -- fell back to its static position: three unstyled buttons stacked in
-   flow at the top of the page. Leave this as range syntax; do not "tidy" it back to
-   899px/900px. */
-@media (width < 900px) {
-  /* The tab bar's clearance belongs to the whole column, not to `main` alone. `main` keeps only
-     the clearance the FAB needs to float above its last row. */
-  .app-content {
-    display: flex; flex-direction: column; min-height: 100dvh;
-    padding-bottom: calc(var(--navbar) + env(safe-area-inset-bottom));
-  }
-  /* `width: 100%` matters: `main` carries `margin: 0 auto`, and an auto margin on a flex
-     item's cross axis cancels the default stretch, so without this it collapses to fit-content
-     and sits centred in a narrow column. */
-  main { flex: 1; width: 100%; padding-bottom: 96px; }
-  .fab { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
-  /* No footer on a phone. The version at the bottom of every screen was chrome between the last
-     row and the tab bar; it lives in Settings > About now, beside the build date and the server
-     version, which is where anyone looking for it goes. */
-}
-
-/* Desktop: a sidebar, and a content area that uses the width instead of centring a phone in it.
-   `width >= 900px`, the exact complement of the mobile query's `width < 900px` above -- see the
-   comment there for why this is range syntax rather than `min-width: 900px`. */
-@media (width >= 900px) {
-  .app-content { margin-left: 240px; }
-  main { max-width: 1100px; }
-  /* The FAB is `position: fixed`, so `right` measures from the *viewport* edge -- fine while
-     `main` fills the content pane, but past ~1340px of viewport width (240px sidebar + 1100px
-     of capped `main`) a gutter opens between `main`'s right edge and the viewport's, and a
-     plain `var(--space-5)` here leaves the FAB stranded in it, detached from the list it acts
-     on. The fix is not `position: absolute` on a relatively-positioned `.app-content`: that
-     container has no fixed height of its own, so `bottom` would resolve against the bottom of
-     all its (possibly long, scrolling) content instead of the bottom of the screen -- the FAB
-     would park at the end of the list rather than floating over it. Staying `fixed` and
-     computing the offset keeps the float; the `calc()` is half the gutter width (mirroring
-     `main`'s own `margin: 0 auto` centring) plus the usual clearance, and `max()` collapses it
-     back to the plain `var(--space-5)` once the gutter closes below the cap. */
-  .fab { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
 }
 
 /* The hub's rows: a single column on a phone, two where there is room. Six rows in one column

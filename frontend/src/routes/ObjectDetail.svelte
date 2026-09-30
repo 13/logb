@@ -580,7 +580,7 @@
 
     <!-- Below 1024 px "+ Log" floats over the timeline; from 1024 px it is in the header above. -->
     {#if !wide.current && shownTab === 'timeline' && timelineHasEntries}
-      <div class="fab-row">
+      <div class="fab-pos flex gap-2">
         <LogAction options={logChoices} onpick={(o) => go(o.path)} />
       </div>
     {/if}
@@ -598,18 +598,3 @@
     />
   {/if}
 {/snippet}
-
-<style>
-  /* Where "+ Log" floats: `.fab`'s own position (app.css), mirrored here -- including its two
-     responsive overrides below -- because the action is a component, not a `.fab` button. */
-  .fab-row {
-    position: fixed; right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
-    z-index: 6; display: flex; gap: var(--space-2);
-  }
-  @media (width < 900px) {
-    .fab-row { bottom: calc(var(--space-4) + var(--navbar) + env(safe-area-inset-bottom)); }
-  }
-  @media (width >= 900px) {
-    .fab-row { right: max(var(--space-5), calc((100vw - 240px - 1100px) / 2 + var(--space-5))); }
-  }
-</style>

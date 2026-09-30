@@ -8,13 +8,13 @@ export function isDark(pref: ThemePref, systemDark: boolean): boolean {
 /**
  * Switches the palette (app.css keys it on `data-theme`) and paints the browser's own bar --
  * `<meta name="theme-color">` -- in the page background of that palette, read back from
- * app.css so the colour has one source. index.html ships one meta per system scheme for the
+ * app.tw.css's `--ui-background` so the colour has one source. index.html ships one meta per system scheme for the
  * first paint; once the app knows the actual theme (which may differ from the system's, when
  * chosen in Settings) both carry it, unconditionally.
  */
 export function applyTheme(doc: Document, dark: boolean): void {
   doc.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  const bg = doc.defaultView?.getComputedStyle(doc.documentElement as Element).getPropertyValue('--bg').trim();
+  const bg = doc.defaultView?.getComputedStyle(doc.documentElement as Element).getPropertyValue('--ui-background').trim();
   if (!bg) return;
   for (const meta of doc.querySelectorAll('meta[name="theme-color"]')) {
     meta.removeAttribute('media');
