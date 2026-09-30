@@ -3,6 +3,40 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## 0.23.0: new look, search, statistics, settings, sign-in
+
+**Search** shows hits as cards. Weights in search use the object's unit; the search API's
+activity hits gain an additive `weight_unit` field.
+
+**Statistics** opens with three cards for the selected year (the current year under "All
+years"): what was spent, the change against the same months of last year while the year is still
+running, and the top object. The cards describe one year while the charts follow the selection.
+Months with nothing in them are hidden, and energy, fuel and water come last.
+
+**Settings save themselves.** "Apply appearance", "Apply delivery time", the instance Save and
+the webhook Save are gone. Drop-downs and checkboxes save when changed. Currency, timezone,
+delivery hour and webhook URL save when you leave the field, press Enter or leave the page.
+Invalid values are refused under the field. Turning off "only on this device" copies what this
+device shows to the account. A "Saved" message confirms; a failed save stays on the page with
+"Try again". Settings rows are links, so open in a new tab works.
+
+**Account** shows who is signed in, with Sign out. Every password field has a show/hide toggle,
+and login shows the real reason when it fails (too many attempts, offline) instead of always
+"wrong password".
+
+**Sign-in and setup** are a centred card, loaded only when signed out. The first visit to
+sign-in needs the connection; offline it waits on "Loading…".
+
+**The app icon is amber.** An installed copy may keep the old icon until it is added to the home
+screen again.
+
+On Android Chrome the page resizes for the on-screen keyboard so Save stays visible.
+
+The whole app is on the new style sheet: line height and spacing moved slightly, and scrollbars
+and native pickers follow the dark theme.
+
+No migration. The API change is additive only.
+
 ## 0.22.1: dependency fixes
 
 **0.22.0 was tagged but never published**, because advisories against two build-time npm
