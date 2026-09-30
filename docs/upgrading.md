@@ -3,7 +3,7 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
-## Unreleased: maintenance
+## 0.24.0: maintenance
 
 **Faster:** importing a backup (its database part is about twice as fast; storing the files
 still dominates), `/sync/bootstrap` (about 40% on SQLite, over half on PostgreSQL), the tag
