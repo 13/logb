@@ -164,8 +164,14 @@ pub(crate) async fn list(
     Query(q): Query<ListQuery>,
 ) -> Result<Response, AppError> {
     load_owned_object(&state, user.id, object_id).await?;
-    let (rows, total) = list_for_object(&state, object_id, &q).await?;
-    let out = with_attachments(&state, rows).await?;
+    // The page and the object's attachments do not depend on each other, so they are read at
+    // once, on two connections: on PostgreSQL every statement is a network round trip, and
+    // these were two of the four a page waited for in turn.
+    let ((rows, total), attachments) = tokio::try_join!(
+        list_for_object(&state, object_id, &q),
+        attachments::for_object(&state, object_id),
+    )?;
+    let out = with_attachments(rows, attachments);
     Ok((
         [(
             axum::http::header::HeaderName::from_static("x-total-count"),
