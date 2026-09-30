@@ -12,7 +12,7 @@ test('calendar supports keyboard selection and dismissal with Sunday first', asy
   await page.getByLabel('Due date', { exact: true }).fill('2028-02-28');
   const trigger = page.getByRole('button', { name: 'Choose date', exact: true });
   await trigger.click();
-  await expect(page.locator('.weekday').first()).toHaveText('Sun');
+  await expect(page.getByTestId('calendar-weekday').first()).toHaveText('Sun');
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('Enter');
   await expect(page.getByLabel('Due date', { exact: true })).toHaveValue('2028-02-29');
@@ -84,7 +84,7 @@ test('calendar reminders and the localized first weekday setting work together',
 
   await page.goto(`/objects/${object.id}/reminders/new`);
   await page.getByRole('button', { name: 'Datum wählen' }).click();
-  await expect(page.locator('.weekday').first()).toHaveText('Mo');
+  await expect(page.getByTestId('calendar-weekday').first()).toHaveText('Mo');
   await expect(page.getByRole('button', { name: 'Vorheriger Monat' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Nächster Monat' })).toBeVisible();
   await page.getByRole('button', { name: 'Datum wählen' }).click();

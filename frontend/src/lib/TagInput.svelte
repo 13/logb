@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n';
+  import { errorClass, labelClass } from '$lib/components/ui/field/classes.js';
   import { addTag, removeTag, splitTyped, suggestTags, tagColorIndex } from './tags';
   import type { TagCount } from './types';
 
@@ -54,32 +55,25 @@
   });
 </script>
 
-<div class="field">
-  <label for={id}>{label}</label>
-  <div class="tag-input">
+<div data-slot="tag-field" class="flex min-w-0 flex-col gap-1.5">
+  <label for={id} class={labelClass}>{label}</label>
+  <!-- Looks like one text field: the chips sit inside the box, and the box shows the focus. -->
+  <div data-testid="tag-input"
+       class="flex min-h-12 flex-wrap items-center gap-1 rounded-lg border border-input bg-card px-2 py-1.5 focus-within:outline-2 focus-within:outline-solid focus-within:outline-offset-2 focus-within:outline-ring">
     {#each tags as tag (tag)}
       <span class={`tag tag-${tagColorIndex(tag)}`}>{tag}
-        <button type="button" class="remove" aria-label={$t('tags.remove', { tag })} onclick={() => (tags = removeTag(tags, tag))}>×</button>
+        <!-- A 32 px tall hit area around the bare glyph: it reaches left over the chip's own text
+             and right to half the gap, so it never covers the next chip. -->
+        <button type="button" data-slot="tag-remove" aria-label={$t('tags.remove', { tag })} onclick={() => (tags = removeTag(tags, tag))}
+                class="relative cursor-pointer border-0 bg-transparent p-0 pl-0.5 text-inherit before:absolute before:top-[calc(50%-16px)] before:bottom-[calc(50%-16px)] before:-left-3.5 before:-right-2.5 before:content-[''] focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-ring">×</button>
       </span>
     {/each}
-    <input {id} bind:this={field} bind:value={text} {onkeydown} {oninput} onblur={() => text.trim() && add(text)} placeholder={$t('tags.placeholder')} autocomplete="off" list={`${id}-list`}
-           aria-describedby={error ? `${id}-error` : undefined} />
+    <input {id} data-slot="tag-text" bind:this={field} bind:value={text} {onkeydown} {oninput} onblur={() => text.trim() && add(text)}
+           placeholder={$t('tags.placeholder')} autocomplete="off" list={`${id}-list`}
+           aria-describedby={error ? `${id}-error` : undefined}
+           class="h-9 min-w-32 flex-1 scroll-my-24 border-0 bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none" />
     <datalist id={`${id}-list`}>{#each offered as s (s)}<option value={s}></option>{/each}</datalist>
   </div>
   <!-- Always rendered, so the live region exists before the first error is announced. -->
-  <p class="error" id={`${id}-error`} aria-live="polite" hidden={!error}>{error}</p>
+  <p class={errorClass} id={`${id}-error`} aria-live="polite" hidden={!error}>{error}</p>
 </div>
-
-<style>
-  .tag-input { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
-  .tag-input input { flex: 1 1 8rem; min-width: 8rem; }
-  .remove { position: relative; background: none; border: 0; padding: 0 0 0 2px; min-height: 0; color: inherit; font: inherit; cursor: pointer; }
-  /* A 32px-tall hit area around the bare glyph -- short of WCAG 2.2 AA's 24x24 minimum target
-     size horizontally, since it must stay inside the chip's own row, but well past it vertically.
-     It reaches left over the chip's own (inert) text and right only to half the gap past the
-     chip's padding, so it never covers the next chip. */
-  .remove::before {
-    content: ''; position: absolute; top: calc(50% - 16px); bottom: calc(50% - 16px);
-    left: -14px; right: calc(-1 * var(--space-2) - var(--space-1) / 2);
-  }
-</style>

@@ -40,7 +40,7 @@ test('an entry created and edited through the form keeps its tags on the timelin
   // Edit: open the entry, add a second tag.
   await page.getByTestId('timeline-entry').filter({ hasText: 'Bremsbeläge vorne' }).getByRole('button', { name: 'Bremsbeläge vorne' }).click();
   await expect(page.getByLabel('Title')).toHaveValue('Bremsbeläge vorne');
-  await expect(page.locator('.tag-input .tag', { hasText: 'BBV' })).toBeVisible();
+  await expect(page.getByTestId('tag-input').locator('.tag', { hasText: 'BBV' })).toBeVisible();
   await tagInput.fill('Bremse');
   await tagInput.press('Enter');
   await page.getByRole('button', { name: 'Save' }).click();

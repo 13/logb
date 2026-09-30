@@ -9,7 +9,7 @@
   const field = getFieldContext();
 </script>
 
-<!-- A number field with a unit drawn over its right edge loses the browser's spinner there. -->
+<!-- A number field has no browser spinner: it is a stepper nobody wants on a phone, and a unit sits where it would be. -->
 <input
   bind:this={ref}
   bind:value
@@ -20,7 +20,8 @@
   aria-invalid={field?.invalid || undefined}
   class={cn(
     controlClass,
-    field?.unit && 'pr-14 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+    type === 'number' && '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+    field?.unit && 'pr-14',
     className,
   )}
   {...restProps}

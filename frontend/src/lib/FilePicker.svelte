@@ -7,6 +7,8 @@
   import { shrinkImage } from './downscale';
   import { t } from '../i18n';
   import Icon from './Icon.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { errorClass } from '$lib/components/ui/field/classes.js';
   import type { Attachment, Kind } from './types';
 
   let { objectId, activityId = null, onuploaded }: { objectId: number; activityId?: number | null; onuploaded: (a: Attachment) => void } = $props();
@@ -68,23 +70,17 @@
   }
 </script>
 
-<div class="picker">
-  <input bind:this={el} type="file" multiple accept="image/*,application/pdf,.txt,.md,.doc,.docx,.xls,.xlsx"
+<div data-slot="file-picker" class="flex flex-col gap-2">
+  <input bind:this={el} type="file" class="hidden" multiple accept="image/*,application/pdf,.txt,.md,.doc,.docx,.xls,.xlsx"
          onchange={(e) => send((e.currentTarget as HTMLInputElement).files)} />
   <!-- `capture` cannot live on the input above: on mobile it suppresses picking an existing file. -->
-  <input bind:this={cam} type="file" accept="image/*" capture="environment"
+  <input bind:this={cam} type="file" class="hidden" accept="image/*" capture="environment"
          onchange={(e) => send((e.currentTarget as HTMLInputElement).files)} />
-  <div class="row">
-    <button type="button" class="ghost" disabled={busy} onclick={() => el.click()}>
+  <div class="grid grid-cols-2 gap-2">
+    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => el.click()}>
       {busy ? $t('activity.uploading') : `+ ${$t('activity.add-files')}`}
-    </button>
-    <button type="button" class="ghost camera-btn" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</button>
+    </Button>
+    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</Button>
   </div>
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<p class={errorClass} aria-live="polite">{error}</p>{/if}
 </div>
-
-<style>
-  .picker input { display: none; }
-  .picker button { border: 1px dashed var(--border); width: 100%; }
-  .camera-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); }
-</style>

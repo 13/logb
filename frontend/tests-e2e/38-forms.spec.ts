@@ -40,3 +40,24 @@ test('the reading form: one field pattern, and Save on screen from the start', a
   await expect(reading).toBeFocused();
   await expect(reading).toHaveCSS('height', '56px');
 });
+
+test('the date field keeps its calendar button inside the box, at a full-size target', async ({ page }) => {
+  await signInFresh(page, '38-date');
+  const id = await object(page, { name: 'Date box car', type: 'car', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/reading`);
+
+  const field = (await page.getByLabel('Date', { exact: true }).boundingBox())!;
+  const button = page.getByRole('button', { name: 'Choose date', exact: true });
+  const b = (await button.boundingBox())!;
+  expect(b.x).toBeGreaterThanOrEqual(field.x);
+  expect(b.x + b.width).toBeLessThanOrEqual(field.x + field.width);
+  expect(b.y).toBeGreaterThanOrEqual(field.y);
+  expect(b.y + b.height).toBeLessThanOrEqual(field.y + field.height);
+  expect(Math.min(b.width, b.height)).toBeGreaterThanOrEqual(44);
+
+  await button.click();
+  await expect(page.getByTestId('calendar-weekday')).toHaveCount(7);
+  const day = page.getByRole('dialog', { name: 'Choose date' }).getByRole('button', { pressed: true });
+  await expect(day).toHaveCount(1);
+  expect((await day.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+});

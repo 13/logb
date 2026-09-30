@@ -6,9 +6,17 @@
   import { settings } from '../stores/settings';
   import { datePlaceholder, fmtDate, parseDate, type DateFormat } from './format';
   import Icon from './Icon.svelte';
+  import { cn } from '$lib/utils.js';
+  import { controlClass } from '$lib/components/ui/field/classes.js';
+  import { getFieldContext } from '$lib/components/ui/field/context.js';
 
   let { id, value = $bindable(''), min, max, required = false, label }:
     { id: string; value?: string; min?: string; max?: string; required?: boolean; label?: string } = $props();
+
+  /** The `Field` around this input, if any: its id, hint and error describe the field too. The
+   *  input's own format error, while shown, is what describes it (one id: see 26-date-format). */
+  const fieldCtx = getFieldContext();
+  const inputId = $derived(fieldCtx?.id ?? id);
 
   let text = $state(fmtDate(value, $dateFormat));
   /** The showing error message, or `null` when the field is valid. A string (not a boolean),
@@ -182,21 +190,34 @@
 </script>
 
 <svelte:window onpointerdown={outside} onkeydown={(e) => { if (pickerOpen && e.key === 'Escape') { e.preventDefault(); closePicker(); } }} />
-<div class="date-input" bind:this={container} onfocusout={(e) => { if (e.relatedTarget instanceof Node && !container.contains(e.relatedTarget)) pickerOpen = false; }}>
-  <input {id} bind:this={field} type="text" inputmode="numeric" autocomplete="off" {required} aria-label={label}
+<div data-slot="date-input" class="relative min-w-0" bind:this={container} onfocusout={(e) => { if (e.relatedTarget instanceof Node && !container.contains(e.relatedTarget)) pickerOpen = false; }}>
+  <input id={inputId} bind:this={field} data-slot="date-text" type="text" inputmode="numeric" autocomplete="off" {required} aria-label={label}
          placeholder={datePlaceholder($dateFormat, $locale)} bind:value={text}
-         aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined}
+         aria-invalid={!!error || fieldCtx?.invalid || undefined}
+         aria-describedby={error ? `${inputId}-error` : fieldCtx?.describedBy}
+         class={cn(controlClass, 'pr-12 tabular-nums')}
          onfocus={() => (focused = true)} onblur={() => { focused = false; commit(); }} onchange={commit} />
-  <button bind:this={trigger} type="button" class="ghost" aria-label={$t('date.pick')} aria-haspopup="dialog" aria-controls={`${id}-calendar`} aria-expanded={pickerOpen} onclick={openPicker}><Icon name="calendar" size={18} /></button>
+  <!-- Inside the field's box, at its right edge: beside it, it squeezed the text to "MM/DD/YYY". -->
+  <button bind:this={trigger} type="button" data-slot="date-trigger" aria-label={$t('date.pick')} aria-haspopup="dialog" aria-controls={`${inputId}-calendar`} aria-expanded={pickerOpen} onclick={openPicker}
+          class="absolute top-1/2 right-0.5 grid size-11 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring"><Icon name="calendar" size={18} /></button>
   {#if pickerOpen}
-    <div id={`${id}-calendar`} class="calendar" role="dialog" aria-label={$t('date.pick')}>
-      <div class="calendar-head"><button type="button" class="ghost" aria-label={$t('date.previous-month')} onclick={() => moveMonth(-1)}>‹</button><strong>{monthLabel}</strong><button type="button" class="ghost" aria-label={$t('date.next-month')} onclick={() => moveMonth(1)}>›</button></div>
-      <div class="calendar-grid">{#each weekdays as day}<span class="weekday">{day}</span>{/each}
+    <div id={`${inputId}-calendar`} role="dialog" aria-label={$t('date.pick')}
+         class="absolute top-[calc(100%+4px)] right-0 z-20 w-[min(20rem,90vw)] rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-md">
+      <div class="grid grid-cols-[auto_1fr_auto] items-center text-center">
+        <button type="button" data-slot="calendar-nav" class="grid size-11 cursor-pointer place-items-center rounded-md text-lg hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring" aria-label={$t('date.previous-month')} onclick={() => moveMonth(-1)}>‹</button>
+        <strong class="text-sm font-semibold">{monthLabel}</strong>
+        <button type="button" data-slot="calendar-nav" class="grid size-11 cursor-pointer place-items-center rounded-md text-lg hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring" aria-label={$t('date.next-month')} onclick={() => moveMonth(1)}>›</button>
+      </div>
+      <div class="grid grid-cols-7 gap-0.5">
+        {#each weekdays as day}<span data-testid="calendar-weekday" class="py-1 text-center text-xs text-muted-foreground">{day}</span>{/each}
         {#each calendarDays as day}
-          <button type="button" data-date={isoDate(day)} tabindex={isoDate(day) === focusedDay ? 0 : -1}
+          <button type="button" data-slot="calendar-day" data-date={isoDate(day)} tabindex={isoDate(day) === focusedDay ? 0 : -1}
             aria-label={dateTimeFormat($locale, { dateStyle: 'full', timeZone: 'UTC' }).format(day)}
             aria-pressed={isoDate(day) === value} aria-disabled={!!rangeMessage(isoDate(day), $dateFormat)}
-            class:outside={day.getUTCMonth() !== view.getUTCMonth()} class:selected={isoDate(day) === value}
+            class={[
+              'min-h-11 min-w-0 cursor-pointer rounded-md text-sm tabular-nums not-aria-pressed:hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring aria-pressed:bg-primary aria-pressed:font-semibold aria-pressed:text-primary-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-40',
+              day.getUTCMonth() !== view.getUTCMonth() && 'text-muted-foreground',
+            ]}
             onkeydown={(e) => calendarKey(e, day)} onclick={() => { if (!rangeMessage(isoDate(day), $dateFormat)) pick(day); }}>{day.getUTCDate()}</button>
         {/each}
       </div>
@@ -204,17 +225,5 @@
   {/if}
 </div>
 {#if error}
-  <span id={`${id}-error`} class="error" aria-live="polite">{error}</span>
+  <span id={`${inputId}-error`} class="text-sm font-medium text-destructive" aria-live="polite">{error}</span>
 {/if}
-
-<style>
-  .date-input { display: flex; gap: var(--space-1); align-items: center; position: relative; }
-  .date-input input[type='text'] { flex: 1; min-width: 0; }
-  .calendar { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; width: min(20rem, 90vw); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow); }
-  .calendar-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; text-align: center; }
-  .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-  .calendar-grid button { min-width: 0; padding: var(--space-2) var(--space-1); }
-  .weekday { text-align: center; color: var(--muted); font-size: var(--text-xs); padding: var(--space-1) 0; }
-  .outside { opacity: .45; }
-  .selected { outline: 2px solid var(--accent-ink); }
-</style>
