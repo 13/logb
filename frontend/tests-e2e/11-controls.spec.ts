@@ -112,14 +112,10 @@ test('every control in a form is the same height', async ({ page }) => {
       ]),
     ),
   );
-  // Round 4: the fields share one height (`h-12`); the Save bar's buttons are the round's
-  // `min-h-11` buttons, a row of their own under the form, and only have to clear the floor.
-  const { button, ...fields } = heights;
-  const distinct = [...new Set(Object.values(fields))];
+  const distinct = [...new Set(Object.values(heights))];
   expect(distinct, `controls stand at different heights: ${JSON.stringify(heights)}`).toHaveLength(1);
   // And the one height they share still clears the tap-target floor.
   expect(distinct[0]).toBeGreaterThanOrEqual(44);
-  expect(button).toBeGreaterThanOrEqual(44);
 });
 
 // The controls row (search box + sort) sat flush against the first card: 8px of air above it and

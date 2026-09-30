@@ -17,7 +17,7 @@
      class="sticky z-[6] -mx-3 desk:mx-0 mt-2 flex flex-col gap-2 border-t border-border bg-background px-3 py-3 max-desk:bottom-[calc(var(--navbar)+1px+env(safe-area-inset-bottom))] desk:bottom-0">
   {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
   <div class="flex gap-2 desk:justify-end">
-    <Button variant="outline" class="min-h-11 flex-1 desk:min-w-28 desk:flex-none" onclick={oncancel}>{$t('nav.cancel')}</Button>
-    <Button type="submit" class="min-h-11 flex-1 desk:min-w-28 desk:flex-none" disabled={busy}>{$t('nav.save')}</Button>
+    <Button variant="outline" class="h-12 flex-1 desk:min-w-28 desk:flex-none" onclick={oncancel}>{$t('nav.cancel')}</Button>
+    <Button type="submit" class="h-12 flex-1 desk:min-w-28 desk:flex-none" disabled={busy}>{$t('nav.save')}</Button>
   </div>
 </div>

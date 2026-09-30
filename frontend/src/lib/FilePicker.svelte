@@ -77,10 +77,10 @@
   <input bind:this={cam} type="file" class="hidden" accept="image/*" capture="environment"
          onchange={(e) => send((e.currentTarget as HTMLInputElement).files)} />
   <div class="grid grid-cols-2 gap-2">
-    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => el.click()}>
+    <Button variant="outline" class="min-h-12 border-dashed whitespace-normal" disabled={busy} onclick={() => el.click()}>
       {busy ? $t('activity.uploading') : `+ ${$t('activity.add-files')}`}
     </Button>
-    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</Button>
+    <Button variant="outline" class="min-h-12 border-dashed whitespace-normal" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</Button>
   </div>
   {#if error}<p class={errorClass} aria-live="polite">{error}</p>{/if}
 </div>

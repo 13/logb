@@ -116,7 +116,10 @@ No open question needs the user.
   `frontend/tests/theme-contrast.test.ts`. Pairs this round reuses and that are already tested:
   brand-ink on `primary/10` over card (checked tiles and segments), muted-foreground on card
   (unit suffix, placeholder), `input` against card (control outlines).
-- Touch targets ≥ 44×44 px on mobile: controls are `h-12`, buttons `min-h-11`, checkboxes widen
+- Touch targets ≥ 44×44 px on mobile: controls are `h-12`; form buttons next to fields (the Save
+  bar's Cancel/Save, "+ Add photos or files", FilePicker's buttons, Delete) are 48 px (`h-12`, one
+  control height, app.css `--control`); `min-h-11` (44 px) stays the floor for other tap targets
+  (chips, toggles, link-buttons); checkboxes widen
   their hit area with `before:-inset-3`.
 - Every new string goes into both `frontend/src/i18n/en.ts` and `de.ts` (append at the end of the
   object, before `} as Record<string, string>;`). `tests/i18n.test.ts` checks the key sets match.
@@ -472,8 +475,8 @@ export async function revealField(id: string): Promise<boolean> {
      class="sticky z-[6] -mx-3 mt-2 flex flex-col gap-2 border-t border-border bg-background px-3 py-3 max-desk:bottom-[calc(var(--navbar)+1px+env(safe-area-inset-bottom))] desk:bottom-0">
   {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
   <div class="flex gap-2 desk:justify-end">
-    <Button variant="outline" class="min-h-11 flex-1 desk:min-w-28 desk:flex-none" onclick={oncancel}>{$t('nav.cancel')}</Button>
-    <Button type="submit" class="min-h-11 flex-1 desk:min-w-28 desk:flex-none" disabled={busy}>{$t('nav.save')}</Button>
+    <Button variant="outline" class="h-12 flex-1 desk:min-w-28 desk:flex-none" onclick={oncancel}>{$t('nav.cancel')}</Button>
+    <Button type="submit" class="h-12 flex-1 desk:min-w-28 desk:flex-none" disabled={busy}>{$t('nav.save')}</Button>
   </div>
 </div>
 ```
@@ -750,10 +753,10 @@ Expected: FAIL. The button sits beside the field, outside its box.
   <input bind:this={cam} type="file" class="hidden" accept="image/*" capture="environment"
          onchange={(e) => send((e.currentTarget as HTMLInputElement).files)} />
   <div class="grid grid-cols-2 gap-2">
-    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => el.click()}>
+    <Button variant="outline" class="min-h-12 border-dashed whitespace-normal" disabled={busy} onclick={() => el.click()}>
       {busy ? $t('activity.uploading') : `+ ${$t('activity.add-files')}`}
     </Button>
-    <Button variant="outline" class="min-h-11 border-dashed whitespace-normal" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</Button>
+    <Button variant="outline" class="min-h-12 border-dashed whitespace-normal" disabled={busy} onclick={() => cam.click()}><Icon name="camera" size={18} /> {$t('activity.take-photo')}</Button>
   </div>
   {#if error}<p class={errorClass} aria-live="polite">{error}</p>{/if}
 </div>
@@ -2398,7 +2401,7 @@ Expected: FAIL. The "Notes" heading still exists.
       {#if saved}
         <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
       {:else if ready}
-        <Button variant="outline" class="min-h-11 w-full border-dashed" onclick={addFiles}>+ {$t('activity.add-files')}</Button>
+        <Button variant="outline" class="h-12 w-full border-dashed" onclick={addFiles}>+ {$t('activity.add-files')}</Button>
       {/if}
     </section>
 
@@ -2453,7 +2456,7 @@ Expected: FAIL. The "Notes" heading still exists.
   {#if editing}
     <section aria-labelledby="activity-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
       <h2 id="activity-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
-      <Button variant="destructive" class="min-h-11 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
+      <Button variant="destructive" class="h-12 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
     </section>
   {/if}
 </main>

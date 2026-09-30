@@ -343,6 +343,7 @@
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     fieldErr = null;
+    error = '';
     if (editing && !saved) {
       // On an edit url with no loaded row: `onMount`'s GET failed (offline, a 5xx). Falling
       // through would take the `else` branch below and CREATE a second activity -- the user
@@ -563,7 +564,7 @@
       {#if saved}
         <FilePicker objectId={oid} activityId={saved.id} onuploaded={(a) => (attachments = [...attachments, a])} />
       {:else if ready}
-        <Button variant="outline" class="min-h-11 w-full border-dashed" onclick={addFiles}>+ {$t('activity.add-files')}</Button>
+        <Button variant="outline" class="h-12 w-full border-dashed" onclick={addFiles}>+ {$t('activity.add-files')}</Button>
       {/if}
     </section>
 
@@ -618,7 +619,7 @@
   {#if editing}
     <section aria-labelledby="activity-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
       <h2 id="activity-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
-      <Button variant="destructive" class="min-h-11 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
+      <Button variant="destructive" class="h-12 w-fit" onclick={remove}>{$t('nav.delete')}</Button>
     </section>
   {/if}
 </main>
