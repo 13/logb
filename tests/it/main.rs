@@ -30,6 +30,7 @@ mod object_list;
 mod objects;
 mod offline_edits;
 mod openapi;
+mod openapi_responses;
 mod own_types;
 mod pairing;
 mod personal_preferences;
