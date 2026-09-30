@@ -6,11 +6,11 @@
   } = $props();
 
   // The mark is sliced out of the same file the favicon and the PWA manifest use, so there is
-  // one drawing to change. Its white ink becomes currentColor, so in the app it takes the theme's
-  // accent instead of sitting on a teal plate. tests/pwa-icons.test.ts guards the markers.
+  // one drawing to change. Its dark ink becomes currentColor, so in the app it takes the amber ink
+  // of the theme instead of sitting on its plate. tests/pwa-icons.test.ts guards the markers.
   const mark = icon
     .slice(icon.indexOf('<!--mark-->'), icon.indexOf('<!--/mark-->'))
-    .replaceAll('#ffffff', 'currentColor');
+    .replaceAll('#1c1300', 'currentColor');
 </script>
 
 <!-- Labelled rather than decorative by default: on the auth card this is the only thing naming

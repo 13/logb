@@ -21,7 +21,7 @@ rsvg-convert -w 180 -h 180 "$svg" -o public/apple-touch-icon.png
 # is exactly one drawing in the repository.
 mark=$(sed -n '/<!--mark-->/,/<!--\/mark-->/p' "$svg")
 # An empty slice means the markers are gone -- without this guard, sed silently matches
-# nothing, $mark is empty, and this would render a plain green plate and exit 0.
+# nothing, $mark is empty, and this would render a bare amber plate and exit 0.
 [ -n "$mark" ] || { echo "no <!--mark--> ... <!--/mark--> markers found in $svg -- can't slice the maskable icon" >&2; exit 1; }
 tmp=$(mktemp --suffix=.svg)
 trap 'rm -f "$tmp"' EXIT
@@ -30,7 +30,7 @@ trap 'rm -f "$tmp"' EXIT
   # separately with printf so any $ or backtick sliced out of icon.svg can't be shell-expanded.
   cat <<'SVG_HEAD'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" fill="#1f6f5f"/>
+  <rect width="64" height="64" fill="#f59e0b"/>
   <g transform="translate(6.4 6.4) scale(.8)">
 SVG_HEAD
   printf '%s\n' "$mark"

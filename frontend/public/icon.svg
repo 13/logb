@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LogB">
-  <rect width="64" height="64" rx="14" fill="#1f6f5f"/>
+  <rect width="64" height="64" rx="14" fill="#f59e0b"/>
   <!--mark-->
-  <circle cx="32" cy="32" r="20" fill="none" stroke="#ffffff" stroke-width="4.5"/>
-  <circle cx="22.5" cy="25" r="2.9" fill="#ffffff"/>
-  <path d="M29 25h14M22 32h17.5M22 39h13" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="20" fill="none" stroke="#1c1300" stroke-width="4.5"/>
+  <circle cx="22.5" cy="25" r="2.9" fill="#1c1300"/>
+  <path d="M29 25h14M22 32h17.5M22 39h13" fill="none" stroke="#1c1300" stroke-width="4.5" stroke-linecap="round"/>
   <!--/mark-->
 </svg>

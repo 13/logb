@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { pwaIcons } from '../scripts/pwa-icons.ts';
+import { contrastRatio } from '../src/lib/tags.ts';
 
 const publicDir = new URL('../public/', import.meta.url);
 const scriptsDir = new URL('../scripts/', import.meta.url);
@@ -37,6 +38,15 @@ describe('pwa icons', () => {
     expect(maskable[0].src).toBe('pwa-512-maskable.png');
   });
 
+  it('is drawn in the app palette: dark ink on the amber plate', () => {
+    const svg = readFileSync(new URL('icon.svg', publicDir), 'utf8');
+    expect(svg).toContain('<rect width="64" height="64" rx="14" fill="#f59e0b"/>');
+    expect(svg).not.toMatch(/#ffffff|#1f6f5f/i);
+    // The mark against its plate, computed: 8.6:1, where white on this amber is 2.1:1.
+    expect(contrastRatio('#1c1300', '#f59e0b')).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio('#ffffff', '#f59e0b')).toBeLessThan(3);
+  });
+
   it('keeps the markers the render script and Logo.svelte slice on', () => {
     const svg = readFileSync(new URL('icon.svg', publicDir), 'utf8');
     const start = svg.indexOf('<!--mark-->');
@@ -44,10 +54,10 @@ describe('pwa icons', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     // Logo.svelte recolours the mark by swapping this exact ink for currentColor. Drawn in any
-    // other spelling of white, the in-app logo would stay white and vanish on the light theme.
+    // other spelling of that ink, the in-app logo would stay white and vanish on the light theme.
     const mark = svg.slice(start, end);
-    expect(mark).toContain('#ffffff');
-    expect(mark.replaceAll('#ffffff', '')).not.toMatch(/#[0-9a-f]{3,8}\b|\bwhite\b/i);
+    expect(mark).toContain('#1c1300');
+    expect(mark.replaceAll('#1c1300', '')).not.toMatch(/#[0-9a-f]{3,8}\b|\bwhite\b/i);
   });
 
   it('gives iOS its 180px icon', () => {

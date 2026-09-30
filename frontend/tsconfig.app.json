@@ -12,5 +12,5 @@
     "paths": { "$lib": ["./src/lib"], "$lib/*": ["./src/lib/*"] }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"],
-  "exclude": ["tests/pwa-icons.test.ts", "tests/icons.test.ts", "tests/scale.test.ts", "tests/tags.test.ts", "tests/source-invariants.test.ts", "tests/theme-contrast.test.ts"]
+  "exclude": ["tests/pwa-icons.test.ts", "tests/viewport.test.ts", "tests/icons.test.ts", "tests/scale.test.ts", "tests/tags.test.ts", "tests/source-invariants.test.ts", "tests/theme-contrast.test.ts"]
 }

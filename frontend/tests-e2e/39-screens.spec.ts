@@ -236,3 +236,24 @@ test('no settings page shows more than one primary button', async ({ page }) => 
     expect(primaries, path).toBeLessThanOrEqual(1);
   }
 });
+
+test('with the on-screen keyboard up, the field being typed in and Save both stay on screen', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'the on-screen keyboard is a phone matter');
+  await signInFresh(page, '39-keyboard');
+  const id = await object(page, { name: 'Keyboard probe', type: 'tool' });
+  await page.goto(`/objects/${id}/activities/new`);
+  // What `interactive-widget=resizes-content` makes Chrome for Android do when the keyboard opens:
+  // the layout viewport shrinks to what is left above it. Playwright has no keyboard to open.
+  await page.setViewportSize({ width: 412, height: 420 });
+  const title = page.getByLabel('Title');
+  await title.focus();
+  await title.fill('Typed with the keyboard up');
+  const bar = (await page.getByTestId('form-actions').boundingBox())!;
+  const field = (await title.boundingBox())!;
+  expect(bar.y + bar.height, 'the Save bar ends above the keyboard').toBeLessThanOrEqual(421);
+  const nav = (await page.locator('nav').last().boundingBox())!;
+  expect(bar.y + bar.height, 'the Save bar is not under the tab bar').toBeLessThanOrEqual(nav.y + 1);
+  expect(field.y + field.height, 'the field is above the Save bar').toBeLessThanOrEqual(bar.y);
+  await expect(title).toBeInViewport();
+  await expect(page.getByTestId('form-actions').getByRole('button', { name: 'Save' })).toBeInViewport();
+});
