@@ -67,7 +67,6 @@ test('an archived object deep inside the tree is still reachable from the archiv
 
   // Archive the bulb: two levels down, inside a garage, inside a house.
   await page.getByRole('button', { name: 'Edit' }).first().click();
-  // The edit form opens "More details" itself once the object has loaded (it sits inside a garage).
   await expect(page.getByLabel('Name')).toHaveValue('Attic Nest Bulb');
   await openMoreDetails(page);
   await page.getByLabel('Archive').check();

@@ -122,9 +122,14 @@ export async function openInfo(page: Page): Promise<void> {
 
 /** Opens a form's "More details" section if it is closed. Safe to call when it is open already. */
 export async function openMoreDetails(page: Page): Promise<void> {
+  // A form that loads its data marks itself aria-busy until it has applied it (and opened "More
+  // details" itself if the data uses it): reading the toggle before then is a race.
+  await expect(page.locator('form[aria-busy="true"]')).toHaveCount(0);
   const toggle = page.getByRole('button', { name: /^(More details|Weitere Angaben)$/ });
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(async () => {
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 });
+  }).toPass();
 }
 
 const TYPE_LABELS: Record<string, string> = {

@@ -72,15 +72,20 @@
       : recurrence === 'yearly' ? `yearly:${yearMonth}:${yearDay}` : null;
   }
 
+  /** True until the object and the reminder being edited are applied (`aria-busy`). */
+  let loading = $state(true);
+
   onMount(async () => {
-    object = await api<MemObject>('GET', `/objects/${oid}`);
-    if (rid) {
-      input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`));
-      readSchedule();
-      dueMode = dueModeOf(input, !!object.counter_unit);
-      moreOpen = input.notes.trim() !== '';
-    }
-    else if (presetKind === 'reading' && (object.counter_unit || object.type === 'body')) { input = readingReminder($t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title')); readSchedule(); }
+    try {
+      object = await api<MemObject>('GET', `/objects/${oid}`);
+      if (rid) {
+        input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`));
+        readSchedule();
+        dueMode = dueModeOf(input, !!object.counter_unit);
+        moreOpen = input.notes.trim() !== '';
+      }
+      else if (presetKind === 'reading' && (object.counter_unit || object.type === 'body')) { input = readingReminder($t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title')); readSchedule(); }
+    } finally { loading = false; }
   });
 
   /** Switching kind on a new reminder. A title the user has not touched follows the kind, so
@@ -149,7 +154,7 @@
 
 <main>
   <TopBar title={editing ? $t('reminder.edit') : $t('reminder.new')} backTo={`/objects/${oid}?tab=reminders`} />
-  <form onsubmit={submit} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
+  <form onsubmit={submit} aria-busy={loading} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
     <!-- A reading needs a counter to read, and a reminder keeps its kind once saved (the server
          refuses a change), so the choice is only offered where it can be made. -->
     {#if !editing && (object?.counter_unit || object?.type === 'body')}

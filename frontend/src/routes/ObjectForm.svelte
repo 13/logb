@@ -88,6 +88,9 @@
   let busy = $state(false);
   /** The object being edited could not be loaded; the form holds defaults, not its data. */
   let loadFailed = $state(false);
+  /** True until the draft or the object being edited has been applied to the form (`aria-busy`:
+   *  the e2e helpers wait on it before opening "More details"). */
+  let loading = $state(true);
   let deleteError = $state('');
   const formError = $derived(error || (fieldErr?.id === null ? fieldErr.message : ''));
 
@@ -170,29 +173,31 @@
     // the back button) carries none that matches, and the draft is discarded rather than shown
     // to whoever mounts next -- see `takeObjectDraft`.
     const draftToken = params.get('draft');
-    const draft = takeObjectDraftState(currentPath, draftToken);
-    // The price fields round a sub-cent `energy_price_milli` to whole cents on load, like every
-    // other money amount here -- see `formText` (../lib/object-form.ts).
-    if (draft) {
-      fill(draft.input);
-      typePicked = draft.typePicked;
-    } else if (id) {
-      // A failed load leaves empty defaults on an EDIT url: say so, and have `submit` refuse --
-      // saving that blank form would overwrite the real object with it.
-      try {
-        const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
-        const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
-        fill(toInput(o));
-      } catch (e) {
-        loadFailed = true;
-        error = errorMessage(e, $t);
-      }
-    }
-    // A `type` in the query names the type just created on Types, straight from the shortcut --
-    // selecting it here (through `setType`, so the counter-unit default still applies) is what
-    // lands the round trip on the new type instead of back on whatever the form had before.
     const typeParam = params.get('type');
-    if (typeParam && $customTypes.some((c) => c.key === typeParam)) pickType(typeParam);
+    try {
+      const draft = takeObjectDraftState(currentPath, draftToken);
+      // The price fields round a sub-cent `energy_price_milli` to whole cents on load, like every
+      // other money amount here -- see `formText` (../lib/object-form.ts).
+      if (draft) {
+        fill(draft.input);
+        typePicked = draft.typePicked;
+      } else if (id) {
+        // A failed load leaves empty defaults on an EDIT url: say so, and have `submit` refuse --
+        // saving that blank form would overwrite the real object with it.
+        try {
+          const cachedPending = Number(id) < 0 ? getCachedObject(Number(id)) : undefined;
+          const o = cachedPending ?? await api<MemObject>('GET', `/objects/${id}`);
+          fill(toInput(o));
+        } catch (e) {
+          loadFailed = true;
+          error = errorMessage(e, $t);
+        }
+      }
+      // A `type` in the query names the type just created on Types, straight from the shortcut --
+      // selecting it here (through `setType`, so the counter-unit default still applies) is what
+      // lands the round trip on the new type instead of back on whatever the form had before.
+      if (typeParam && $customTypes.some((c) => c.key === typeParam)) pickType(typeParam);
+    } finally { loading = false; }
     // Both are one-shot: a reload of this exact URL must not re-apply `type` over a draft that
     // is already consumed, nor offer up a `draft` token a second time (see `takeObjectDraft`'s
     // "used at most once"). Mirrors ObjectDetail's `?tag=` -- strip what was just consumed, keep
@@ -326,10 +331,9 @@
   }
 </script>
 
-
 <main>
   <TopBar title={editing ? $t('object.edit') : $t('object.new')} backTo={editing ? `/objects/${id}` : '/'} />
-  <form onsubmit={submit} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
+  <form onsubmit={submit} aria-busy={loading} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
     <TypeTiles value={input.type} picked={typePicked} error={errorFor('object-type')} onpick={pickType} onnewtype={() => setType(NEW_TYPE)} />
 
     {#if !editing}
@@ -355,7 +359,7 @@
 
     <Field id="n" label={$t('object.name')} error={errorFor('n')}><Input bind:value={input.name} required /></Field>
 
-    {#if input.type !== 'body' || editing}
+    {#if (typePicked || editing) && (input.type !== 'body' || editing)}
       <Field id="u" label={$t('object.counter')}>
         <NativeSelect bind:value={input.counter_unit}>
           <option value={null}>{$t('object.counter-none')}</option>
@@ -381,7 +385,7 @@
       {/if}
     {/if}
 
-    {#if input.type === 'body'}
+    {#if typePicked && input.type === 'body'}
       <Field id="wu" label={$t('weight.unit')}>
         <NativeSelect bind:value={input.weight_unit}><option value="kg">kg</option><option value="lb">lb</option></NativeSelect>
       </Field>
