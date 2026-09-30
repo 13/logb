@@ -4,6 +4,7 @@
   import TopBar from '../../lib/TopBar.svelte';
   import { discardDeadOp, deadOps, outboxPending, retryDead, uploadRaw } from '../../lib/api';
   import type { QueuedOp } from '../../lib/outbox';
+  import { describeFailedWrite } from '../../lib/failed-write';
   import { t } from '../../i18n';
   import Toaster from '../../lib/Toaster.svelte';
   import { toast } from '../../lib/toast';
@@ -36,7 +37,9 @@
     finally { recoveryBusy = false; }
   }
 
+  /** As on the hub: a discarded save is gone for good, so it asks first. */
   async function discard(id: string) {
+    if (!confirm($t('nav.confirm-delete'))) return;
     await discardDeadOp(id);
     await loadRecovery();
   }
@@ -58,7 +61,8 @@
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
     {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
 
-    <section class={card}>
+    <section aria-labelledby="export-title" class={card}>
+      <h2 id="export-title" class={sectionHeadingClass}>{$t('settings.export-title')}</h2>
       <CheckField id="export-exclude-body" label={$t('settings.export-exclude-body')} bind:checked={excludeBody} />
       <div class="flex flex-wrap gap-2">
         <!-- The page's one primary action: a link, so the browser downloads it. -->
@@ -81,10 +85,14 @@
         <p role="alert" class={errorClass}>{$t('settings.sync-failed', { n: failed.length })}</p>
         <ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
           {#each failed as op (op.id)}
-            <li class="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">
-              <span class="font-medium text-foreground">{op.kind}</span>
-              <span class="min-w-0 flex-[1_1_16rem] text-muted-foreground [overflow-wrap:anywhere]">{op.lastError ?? $t('error.generic')}</span>
-              <Button variant="ghost" class={`min-h-11 ${destructiveGhostClass}`} disabled={recoveryBusy} onclick={() => discard(op.id)}>{$t('settings.sync-discard')}</Button>
+            <!-- Described as on the hub: what it was, its name, and why the server refused it. -->
+            {@const d = describeFailedWrite(op, $t)}
+            <li data-testid="failed-write" class="flex items-center gap-3 rounded-md border border-border p-3">
+              <span class="flex min-w-0 flex-1 flex-col gap-1 [overflow-wrap:anywhere]">
+                <b class="font-semibold text-foreground">{d.what}{#if d.name}: {d.name}{/if}</b>
+                {#if d.reason}<span class="text-sm text-destructive">{d.reason}</span>{/if}
+              </span>
+              <Button variant="ghost" class={`min-h-11 shrink-0 ${destructiveGhostClass}`} disabled={recoveryBusy} onclick={() => discard(op.id)}>{$t('settings.sync-discard')}</Button>
             </li>
           {/each}
         </ul>

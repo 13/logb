@@ -106,9 +106,14 @@
     editing = null;
   }
 
+  /** The type being deleted: its row is busy and no second delete starts meanwhile. */
+  let removing = $state<number | null>(null);
+
   async function remove(ty: CustomType) {
+    if (removing !== null) return;
     if (!confirm($t('nav.confirm-delete'))) return;
     deleteError = null;
+    removing = ty.id;
     try {
       await api('DELETE', `/types/${ty.id}`);
       if (editing === ty.id) editing = null;
@@ -119,7 +124,7 @@
         ? (count === 1 ? $t('types.in-use-one') : $t('types.in-use', { n: count }))
         : errorText(e);
       deleteError = { id: ty.id, message };
-    }
+    } finally { removing = null; }
   }
 
   /** The server's stable codes for a refused type (`types.error.*`), said in the reader's
@@ -185,28 +190,32 @@
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
     <section class="flex flex-col gap-2">
       <h2 id="types-yours" class={sectionHeadingClass}>{$t('types.yours')}</h2>
+      <!-- No list at all while the first type is being added: an empty labelled list would be
+           announced as "Your types, list, 0 items" above the form. -->
+      {#if $customTypes.length > 0 || editing !== 'new'}
       <ul role="list" aria-labelledby="types-yours" class="m-0 flex list-none flex-col gap-2 p-0">
         {#each $customTypes as ty (ty.id)}
           <li>
             {#if editing === ty.id}
               {@render form()}
             {:else}
-              <div data-testid="type-row" class="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-xs">
+              <div data-testid="type-row" aria-busy={removing === ty.id} class="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-xs">
                 <span class="grid size-10 place-items-center rounded-md bg-primary/10 text-brand-ink" aria-hidden="true"><Icon name={ty.icon} /></span>
                 <span class="flex min-w-0 flex-col">
                   <b class="font-semibold text-foreground [overflow-wrap:anywhere]">{ty.name}</b>
                   <span class="truncate text-sm text-muted-foreground">{summary(ty)}</span>
                 </span>
                 <Button variant="ghost" class="min-h-11" aria-label={$t('types.edit-named', { name: ty.name })} onclick={() => open(ty)}>{$t('nav.edit')}</Button>
-                <Button variant="ghost" class={`min-h-11 ${destructiveGhostClass}`} aria-label={$t('types.delete-named', { name: ty.name })} onclick={() => remove(ty)}>{$t('types.delete')}</Button>
+                <Button variant="ghost" class={`min-h-11 ${destructiveGhostClass}`} aria-label={$t('types.delete-named', { name: ty.name })} disabled={removing !== null} onclick={() => remove(ty)}>{$t('types.delete')}</Button>
                 {#if deleteError?.id === ty.id}<p role="alert" class={`${errorClass} col-span-full`}>{deleteError.message}</p>{/if}
               </div>
             {/if}
           </li>
         {:else}
-          {#if editing !== 'new'}<li class="px-1 py-4 text-sm text-muted-foreground">{$t('types.empty')}</li>{/if}
+          <li class="px-1 py-4 text-sm text-muted-foreground">{$t('types.empty')}</li>
         {/each}
       </ul>
+      {/if}
       {#if editing === 'new'}
         {@render form()}
       {:else}

@@ -9,7 +9,7 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import { Field } from '$lib/components/ui/field/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
-  import { errorClass, hintClass } from '$lib/components/ui/field/classes.js';
+  import { errorClass, hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
   import type { BackupStatus, DbDescription, DbLocation, DbProbe, DbSwitched } from '../../lib/types';
 
   let db = $state<DbDescription | null>(null);
@@ -102,8 +102,8 @@
     catch (e) { dbError = errorMessage(e, $t); restarting = false; }
   }
 
-  const card = 'flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-xs';
-  const heading = 'm-0 text-base font-semibold text-foreground';
+  // The same card and section heading as every other settings page.
+  const card = 'flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs';
   /** A host, a file path, an epoch or a driver's message: long, and never cut off. */
   const long = 'm-0 text-sm text-muted-foreground [overflow-wrap:anywhere]';
 </script>
@@ -114,7 +114,7 @@
     {#if dbError}<p role="alert" class={errorClass}>{dbError}</p>{/if}
     {#if db}
       <section aria-labelledby="db-current" class={card}>
-        <h2 id="db-current" class={heading}>{$t('db.current')}</h2>
+        <h2 id="db-current" class={sectionHeadingClass}>{$t('db.current')}</h2>
         <p class="m-0 font-semibold text-foreground">{backendName(db)}</p>
         <p class={long}>{place(db)}</p>
       </section>
@@ -150,6 +150,9 @@
         {/if}
       </div>
 
+      <!-- A polite live region, mounted empty with the page: what the test or the switch found is
+           announced when it lands. Pulled up by the gap while it holds nothing. -->
+      <div role="status" class={['flex flex-col gap-6', !probe && !switched && '-mt-6']}>
       {#if probe}
         <div class={card}>
           <p class="m-0 font-semibold text-foreground">{probe.reachable ? $t('db.reachable') : $t('db.unreachable')}</p>
@@ -171,6 +174,7 @@
           <p class={long}>{$t('db.pointer', { path: switched.pointer })}</p>
         </div>
       {/if}
+      </div>
       {#if db.pending || switched}
         <div class={`${card} border-l-4 border-l-destructive`}>
           <p class="m-0 font-semibold text-foreground">{$t('db.pending')}</p>
@@ -184,7 +188,7 @@
     {/if}
 
     <section aria-labelledby="backup-title" class="flex flex-col gap-2">
-      <h2 id="backup-title" class={heading}>{$t('backup.title')}</h2>
+      <h2 id="backup-title" class={sectionHeadingClass}>{$t('backup.title')}</h2>
       <!-- Three states; on PostgreSQL LogB backs up nothing, said as a division of responsibility
            (accent ink), not as a fault. -->
       {#if backup}
