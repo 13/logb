@@ -166,6 +166,66 @@ async fn bootstrap_scopes_every_child_table_and_hides_a_live_child_of_a_tombston
     }
 }
 
+/// The snapshot is written as JSON text straight from the rows (`feed::snapshot`), not built as
+/// values first, so the encoding of each column is pinned here rather than left to serde:
+/// integers as numbers, text as strings, NULL as null, a tombstone column present and null,
+/// every column of the row under its own name -- and `search_text`, the server's own folded
+/// copy for `/search`, not at all.
+#[tokio::test]
+async fn bootstrap_rows_carry_every_column_typed_and_not_search_text() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+    let (object_id, activity_id, _, _) = object_with_children(&app, &app.client, "Golf \"GTI\" \u{e9}").await;
+
+    let res = app.client.get(app.url("/sync/bootstrap")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body: serde_json::Value = res.json().await.unwrap();
+
+    let object = &body["objects"][0];
+    assert_eq!(object["id"], object_id);
+    assert_eq!(object["name"], "Golf \"GTI\" \u{e9}", "text is escaped as JSON");
+    assert_eq!(object["counter_unit"], "km");
+    assert!(object["deleted_at"].is_null() && object.get("deleted_at").is_some());
+    assert_eq!(object["tags"], "[]", "tags travel as the column's own JSON text");
+    let activity = body["activities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == activity_id)
+        .expect("the activity is in the snapshot");
+    assert_eq!(activity["object_id"], object_id);
+    assert_eq!(activity["cost_cents"], 5000);
+    assert_eq!(activity["counter_value"], 1000);
+    assert!(activity["client_uuid"].is_string());
+
+    for table in ["objects", "activities"] {
+        for row in body[table].as_array().unwrap() {
+            assert!(row.get("search_text").is_none(), "{table} rows must not carry search_text: {row}");
+        }
+    }
+    // Every other column of the row is there: the snapshot is the row, less that one column.
+    let columns: Vec<String> = if app.state.backend == logb::dialect::Backend::Sqlite {
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('activities')")
+            .fetch_all(&app.state.db)
+            .await
+            .unwrap()
+    } else {
+        sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = 'activities'",
+        )
+        .fetch_all(&app.state.db)
+        .await
+        .unwrap()
+    };
+    let mut expected: Vec<&str> = columns.iter().map(String::as_str).filter(|c| *c != "search_text").collect();
+    expected.sort();
+    let mut got: Vec<&str> = activity.as_object().unwrap().keys().map(String::as_str).collect();
+    got.sort();
+    assert_eq!(got, expected);
+}
+
 
 #[tokio::test]
 async fn a_pull_carrying_a_stale_epoch_is_gone() {

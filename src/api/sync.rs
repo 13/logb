@@ -11,6 +11,8 @@ use crate::sync::{
     Op, OpKind, Outcome,
 };
 use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -263,14 +265,20 @@ async fn pull(
     Ok(Json(PullOut { changes, next_seq, complete, server_time: record::edited_at_now(), epoch }))
 }
 
-async fn bootstrap(
-    State(state): State<App>,
-    user: AuthUser,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let (seq, mut snapshot) = feed::snapshot(&state.db, user.id).await?;
-    let map = snapshot.as_object_mut().expect("snapshot builds a JSON object");
-    map.insert("seq".into(), serde_json::json!(seq));
-    map.insert("server_time".into(), serde_json::json!(record::edited_at_now()));
-    map.insert("epoch".into(), serde_json::json!(crate::sync::epoch::current(&state.db).await?));
-    Ok(Json(snapshot))
+/// Written as JSON text rather than built as a `serde_json::Value`: see `feed::snapshot`.
+async fn bootstrap(State(state): State<App>, user: AuthUser) -> Result<Response, AppError> {
+    let (seq, mut fields) = feed::snapshot(&state.db, user.id).await?;
+    let epoch = crate::sync::epoch::current(&state.db).await?;
+    let scalars = [
+        ("seq", serde_json::json!(seq)),
+        ("server_time", serde_json::json!(record::edited_at_now())),
+        ("epoch", serde_json::json!(epoch)),
+    ];
+    for (key, value) in scalars {
+        let mut out = Vec::new();
+        feed::push_json(&mut out, &value);
+        fields.push((key, out));
+    }
+    let body = feed::json_object(fields);
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }

@@ -432,30 +432,24 @@ pub struct ActivityOut {
     pub attachments: Vec<AttachmentOut>,
 }
 
-pub async fn with_attachments(
-    state: &App,
-    rows: Vec<ActivityRow>,
-) -> Result<Vec<ActivityOut>, AppError> {
-    let object_id = match rows.first() {
-        Some(r) => r.object_id,
-        None => return Ok(vec![]),
-    };
-    // The object's attachments in one indexed read, grouped by activity once rather than every
-    // row scanning every attachment. Not only the page's own (`activity_id IN (...)`): with a
-    // hundred bound ids that measured slower on every page but the first.
+/// Pairs each row with its attachments, from the object's attachments read in one indexed
+/// statement (`attachments::for_object`) and grouped by activity once, rather than every row
+/// scanning every attachment. Not only the page's own (`activity_id IN (...)`): with a hundred
+/// bound ids that measured slower on every page but the first. The caller reads them, so it can
+/// do so alongside the rows themselves.
+pub fn with_attachments(rows: Vec<ActivityRow>, attachments: Vec<AttachmentOut>) -> Vec<ActivityOut> {
     let mut by_activity: HashMap<i64, Vec<AttachmentOut>> = HashMap::new();
-    for a in attachments::for_object(state, object_id).await? {
+    for a in attachments {
         if let Some(activity_id) = a.activity_id {
             by_activity.entry(activity_id).or_default().push(a);
         }
     }
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .map(|activity| ActivityOut {
             attachments: by_activity.remove(&activity.id).unwrap_or_default(),
             activity,
         })
-        .collect())
+        .collect()
 }
 
 async fn one_out(state: &App, row: ActivityRow) -> Result<ActivityOut, AppError> {

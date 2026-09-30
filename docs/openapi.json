@@ -5472,14 +5472,14 @@
             "items": {
               "type": "object"
             },
-            "description": "Every live row from `objects`, verbatim, keyed by column name."
+            "description": "Every live row from `objects`, verbatim, keyed by column name -- except `search_text`, the server's own folded copy of the row's text for `GET /search`, which no sync op sets and no pull carries."
           },
           "activities": {
             "type": "array",
             "items": {
               "type": "object"
             },
-            "description": "Every live row from `activities` whose object is also live."
+            "description": "Every live row from `activities` whose object is also live, without `search_text` (see `objects`)."
           },
           "reminders": {
             "type": "array",
