@@ -45,8 +45,9 @@ test('an object records activities, photos and reminders', async ({ page }) => {
   await page.getByRole('tab', { name: /^Reminders/ }).click();
   await page.getByRole('button', { name: /New reminder/ }).click();
   await page.getByLabel('Title').fill('Oil change');
-  await page.getByLabel(/Due at counter/).fill('100000');
-  await page.getByLabel(/Repeat every \(counter\)/).fill('15000');
+  await page.getByRole('group', { name: 'Due by' }).getByRole('radio', { name: 'Counter', exact: true }).check();
+  await page.getByLabel(/^Due at/).fill('100000');
+  await page.getByLabel(/^Then every/).fill('15000');
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Oil change').first()).toBeVisible();
   await expect(page.getByTestId('reminder-status').filter({ hasText: 'Due' }).first()).toBeVisible();

@@ -120,6 +120,14 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
+    // Segmented control (Due by, reminder kind): the checked segment is primary/10 over card with a
+    // brand-ink edge; the focus ring is drawn outside it, offset onto the card/page.
+    it(`${name}: segmented control -- checked edge and focus ring against the tint, text on hover (>= 3:1 / 4.5:1)`, () => {
+      const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
+      expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(ui('ring', theme), bg)).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(ui('foreground', theme), ui('accent', theme))).toBeGreaterThanOrEqual(4.5);
+    });
     // The object card's due badge sits on the card.
     it(`${name}: destructive text on the object card's due badge (destructive/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('destructive', theme), ui('card', theme), 0.1);

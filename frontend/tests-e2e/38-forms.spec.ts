@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { openMoreDetails, signInFresh } from './helpers';
 
 /** The forms as round 4 of the UI overhaul left them. Seeds through the API so each test drives
  *  only the form it is about. */
@@ -60,4 +60,79 @@ test('the date field keeps its calendar button inside the box, at a full-size ta
   const day = page.getByRole('dialog', { name: 'Choose date' }).getByRole('button', { pressed: true });
   await expect(day).toHaveCount(1);
   expect((await day.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+});
+
+test('a reminder is due by date, by counter or by both, chosen up front', async ({ page }) => {
+  await signInFresh(page, '38-due-by');
+  const id = await object(page, { name: 'Due-by car', type: 'car', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/reminders/new`);
+
+  const dueBy = page.getByRole('group', { name: 'Due by' });
+  await expect(dueBy.getByRole('radio', { name: 'Date', exact: true })).toBeChecked();
+  await expect(page.getByLabel('Due date', { exact: true })).toBeVisible();
+  await expect(page.getByLabel(/^Due at/)).toHaveCount(0);
+  await expectSaveOnScreen(page);
+
+  await dueBy.getByRole('radio', { name: 'Counter', exact: true }).check();
+  await expect(page.getByLabel('Due date', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Repeat', { exact: true })).toHaveCount(0);
+  // Words in the label, the unit in the box: no "(counter) (km)".
+  await expect(page.getByText(/\(counter\)/)).toHaveCount(0);
+  await page.getByLabel('Title').fill('Timing belt');
+  await page.getByLabel(/^Due at/).fill('100000');
+  await page.getByLabel(/^Then every/).fill('15000');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}\\?tab=reminders$`));
+
+  const rows = (await (await page.request.get(`/api/objects/${id}/reminders`)).json()) as Array<Record<string, unknown>>;
+  expect(rows.find((r) => r.title === 'Timing belt')).toMatchObject({ due_date: null, schedule: null, every_n: null, due_counter: 100000, repeat_counter: 15000 });
+
+  // "Both" says what it means, and a saved reminder opens on its own side.
+  await page.goto(`/objects/${id}/reminders/new`);
+  await dueBy.getByRole('radio', { name: 'Both', exact: true }).check();
+  await expect(page.getByText('Due at whichever comes first.')).toBeVisible();
+  const belt = rows.find((r) => r.title === 'Timing belt')!;
+  await page.goto(`/objects/${id}/reminders/${belt.id}`);
+  await expect(dueBy.getByRole('radio', { name: 'Counter', exact: true })).toBeChecked();
+});
+
+test('a counter field typed and then hidden is not saved', async ({ page }) => {
+  await signInFresh(page, '38-due-switch');
+  const id = await object(page, { name: 'Switch car', type: 'car', counter_unit: 'km' });
+  await page.goto(`/objects/${id}/reminders/new`);
+  const dueBy = page.getByRole('group', { name: 'Due by' });
+  await page.getByLabel('Title').fill('Brake fluid');
+  await dueBy.getByRole('radio', { name: 'Counter', exact: true }).check();
+  await page.getByLabel(/^Due at/).fill('90000');
+  await dueBy.getByRole('radio', { name: 'Date', exact: true }).check();
+  await page.getByLabel('Due date', { exact: true }).fill('01/01/2031');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/objects/${id}\\?tab=reminders$`));
+  const rows = (await (await page.request.get(`/api/objects/${id}/reminders`)).json()) as Array<Record<string, unknown>>;
+  expect(rows.find((r) => r.title === 'Brake fluid')).toMatchObject({ due_date: '2031-01-01', due_counter: null });
+});
+
+test('notes wait under "More details", which opens by itself for a reminder that has them', async ({ page }) => {
+  await signInFresh(page, '38-reminder-notes');
+  const id = await object(page, { name: 'Notes car', type: 'other' });
+  const plain = await (await page.request.post(`/api/objects/${id}/reminders`, { data: { title: 'Plain', due_date: '2031-01-01' } })).json();
+  const noted = await (await page.request.post(`/api/objects/${id}/reminders`, { data: { title: 'Noted', due_date: '2031-01-01', notes: 'Use DOT 4' } })).json();
+
+  const toggle = page.getByRole('button', { name: 'More details' });
+  await page.goto(`/objects/${id}/reminders/${plain.id}`);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByLabel('Notes')).toBeHidden();
+  await openMoreDetails(page);
+  await expect(page.getByLabel('Notes')).toBeVisible();
+  await page.goto(`/objects/${id}/reminders/${noted.id}`);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByLabel('Notes')).toHaveValue('Use DOT 4');
+
+  // A refused save names the field under it and moves the focus there.
+  await page.getByLabel('Title').fill('');
+  await page.getByLabel('Title').evaluate((el: HTMLInputElement) => el.removeAttribute('required'));
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Check “Title”: it is missing or not valid.');
+  await expect(page.getByLabel('Title')).toBeFocused();
+  await expect(page.getByLabel('Title')).toHaveAttribute('aria-invalid', 'true');
 });

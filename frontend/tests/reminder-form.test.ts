@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  emptyReminder, intervalDays, readingReminder, reminderBody, splitReminders, toReminderInput, validateReminder,
+  applyDueMode, dueModeOf, emptyReminder, intervalDays, readingReminder, reminderBody, REMINDER_FIELD_IDS, splitReminders, toReminderInput, validateReminder,
 } from '../src/lib/reminder-form';
 import type { Reminder } from '../src/lib/types';
 
@@ -72,5 +72,45 @@ describe('reminder form', () => {
     expect(s.due.map((x) => x.id)).toEqual([1]);
     expect(s.open.map((x) => x.id)).toEqual([2]);
     expect(s.done.map((x) => x.id)).toEqual([3]);
+  });
+});
+
+describe('due by date, counter or both', () => {
+  const base = emptyReminder();
+
+  it('reads the side a saved reminder uses', () => {
+    expect(dueModeOf({ ...base, due_date: '2030-01-01' }, true)).toBe('date');
+    expect(dueModeOf({ ...base, due_counter: 100000 }, true)).toBe('counter');
+    expect(dueModeOf({ ...base, due_counter: 100000, repeat_counter: 15000 }, true)).toBe('counter');
+    expect(dueModeOf({ ...base, due_date: '2030-01-01', due_counter: 100000 }, true)).toBe('both');
+    expect(dueModeOf({ ...base, every_n: 12, every_unit: 'month', repeat_counter: 15000 }, true)).toBe('both');
+    expect(dueModeOf({ ...base, schedule: 'yearly:3:1', due_counter: 5 }, true)).toBe('both');
+  });
+
+  it('is by date for a new reminder, and always by date without a counter', () => {
+    expect(dueModeOf(base, true)).toBe('date');
+    expect(dueModeOf({ ...base, due_counter: 100000 }, false)).toBe('date');
+  });
+
+  it('clears the side the reminder does not use', () => {
+    const full = { ...base, due_date: '2030-01-01', every_n: 12, every_unit: 'month' as const, due_counter: 100000, repeat_counter: 15000 };
+    expect(applyDueMode(full, 'date')).toEqual({ ...full, due_counter: null, repeat_counter: null });
+    expect(applyDueMode(full, 'counter')).toEqual({ ...full, due_date: null, schedule: null, every_n: null, every_unit: null, repeat_months: null });
+    expect(applyDueMode(full, 'both')).toEqual(full);
+  });
+
+  it('leaves a reading reminder alone', () => {
+    const reading = readingReminder('Log it', '2030-01-01');
+    expect(applyDueMode(reading, 'counter')).toEqual(reading);
+  });
+
+  it('a reminder by counter alone is valid', () => {
+    expect(validateReminder(applyDueMode({ ...base, title: 'Belt', due_counter: 100000, due_date: '2030-01-01' }, 'counter'))).toBeNull();
+  });
+
+  it('names a field for every key validateReminder returns', () => {
+    for (const key of ['reminder.title', 'reminder.every', 'reminder.schedule', 'reminder.due-date', 'reminder.due-counter', 'reminder.repeat-counter']) {
+      expect(REMINDER_FIELD_IDS[key], key).toBeTruthy();
+    }
   });
 });

@@ -9,8 +9,18 @@
   import { api, createReminderQueued } from '../lib/api';
   import { go, back } from '../lib/router';
   import { t } from '../i18n';
-  import { emptyReminder, readingReminder, reminderBody, toReminderInput, validateReminder } from '../lib/reminder-form';
-  import { fieldError } from '../lib/form-error';
+  import { applyDueMode, dueModeOf, emptyReminder, readingReminder, reminderBody, REMINDER_FIELD_IDS, toReminderInput, validateReminder, type DueMode } from '../lib/reminder-form';
+  import { fieldErrorAt, type FieldError } from '../lib/form-error';
+  import FormActions from '../lib/FormActions.svelte';
+  import MoreDetails from '../lib/MoreDetails.svelte';
+  import { revealField } from '../lib/reveal-field';
+  import { Field } from '$lib/components/ui/field/index.js';
+  import { hintClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Textarea } from '$lib/components/ui/textarea/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
+  import { Segmented } from '$lib/components/ui/segmented/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
   import type { MemObject, Reminder, ReminderInput } from '../lib/types';
 
   let { id, rid }: { id: string; rid?: string } = $props();
@@ -28,6 +38,17 @@
   let yearMonth = $state(1);
   let yearDay = $state(1);
   const upcoming = $derived(previewDates(input.schedule, input.due_date));
+
+  /** Which due field a service reminder watches; only asked where the object has a counter. */
+  let dueMode = $state<DueMode>('date');
+  let moreOpen = $state(false);
+  /** A save refused by `validateReminder`, shown under the field it names. */
+  let fieldErr = $state<FieldError | null>(null);
+  const errorFor = (fid: string): string => (fieldErr?.id === fid ? fieldErr.message : '');
+  const formError = $derived(error || (fieldErr?.id === null ? fieldErr.message : ''));
+  const hasCounter = $derived(!!object?.counter_unit);
+  const showDate = $derived(input.kind === 'reading' || !hasCounter || dueMode !== 'counter');
+  const showCounter = $derived(input.kind === 'service' && hasCounter && dueMode !== 'date');
 
   function readSchedule() {
     if (input.repeat_months) {
@@ -53,7 +74,12 @@
 
   onMount(async () => {
     object = await api<MemObject>('GET', `/objects/${oid}`);
-    if (rid) { input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`)); readSchedule(); }
+    if (rid) {
+      input = toReminderInput(await api<Reminder>('GET', `/reminders/${rid}`));
+      readSchedule();
+      dueMode = dueModeOf(input, !!object.counter_unit);
+      moreOpen = input.notes.trim() !== '';
+    }
     else if (presetKind === 'reading' && (object.counter_unit || object.type === 'body')) { input = readingReminder($t(object?.type === 'body' ? 'weight.reminder' : 'reading.reminder-title')); readSchedule(); }
   });
 
@@ -75,7 +101,7 @@
   }
 
   function normalized(): ReminderInput {
-    return reminderBody({
+    const body = reminderBody({
       ...input,
       due_date: input.due_date || null,
       due_counter: num(input.due_counter),
@@ -83,13 +109,24 @@
       repeat_counter: num(input.repeat_counter),
       every_n: num(input.every_n),
     });
+    // Without a counter there are no sides; a reminder saved when the object still had one keeps
+    // its counter rather than losing it to an edit of its title.
+    return hasCounter ? applyDueMode(body, dueMode) : body;
+  }
+
+  async function reject(key: string) {
+    const ids = { ...REMINDER_FIELD_IDS, 'reminder.due-date': showDate ? 'dd' : 'dc' };
+    const at = fieldErrorAt(key, $t, ids);
+    fieldErr = at;
+    if (at.id !== null && !(await revealField(at.id))) fieldErr = { id: null, message: at.message };
   }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    fieldErr = null;
     const body = normalized();
     const bad = validateReminder(body);
-    if (bad) { error = fieldError(bad, $t); return; }
+    if (bad) { await reject(bad); return; }
     busy = true; error = '';
     try {
       if (rid) await api('PATCH', `/reminders/${rid}`, body);
@@ -112,77 +149,116 @@
 
 <main>
   <TopBar title={editing ? $t('reminder.edit') : $t('reminder.new')} backTo={`/objects/${oid}?tab=reminders`} />
-  <form onsubmit={submit}>
+  <form onsubmit={submit} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
     <!-- A reading needs a counter to read, and a reminder keeps its kind once saved (the server
          refuses a change), so the choice is only offered where it can be made. -->
     {#if !editing && (object?.counter_unit || object?.type === 'body')}
-      <fieldset class="field kind">
-        <legend>{$t('reminder.kind')}</legend>
-        <label class="row toggle"><input type="radio" name="kind" checked={input.kind === 'service'} onchange={() => setKind('service')} /> {$t('reminder.kind-service')}</label>
-        <label class="row toggle"><input type="radio" name="kind" checked={input.kind === 'reading'} onchange={() => setKind('reading')} /> {$t(object?.type === 'body' ? 'weight.log' : 'reminder.kind-reading')}</label>
-      </fieldset>
+      <Segmented legend={$t('reminder.kind')} name="kind" value={input.kind} onchange={setKind}
+                 options={[
+                   { value: 'service', label: $t('reminder.kind-service') },
+                   { value: 'reading', label: $t(object?.type === 'body' ? 'weight.log' : 'reminder.kind-reading') },
+                 ]} />
     {/if}
-    <div class="field"><label for="ti">{$t('reminder.title')}</label><input id="ti" bind:value={input.title} required /></div>
-      <div class="field">
-        <label for="recurrence">{$t('reminder.recurrence')}</label>
-        <select id="recurrence" bind:value={recurrence} onchange={writeSchedule}>
+    <Field id="ti" label={$t('reminder.title')} error={errorFor('ti')}><Input bind:value={input.title} required /></Field>
+
+    {#if input.kind === 'service' && hasCounter}
+      <Segmented legend={$t('reminder.due-by')} name="due-by" bind:value={dueMode}
+                 hint={dueMode === 'both' ? $t('reminder.due-by-both-hint') : ''}
+                 options={[
+                   { value: 'date', label: $t('reminder.due-by-date') },
+                   { value: 'counter', label: $t('reminder.due-by-counter') },
+                   { value: 'both', label: $t('reminder.due-by-both') },
+                 ]} />
+    {/if}
+
+    {#if showDate}
+      <Field id="recurrence" label={$t('reminder.recurrence')} error={errorFor('recurrence')}>
+        <NativeSelect bind:value={() => recurrence, (v) => { recurrence = v; writeSchedule(); }}>
           {#if input.kind === 'service'}<option value="none">{$t('reminder.recurrence-none')}</option>{/if}
           <option value="interval">{$t('reminder.recurrence-interval')}</option>
           <option value="daily">{$t('reminder.recurrence-daily')}</option>
           <option value="weekly">{$t('reminder.recurrence-weekly')}</option>
           <option value="monthly">{$t('reminder.recurrence-monthly')}</option>
           <option value="yearly">{$t('reminder.recurrence-yearly')}</option>
-        </select>
-      </div>
+        </NativeSelect>
+      </Field>
       {#if recurrence === 'weekly'}
-        <div class="field"><label for="weekday">{$t('reminder.weekday')}</label><select id="weekday" bind:value={weekday} onchange={writeSchedule}>{#each [1,2,3,4,5,6,7] as d}<option value={d}>{$t(`weekday.${d}`)}</option>{/each}</select></div>
+        <Field id="weekday" label={$t('reminder.weekday')}>
+          <NativeSelect bind:value={() => weekday, (v) => { weekday = Number(v); writeSchedule(); }}>
+            {#each [1, 2, 3, 4, 5, 6, 7] as d (d)}<option value={d}>{$t(`weekday.${d}`)}</option>{/each}
+          </NativeSelect>
+        </Field>
       {:else if recurrence === 'monthly'}
-        <div class="field"><label for="monthday">{$t('reminder.month-day')}</label><select id="monthday" bind:value={monthDay} onchange={writeSchedule}>{#each Array.from({length:31},(_,i)=>i+1) as d}<option value={d}>{d}</option>{/each}<option value="last">{$t('reminder.last-day')}</option></select></div>
+        <Field id="monthday" label={$t('reminder.month-day')}>
+          <NativeSelect bind:value={() => monthDay, (v) => { monthDay = v; writeSchedule(); }}>
+            {#each Array.from({ length: 31 }, (_, i) => i + 1) as d (d)}<option value={d}>{d}</option>{/each}
+            <option value="last">{$t('reminder.last-day')}</option>
+          </NativeSelect>
+        </Field>
       {:else if recurrence === 'yearly'}
-        <div class="row">
-          <div class="field"><label for="yearmonth">{$t('reminder.month')}</label><select id="yearmonth" bind:value={yearMonth} onchange={writeSchedule}>{#each Array.from({length:12},(_,i)=>i+1) as m}<option value={m}>{$t(`month.${m}`)}</option>{/each}</select></div>
-          <div class="field"><label for="yearday">{$t('reminder.month-day')}</label><select id="yearday" bind:value={yearDay} onchange={writeSchedule}>{#each Array.from({length:31},(_,i)=>i+1) as d}<option value={d}>{d}</option>{/each}</select></div>
+        <div class="grid grid-cols-2 gap-3">
+          <Field id="yearmonth" label={$t('reminder.month')}>
+            <NativeSelect bind:value={() => yearMonth, (v) => { yearMonth = Number(v); writeSchedule(); }}>
+              {#each Array.from({ length: 12 }, (_, i) => i + 1) as m (m)}<option value={m}>{$t(`month.${m}`)}</option>{/each}
+            </NativeSelect>
+          </Field>
+          <Field id="yearday" label={$t('reminder.month-day')}>
+            <NativeSelect bind:value={() => yearDay, (v) => { yearDay = Number(v); writeSchedule(); }}>
+              {#each Array.from({ length: 31 }, (_, i) => i + 1) as d (d)}<option value={d}>{d}</option>{/each}
+            </NativeSelect>
+          </Field>
         </div>
       {/if}
       {#if input.schedule}
-        <div class="field"><label for="schedule-start">{$t('reminder.starts')}</label><DateInput id="schedule-start" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>
-        <p class="hint">{$t('reminder.calendar-hint')}</p>
-        <p aria-live="polite">{$t('reminder.preview')}: {upcoming.map(d => fmtDate(d, $dateFormat)).join(' · ')}</p>
+        <Field id="schedule-start" label={$t('reminder.starts')} hint={$t('reminder.calendar-hint')}>
+          <DateInput id="schedule-start" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} />
+        </Field>
+        <p aria-live="polite" class="m-0 text-sm text-muted-foreground tabular-nums">{$t('reminder.preview')}: {upcoming.map((d) => fmtDate(d, $dateFormat)).join(' · ')}</p>
       {/if}
       {#if recurrence === 'interval'}
-        <div class="row">
-          <div class="field"><label for="en">{$t('reminder.every')}</label><input id="en" type="number" min="1" max="60" bind:value={input.every_n} /></div>
-          <div class="field"><label for="eu">{$t('reminder.every-unit')}</label><select id="eu" bind:value={input.every_unit}><option value="week">{$t('reminder.unit-week')}</option><option value="month">{$t('reminder.unit-month')}</option></select></div>
+        <div class="grid grid-cols-2 gap-3">
+          <Field id="en" label={$t('reminder.every')} error={errorFor('en')}><Input type="number" min="1" max="60" bind:value={input.every_n} /></Field>
+          <Field id="eu" label={$t('reminder.every-unit')}>
+            <NativeSelect bind:value={input.every_unit}>
+              <option value="week">{$t('reminder.unit-week')}</option>
+              <option value="month">{$t('reminder.unit-month')}</option>
+            </NativeSelect>
+          </Field>
         </div>
       {/if}
-    {#if input.kind === 'reading'}
-      {#if !input.schedule}<div class="field"><label for="st">{$t('reminder.starts')}</label><DateInput id="st" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>{/if}
-      <p class="hint">{$t(object?.type === 'body' ? 'weight.reminder-hint' : 'reminder.reading-hint')}</p>
-    {:else}
-      <div class="row">
-        {#if !input.schedule}<div class="field"><label for="dd">{$t('reminder.due-date')}</label><DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></div>{/if}
-        {#if object?.counter_unit}
-          <div class="field"><label for="dc">{$t('reminder.due-counter')} ({object.counter_unit})</label><input id="dc" type="number" min="0" bind:value={input.due_counter} /></div>
+      {#if input.kind === 'reading'}
+        {#if !input.schedule}
+          <Field id="st" label={$t('reminder.starts')}><DateInput id="st" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} /></Field>
         {/if}
-      </div>
-      <div class="row">
-        {#if object?.counter_unit}
-          <div class="field"><label for="rc">{$t('reminder.repeat-counter')} ({object.counter_unit})</label><input id="rc" type="number" min="1" bind:value={input.repeat_counter} /></div>
-        {/if}
+        <p class={hintClass}>{$t(object?.type === 'body' ? 'weight.reminder-hint' : 'reminder.reading-hint')}</p>
+      {:else if !input.schedule}
+        <Field id="dd" label={$t('reminder.due-date')} error={errorFor('dd')}>
+          <DateInput id="dd" bind:value={() => input.due_date ?? '', (v) => (input.due_date = v || null)} />
+        </Field>
+      {/if}
+    {/if}
+
+    {#if showCounter}
+      <div class="grid grid-cols-2 gap-3">
+        <Field id="dc" label={$t('reminder.due-counter')} unit={object?.counter_unit ?? null} error={errorFor('dc')}>
+          <Input type="number" inputmode="numeric" min="0" bind:value={input.due_counter} />
+        </Field>
+        <Field id="rc" label={$t('reminder.repeat-counter')} unit={object?.counter_unit ?? null} error={errorFor('rc')}>
+          <Input type="number" inputmode="numeric" min="1" bind:value={input.repeat_counter} />
+        </Field>
       </div>
     {/if}
-    <div class="field"><label for="no">{$t('reminder.notes')}</label><textarea id="no" bind:value={input.notes}></textarea></div>
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <div class="row actions">
-      <button type="button" class="ghost" onclick={() => back(`/objects/${oid}?tab=reminders`)}>{$t('nav.cancel')}</button>
-      <button class="primary" disabled={busy}>{$t('nav.save')}</button>
-    </div>
-  </form>
-  {#if editing}<button class="danger" disabled={busy} onclick={remove}>{$t('nav.delete')}</button>{/if}
-</main>
 
-<style>
-  .actions { margin-top: var(--space-2); }
-  .kind { border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
-  .kind legend { padding: 0; margin-bottom: var(--space-1); }
-</style>
+    <MoreDetails bind:open={moreOpen}>
+      <Field id="no" label={$t('reminder.notes')}><Textarea bind:value={input.notes} /></Field>
+    </MoreDetails>
+
+    <FormActions {busy} error={formError} oncancel={() => back(`/objects/${oid}?tab=reminders`)} />
+  </form>
+  {#if editing}
+    <section aria-labelledby="reminder-delete" class="mt-8 flex max-w-[40rem] flex-col gap-2 border-t border-border pt-4">
+      <h2 id="reminder-delete" class={sectionHeadingClass}>{$t('nav.delete')}</h2>
+      <Button variant="destructive" class="min-h-11 w-fit" disabled={busy} onclick={remove}>{$t('nav.delete')}</Button>
+    </section>
+  {/if}
+</main>

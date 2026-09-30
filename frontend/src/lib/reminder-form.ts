@@ -64,3 +64,36 @@ export function intervalDays(n: number | null, unit: EveryUnit | null): number {
   const days = (n ?? 1) * (unit === 'week' ? 7 : 30);
   return Math.min(Math.max(days, 1), 365);
 }
+
+/** Which of the two due fields a service reminder watches. */
+export type DueMode = 'date' | 'counter' | 'both';
+
+/** The side a saved reminder uses, so the form opens on it. Without a counter on the object
+ *  there is only the date. A new reminder starts by date. */
+export function dueModeOf(input: ReminderInput, hasCounter: boolean): DueMode {
+  if (!hasCounter) return 'date';
+  const byCounter = input.due_counter !== null || input.repeat_counter !== null;
+  const byDate = input.due_date !== null || input.schedule !== null || input.every_n !== null || input.repeat_months !== null;
+  if (byCounter && byDate) return 'both';
+  return byCounter ? 'counter' : 'date';
+}
+
+/** The reminder as saved under `mode`: the side it does not use is cleared, so a value typed and
+ *  then hidden by switching sides is not saved behind the user's back. The form applies this only
+ *  when saving, so switching back and forth loses nothing typed. Reading reminders have no sides. */
+export function applyDueMode(input: ReminderInput, mode: DueMode): ReminderInput {
+  if (input.kind === 'reading' || mode === 'both') return input;
+  if (mode === 'date') return { ...input, due_counter: null, repeat_counter: null };
+  return { ...input, due_date: null, schedule: null, every_n: null, every_unit: null, repeat_months: null };
+}
+
+/** The reminder form's field for each key `validateReminder` returns. `reminder.due-date` is the
+ *  counter field instead while only the counter side is shown (the form overrides it). */
+export const REMINDER_FIELD_IDS: Readonly<Record<string, string>> = {
+  'reminder.title': 'ti',
+  'reminder.every': 'en',
+  'reminder.schedule': 'recurrence',
+  'reminder.due-date': 'dd',
+  'reminder.due-counter': 'dc',
+  'reminder.repeat-counter': 'rc',
+};

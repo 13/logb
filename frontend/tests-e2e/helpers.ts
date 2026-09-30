@@ -119,3 +119,10 @@ export async function openInfo(page: Page): Promise<void> {
   const info = tabs.getByRole('tab', { name: 'Info', exact: true });
   if ((await info.count()) > 0) await info.click();
 }
+
+/** Opens a form's "More details" section if it is closed. Safe to call when it is open already. */
+export async function openMoreDetails(page: Page): Promise<void> {
+  const toggle = page.getByRole('button', { name: /^(More details|Weitere Angaben)$/ });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
