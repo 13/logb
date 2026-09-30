@@ -70,7 +70,7 @@
       <div class="flex flex-col gap-0.5">
         <span class={label}>{$t('weight.latest')}</span>
         <strong class={figure}>{formatWeight(latest.weight_grams, unit, $locale)}</strong>
-        <span class={label}>{fmtDate(latest.date, $dateFormat)}{#if latest.pending} · {$t('weight.pending')}{/if}</span>
+        <span class={label}>{fmtDate(latest.date, $dateFormat)}{#if latest.pending}{' · '}{$t('weight.pending')}{/if}</span>
       </div>
       {#if previous}
         <div class="flex flex-col gap-0.5">
@@ -93,7 +93,7 @@
   {#if failed}<p role="status" class="m-0 text-sm text-foreground">{$t('weight.unavailable')}</p>{/if}
   {#if all.length > 0}
     <!-- The dashboard's segmented control: the chosen range on a card-coloured segment. -->
-    <div role="group" aria-label={$t('weight.history')} class="flex w-fit gap-1 rounded-md bg-muted p-1">
+    <div role="group" aria-label={$t('weight.range')} class="flex w-fit gap-1 rounded-md bg-muted p-1">
       {#each [1, 3, 0] as months (months)}
         <button type="button" data-slot="weight-range" aria-pressed={range === months}
                 onclick={() => { range = months as 1 | 3 | 0; selected = null; }}
@@ -125,7 +125,7 @@
             <button type="button" data-slot="weight-point" aria-label={$t('weight.chart-point')} onclick={() => (selected = point.id)}
                     class={['flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md px-3 text-left text-sm text-foreground hover:bg-accent', focus, focused?.id === point.id && 'outline-2 outline-solid outline-brand-ink']}>
               <span>{fmtDate(point.date, $dateFormat)}</span>
-              <span><strong class="font-semibold tabular-nums">{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="text-muted-foreground"> · {$t('weight.pending')}</span>{/if}</span>
+              <span><strong class="font-semibold tabular-nums">{formatWeight(point.weight_grams, unit, $locale)}</strong>{#if point.pending}<span class="text-muted-foreground">{' · '}{$t('weight.pending')}</span>{/if}</span>
             </button>
           </li>
         {/each}

@@ -73,6 +73,7 @@ export default {
   "weight.three-months": "3 Monate",
   "weight.all": "Gesamter Zeitraum",
   "weight.history": "Gewichtsverlauf",
+  "weight.range": "Zeitraum",
   "weight.pending": "Wartet auf Synchronisierung",
   "weight.chart-hint": "Wähle einen Punkt, um Gewicht und Datum zu sehen.",
   "weight.chart-point": "Diagrammpunkt auswählen",
