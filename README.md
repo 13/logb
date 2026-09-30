@@ -317,6 +317,7 @@ until it is started by hand.
 | `LOGB_LOG`           | `info`    | tracing filter                                                                                                               |
 | `LOGB_TRUST_PROXY`   | `false`   | trust `X-Forwarded-For` for the login rate limiter's client IP (its rightmost entry, the one your proxy appended); enable only behind a reverse proxy that sets or appends the header |
 | `LOGB_LOGIN_MAX_ATTEMPTS` | `10` | login attempts allowed from one IP per minute before further ones get a 429; raise it where many people share an address. QR sign-in's redeem step (a phone swapping a pairing code for a token) shares this same limit and counter, by the same IP — it is not a separate budget |
+| `LOGB_METRICS_TOKEN` | unset     | turns on `/metrics` for a Prometheus scraper sending `Authorization: Bearer <this token>`; unset or blank, `/metrics` answers 404 -- see [Metrics](#metrics) |
 | `LOGB_CORS_ORIGINS`  | *(empty)* | comma-separated origins allowed to call the API from another origin; empty sends no CORS headers. Never permits credentials — a cross-origin client uses a bearer token |
 | `LOGB_BUILD_COMMIT`  | unset     | **read at build time, not at run time**: the commit Settings → About shows. A build in a git checkout asks git; `docker build` copies no `.git`, so pass `--build-arg LOGB_BUILD_COMMIT=$(git rev-parse HEAD)` (CI and the released images do). Without either, About shows no commit |
 
@@ -608,6 +609,34 @@ id for that uuid. The full shapes are in `docs/openapi.json`.
 the API; unset, no CORS headers are sent at all. Credentials are never allowed
 cross-origin whatever is listed, so such a client must authenticate with a
 bearer token rather than the session cookie.
+
+## Metrics
+
+`/metrics` answers in Prometheus's text format, at the root beside `/api`. It is off unless
+`LOGB_METRICS_TOKEN` is set: until then it answers 404 to everyone, and once set it answers only
+a request carrying that token as a bearer credential (anything else gets a 401). A session or an
+API token does not open it.
+
+```yaml
+scrape_configs:
+  - job_name: logb
+    authorization:
+      credentials: <LOGB_METRICS_TOKEN>
+    static_configs:
+      - targets: ["logb.example:8080"]
+```
+
+| Metric | Type | Labels | |
+|---|---|---|---|
+| `logb_http_requests_total` | counter | `route`, `method`, `status` | requests answered. `route` is the matched route template (`/api/objects/{id}`), never the raw path, and `fallback` for everything no route matched -- the frontend's files and unknown paths alike; `status` is the class (`2xx`) |
+| `logb_http_request_duration_seconds` | histogram | `route`, `method`, `status` | time until the response headers were ready; a body streamed after that (an export, a file) is not in it |
+| `logb_db_pool_connections`, `logb_db_pool_idle_connections`, `logb_db_pool_max_connections` | gauge | `pool` | the `read` and `write` pools. On SQLite the write pool is the one writer connection; on PostgreSQL both names are the same pool, so do not add them up there |
+| `logb_db_write_lock_wait_seconds` | histogram | | how long a write waited before it held the write lock: the writer connection on SQLite, the advisory lock on PostgreSQL |
+| `logb_db_write_lock_timeouts_total` | counter | | writes that gave up waiting (answered 503 with `Retry-After`) |
+| `logb_build_info` | gauge | `version` | always 1 |
+| `process_start_time_seconds` | gauge | | when the server started, as a Unix time |
+
+Counting costs a few atomic additions per request, and happens whether or not the endpoint is on.
 
 ## License
 

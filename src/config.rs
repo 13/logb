@@ -105,6 +105,10 @@ pub struct Config {
     /// a stock PostgreSQL server's `max_connections`.
     #[arg(long, env = "LOGB_DB_POOL_SIZE")]
     pub db_pool_size: Option<u32>,
+    /// Bearer token a Prometheus scraper must send to read `/metrics`. Unset (the default) or
+    /// blank turns the endpoint off: it answers 404. `hide_env_values` keeps it out of `--help`.
+    #[arg(long, env = "LOGB_METRICS_TOKEN", hide_env_values = true)]
+    pub metrics_token: Option<String>,
     /// Accept plain-http push subscription endpoints on the loopback address.
     ///
     /// Only for the integration tests, whose stand-in push service listens on `127.0.0.1` over
@@ -166,6 +170,12 @@ impl Config {
         }
     }
 
+    /// The token `/metrics` answers to, or `None` when metrics are off. Blank counts as unset, so
+    /// an exported-but-empty variable does not turn on an endpoint that any empty bearer opens.
+    pub fn metrics_token(&self) -> Option<&str> {
+        self.metrics_token.as_deref().filter(|t| !t.trim().is_empty())
+    }
+
     pub fn max_upload_bytes(&self) -> usize {
         self.max_upload_mb * 1024 * 1024
     }
@@ -214,6 +224,7 @@ mod tests {
             cors_origins: String::new(),
             database_url: None,
             db_pool_size: None,
+            metrics_token: None,
             allow_loopback_http_push: false,
         }
     }

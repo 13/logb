@@ -3,7 +3,7 @@
   "info": {
     "title": "LogB",
     "version": "0.23.0",
-    "description": "The HTTP API behind LogB, served under `/api`.\n\nTwo credentials work everywhere except issuing and listing tokens: the `logb_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logb_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; issuing and listing tokens deliberately refuse bearer credentials, so a leaked token cannot mint replacements. `DELETE /auth/tokens/{id}` is the one exception: a bearer token may revoke itself, so an app can sign out without ever holding a cookie -- but not any other token. `GET /health` lists `token-self-revoke` in its `features` array so a client can detect support before relying on it.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked against the running router by `tests/openapi.rs`: a route added, removed or renamed without updating it fails the build."
+    "description": "The HTTP API behind LogB, served under `/api`.\n\nTwo credentials work everywhere except issuing and listing tokens: the `logb_session` cookie a browser gets from `POST /auth/login`, and an `Authorization: Bearer logb_pat_...` token for clients that are not browsers. A client obtains its first token by logging in interactively once and calling `POST /auth/tokens`; issuing and listing tokens deliberately refuse bearer credentials, so a leaked token cannot mint replacements. `DELETE /auth/tokens/{id}` is the one exception: a bearer token may revoke itself, so an app can sign out without ever holding a cookie -- but not any other token. `GET /health` lists `token-self-revoke` in its `features` array so a client can detect support before relying on it.\n\n**Writing offline.** `POST /objects/{id}/activities` and `POST /objects/{id}/attachments` accept a `client_op_id`: any string unique to the write, generated once by the client and kept across every retry. The server records it under a unique index, so replaying a write whose response was lost resolves to the row already created instead of duplicating it. Any client that queues writes while offline should use it.\n\nThis document is checked against the running router by `tests/it/openapi.rs`: a route added, removed or renamed without updating it fails the build.\n\n`/metrics` is the one path outside `/api`: a Prometheus scrape target, off unless the operator sets `LOGB_METRICS_TOKEN`."
   },
   "servers": [
     {
@@ -52,6 +52,54 @@
           }
         },
         "security": []
+      }
+    },
+    "/metrics": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "summary": "Prometheus metrics, in the text exposition format. Off unless `LOGB_METRICS_TOKEN` is set.",
+        "description": "Unset (the default), this answers 404 to everyone. Set, it answers only to `Authorization: Bearer <LOGB_METRICS_TOKEN>`; a session cookie or an API token does not open it. Served at the root, not under `/api`. Metrics: `logb_http_requests_total` and `logb_http_request_duration_seconds` by `route` (the matched route template, `fallback` for anything no route matched), `method` and `status` class; `logb_db_pool_connections`, `logb_db_pool_idle_connections` and `logb_db_pool_max_connections` by `pool` (`read`, `write` -- one pool under both names on PostgreSQL); `logb_db_write_lock_wait_seconds` and `logb_db_write_lock_timeouts_total`; `logb_build_info{version}`; `process_start_time_seconds`.",
+        "security": [
+          {
+            "metricsToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metrics",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Metrics are on, and the request did not carry the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Metrics are off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/auth/status": {
@@ -2631,6 +2679,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "An API token from `POST /auth/tokens`. Does not expire; revoke it to end it."
+      },
+      "metricsToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The operator's `LOGB_METRICS_TOKEN`. Opens `/metrics` and nothing else."
       }
     },
     "schemas": {

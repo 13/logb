@@ -23,6 +23,7 @@ mod harness;
 mod health;
 mod insights;
 mod last_done;
+mod metrics;
 mod migration_object_types;
 mod notify;
 mod object_list;
