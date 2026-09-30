@@ -87,6 +87,7 @@ describe('shadcn token contrast', () => {
       ['accent-foreground', 'accent'], ['destructive-foreground', 'destructive'],
       ['destructive', 'background'], ['destructive', 'card'],
       ['brand-ink', 'background'], ['brand-ink', 'card'],
+      ['warn', 'background'], ['warn', 'card'],
     ];
     for (const [fg, bg] of text) {
       it(`${name}: ${fg} on ${bg} (>= 4.5:1)`, () => {

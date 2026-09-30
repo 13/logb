@@ -27,3 +27,12 @@ export function fieldError(key: string, t: Translate): string {
   if (tripMessage) return t(tripMessage);
   return t('form.check-field', { field: t(key) });
 }
+
+/** Where a refused field's message goes: the id of the field's element in the form, or `null`
+ *  for the form's own message line (a key the form has no field for). */
+export interface FieldError { id: string | null; message: string }
+
+/** `fieldError`, plus where to show it. `ids` maps a validator's keys to a form's field ids. */
+export function fieldErrorAt(key: string, t: Translate, ids: Readonly<Record<string, string>>): FieldError {
+  return { id: ids[key] ?? null, message: fieldError(key, t) };
+}

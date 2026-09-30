@@ -10,6 +10,10 @@
   import { dateFormat } from '../stores/date-format';
   import { readingActivity, readingWarning, type ReadingWarning } from '../lib/reading';
   import { locale, t } from '../i18n';
+  import FormActions from '../lib/FormActions.svelte';
+  import { Field } from '$lib/components/ui/field/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { errorClass, hintClass, warnClass } from '$lib/components/ui/field/classes.js';
   import type { MemObject } from '../lib/types';
 
   let { id }: { id: string } = $props();
@@ -20,6 +24,7 @@
   let date = $state(todayIso());
   let lastDate = $state<string | null>(null);
   let rate = $state<number | null>(null);
+  let valueInput = $state<HTMLInputElement | null>(null);
   let error = $state('');
   let busy = $state(false);
   /** The warning the user has already been shown for exactly this value and date. Saving again
@@ -43,11 +48,22 @@
     catch { /* offline or refused: no rate check */ }
   });
 
+  // Focused straight away: this form has one job, and it is usually opened from a notification
+  // with the odometer in front of the person. (`autofocus` on a component's input is only an
+  // attribute by the time it is inserted, and the browser ignores that.)
+  $effect(() => { valueInput?.focus(); });
+
   const value = $derived(String(valueText).trim() === '' ? NaN : Number(valueText));
   const warning = $derived(
     object && Number.isFinite(value)
       ? readingWarning(value, date, { lastCounter: object.stats.current_counter, lastDate, ratePerDayMilli: rate })
       : null,
+  );
+
+  const lastHint = $derived(
+    object && object.stats.current_counter !== null && lastDate
+      ? $t('reading.last', { counter: counter(object.stats.current_counter, object.counter_unit, $locale), date: fmtDate(lastDate, $dateFormat) })
+      : '',
   );
 
   async function submit(e: SubmitEvent) {
@@ -71,42 +87,27 @@
 </script>
 
 <main>
-  <TopBar title={$t('reading.title')} backTo={`/objects/${oid}`} />
+  <TopBar title={$t('reading.title')} subtitle={object?.name ?? null} backTo={`/objects/${oid}`} />
   {#if object}
-    <form onsubmit={submit}>
-      <p class="muted">{object.name}</p>
-      <div class="field">
-        <label for="rv">{$t('reading.value', { unit: object.counter_unit ?? '' })}</label>
-        <!-- Focused straight away: this form has one job, and it is usually opened from a
-             notification with the odometer in front of the person. -->
-        <!-- svelte-ignore a11y_autofocus -->
-        <input id="rv" class="tnum big" type="number" inputmode="numeric" min="0" step="1" bind:value={valueText} autofocus required />
-        {#if object.stats.current_counter !== null && lastDate}
-          <span class="hint tnum">{$t('reading.last', { counter: counter(object.stats.current_counter, object.counter_unit, $locale), date: fmtDate(lastDate, $dateFormat) })}</span>
-        {/if}
-      </div>
-      <div class="field"><label for="rd">{$t('activity.date')}</label><DateInput id="rd" bind:value={date} max={todayIso()} required /></div>
+    <form onsubmit={submit} class="m-0 flex w-full max-w-[40rem] flex-col gap-5">
+      <Field id="rv" label={$t('reading.value', { unit: object.counter_unit ?? '' })} hint={lastHint}>
+        <Input type="number" inputmode="numeric" min="0" step="1" bind:ref={valueInput} bind:value={valueText} required class="h-14 text-2xl tabular-nums" />
+      </Field>
+      <Field id="rd" label={$t('activity.date')}><DateInput id="rd" bind:value={date} max={todayIso()} required /></Field>
+      <!-- An alert, not the field's quiet warning: it is the reason Save did not go through, and
+           saving again unchanged is the confirmation. -->
       {#if acknowledged && warning === acknowledged.warning}
-        <p class="warn" role="alert">
+        <p role="alert" class={warnClass}>
           {warning === 'lower'
             ? $t('reading.warn-lower', { last: counter(object.stats.current_counter, object.counter_unit, $locale) })
             : $t('reading.warn-implausible', { date: fmtDate(lastDate, $dateFormat) })}
         </p>
       {/if}
-      {#if error}<p class="error" role="alert">{error}</p>{/if}
-      <div class="row actions">
-        <button type="button" class="ghost" onclick={() => back(`/objects/${oid}`)}>{$t('nav.cancel')}</button>
-        <button class="primary" disabled={busy}>{$t('nav.save')}</button>
-      </div>
+      <FormActions {busy} {error} oncancel={() => back(`/objects/${oid}`)} />
     </form>
   {:else if error}
-    <p class="error" role="alert">{error}</p>
+    <p role="alert" class={errorClass}>{error}</p>
   {:else}
-    <p class="muted">{$t('nav.loading')}</p>
+    <p class={hintClass}>{$t('nav.loading')}</p>
   {/if}
 </main>
-
-<style>
-  .big { font-size: var(--text-data); }
-  .actions { margin-top: var(--space-2); }
-</style>

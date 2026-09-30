@@ -14,7 +14,8 @@ import { mkdirSync } from 'node:fs';
 
 const BASE = process.env.SHOTS_BASE ?? 'http://127.0.0.1:8111';
 const OUT = process.argv[2] ?? 'shots';
-const ONLY = process.argv[3];
+/** Optional comma list of substrings: a screen is captured when its id contains any of them. */
+const ONLY = process.argv[3]?.split(',');
 const USER = { username: 'ben', password: 'correct horse' };
 mkdirSync(OUT, { recursive: true });
 
@@ -70,8 +71,10 @@ const SCREENS = [
   ['06-object-reminders', `/objects/${car}?tab=reminders`],
   ['07-object-info', `/objects/${car}?tab=info`],
   ['08-activity-new', `/objects/${car}/activities/new`],
+  ['09-reading-new', `/objects/${car}/reading`],
   ['10-reminder-new', `/objects/${car}/reminders/new`],
   ['11-object-new', '/objects/new'],
+  ['19-object-edit', `/objects/${car}/edit`],
   ['12-search', '/search', async (p) => { await p.getByRole('searchbox').first().fill('oil'); }],
   ['13-stats', '/stats'],
   ['14-settings', '/settings'],
@@ -87,7 +90,7 @@ for (const { name, ...opts } of VARIANTS) {
     const login = await signed.request.post(`${BASE}/api/auth/login`, { data: USER });
     if (!login.ok()) throw new Error(`login: ${login.status()}`);
     for (const [id, path, act, authed = true] of SCREENS) {
-      if (ONLY && !id.includes(ONLY)) continue;
+      if (ONLY && !ONLY.some((s) => id.includes(s))) continue;
       const page = await (authed ? signed : anon).newPage();
       await page.goto(BASE + path);
       await page.waitForLoadState('networkidle');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fieldError } from '../src/lib/form-error';
+import { fieldError, fieldErrorAt } from '../src/lib/form-error';
 import en from '../src/i18n/en';
 
 /** The same interpolation the app's `t` does, over the real English table. */
@@ -17,5 +17,21 @@ describe('fieldError', () => {
 
   it('names whichever field the validator returned', () => {
     expect(fieldError('activity.cost', t)).toContain('“Cost”');
+  });
+});
+
+describe('fieldErrorAt', () => {
+  const t = (key: string, vars?: Record<string, string | number>) => (vars ? `${key}(${Object.values(vars).join(',')})` : key);
+
+  it('puts the message on the field the key names', () => {
+    expect(fieldErrorAt('activity.cost', t, { 'activity.cost': 'co' })).toEqual({ id: 'co', message: fieldError('activity.cost', t) });
+  });
+
+  it('puts a key the form has no field for on the form itself', () => {
+    expect(fieldErrorAt('activity.cost', t, {})).toEqual({ id: null, message: fieldError('activity.cost', t) });
+  });
+
+  it('keeps the trip sentences', () => {
+    expect(fieldErrorAt('trip.end', t, { 'trip.end': 'ten' })).toEqual({ id: 'ten', message: 'trip.error-end' });
   });
 });
