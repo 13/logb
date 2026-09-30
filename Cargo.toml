@@ -35,7 +35,7 @@ tokio-util = { version = "0.7.19", features = ["io"] }
 web-push-native = { version = "0.5", default-features = false }
 p256 = { version = "0.13", features = ["ecdsa"] }
 base64ct = { version = "1.8", features = ["alloc"] }
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 unicode-normalization = "0.1"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 percent-encoding = "2.3.2"
