@@ -589,6 +589,23 @@ pub fn spawn(state: App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bot tokens already stored were sealed by an earlier `aes-gcm`; after a bump they must still
+    /// open. The vector comes from an independent implementation (Node's `crypto`), in the layout
+    /// `encrypt` stores: ciphertext followed by the 16-byte tag, 12-byte nonce, both hex.
+    #[test]
+    fn a_stored_token_still_decrypts() {
+        let key: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let nonce: [u8; 12] = std::array::from_fn(|i| i as u8);
+        let stored =
+            hex::decode("7630e52ff0d3f879e235baffde821d035c1e096eb4cdc6d6e5fc6d7e3a66fd6d").unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let plain = cipher.decrypt(&Nonce::from(nonce), stored.as_ref()).unwrap();
+        assert_eq!(plain, b"123456:bot-token");
+        let sealed = cipher.encrypt(&Nonce::from(nonce), plain.as_ref()).unwrap();
+        assert_eq!(sealed, stored);
+    }
+
     #[test]
     fn long_messages_are_split_at_telegram_limit() {
         let d = Digest {
