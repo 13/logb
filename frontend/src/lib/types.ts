@@ -179,6 +179,8 @@ export interface ImportCounts {
 export interface ActivityHit {
   id: number; object_id: number; object_name: string; date: string; category: Category; title: string;
   notes: string; counter_value: number | null; cost_cents: number | null; weight_grams: number | null; tags: string[];
+  /** The object's weight unit: a weight hit is shown in it. */
+  weight_unit?: WeightUnit;
   /** Only ever set on a `trip` hit -- see `placesLabel` in ./trip. */
   from_place: string | null; to_place: string | null;
 }

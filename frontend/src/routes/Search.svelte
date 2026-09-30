@@ -6,6 +6,7 @@
   import { fmtDate, money } from '../lib/format';
   import { activityTitle } from '../lib/activity-form';
   import { placesLabel } from '../lib/trip';
+  import { formatWeight } from '../lib/weight';
   import { dateFormat } from '../stores/date-format';
   import { currency } from '../stores/session';
   import { locale, t } from '../i18n';
@@ -82,6 +83,15 @@
   }
 
   const empty = $derived(results !== null && results.objects.length === 0 && results.activities.length === 0);
+  /** What the polite status region says, for screen readers only, once hits are on screen: how
+   *  many. "No matches" is the region's visible text instead. Empty while loading, so each
+   *  answer is announced once. */
+  const announcement = $derived.by(() => {
+    if (!results || empty || loading || error) return '';
+    const n = results.objects.length + results.activities.length;
+    if (results.has_more) return $t('search.count-more', { n });
+    return n === 1 ? $t('search.count-one') : $t('search.count', { n });
+  });
 
   // The dashboard's object card (ObjectCard.svelte): one box, an icon tile, the name as the
   // button that opens it, stretched over the whole card; tag chips are raised above it.
@@ -105,13 +115,21 @@
   {#if error}<p role="alert" class="m-0 mb-3 text-sm font-medium text-destructive">{error}</p>{/if}
   {#if loading && !results}
     <p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p>
-  {:else if empty}
-    <!-- A report about a query, not an invitation: it names what was searched for, and there is
-         no action to offer. Before anything is typed nothing is drawn at all. -->
-    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
-      <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('search.none', { q: searched })}</p>
-    </div>
-  {:else if results}
+  {/if}
+  <!-- A polite live region, mounted empty with the page, so each answer is announced: the number
+       of hits (for screen readers only), or the visible "no matches" line. -->
+  <div role="status">
+    {#if empty}
+      <!-- A report about a query, not an invitation: it names what was searched for, and there is
+           no action to offer. Before anything is typed nothing is drawn at all. -->
+      <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+        <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('search.none', { q: searched })}</p>
+      </div>
+    {:else if announcement}
+      <span class="sr-only">{announcement}</span>
+    {/if}
+  </div>
+  {#if results && !empty}
     {#if results.objects.length > 0}
       <section aria-labelledby="search-objects" class="mb-6 flex flex-col gap-2">
         <h2 id="search-objects" class={sectionHeadingClass}>{$t('search.objects')}</h2>
@@ -145,7 +163,7 @@
               <div class="flex min-w-0 flex-1 flex-col gap-1">
                 <button data-slot="hit-open" class={open} onclick={() => go(`/objects/${a.object_id}/activities/${a.id}`)}>{activityTitle(a.title, a.category, $t)}</button>
                 <p class={facts}>
-                  {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{a.weight_grams !== null ? ` · ${a.weight_grams} g` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
+                  {a.object_name} · {fmtDate(a.date, $dateFormat)}{a.cost_cents !== null ? ` · ${money(a.cost_cents, $currency, $locale)}` : ''}{a.weight_grams !== null ? ` · ${formatWeight(a.weight_grams, a.weight_unit ?? 'kg', $locale)}` : ''}{placesLabel(a.from_place, a.to_place) ? ` · ${placesLabel(a.from_place, a.to_place)}` : ''}
                 </p>
                 {#if (a.tags ?? []).length > 0}
                   <!-- A tapped chip opens the entry's object with its timeline narrowed to that tag. -->

@@ -38,6 +38,8 @@ pub struct ActivityHit {
     pub counter_value: Option<i64>,
     pub cost_cents: Option<i64>,
     pub weight_grams: Option<i64>,
+    /// The object's unit, so a weight hit reads "81.5 kg" or "179.7 lb" as its object shows it.
+    pub weight_unit: String,
     #[serde(serialize_with = "crate::domain::tags::serialize_json_text")]
     pub tags: String,
     /// A trip's places, so a hit on one of them is readable in the result list without a second
@@ -149,7 +151,7 @@ async fn search(
 
     let mut activities = sqlx::query_as::<_, ActivityHit>(sqlx::AssertSqlSafe(format!(
         "SELECT a.id, a.object_id, o.name AS object_name, a.date, a.category, a.title, a.notes, \
-         a.counter_value, a.cost_cents, a.weight_grams, a.tags, a.from_place, a.to_place \
+         a.counter_value, a.cost_cents, a.weight_grams, o.weight_unit, a.tags, a.from_place, a.to_place \
          FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL \
          AND {activities_match} \

@@ -4968,6 +4968,22 @@
             "format": "int64",
             "description": "Money is always integer cents; never a float"
           },
+          "weight_grams": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A weight entry's weight in grams; null on every other category."
+          },
+          "weight_unit": {
+            "type": "string",
+            "enum": [
+              "kg",
+              "lb"
+            ],
+            "description": "The owning object's weight display unit, so a weight hit can be shown the way its object shows it."
+          },
           "tags": {
             "type": "array",
             "items": {
