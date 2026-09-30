@@ -6,6 +6,10 @@
   import { t } from '../../i18n';
   import { fmtDate } from '../../lib/format';
   import { dateFormat } from '../../stores/date-format';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Field } from '$lib/components/ui/field/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { errorClass, hintClass } from '$lib/components/ui/field/classes.js';
   import type { BackupStatus, DbDescription, DbLocation, DbProbe, DbSwitched } from '../../lib/types';
 
   let db = $state<DbDescription | null>(null);
@@ -97,124 +101,111 @@
     try { await api('POST', '/database/restart'); restartNote = $t('db.restart-sent'); }
     catch (e) { dbError = errorMessage(e, $t); restarting = false; }
   }
+
+  const card = 'flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-xs';
+  const heading = 'm-0 text-base font-semibold text-foreground';
+  /** A host, a file path, an epoch or a driver's message: long, and never cut off. */
+  const long = 'm-0 text-sm text-muted-foreground [overflow-wrap:anywhere]';
 </script>
 
 <main>
   <TopBar title={$t('db.title')} backTo="/settings" />
-  {#if dbError}<p class="error" role="alert">{dbError}</p>{/if}
-  {#if db}
-    <p class="muted">{$t('db.current')}</p>
-    <div class="card stack">
-      <b>{backendName(db)}</b>
-      <span class="muted break">{place(db)}</span>
-    </div>
-    <!-- Above the field, not below it and not in a tooltip: a migrated instance looks
-         perfectly healthy until somebody opens a photo, and by then the source machine may
-         be gone. -->
-    <div class="card blobs stack">
-      <b>{$t('db.blobs-title')}</b>
-      <span>{$t('db.blobs')}</span>
-    </div>
-    <div class="field">
-      <label for="dburl">{$t('db.url')}</label>
-      <!-- No placeholder and no hint about sending when the field cannot be used: an example
-           URL in a read-only box reads like a value that is already saved. -->
-      <input id="dburl" bind:value={dbUrl} placeholder={canChooseDb ? $t('db.url-placeholder') : ''} readonly={!canChooseDb}
-             autocomplete="off" autocapitalize="off" spellcheck="false" />
-      {#if canChooseDb}<span class="hint">{$t('db.url-hint')}</span>{/if}
-    </div>
-    {#if !canChooseDb}
-      <p class="muted"><b>{$t('db.env')}</b> — {$t('db.env-hint')}</p>
-    {:else}
-      <div class="row">
-        <button onclick={testDatabase} disabled={probing || switching || dbUrl.trim().length === 0}>
-          {probing ? $t('db.testing') : $t('db.test')}
-        </button>
-        <button class="primary" onclick={switchDatabase} disabled={probing || switching || dbUrl.trim().length === 0}>
-          {switching ? $t('db.switching') : $t('db.switch')}
-        </button>
-      </div>
-      {#if switching}<p class="muted">{$t('db.switching-hint')}</p>{/if}
-    {/if}
-    {#if probe}
-      <div class="card stack">
-        <b>{probe.reachable ? $t('db.reachable') : $t('db.unreachable')}</b>
-        {#if probe.version}<span class="muted break">{$t('db.version', { version: probe.version })}</span>{/if}
-        {#if probe.state === 'empty'}<span class="muted">{$t('db.state-empty')}</span>{/if}
-        {#if probe.state === 'holds_logb_data'}<span class="muted">{$t('db.state-holds')}</span>{/if}
-        {#if probe.message}<span class="muted break">{probe.message}</span>{/if}
-      </div>
-    {/if}
-    {#if switched}
-      <div class="card stack">
-        <b>{$t('db.switched')}</b>
-        <ul class="tables">
-          {#each switched.tables as tb (tb.table)}
-            <li><span>{tb.table}</span><span class="muted">{$t('db.rows', { rows: tb.rows })}</span></li>
-          {/each}
-        </ul>
-        <span class="muted break">{$t('db.epoch', { epoch: switched.epoch })}</span>
-        <span class="muted break">{$t('db.pointer', { path: switched.pointer })}</span>
-      </div>
-    {/if}
-    {#if db.pending || switched}
-      <div class="card restart stack">
-        <b>{$t('db.pending')}</b>
-        {#if db.pending}<span class="muted break">{$t('db.pending-at', { where: `${backendName(db.pending)} · ${place(db.pending)}` })}</span>{/if}
-        <!-- Nothing here can check that a supervisor exists, so the button does not promise
-             one. "Restart now" that quietly means "stop now" is how an instance ends up down
-             overnight. -->
-        <span>{$t('db.restart-hint')}</span>
-        <button class="danger" onclick={restartNow} disabled={restarting}>{$t('db.restart')}</button>
-        {#if restartNote}<span class="muted">{restartNote}</span>{/if}
-      </div>
-    {/if}
-  {/if}
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-6" aria-busy={db === null}>
+    {#if dbError}<p role="alert" class={errorClass}>{dbError}</p>{/if}
+    {#if db}
+      <section aria-labelledby="db-current" class={card}>
+        <h2 id="db-current" class={heading}>{$t('db.current')}</h2>
+        <p class="m-0 font-semibold text-foreground">{backendName(db)}</p>
+        <p class={long}>{place(db)}</p>
+      </section>
 
-  <h2>{$t('backup.title')}</h2>
-  <!-- Three states, one of which is the reason this section exists: on PostgreSQL LogB backs
-       up nothing, and an instance migrated from SQLite through the section just above looks
-       in every other way as if its nightly backups came along with it. That is said as a
-       division of responsibility rather than as an error, because it is not a fault -- but it
-       is said plainly enough that nobody reads this screen and still believes otherwise. -->
-  {#if backup}
-    <div class="card stack" class:elsewhere={backup.state === 'not_ours'}>
-      {#if backup.state === 'scheduled' || backup.state === 'stale'}
-        <b>{$t('backup.scheduled-title')}</b>
-        <span class="break">{$t('backup.scheduled', { directory: backup.directory ?? '', hour: hourText(backup.hour) })}</span>
-        <span class="muted">
-          {backup.last_at
-            ? $t('backup.last', { date: fmtDate(backup.last_at, $dateFormat) })
-            : $t('backup.last-none', { hour: hourText(backup.hour) })}
-        </span>
-        {#if backup.state === 'stale'}<span class="error">{$t('backup.stale')}</span>{/if}
-      {:else if backup.state === 'off'}
-        <b>{$t('backup.off-title')}</b>
-        <span>{$t('backup.off')}</span>
-      {:else}
-        <b>{$t('backup.not-ours-title')}</b>
-        <span>{$t('backup.not-ours')}</span>
-        <span>{$t('backup.not-ours-how')}</span>
+      <!-- Above the field, not below it and not in a tooltip: a migrated instance looks healthy
+           until somebody opens a photo, and by then the source machine may be gone. Marked in the
+           warning colour so it cannot be read as another hint. -->
+      <div class={`${card} border-l-4 border-l-warn`}>
+        <p class="m-0 font-semibold text-warn">{$t('db.blobs-title')}</p>
+        <p class="m-0 text-sm text-foreground">{$t('db.blobs')}</p>
+      </div>
+
+      <div class={card}>
+        <!-- No placeholder and no hint when the field cannot be used: an example URL in a
+             read-only box reads like a value that is already saved. -->
+        <Field id="dburl" label={$t('db.url')} hint={canChooseDb ? $t('db.url-hint') : ''}>
+          <Input bind:value={dbUrl} placeholder={canChooseDb ? $t('db.url-placeholder') : ''} readonly={!canChooseDb}
+                 autocomplete="off" autocapitalize="off" spellcheck="false" />
+        </Field>
+        {#if !canChooseDb}
+          <p class="m-0 text-sm text-muted-foreground"><b class="font-semibold text-foreground">{$t('db.env')}</b> — {$t('db.env-hint')}</p>
+        {:else}
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" class="h-12" onclick={testDatabase} disabled={probing || switching || dbUrl.trim().length === 0}>
+              {probing ? $t('db.testing') : $t('db.test')}
+            </Button>
+            <!-- The page's one primary action. -->
+            <Button class="h-12" onclick={switchDatabase} disabled={probing || switching || dbUrl.trim().length === 0}>
+              {switching ? $t('db.switching') : $t('db.switch')}
+            </Button>
+          </div>
+          {#if switching}<p class={hintClass}>{$t('db.switching-hint')}</p>{/if}
+        {/if}
+      </div>
+
+      {#if probe}
+        <div class={card}>
+          <p class="m-0 font-semibold text-foreground">{probe.reachable ? $t('db.reachable') : $t('db.unreachable')}</p>
+          {#if probe.version}<p class={long}>{$t('db.version', { version: probe.version })}</p>{/if}
+          {#if probe.state === 'empty'}<p class={long}>{$t('db.state-empty')}</p>{/if}
+          {#if probe.state === 'holds_logb_data'}<p class={long}>{$t('db.state-holds')}</p>{/if}
+          {#if probe.message}<p class={long}>{probe.message}</p>{/if}
+        </div>
       {/if}
-    </div>
-  {/if}
-</main>
+      {#if switched}
+        <div class={card}>
+          <p class="m-0 font-semibold text-foreground">{$t('db.switched')}</p>
+          <ul role="list" class="m-0 flex list-none flex-col gap-1 p-0 text-sm">
+            {#each switched.tables as tb (tb.table)}
+              <li class="flex justify-between gap-2"><span class="text-foreground">{tb.table}</span><span class="text-muted-foreground tabular-nums">{$t('db.rows', { rows: tb.rows })}</span></li>
+            {/each}
+          </ul>
+          <p class={long}>{$t('db.epoch', { epoch: switched.epoch })}</p>
+          <p class={long}>{$t('db.pointer', { path: switched.pointer })}</p>
+        </div>
+      {/if}
+      {#if db.pending || switched}
+        <div class={`${card} border-l-4 border-l-destructive`}>
+          <p class="m-0 font-semibold text-foreground">{$t('db.pending')}</p>
+          {#if db.pending}<p class={long}>{$t('db.pending-at', { where: `${backendName(db.pending)} · ${place(db.pending)}` })}</p>{/if}
+          <!-- Nothing here can check that a supervisor exists, so the button does not promise one. -->
+          <p class="m-0 text-sm text-foreground">{$t('db.restart-hint')}</p>
+          <Button variant="destructive" class="h-12 self-start" onclick={restartNow} disabled={restarting}>{$t('db.restart')}</Button>
+          {#if restartNote}<p class={hintClass}>{restartNote}</p>{/if}
+        </div>
+      {/if}
+    {/if}
 
-<style>
-  .row > button { flex: none; }
-  .stack { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
-  /* A host, a file path, an epoch and a driver's error message are all long and none of them
-     may be cut off half way through. */
-  .break { word-break: break-word; }
-  /* The one thing on this screen a migration can silently lose. It is coloured and bordered so
-     it cannot be read as another hint under another field. */
-  .blobs { border-left: 4px solid var(--warn); }
-  .blobs b { color: var(--warn); }
-  .restart { border-left: 4px solid var(--danger); }
-  /* Marked out, but in the accent colour rather than the warning or danger one: a PostgreSQL
-     database LogB does not back up is a division of responsibility, not a fault. */
-  .elsewhere { border-left: 4px solid var(--accent-ink); }
-  .elsewhere b { color: var(--accent-ink); }
-  .tables { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-1); }
-  .tables li { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
-</style>
+    <section aria-labelledby="backup-title" class="flex flex-col gap-2">
+      <h2 id="backup-title" class={heading}>{$t('backup.title')}</h2>
+      <!-- Three states; on PostgreSQL LogB backs up nothing, said as a division of responsibility
+           (accent ink), not as a fault. -->
+      {#if backup}
+        <div class={[card, backup.state === 'not_ours' && 'border-l-4 border-l-brand-ink']}>
+          {#if backup.state === 'scheduled' || backup.state === 'stale'}
+            <p class="m-0 font-semibold text-foreground">{$t('backup.scheduled-title')}</p>
+            <p class="m-0 text-sm text-foreground [overflow-wrap:anywhere]">{$t('backup.scheduled', { directory: backup.directory ?? '', hour: hourText(backup.hour) })}</p>
+            <p class={hintClass}>
+              {backup.last_at ? $t('backup.last', { date: fmtDate(backup.last_at, $dateFormat) }) : $t('backup.last-none', { hour: hourText(backup.hour) })}
+            </p>
+            {#if backup.state === 'stale'}<p class={errorClass}>{$t('backup.stale')}</p>{/if}
+          {:else if backup.state === 'off'}
+            <p class="m-0 font-semibold text-foreground">{$t('backup.off-title')}</p>
+            <p class="m-0 text-sm text-foreground">{$t('backup.off')}</p>
+          {:else}
+            <p class="m-0 font-semibold text-brand-ink">{$t('backup.not-ours-title')}</p>
+            <p class="m-0 text-sm text-foreground">{$t('backup.not-ours')}</p>
+            <p class="m-0 text-sm text-foreground">{$t('backup.not-ours-how')}</p>
+          {/if}
+        </div>
+      {/if}
+    </section>
+  </div>
+</main>

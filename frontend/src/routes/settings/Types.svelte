@@ -8,6 +8,11 @@
   import { t } from '../../i18n';
   import { go } from '../../lib/router';
   import { safeReturnPath } from '../../lib/object-draft';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { CheckField, Field } from '$lib/components/ui/field/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
+  import { destructiveGhostClass, errorClass, labelClass, sectionHeadingClass } from '$lib/components/ui/field/classes.js';
   import { CUSTOM_TYPE_ICONS, customTypes, loadCustomTypes, typeIcon } from '../../lib/type-registry';
   import { CATEGORIES, OBJECT_TYPES, type Category, type CounterUnit, type CustomType } from '../../lib/types';
 
@@ -123,121 +128,100 @@
 
   const summary = (ty: CustomType) =>
     [ty.counter_unit, ty.categories.map((c) => $t(`cat.${c}`)).join(', ')].filter(Boolean).join(' · ');
+
+  // Icon tiles as TypeTiles draws the object form's: the invisible radio fills its label, which
+  // carries the look (brand-ink on primary/10 over card when checked, tested).
+  const iconTile = 'relative flex min-h-12 cursor-pointer items-center justify-center rounded-lg border border-input bg-card text-muted-foreground transition-colors hover:not-has-checked:bg-accent has-checked:border-brand-ink has-checked:bg-primary/10 has-checked:text-brand-ink has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-offset-2 has-focus-visible:outline-ring';
 </script>
 
 {#snippet form()}
-  <form class="card type-form" onsubmit={(e) => { e.preventDefault(); void save(); }}>
-    <div class="field">
-      <label for="tn">{$t('types.name')}</label>
-      <input id="tn" bind:value={name} maxlength="40" autocomplete="off" required />
-    </div>
-    <fieldset class="field">
-      <legend>{$t('types.icon')}</legend>
-      <div class="icons">
+  <form data-testid="type-form" aria-busy={busy} class="m-0 flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs"
+        onsubmit={(e) => { e.preventDefault(); void save(); }}>
+    <Field id="tn" label={$t('types.name')}>
+      <Input bind:value={name} maxlength={40} autocomplete="off" required />
+    </Field>
+    <fieldset class="m-0 flex min-w-0 flex-col border-0 p-0">
+      <legend class={`${labelClass} mb-1.5 p-0`}>{$t('types.icon')}</legend>
+      <div class="grid grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
         {#each CUSTOM_TYPE_ICONS as i (i)}
-          <label class="icon-choice" title={iconLabel(i)}>
-            <input type="radio" name="type-icon" value={i} bind:group={icon} class="visually-hidden" />
+          <label data-testid="icon-choice" class={iconTile} title={iconLabel(i)}>
+            <input type="radio" data-slot="icon-radio" name="type-icon" value={i} bind:group={icon}
+                   class="absolute inset-0 m-0 size-full cursor-pointer appearance-none rounded-lg opacity-0" />
             <Icon name={i} size={24} />
-            <span class="visually-hidden">{iconLabel(i)}</span>
+            <span class="sr-only">{iconLabel(i)}</span>
           </label>
         {/each}
       </div>
     </fieldset>
-    <fieldset class="field">
-      <legend>{$t('types.categories')}</legend>
-      <div class="cats">
+    <fieldset class="m-0 flex min-w-0 flex-col border-0 p-0">
+      <legend class={`${labelClass} mb-1.5 p-0`}>{$t('types.categories')}</legend>
+      <div class="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-3">
         {#each CATEGORIES as c (c)}
-          <label class="row toggle">
-            <input type="checkbox" checked={c === 'other' || categories.includes(c)} disabled={c === 'other'}
-              onchange={(e) => toggle(c, e.currentTarget.checked)} />
-            {$t(`cat.${c}`)}
-          </label>
+          <!-- "Other" fits any entry, so it is always on and cannot be taken off. -->
+          <CheckField id={`type-cat-${c}`} label={$t(`cat.${c}`)} disabled={c === 'other'}
+                      bind:checked={() => c === 'other' || categories.includes(c), (on) => toggle(c, on)} />
         {/each}
       </div>
     </fieldset>
-    <div class="field">
-      <label for="tu">{$t('types.unit')}</label>
-      <select id="tu" bind:value={unit}>
+    <Field id="tu" label={$t('types.unit')}>
+      <NativeSelect bind:value={unit}>
         <option value={null}>{$t('types.unit-none')}</option>
         <option value="km">{$t('object.counter-km')}</option>
         <option value="mi">{$t('object.counter-mi')}</option>
         <option value="h">{$t('object.counter-h')}</option>
-      </select>
-    </div>
-    {#if formError}<p class="error" role="alert">{formError}</p>{/if}
-    <div class="row actions">
-      <button type="submit" class="primary" disabled={busy || name.trim() === ''}>{$t('types.save')}</button>
-      <button type="button" class="ghost" onclick={cancelForm}>{$t('nav.cancel')}</button>
+      </NativeSelect>
+    </Field>
+    {#if formError}<p role="alert" class={errorClass}>{formError}</p>{/if}
+    <div class="flex gap-2">
+      <!-- While the form is open, "Add type" is hidden: this is the page's one primary. -->
+      <Button type="submit" class="h-12 flex-1 sm:min-w-28 sm:flex-none" disabled={busy || name.trim() === ''}>{$t('types.save')}</Button>
+      <Button variant="outline" class="h-12 flex-1 sm:min-w-28 sm:flex-none" onclick={cancelForm}>{$t('nav.cancel')}</Button>
     </div>
   </form>
 {/snippet}
 
 <main>
   <TopBar title={$t('settings.types')} backTo="/settings" />
-
-  <h2>{$t('types.yours')}</h2>
-  <div class="list">
-    {#each $customTypes as ty (ty.id)}
-      {#if editing === ty.id}
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
+    <section class="flex flex-col gap-2">
+      <h2 id="types-yours" class={sectionHeadingClass}>{$t('types.yours')}</h2>
+      <ul role="list" aria-labelledby="types-yours" class="m-0 flex list-none flex-col gap-2 p-0">
+        {#each $customTypes as ty (ty.id)}
+          <li>
+            {#if editing === ty.id}
+              {@render form()}
+            {:else}
+              <div data-testid="type-row" class="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-xs">
+                <span class="grid size-10 place-items-center rounded-md bg-primary/10 text-brand-ink" aria-hidden="true"><Icon name={ty.icon} /></span>
+                <span class="flex min-w-0 flex-col">
+                  <b class="font-semibold text-foreground [overflow-wrap:anywhere]">{ty.name}</b>
+                  <span class="truncate text-sm text-muted-foreground">{summary(ty)}</span>
+                </span>
+                <Button variant="ghost" class="min-h-11" aria-label={$t('types.edit-named', { name: ty.name })} onclick={() => open(ty)}>{$t('nav.edit')}</Button>
+                <Button variant="ghost" class={`min-h-11 ${destructiveGhostClass}`} aria-label={$t('types.delete-named', { name: ty.name })} onclick={() => remove(ty)}>{$t('types.delete')}</Button>
+                {#if deleteError?.id === ty.id}<p role="alert" class={`${errorClass} col-span-full`}>{deleteError.message}</p>{/if}
+              </div>
+            {/if}
+          </li>
+        {:else}
+          {#if editing !== 'new'}<li class="px-1 py-4 text-sm text-muted-foreground">{$t('types.empty')}</li>{/if}
+        {/each}
+      </ul>
+      {#if editing === 'new'}
         {@render form()}
       {:else}
-        <div class="card type-row">
-          <span class="icon"><Icon name={ty.icon} /></span>
-          <span class="text">
-            <b>{ty.name}</b>
-            <span class="muted summary">{summary(ty)}</span>
-          </span>
-          <button class="ghost" aria-label={$t('types.edit-named', { name: ty.name })} onclick={() => open(ty)}>{$t('nav.edit')}</button>
-          <button class="ghost danger-text" aria-label={$t('types.delete-named', { name: ty.name })} onclick={() => remove(ty)}>{$t('types.delete')}</button>
-          {#if deleteError?.id === ty.id}<p class="error full" role="alert">{deleteError.message}</p>{/if}
-        </div>
+        <!-- The page's one primary action. -->
+        <Button class="h-12 self-start" onclick={() => open('new')}>{$t('types.add')}</Button>
       {/if}
-    {:else}
-      {#if editing !== 'new'}<div class="empty"><p>{$t('types.empty')}</p></div>{/if}
-    {/each}
-    {#if editing === 'new'}
-      {@render form()}
-    {:else}
-      <button onclick={() => open('new')}>{$t('types.add')}</button>
-    {/if}
+    </section>
+
+    <section class="flex flex-col gap-2">
+      <h2 id="types-built-in" class={sectionHeadingClass}>{$t('types.built-in')}</h2>
+      <ul role="list" aria-labelledby="types-built-in" class="m-0 grid list-none grid-cols-1 gap-x-4 rounded-lg border border-border bg-card p-3 shadow-xs sm:grid-cols-2">
+        {#each OBJECT_TYPES as ty (ty)}
+          <li class="flex min-h-11 items-center gap-3 text-foreground"><span class="text-muted-foreground" aria-hidden="true"><Icon name={typeIcon(ty, [])} /></span>{$t(`type.${ty}`)}</li>
+        {/each}
+      </ul>
+    </section>
   </div>
-
-  <h2>{$t('types.built-in')}</h2>
-  <ul class="card builtins">
-    {#each OBJECT_TYPES as ty (ty)}
-      <li><span class="icon"><Icon name={typeIcon(ty, [])} /></span>{$t(`type.${ty}`)}</li>
-    {/each}
-  </ul>
 </main>
-
-<style>
-  .danger-text { color: var(--danger); }
-  .type-row {
-    display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
-    align-items: center; gap: var(--space-2);
-  }
-  .type-row button { padding-inline: var(--space-2); }
-  .icon { display: flex; color: var(--muted); }
-  .text { display: flex; flex-direction: column; min-width: 0; }
-  .text b { overflow-wrap: anywhere; }
-  .summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .full { grid-column: 1 / -1; margin: 0; }
-  fieldset { border: 0; padding: 0; margin-inline: 0; min-width: 0; }
-  legend { font-size: var(--text-sm); color: var(--muted); padding: 0; margin-bottom: var(--space-1); }
-  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: var(--space-2); }
-  .icon-choice {
-    display: flex; align-items: center; justify-content: center; min-height: 48px;
-    border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; color: var(--muted);
-  }
-  .icon-choice:has(input:checked) { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
-  .icon-choice:has(input:focus-visible) { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
-  .cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 var(--space-3); }
-  .cats label { min-height: 44px; }
-  .actions { margin-top: var(--space-2); }
-  .builtins { list-style: none; margin: 0; padding-block: var(--space-1); display: grid; }
-  .builtins li { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; }
-  .visually-hidden {
-    position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden;
-    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-  }
-</style>

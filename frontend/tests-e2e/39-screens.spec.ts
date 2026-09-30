@@ -216,3 +216,23 @@ test.describe('the sign-in chunk not yet fetched', () => {
     await expect(page.getByTestId('auth-form')).toBeVisible();
   });
 });
+
+test('no settings page shows more than one primary button', async ({ page }) => {
+  await signIn(page); // the administrator sees every page
+  const pages = ['/settings', '/settings/appearance', '/settings/account', '/settings/notifications', '/settings/types',
+    '/settings/api', '/settings/data', '/settings/people', '/settings/database'];
+  for (const path of pages) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    await page.waitForLoadState('networkidle');
+    const primaries = await page.getByRole('main').locator('button, a').evaluateAll((els) => {
+      const probe = document.createElement('div');
+      probe.style.backgroundColor = 'var(--ui-primary)';
+      document.body.append(probe);
+      const amber = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return els.filter((e) => (e as HTMLElement).offsetParent !== null && getComputedStyle(e).backgroundColor === amber).length;
+    });
+    expect(primaries, path).toBeLessThanOrEqual(1);
+  }
+});

@@ -16,9 +16,9 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await page.waitForURL('**/settings/types');
   await page.getByRole('button', { name: 'Add type' }).click();
   await page.getByLabel('Name', { exact: true }).fill('E-Scooter');
-  // The radio itself is visually hidden inside its icon cell; a person taps the cell.
+  // The radio fills its icon tile, invisibly; checking it is the tap.
   const eBike = page.getByRole('radio', { name: 'E-bike' });
-  await page.locator('.icon-choice').filter({ has: eBike }).click();
+  await eBike.check();
   await expect(eBike).toBeChecked();
   // The add form starts with a sensible default set; this type wants exactly Repair and Fuel.
   for (const c of ['Maintenance', 'Inspection', 'Purchase']) await page.getByLabel(c, { exact: true }).uncheck();
@@ -26,7 +26,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await expect(page.getByLabel('Repair', { exact: true })).toBeChecked();
   await page.getByLabel('Default counter unit').selectOption('km');
   await page.getByRole('button', { name: 'Save type' }).click();
-  const typeRow = page.locator('.type-row', { hasText: 'E-Scooter' });
+  const typeRow = page.getByTestId('type-row').filter({ hasText: 'E-Scooter' });
   await expect(typeRow).toBeVisible();
 
   // New object: the type sits under "Your types" and brings its counter unit along.
@@ -88,7 +88,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   await typeRow.getByRole('button', { name: 'Delete E-Scooter' }).click();
   await expect(typeRow.getByRole('alert')).toHaveText(/Used by 1 object/);
   await page.reload();
-  await expect(page.locator('.type-row', { hasText: 'E-Scooter' })).toBeVisible();
+  await expect(page.getByTestId('type-row').filter({ hasText: 'E-Scooter' })).toBeVisible();
 });
 
 test('"+ New type…" on the object form makes a type without losing what was typed', async ({ page }) => {
