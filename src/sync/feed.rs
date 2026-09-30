@@ -102,107 +102,184 @@ pub async fn retention_floor(db: &sqlx::AnyPool) -> Result<i64, AppError> {
 /// would be baked into the snapshot and then delivered again by the first pull -- harmless for
 /// an idempotent apply, but it would also let an op that landed between them be skipped if the
 /// order were reversed. Reading it first can only ever repeat work, never lose it.
+///
+/// Each table comes back as the finished JSON text of its array, keyed by the snapshot's name
+/// for it; `json_object` puts them together with whatever else the response carries. The rows
+/// are never a `serde_json::Value` on the way: for 20 000 entries that tree was built once,
+/// deep-copied once more into the response object, and only then serialised, which was most of
+/// the endpoint's time.
+///
+/// Activities, by far the largest table, are read on a connection of their own while the rest
+/// are read one after another on a second one. Two, not six: SQLite's read pool is four
+/// connections, and a bootstrap should not hold all of them. Neither order nor a shared
+/// transaction was ever promised between the tables -- each was always its own statement --
+/// so reading two at once changes nothing about what a snapshot can contain; the cursor read
+/// first is still what makes it safe.
 pub async fn snapshot(
     db: &sqlx::AnyPool,
     user_id: i64,
-) -> Result<(i64, serde_json::Value), AppError> {
+) -> Result<(i64, Vec<(&'static str, Vec<u8>)>), AppError> {
     let seq: i64 =
         sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM changes WHERE user_id = $1")
             .bind(user_id)
             .fetch_one(db)
             .await?;
 
-    let objects = rows(
-        db,
-        "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL",
-        user_id,
-    )
-    .await?;
     let activities = rows(
         db,
         "SELECT a.* FROM activities a JOIN objects o ON o.id = a.object_id \
          WHERE o.user_id = $1 AND a.deleted_at IS NULL AND o.deleted_at IS NULL",
         user_id,
-    )
-    .await?;
-    let reminders = rows(
-        db,
-        "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
-         WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
-        user_id,
-    )
-    .await?;
-    let attachments = rows(
-        db,
-        "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
-         WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL",
-        user_id,
-    )
-    .await?;
-    let files = rows(
-        db,
-        "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL",
-        user_id,
-    )
-    .await?;
-    // Added with own types. A client must ignore snapshot keys it does not know, so an older
-    // client reads this snapshot as before.
-    let object_types = rows(
-        db,
-        "SELECT * FROM object_types WHERE user_id = $1 AND deleted_at IS NULL",
-        user_id,
-    )
-    .await?;
+    );
+    let rest = async {
+        let objects = rows(
+            db,
+            "SELECT * FROM objects WHERE user_id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
+        .await?;
+        let reminders = rows(
+            db,
+            "SELECT r.* FROM reminders r JOIN objects o ON o.id = r.object_id \
+             WHERE o.user_id = $1 AND r.deleted_at IS NULL AND o.deleted_at IS NULL",
+            user_id,
+        )
+        .await?;
+        let attachments = rows(
+            db,
+            "SELECT t.* FROM attachments t JOIN objects o ON o.id = t.object_id \
+             WHERE o.user_id = $1 AND t.deleted_at IS NULL AND o.deleted_at IS NULL",
+            user_id,
+        )
+        .await?;
+        let files = rows(
+            db,
+            "SELECT * FROM files WHERE user_id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
+        .await?;
+        // Added with own types. A client must ignore snapshot keys it does not know, so an older
+        // client reads this snapshot as before.
+        let object_types = rows(
+            db,
+            "SELECT * FROM object_types WHERE user_id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
+        .await?;
+        Ok::<_, AppError>((objects, reminders, attachments, files, object_types))
+    };
+    let (activities, (objects, reminders, attachments, files, object_types)) =
+        tokio::try_join!(activities, rest)?;
 
     Ok((
         seq,
-        serde_json::json!({
-            "objects": objects,
-            "activities": activities,
-            "reminders": reminders,
-            "attachments": attachments,
-            "files": files,
-            "object_types": object_types,
-        }),
+        vec![
+            ("objects", objects),
+            ("activities", activities),
+            ("reminders", reminders),
+            ("attachments", attachments),
+            ("files", files),
+            ("object_types", object_types),
+        ],
     ))
 }
 
-/// Reads a whole table as JSON objects, column names taken from the result set.
+/// Columns a snapshot leaves out. `search_text` is the server's own folded copy of a row's
+/// text for `/search` (see `crate::search_text`): no sync op can set it, no pull ever carries
+/// it, and it changes whenever the folding does, so a device holding it would hold a stale
+/// derivative of fields it already has.
+const NOT_SNAPSHOTTED: &[&str] = &["search_text"];
+
+/// Joins `(key, JSON text)` pairs into one JSON object, keys in byte order -- the order
+/// `serde_json::Map` always wrote them in, so the text is what it was before the snapshot
+/// stopped going through a `Value`.
+pub fn json_object(mut fields: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
+    fields.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = Vec::with_capacity(fields.iter().map(|(k, v)| k.len() + v.len() + 4).sum::<usize>() + 2);
+    out.push(b'{');
+    for (i, (key, value)) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(b',');
+        }
+        push_json(&mut out, key);
+        out.push(b':');
+        out.extend_from_slice(value);
+    }
+    out.push(b'}');
+    out
+}
+
+/// Appends `value` as JSON. Writing into a `Vec` cannot fail, and none of the types written
+/// here (strings, integers, floats, booleans) can fail to serialise.
+pub fn push_json<T: serde::Serialize + ?Sized>(out: &mut Vec<u8>, value: &T) {
+    serde_json::to_writer(out, value).expect("a scalar serialises into a Vec");
+}
+
+/// Reads a whole table as a JSON array of objects, column names taken from the result set,
+/// written straight to JSON text.
 ///
 /// Generic in the shape it returns because the snapshot ships rows verbatim -- a typed struct
-/// per table would have to be kept in step with five schemas for no gain to any caller.
-async fn rows(
-    db: &sqlx::AnyPool,
-    sql: &'static str,
-    user_id: i64,
-) -> Result<Vec<serde_json::Value>, AppError> {
+/// per table would have to be kept in step with five schemas for no gain to any caller. Keys
+/// are written in byte order, as `serde_json::Map` did when the rows were built as values.
+async fn rows(db: &sqlx::AnyPool, sql: &'static str, user_id: i64) -> Result<Vec<u8>, AppError> {
     use sqlx::{Column, Row, TypeInfo, ValueRef};
     let fetched = sqlx::query(sql).bind(user_id).fetch_all(db).await?;
-    let mut out = Vec::with_capacity(fetched.len());
-    for row in fetched {
-        let mut map = serde_json::Map::new();
-        for (i, col) in row.columns().iter().enumerate() {
-            let raw = row.try_get_raw(i)?;
-            let value = if raw.is_null() {
-                serde_json::Value::Null
-            } else {
-                // `Any` reports its own type names, not the driver's: what the SQLite
-                // driver called INTEGER and REAL arrive here as BIGINT and DOUBLE. Both
-                // spellings are listed so this reads the same rows it always did, and the
-                // names PostgreSQL will produce are listed alongside them.
-                match raw.type_info().name() {
-                    "BIGINT" | "INTEGER" | "SMALLINT" => {
-                        serde_json::json!(row.try_get::<i64, _>(i)?)
-                    }
-                    "DOUBLE" | "REAL" => serde_json::json!(row.try_get::<f64, _>(i)?),
-                    "BOOLEAN" => serde_json::json!(row.try_get::<bool, _>(i)?),
-                    _ => serde_json::json!(row.try_get::<String, _>(i)?),
-                }
-            };
-            map.insert(col.name().to_string(), value);
+    let Some(first) = fetched.first() else {
+        return Ok(b"[]".to_vec());
+    };
+    // Every row of one statement has the same columns, so the order and the quoted keys are
+    // worked out once.
+    let mut columns: Vec<(usize, &str)> = first
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(i, col)| (i, col.name()))
+        .filter(|(_, name)| !NOT_SNAPSHOTTED.contains(name))
+        .collect();
+    columns.sort_by(|a, b| a.1.cmp(b.1));
+    let keys: Vec<(usize, Vec<u8>)> = columns
+        .iter()
+        .map(|&(i, name)| {
+            let mut key = Vec::with_capacity(name.len() + 3);
+            push_json(&mut key, name);
+            key.push(b':');
+            (i, key)
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(fetched.len() * 64 * keys.len().max(1));
+    out.push(b'[');
+    for (n, row) in fetched.iter().enumerate() {
+        if n > 0 {
+            out.push(b',');
         }
-        out.push(serde_json::Value::Object(map));
+        out.push(b'{');
+        for (k, (i, key)) in keys.iter().enumerate() {
+            if k > 0 {
+                out.push(b',');
+            }
+            out.extend_from_slice(key);
+            let i = *i;
+            let raw = row.try_get_raw(i)?;
+            if raw.is_null() {
+                out.extend_from_slice(b"null");
+                continue;
+            }
+            // `Any` reports its own type names, not the driver's: what the SQLite driver
+            // called INTEGER and REAL arrive here as BIGINT and DOUBLE. Both spellings are
+            // listed so this reads the same rows it always did, and the names PostgreSQL
+            // will produce are listed alongside them. Asked per value, not per column:
+            // SQLite types values, not columns.
+            match raw.type_info().name() {
+                "BIGINT" | "INTEGER" | "SMALLINT" => push_json(&mut out, &row.try_get::<i64, _>(i)?),
+                "DOUBLE" | "REAL" => push_json(&mut out, &row.try_get::<f64, _>(i)?),
+                "BOOLEAN" => push_json(&mut out, &row.try_get::<bool, _>(i)?),
+                _ => push_json(&mut out, row.try_get::<&str, _>(i)?),
+            }
+        }
+        out.push(b'}');
     }
+    out.push(b']');
     Ok(out)
 }
 
