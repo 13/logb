@@ -123,6 +123,10 @@ describe('tinted highlight contrast', () => {
       expect(contrastRatio(ui('popover-foreground', theme), bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(ui('destructive', theme), blend(ui('destructive', theme), ui('popover', theme), 0.2))).toBeGreaterThanOrEqual(4.5);
     });
+    // The new API token's card: foreground text on primary/10 over the page.
+    it(`${name}: text on the fresh-token card (primary/10 over background) (>= 4.5:1)`, () => {
+      expect(contrastRatio(ui('foreground', theme), blend(ui('primary', theme), ui('background', theme), 0.1))).toBeGreaterThanOrEqual(4.5);
+    });
     // A ghost button in destructive text (`destructiveGhostClass`: Discard, Remove, Revoke,
     // Delete) on its hover fill, which the ghost variant paints as muted in light and muted/50 in
     // dark, over the card the button sits on.

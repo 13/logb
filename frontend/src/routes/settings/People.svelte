@@ -4,6 +4,11 @@
   import TopBar from '../../lib/TopBar.svelte';
   import { api } from '../../lib/api';
   import { t } from '../../i18n';
+  import PasswordInput from '../../lib/PasswordInput.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { CheckField, Field } from '$lib/components/ui/field/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { errorClass, hintClass, labelClass, sectionHeadingClass, destructiveGhostClass } from '$lib/components/ui/field/classes.js';
   import { user } from '../../stores/session';
   import type { User } from '../../lib/types';
 
@@ -21,7 +26,8 @@
     try { users = await api<User[]>('GET', '/users'); } catch (e) { error = errorMessage(e, $t); }
   }
 
-  async function addUser() {
+  async function addUser(e: SubmitEvent) {
+    e.preventDefault();
     try {
       await api('POST', '/users', { username: newName, password: newPass, is_admin: newAdmin });
       newName = ''; newPass = ''; newAdmin = false;
@@ -37,24 +43,31 @@
 
 <main>
   <TopBar title={$t('settings.users')} backTo="/settings" />
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
+    {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
+    <ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
+      {#each users as u (u.id)}
+        <li data-testid="user-row" class="flex min-h-14 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2 shadow-xs">
+          <span class="min-w-0 flex-1 truncate font-medium text-foreground">{u.username}</span>
+          {#if u.is_admin}<span class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{$t('settings.user-admin')}</span>{/if}
+          {#if u.id !== $user?.id}<Button variant="ghost" class={`min-h-11 shrink-0 ${destructiveGhostClass}`} onclick={() => removeUser(u)}>{$t('settings.user-delete')}</Button>{/if}
+        </li>
+      {/each}
+    </ul>
 
-  <div class="list">
-    {#each users as u (u.id)}
-      <div class="card row">
-        <span>{u.username}{#if u.is_admin} · {$t('settings.user-admin')}{/if}</span>
-        {#if u.id !== $user?.id}<button class="ghost danger-text" onclick={() => removeUser(u)}>{$t('settings.user-delete')}</button>{/if}
+    <form aria-labelledby="people-new" onsubmit={addUser} class="m-0 flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs">
+      <h2 id="people-new" class={sectionHeadingClass}>{$t('settings.user-new')}</h2>
+      <Field id="nu" label={$t('login.username')}>
+        <Input bind:value={newName} autocomplete="off" autocapitalize="off" spellcheck="false" />
+      </Field>
+      <div class="flex flex-col gap-1.5">
+        <label for="np" class={labelClass}>{$t('login.password')}</label>
+        <PasswordInput id="np" bind:value={newPass} autocomplete="new-password" describedby="np-hint" />
+        <p id="np-hint" class={hintClass}>{$t('setup.password-hint')}</p>
       </div>
-    {/each}
+      <CheckField id="nu-admin" label={$t('settings.user-admin')} bind:checked={newAdmin} />
+      <!-- The page's one primary action. -->
+      <Button type="submit" class="h-12 self-start" disabled={newName.length < 3 || newPass.length < 8}>{$t('settings.user-new')}</Button>
+    </form>
   </div>
-  <h2>{$t('settings.user-new')}</h2>
-  <div class="field"><label for="nu">{$t('login.username')}</label><input id="nu" bind:value={newName} /></div>
-  <div class="field"><label for="np">{$t('login.password')}</label><input id="np" type="password" bind:value={newPass} autocomplete="new-password" /></div>
-  <label class="row toggle"><input type="checkbox" bind:checked={newAdmin} /> {$t('settings.user-admin')}</label>
-  <button class="primary" onclick={addUser} disabled={newName.length < 3 || newPass.length < 8}>{$t('settings.user-new')}</button>
 </main>
-
-<style>
-  .row > button { flex: none; }
-  .danger-text { color: var(--danger); }
-</style>

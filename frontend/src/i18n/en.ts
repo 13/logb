@@ -676,4 +676,9 @@ export default {
   'settings.currency-invalid': 'Use a three-letter code such as EUR.',
   'notify.digest-title': 'Daily digest',
   'notify.hour-invalid': 'Choose an hour from 0 to 23.',
+  'settings.new-password': 'New password',
+  'settings.password-changed': 'Password changed',
+  'settings.sessions': 'Sessions',
+  'login.show-password': 'Show password',
+  'setup.password-hint': 'At least 8 characters.',
 } as Record<string, string>;

@@ -15,7 +15,7 @@ test('a token can be created, used, and revoked from Settings', async ({ page, p
   await page.getByLabel('What is this token for?').fill('phone');
   await page.getByRole('button', { name: 'Create token' }).click();
 
-  const shown = page.locator('.fresh-token code');
+  const shown = page.getByTestId('fresh-token');
   await expect(shown).toBeVisible();
   const token = (await shown.innerText()).trim();
   expect(token).toMatch(/^logb_pat_[0-9a-f]{64}$/);
@@ -23,7 +23,7 @@ test('a token can be created, used, and revoked from Settings', async ({ page, p
   // It is listed afterwards by name and prefix, and never in full again.
   await expect(page.getByText('phone')).toBeVisible();
   await expect(page.getByText('never used')).toBeVisible();
-  await expect(page.locator('.list').getByText(token)).toHaveCount(0);
+  await expect(page.getByTestId('token-list').getByText(token)).toHaveCount(0);
 
   // A request context of its own, so it carries no cookie and the header is the only credential
   // in play -- which is the whole point of the token. Each project runs its own server on its

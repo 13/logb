@@ -4,15 +4,21 @@
   import { discardDeadOp, deadOps, outboxPending, retryDead, uploadRaw } from '../../lib/api';
   import type { QueuedOp } from '../../lib/outbox';
   import { t } from '../../i18n';
+  import Toaster from '../../lib/Toaster.svelte';
+  import { toast } from '../../lib/toast';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { CheckField } from '$lib/components/ui/field/index.js';
+  import { errorClass, hintClass, sectionHeadingClass, destructiveGhostClass } from '$lib/components/ui/field/classes.js';
   import type { ImportCounts } from '../../lib/types';
 
   let fileEl: HTMLInputElement;
-  let message = $state('');
   let error = $state('');
   let excludeBody = $state(false);
   let pending = $state(0);
   let failed = $state<QueuedOp[]>([]);
   let recoveryBusy = $state(false);
+
+  const card = 'flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-xs';
 
   async function loadRecovery() {
     pending = await outboxPending();
@@ -37,50 +43,49 @@
     if (!files || files.length === 0) return;
     try {
       const counts = await uploadRaw<ImportCounts>('/import', files[0], 'application/zip');
-      message = $t('settings.import-done', counts as unknown as Record<string, number>);
+      toast($t('settings.import-done', counts as unknown as Record<string, number>), 8000);
     } catch (e) { error = errorMessage(e, $t); } finally { fileEl.value = ''; }
   }
 </script>
 
 <main>
   <TopBar title={$t('settings.data')} backTo="/settings" />
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if message}<p class="muted">{message}</p>{/if}
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-6">
+    {#if error}<p role="alert" class={errorClass}>{error}</p>{/if}
 
-  <div class="list">
-    <label><input type="checkbox" bind:checked={excludeBody} /> {$t('settings.export-exclude-body')}</label>
-    <a class="button-like" href={excludeBody ? '/api/export?exclude_body=true' : '/api/export'}>{$t('settings.export')}</a>
-    <button onclick={() => fileEl.click()}>{$t('settings.import')}</button>
-    <input bind:this={fileEl} type="file" accept=".zip,application/zip" hidden onchange={(e) => doImport((e.currentTarget as HTMLInputElement).files)} />
+    <section class={card}>
+      <CheckField id="export-exclude-body" label={$t('settings.export-exclude-body')} bind:checked={excludeBody} />
+      <div class="flex flex-wrap gap-2">
+        <!-- The page's one primary action: a link, so the browser downloads it. -->
+        <Button href={excludeBody ? '/api/export?exclude_body=true' : '/api/export'} class="h-12">{$t('settings.export')}</Button>
+        <Button variant="outline" class="h-12" onclick={() => fileEl.click()}>{$t('settings.import')}</Button>
+      </div>
+      <input bind:this={fileEl} data-slot="import-file" type="file" accept=".zip,application/zip" hidden
+             onchange={(e) => doImport((e.currentTarget as HTMLInputElement).files)} />
+      <!-- Beside the buttons, not in the Backup section: the export is what somebody reaches for
+           when they mean "keep a copy", and it is not a database backup. -->
+      <p class={hintClass}>{$t('settings.export-not-backup')}</p>
+    </section>
+
+    <section aria-labelledby="recovery-title" class={card}>
+      <h2 id="recovery-title" class={sectionHeadingClass}>{$t('settings.sync-recovery')}</h2>
+      {#if pending > 0}<p class={hintClass}>{$t('settings.sync-pending', { n: pending })}</p>{/if}
+      {#if failed.length === 0}
+        <p class={hintClass}>{$t('settings.sync-clear')}</p>
+      {:else}
+        <p class={errorClass}>{$t('settings.sync-failed', { n: failed.length })}</p>
+        <ul role="list" class="m-0 flex list-none flex-col gap-2 p-0">
+          {#each failed as op (op.id)}
+            <li class="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">
+              <span class="font-medium text-foreground">{op.kind}</span>
+              <span class="min-w-0 flex-[1_1_16rem] text-muted-foreground [overflow-wrap:anywhere]">{op.lastError ?? $t('error.generic')}</span>
+              <Button variant="ghost" class={`min-h-11 ${destructiveGhostClass}`} disabled={recoveryBusy} onclick={() => discard(op.id)}>{$t('settings.sync-discard')}</Button>
+            </li>
+          {/each}
+        </ul>
+        <Button variant="outline" class="h-12 self-start" disabled={recoveryBusy} onclick={retryFailed}>{$t('settings.sync-retry')}</Button>
+      {/if}
+    </section>
   </div>
-  <section class="recovery" aria-labelledby="recovery-title">
-    <h2 id="recovery-title">{$t('settings.sync-recovery')}</h2>
-    {#if pending > 0}<p class="muted">{$t('settings.sync-pending', { n: pending })}</p>{/if}
-    {#if failed.length === 0}
-      <p class="muted">{$t('settings.sync-clear')}</p>
-    {:else}
-      <p class="error">{$t('settings.sync-failed', { n: failed.length })}</p>
-      <ul>
-        {#each failed as op (op.id)}
-          <li>
-            <span>{op.kind}</span>
-            <span class="muted">{op.lastError ?? $t('error.generic')}</span>
-            <button class="ghost" disabled={recoveryBusy} onclick={() => discard(op.id)}>{$t('settings.sync-discard')}</button>
-          </li>
-        {/each}
-      </ul>
-      <button class="primary" disabled={recoveryBusy} onclick={retryFailed}>{$t('settings.sync-retry')}</button>
-    {/if}
-  </section>
-  <!-- Beside the button, not in the Backup section: the export is the thing somebody reaches
-       for when they mean "keep a copy", and it is genuinely useful -- just not a backup of the
-       database. -->
-  <p class="muted">{$t('settings.export-not-backup')}</p>
+  <Toaster />
 </main>
-
-<style>
-  .recovery { margin-top: var(--space-6); }
-  .recovery ul { display: grid; gap: var(--space-2); padding-left: var(--space-4); }
-  .recovery li { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
-  .recovery li .muted { flex: 1 1 16rem; }
-</style>

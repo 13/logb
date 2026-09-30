@@ -146,3 +146,23 @@ test('leaving by the in-app Back button sends a waiting change at once, not afte
   await sent;
   await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json())?.dateFormat).toBe('iso');
 });
+
+test('changing the password is one explicit action, and a password field can show what was typed', async ({ page }) => {
+  const username = await signInFresh(page, '39-account');
+  await page.goto('/settings/account');
+  await page.getByLabel('Current password').fill('password123');
+  const fresh = page.getByLabel('New password');
+  await fresh.fill('password456');
+  await expect(fresh).toHaveAttribute('type', 'password');
+  const show = page.getByRole('button', { name: 'Show password' }).nth(1);
+  await expect(show).toHaveAttribute('aria-pressed', 'false');
+  await show.click();
+  await expect(fresh).toHaveAttribute('type', 'text');
+  await expect(show).toHaveAttribute('aria-pressed', 'true');
+  await expect(fresh).toHaveValue('password456');
+
+  await page.getByRole('button', { name: 'Change password' }).click();
+  await expect(page.getByRole('status')).toHaveText('Password changed');
+  await expect(page.getByLabel('Current password')).toHaveValue('');
+  expect((await page.request.post('/api/auth/login', { data: { username, password: 'password456' } })).ok()).toBe(true);
+});
