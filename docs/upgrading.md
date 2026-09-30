@@ -3,6 +3,25 @@
 A new image applies any pending database migrations when it starts. Take a snapshot first
 (README → Backup) whenever a release below says so.
 
+## Unreleased: maintenance
+
+**Faster:** importing a backup (its database part is about twice as fast; storing the files
+still dominates), `/sync/bootstrap` (about 40% on SQLite, over half on PostgreSQL), the tag
+list, one year's statistics, and the first timeline page. The app starts with about 10 KB less
+JavaScript: English, like German, is loaded only when it is the language in use.
+
+**Migration:** one index for the statistics (SQLite `0031`, PostgreSQL `0022`). It is built at
+start, which takes a moment on a large database. Take a snapshot first as usual.
+
+**`/metrics`** for Prometheus, off unless `LOGB_METRICS_TOKEN` is set, and then answering only
+`Authorization: Bearer <token>`. See README → Metrics.
+
+**API:** `/sync/bootstrap` rows no longer carry `search_text`, the server's own copy of a row's
+text for search, which no sync op sets and no pull ever carried. The app does not use it; a
+client of your own that read it should stop. `docs/openapi.json` now matches what the server
+answers (setup is 201, reminder done returns `{done, next}`, import takes the raw zip body, and
+several fields were missing) and a test keeps it that way. No other behaviour changed.
+
 ## 0.23.0: new look, search, statistics, settings, sign-in
 
 **Search** shows hits as cards. Weights in search use the object's unit; the search API's
