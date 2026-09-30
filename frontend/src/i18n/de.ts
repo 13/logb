@@ -667,4 +667,10 @@ export default {
   'reminder.due-by-counter': 'Zählerstand',
   'reminder.due-by-both': 'Beides',
   'reminder.due-by-both-hint': 'Fällig bei dem, was zuerst eintritt.',
+  'stats.summary': 'Übersicht {year}',
+  'stats.spent-in': 'Ausgaben {year}',
+  'stats.change': 'Veränderung',
+  'stats.vs': 'gegenüber {period}',
+  'stats.vs-none': 'Keine Ausgaben {year} zum Vergleich',
+  'stats.top-object': 'Teuerstes Objekt',
 } as Record<string, string>;

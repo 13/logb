@@ -79,7 +79,7 @@ test('an own type is offered, drawn and counted everywhere a built-in one is', a
   // Statistics: the "By type" row is the type's name.
   await page.goto('/stats');
   const byType = page.getByTestId('stats-by-type');
-  await expect(byType.locator('.bar-row', { hasText: 'E-Scooter' })).toContainText('€120.00');
+  await expect(byType.getByTestId('bar-row').filter({ hasText: 'E-Scooter' })).toContainText('€120.00');
   await expect(byType).not.toContainText('custom:');
 
   // Deleting a type still in use is refused, with the count, and the type stays.

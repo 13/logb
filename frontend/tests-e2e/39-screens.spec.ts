@@ -57,3 +57,36 @@ test('search hits are cards like the dashboard: icon tile, name, facts, tags ins
   await page.mouse.click(box.x + box.width - 12, box.y + 12);
   await expect(page.getByLabel('Title')).toHaveValue('Kartenschlauch');
 });
+
+test('statistics lead with the year: spent, change against the same months last year, top object', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-09-15T12:00:00'));
+  await signInFresh(page, '39-stats');
+  const car = await object(page, { name: 'Summary Car', type: 'car' });
+  const house = await object(page, { name: 'Summary House', type: 'home' });
+  const cost = async (id: number, date: string, cost_cents: number) => {
+    expect((await page.request.post(`/api/objects/${id}/activities`, { data: { date, category: 'repair', title: 'Work', notes: '', cost_cents } })).ok()).toBe(true);
+  };
+  await cost(car, '2025-03-10', 100_000);
+  await cost(house, '2025-11-10', 900_000); // after September: outside the comparison
+  await cost(car, '2026-02-01', 50_000);
+  await cost(house, '2026-07-01', 25_000);
+
+  await page.goto('/stats');
+  const summary = page.getByTestId('stats-summary');
+  await expect(summary.getByTestId('stats-spent')).toContainText('Spent in 2026');
+  await expect(summary.getByTestId('stats-spent')).toContainText('750.00');
+  await expect(summary.getByTestId('stats-change')).toContainText('-25%');
+  await expect(summary.getByTestId('stats-change')).toContainText('vs Jan–Sep 2025');
+  await expect(summary.getByTestId('stats-top')).toContainText('Summary Car');
+
+  // Summary first, then the money.
+  const order = await page.locator('main [data-testid]').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')));
+  expect(order.indexOf('stats-summary')).toBeLessThan(order.indexOf('stats-over-time'));
+
+  // A past year compares with the whole year before, and the top card opens its object.
+  await page.getByLabel('Year').selectOption('2025');
+  await expect(summary.getByTestId('stats-spent')).toContainText('Spent in 2025');
+  await expect(summary.getByTestId('stats-change')).toContainText('Nothing spent in 2024');
+  await summary.getByRole('button', { name: 'Summary House' }).click();
+  await page.waitForURL(`**/objects/${house}`);
+});

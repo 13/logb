@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { flattenTree, periodLabel, sharePct, statsPath } from '../src/lib/stats';
-import type { StatsObject } from '../src/lib/types';
+import { flattenTree, monthLabel, periodLabel, sharePct, statsPath, yearSummary } from '../src/lib/stats';
+import type { Stats, StatsObject } from '../src/lib/types';
 
 const node = (id: number, cost_cents: number, children: StatsObject[] = []): StatsObject =>
   ({ id, name: `o${id}`, type: 'other', archived: false, cost_cents, children });
@@ -49,5 +49,49 @@ describe('flattenTree', () => {
 
   it('hides a grandchild when its grandparent is collapsed, even if its parent is marked expanded', () => {
     expect(flattenTree(tree, new Set([2])).map((r) => r.node.id)).toEqual([1, 4]);
+  });
+});
+
+describe('monthLabel', () => {
+  it('names a month with its year, and leaves a year alone', () => {
+    expect(monthLabel('2026-03', 'en')).toBe('Mar 2026');
+    expect(monthLabel('2026', 'en')).toBe('2026');
+  });
+});
+
+describe('yearSummary', () => {
+  const stats = (total: number, months: Array<[string, number]>, roots: Array<[number, string, number]> = []): Stats => ({
+    total_cents: total,
+    years: [],
+    over_time: months.map(([bucket, cost_cents]) => ({ bucket, cost_cents })),
+    by_object: roots.map(([id, name, cost_cents]) => ({ id, name, type: 'car', archived: false, cost_cents, children: [] })),
+    by_type: [],
+    by_category: [],
+  });
+
+  it('compares a past year with the whole year before it', () => {
+    const s = yearSummary(stats(75_000, []), stats(100_000, [['2024-03', 40_000], ['2024-11', 60_000]]), '2025', '2026-09-15');
+    expect(s.previous).toEqual({ year: '2024', cents: 100_000, through: null });
+    expect(s.changePct).toBe(-25);
+  });
+
+  it('compares the running year with the same months of the year before', () => {
+    const before = stats(1_000_000, [['2025-03', 100_000], ['2025-09', 50_000], ['2025-11', 850_000]]);
+    const s = yearSummary(stats(300_000, []), before, '2026', '2026-09-15');
+    expect(s.previous).toEqual({ year: '2025', cents: 150_000, through: 9 });
+    expect(s.changePct).toBe(100);
+  });
+
+  it('gives no percentage when the year before spent nothing', () => {
+    expect(yearSummary(stats(5_000, []), stats(0, []), '2026', '2026-01-02').changePct).toBeNull();
+  });
+
+  it('names the object that cost most, counting what is inside it', () => {
+    const s = yearSummary(stats(900, [], [[1, 'House', 600], [2, 'Car', 300]]), stats(0, []), '2026', '2026-05-01');
+    expect(s.top).toEqual({ id: 1, name: 'House', cents: 600 });
+  });
+
+  it('has no top object in a year without spend', () => {
+    expect(yearSummary(stats(0, []), stats(0, []), '2026', '2026-05-01').top).toBeNull();
   });
 });

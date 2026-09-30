@@ -667,4 +667,10 @@ export default {
   'reminder.due-by-counter': 'Counter',
   'reminder.due-by-both': 'Both',
   'reminder.due-by-both-hint': 'Due at whichever comes first.',
+  'stats.summary': 'Summary for {year}',
+  'stats.spent-in': 'Spent in {year}',
+  'stats.change': 'Change',
+  'stats.vs': 'vs {period}',
+  'stats.vs-none': 'Nothing spent in {year} to compare with',
+  'stats.top-object': 'Top object',
 } as Record<string, string>;

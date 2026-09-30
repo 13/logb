@@ -100,7 +100,9 @@ describe('shadcn token contrast', () => {
     // Chart bars (Chart.svelte) are brand-ink on a card: a meaningful graphic, 1.4.11.
     for (const [fg, bg] of [['input', 'background'], ['input', 'card'], ['ring', 'background'], ['ring', 'card'], ['brand-ink', 'card'], ['background', 'brand-ink'],
       // The border of an invalid field (`aria-invalid:border-destructive`) on the page and on a card.
-      ['destructive', 'background'], ['destructive', 'card']] as const) {
+      ['destructive', 'background'], ['destructive', 'card'],
+      // BarList's fill on its track (Statistics, Insights).
+      ['brand-ink', 'muted']] as const) {
       it(`${name}: ${fg} against ${bg} (>= 3:1)`, () => {
         expect(contrastRatio(ui(fg, theme), ui(bg, theme))).toBeGreaterThanOrEqual(3);
       });

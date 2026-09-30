@@ -40,7 +40,7 @@ test('statistics total everything, roll a boiler into its house, and remember th
   await byObject.getByRole('button', { name: 'Show what is inside Stats House' }).click();
   await expect(byObject.getByText('Stats Boiler')).toBeVisible();
 
-  // One year: twelve months, and only that year's money.
+  // One year: only that year's money.
   await page.getByLabel('Year').selectOption('2026');
   // "750.00" is also inside the all-years "1,750.00", so wait for that to go first.
   await expect(total).not.toContainText('1,750.00');
@@ -53,7 +53,8 @@ test('statistics total everything, roll a boiler into its house, and remember th
   await expect(page.getByTestId('stats-total')).not.toContainText('1,750.00');
   await expect(page.getByTestId('stats-total')).toContainText('750.00');
 
-  await expect(page.getByTestId('stats-over-time').locator('.bar-row')).toHaveCount(12);
+  // Only the months with spend are drawn: February, June and July.
+  await expect(page.getByTestId('stats-over-time').getByTestId('chart-bar')).toHaveCount(3);
 
   // Purchase prices: off by default, on survives a reload.
   await page.getByLabel('Year').selectOption({ label: 'All years' });

@@ -1,16 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { numberFormat } from '../lib/intl-cache';
+  import { numberFormat, dateTimeFormat } from '../lib/intl-cache';
   import { errorMessage } from '../lib/api-error';
   import TopBar from '../lib/TopBar.svelte';
   import BarList, { type Bar } from '../lib/BarList.svelte';
+  import Chart from '../lib/Chart.svelte';
+  import type { ChartBar } from '../lib/chart';
+  import { CheckField, Field } from '$lib/components/ui/field/index.js';
+  import { NativeSelect } from '$lib/components/ui/native-select/index.js';
+  import { sectionHeadingClass } from '$lib/components/ui/field/classes.js';
   import { api } from '../lib/api';
   import { go } from '../lib/router';
-  import { money } from '../lib/format';
+  import { money, todayIso } from '../lib/format';
   import { currency } from '../stores/session';
   import { persisted } from '../stores/persisted';
   import { locale, t } from '../i18n';
-  import { PURCHASE_PRICE, flattenTree, periodLabel, sharePct, statsPath } from '../lib/stats';
+  import { PURCHASE_PRICE, flattenTree, monthLabel, periodLabel, sharePct, statsPath, yearSummary, type YearSummary } from '../lib/stats';
   import type { Amount, EnergyUsage, FuelUsage, WaterUsage, Stats } from '../lib/types';
   import { customTypes, typeLabel, typesLoaded } from '../lib/type-registry';
 
@@ -105,106 +110,191 @@
   // Meter deltas are the useful signal for water. Keep the section visible whenever a month
   // has measured volume, even if a backend/client version reports zero entry metadata.
   const hasWater = $derived(water?.months.some((m) => m.liters_milli > 0 || m.entries > 0 || m.cost_cents > 0) ?? false);
+  // The summary is one year: the chosen one, or this year under "All years". The charts below
+  // keep describing the selection. With a year chosen, the selection's own answer is that year.
+  const today = todayIso();
+  const focusYear = $derived(year ?? today.slice(0, 4));
+  const beforeYear = $derived(String(Number(focusYear) - 1).padStart(4, '0'));
+  let focusData = $state<Stats | null>(null);
+  let beforeData = $state<Stats | null>(null);
+  $effect(() => {
+    const purchases = $includePurchases;
+    const own = year === null;
+    const fy = focusYear;
+    const by = beforeYear;
+    focusData = null;
+    beforeData = null;
+    let current = true;
+    const load = (y: string) => api<Stats>('GET', statsPath(y, purchases));
+    Promise.all([own ? load(fy) : Promise.resolve(null), load(by)])
+      .then(([f, b]) => { if (current) { focusData = f; beforeData = b; } })
+      .catch(() => { /* no summary; the charts below report their own failure */ });
+    return () => { current = false; };
+  });
+  const summary = $derived.by<YearSummary | null>(() => {
+    const focus = year === null ? focusData : data;
+    return focus && beforeData ? yearSummary(focus, beforeData, focusYear, today) : null;
+  });
+
+  const pct = (n: number) => numberFormat($locale, { style: 'percent', signDisplay: 'exceptZero', maximumFractionDigits: 0 }).format(n / 100);
+  const signedMoney = (cents: number) => `${cents > 0 ? '+' : ''}${fmt(cents)}`;
+  const monthName = (m: number) => dateTimeFormat($locale, { month: 'short' }).format(new Date(Date.UTC(2000, m - 1, 15)));
+  /** "Jan–Sep 2025" while the year runs, "2025" once it is over. */
+  const period = (s: YearSummary) =>
+    s.previous.through === null ? s.previous.year
+      : s.previous.through === 1 ? `${monthName(1)} ${s.previous.year}`
+      : `${monthName(1)}–${monthName(s.previous.through)} ${s.previous.year}`;
+  /** One bar of a series over time. */
+  const bar = (bucket: string, value: number, display: string): ChartBar =>
+    ({ key: bucket, label: monthLabel(bucket, $locale), tick: periodLabel(bucket, $locale), value, display });
+
+  const panel = 'flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-xs';
+  const heading = 'm-0 text-base font-semibold text-foreground';
+  const figure = 'flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card p-4 shadow-xs';
+  const figureValue = 'm-0 text-2xl font-semibold tracking-tight text-foreground tabular-nums';
+  const line = 'm-0 text-sm text-muted-foreground tabular-nums';
+  const strong = 'font-semibold text-foreground';
+  const stretched = "min-w-0 cursor-pointer truncate text-left font-semibold text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:outline-offset-2 focus-visible:after:outline-ring";
+  const open = `${stretched} text-lg`;
+  const openLevel = `${stretched} text-base`;
 </script>
 
 <main>
   <TopBar title={$t('stats.title')} icon="chart" />
 
-  <div class="field">
-    <label for="stats-year">{$t('stats.year')}</label>
-    <select id="stats-year" value={year ?? ''} onchange={(e) => (year = (e.currentTarget as HTMLSelectElement).value || null)}>
-      <option value="">{$t('stats.all-years')}</option>
-      {#each yearOptions as y (y)}<option value={y}>{y}</option>{/each}
-    </select>
+  <div class="mb-4 flex flex-wrap items-end gap-x-6 gap-y-2">
+    <Field id="stats-year" label={$t('stats.year')} class="w-full sm:w-48">
+      <NativeSelect bind:value={() => year ?? '', (v) => (year = v || null)}>
+        <option value="">{$t('stats.all-years')}</option>
+        {#each yearOptions as y (y)}<option value={y}>{y}</option>{/each}
+      </NativeSelect>
+    </Field>
+    <CheckField id="stats-purchases" label={$t('stats.purchases')} bind:checked={() => $includePurchases, (on) => includePurchases.set(on)} />
   </div>
-  <label class="row toggle"><input type="checkbox" bind:checked={$includePurchases} /> {$t('stats.purchases')}</label>
 
-  {#if energy && hasKwh}
-    <section data-testid="stats-energy">
-      <h2>{$t('stats.energy-title')}</h2>
-      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtKwh(energy.current_kwh_milli)}</b></p>
-      <p class="muted">{$t('stats.energy-previous')}: {fmtKwh(energy.previous_kwh_milli)}</p>
-      {#if energy.target_kwh_milli > 0}<p class="muted">{$t('stats.target')}: {fmtKwh(energy.target_kwh_milli)}</p>{/if}
-      <BarList items={energy.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.kwh_milli, display: fmtKwh(m.kwh_milli) }))} />
-    </section>
-  {/if}
-  {#if fuel && hasFuel}
-    <section data-testid="stats-fuel">
-      <h2>{$t('stats.fuel-title')}</h2>
-      {#if hasLiters || hasGallons}
-        <p class="total">{$t('stats.energy-current')}: <b class="tnum">{[hasLiters ? fmtLiters(fuel.current_liters_milli) : '', hasGallons ? fmtGallons(fuel.current_gallons_milli) : ''].filter(Boolean).join(' · ')}</b></p>
-        <p class="muted">{$t('stats.energy-previous')}: {[hasLiters ? fmtLiters(fuel.previous_liters_milli) : '', hasGallons ? fmtGallons(fuel.previous_gallons_milli) : ''].filter(Boolean).join(' · ')}</p>
-      {/if}
-      {#if fuel.levels.length > 0}
-        <h3>{$t('stats.fuel-levels')}</h3>
-        <div class="levels">
-          {#each fuel.levels as level (level.object_id)}
-            <button class="level-card" onclick={() => go(`/objects/${level.object_id}`)}>
-              <span>{level.object_name}</span>
-              <b>{level.level_pct}%{#if level.remaining_milli !== null} · {level.unit === 'l' ? fmtLiters(level.remaining_milli) : fmtGallons(level.remaining_milli)}{/if}</b>
-              <small>{periodLabel(level.date, $locale)}{#if level.estimated_days_remaining !== null} · {$t('stats.fuel-days', { n: level.estimated_days_remaining })}{/if}{#if level.low} · {$t('stats.fuel-low')}{/if}</small>
-            </button>
-          {/each}
-        </div>
-      {/if}
-      {#if hasLiters}<h3>{$t('stats.fuel-liters')}</h3><BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: fmtLiters(m.liters_milli) }))} />{/if}
-      {#if hasGallons}<h3>{$t('stats.fuel-gallons')}</h3><BarList items={fuel.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.gallons_milli, display: fmtGallons(m.gallons_milli) }))} />{/if}
-    </section>
-  {/if}
-  {#if water && hasWater}
-    <section data-testid="stats-water">
-      <h2>{$t('stats.water-title')}</h2>
-      <p class="total">{$t('stats.energy-current')}: <b class="tnum">{fmtWater(water.current_liters_milli)}</b></p>
-      <p class="muted">{$t('stats.energy-previous')}: {fmtWater(water.previous_liters_milli)} · {$t('water.daily-average')}: {fmtWater(water.daily_average_liters_milli)}</p>
-      {#if water.current_cost_cents > 0}<p class="muted">{$t('activity.cost')}: {fmt(water.current_cost_cents)}</p>{/if}
-      {#if water.anomalies > 0}<p class="hint warning">{$t('water.anomalies', { n: water.anomalies })}</p>{/if}
-      <BarList items={water.months.map((m) => ({ key: m.month, label: periodLabel(m.month, $locale), value: m.liters_milli, display: `${fmtWater(m.liters_milli)}${m.estimated ? ` · ${$t('water.estimated-short')}` : ''}` }))} />
-      {#if water.objects.length > 1}
-        <h3>{$t('stats.by-object')}</h3>
-        <BarList items={water.objects.map((o) => ({ key: o.object_id, label: o.object_name, value: o.liters_milli, display: o.target_liters_milli ? `${fmtWater(o.liters_milli)} / ${fmtWater(o.target_liters_milli)}` : fmtWater(o.liters_milli) }))} />
-      {/if}
+  {#if summary && (summary.spent > 0 || summary.previous.cents > 0)}
+    {@const s = summary}
+    <section data-testid="stats-summary" aria-label={$t('stats.summary', { year: s.year })} class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div data-testid="stats-spent" class={figure}>
+        <p class={sectionHeadingClass}>{$t('stats.spent-in', { year: s.year })}</p>
+        <p class={figureValue}>{fmt(s.spent)}</p>
+      </div>
+      <div data-testid="stats-change" class={figure}>
+        <p class={sectionHeadingClass}>{$t('stats.change')}</p>
+        {#if s.changePct !== null}
+          <p class={figureValue}>{pct(s.changePct)}</p>
+          <p class={line}>{$t('stats.vs', { period: period(s) })} · {signedMoney(s.spent - s.previous.cents)}</p>
+        {:else}
+          <p class={figureValue} aria-hidden="true">–</p>
+          <p class={line}>{$t('stats.vs-none', { year: s.previous.year })}</p>
+        {/if}
+      </div>
+      <div data-testid="stats-top" class={`relative isolate ${figure}`}>
+        <p class={sectionHeadingClass}>{$t('stats.top-object')}</p>
+        {#if s.top}
+          {@const top = s.top}
+          <button data-slot="stats-top-open" class={open} onclick={() => go(`/objects/${top.id}`)}>{top.name}</button>
+          <p class={line}>{fmt(top.cents)} · {sharePct(top.cents, s.spent)}%</p>
+        {:else}
+          <p class={figureValue} aria-hidden="true">–</p>
+        {/if}
+      </div>
     </section>
   {/if}
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <p role="alert" class="m-0 mb-4 text-sm font-medium text-destructive">{error}</p>
   {:else if !data}
-    <p class="muted">{$t('nav.loading')}</p>
+    <p class="m-0 mb-4 text-sm text-muted-foreground">{$t('nav.loading')}</p>
   {:else if data.total_cents === 0}
-    <div class="empty"><p>{$t('stats.none')}</p></div>
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <p class="m-0 max-w-[34ch] text-sm text-muted-foreground">{$t('stats.none')}</p>
+    </div>
   {:else}
-    <p class="total" data-testid="stats-total">{$t('stats.total')}: <b class="tnum">{fmt(data.total_cents)}</b></p>
-
-    <section data-testid="stats-over-time">
-      <h2>{$t('stats.over-time')}</h2>
-      <!-- Months show the amount alone: a share of the year on every one of twelve bars is noise. -->
-      <BarList items={data.over_time.map((a) => ({ key: a.bucket, label: periodLabel(a.bucket, $locale), value: a.cost_cents, display: fmt(a.cost_cents) }))} />
-    </section>
-
-    <section data-testid="stats-by-object">
-      <h2>{$t('stats.by-object')}</h2>
-      <BarList items={objectBars} />
-    </section>
-
-    <section data-testid="stats-by-type">
-      <h2>{$t('stats.by-type')}</h2>
-      <BarList items={bars(data.by_type, (b) => typeLabel(b, $customTypes, $t, $typesLoaded))} />
-    </section>
-
-    <section data-testid="stats-by-category">
-      <h2>{$t('stats.by-category')}</h2>
-      <BarList items={bars(data.by_category, (b) => (b === PURCHASE_PRICE ? $t('stats.purchase-price') : $t(`cat.${b}`)))} />
-    </section>
+    <div class="mb-6 grid grid-cols-1 gap-4 wide:grid-cols-2">
+      <section data-testid="stats-over-time" class={`${panel} wide:col-span-2`}>
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3">
+          <h2 class={heading}>{$t('stats.over-time')}</h2>
+          <p data-testid="stats-total" class="m-0 text-sm text-muted-foreground">{$t('stats.total')}: <b class={`${strong} tabular-nums`}>{fmt(data.total_cents)}</b></p>
+        </div>
+        <!-- Empty months (or years) are left out; each bar keeps its own label, so a gap shows. -->
+        <Chart label={$t('stats.over-time')} items={data.over_time.map((a) => bar(a.bucket, a.cost_cents, fmt(a.cost_cents)))} />
+      </section>
+      <section data-testid="stats-by-object" class={`${panel} wide:col-span-2`}>
+        <h2 class={heading}>{$t('stats.by-object')}</h2>
+        <BarList items={objectBars} labelClass="w-32 desk:w-44 wide:w-64" />
+      </section>
+      <section data-testid="stats-by-type" class={panel}>
+        <h2 class={heading}>{$t('stats.by-type')}</h2>
+        <BarList items={bars(data.by_type, (b) => typeLabel(b, $customTypes, $t, $typesLoaded))} labelClass="w-28" />
+      </section>
+      <section data-testid="stats-by-category" class={panel}>
+        <h2 class={heading}>{$t('stats.by-category')}</h2>
+        <BarList items={bars(data.by_category, (b) => (b === PURCHASE_PRICE ? $t('stats.purchase-price') : $t(`cat.${b}`)))} labelClass="w-28" />
+      </section>
+    </div>
   {/if}
-</main>
 
-<style>
-  /* .field, .row, .muted, .error, .empty, h2 and .tnum are global -- the rules below are specific
-     to this screen. */
-  .total { font-size: var(--text-lg); margin: var(--space-3) 0; }
-  /* BarList's default 90px label column fits "Fuel" but clips an object name or "Maintenance". */
-  section :global(.label) { width: 140px; }
-  .levels { display: grid; gap: var(--space-2); }
-  .level-card { display: grid; grid-template-columns: 1fr auto; gap: var(--space-1); text-align: left; padding: var(--space-3); border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-md); }
-  .level-card small { grid-column: 1 / -1; color: var(--muted); }
-</style>
+  <!-- Resources after money (round 0 fixed what the fuel section counts). They take neither the
+       year nor the purchases switch: always the last twelve months. -->
+  <div class="grid grid-cols-1 gap-4 wide:grid-cols-2">
+    {#if energy && hasKwh}
+      <section data-testid="stats-energy" class={panel}>
+        <h2 class={heading}>{$t('stats.energy-title')}</h2>
+        <p class={line}>
+          {$t('stats.energy-current')}: <b class={strong}>{fmtKwh(energy.current_kwh_milli)}</b> · {$t('stats.energy-previous')}: {fmtKwh(energy.previous_kwh_milli)}{#if energy.target_kwh_milli > 0} · {$t('stats.target')}: {fmtKwh(energy.target_kwh_milli)}{/if}
+        </p>
+        <Chart label={$t('stats.energy-title')} items={energy.months.map((m) => bar(m.month, m.kwh_milli, fmtKwh(m.kwh_milli)))} />
+      </section>
+    {/if}
+    {#if fuel && hasFuel}
+      <section data-testid="stats-fuel" class={panel}>
+        <h2 class={heading}>{$t('stats.fuel-title')}</h2>
+        {#if hasLiters || hasGallons}
+          <p class={line}>
+            {$t('stats.energy-current')}: <b class={strong}>{[hasLiters ? fmtLiters(fuel.current_liters_milli) : '', hasGallons ? fmtGallons(fuel.current_gallons_milli) : ''].filter(Boolean).join(' · ')}</b>
+            · {$t('stats.energy-previous')}: {[hasLiters ? fmtLiters(fuel.previous_liters_milli) : '', hasGallons ? fmtGallons(fuel.previous_gallons_milli) : ''].filter(Boolean).join(' · ')}
+          </p>
+        {/if}
+        {#if fuel.levels.length > 0}
+          <h3 class={sectionHeadingClass}>{$t('stats.fuel-levels')}</h3>
+          <ul role="list" class="m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
+            {#each fuel.levels as level (level.object_id)}
+              <li class="relative isolate flex flex-col gap-1 rounded-lg border border-border bg-background p-3">
+                <div class="flex items-baseline justify-between gap-2">
+                  <button data-slot="level-open" class={openLevel} onclick={() => go(`/objects/${level.object_id}`)}>{level.object_name}</button>
+                  <b class="shrink-0 font-semibold text-foreground tabular-nums">{level.level_pct}%{#if level.remaining_milli !== null} · {level.unit === 'l' ? fmtLiters(level.remaining_milli) : fmtGallons(level.remaining_milli)}{/if}</b>
+                </div>
+                <p class={line}>
+                  {periodLabel(level.date, $locale)}{#if level.estimated_days_remaining !== null} · {$t('stats.fuel-days', { n: level.estimated_days_remaining })}{/if}{#if level.low} · <span class="font-medium text-warn">{$t('stats.fuel-low')}</span>{/if}
+                </p>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        {#if hasLiters}
+          <h3 class={sectionHeadingClass}>{$t('stats.fuel-liters')}</h3>
+          <Chart label={$t('stats.fuel-liters')} items={fuel.months.map((m) => bar(m.month, m.liters_milli, fmtLiters(m.liters_milli)))} />
+        {/if}
+        {#if hasGallons}
+          <h3 class={sectionHeadingClass}>{$t('stats.fuel-gallons')}</h3>
+          <Chart label={$t('stats.fuel-gallons')} items={fuel.months.map((m) => bar(m.month, m.gallons_milli, fmtGallons(m.gallons_milli)))} />
+        {/if}
+      </section>
+    {/if}
+    {#if water && hasWater}
+      <section data-testid="stats-water" class={panel}>
+        <h2 class={heading}>{$t('stats.water-title')}</h2>
+        <p class={line}>
+          {$t('stats.energy-current')}: <b class={strong}>{fmtWater(water.current_liters_milli)}</b> · {$t('stats.energy-previous')}: {fmtWater(water.previous_liters_milli)} · {$t('water.daily-average')}: {fmtWater(water.daily_average_liters_milli)}{#if water.current_cost_cents > 0} · {$t('activity.cost')}: {fmt(water.current_cost_cents)}{/if}
+        </p>
+        {#if water.anomalies > 0}<p class="m-0 text-sm text-warn">{$t('water.anomalies', { n: water.anomalies })}</p>{/if}
+        <Chart label={$t('stats.water-title')} items={water.months.map((m) => bar(m.month, m.liters_milli, `${fmtWater(m.liters_milli)}${m.estimated ? ` · ${$t('water.estimated-short')}` : ''}`))} />
+        {#if water.objects.length > 1}
+          <h3 class={sectionHeadingClass}>{$t('stats.by-object')}</h3>
+          <BarList labelClass="w-36" items={water.objects.map((o) => ({ key: o.object_id, label: o.object_name, value: o.liters_milli, display: o.target_liters_milli ? `${fmtWater(o.liters_milli)} / ${fmtWater(o.target_liters_milli)}` : fmtWater(o.liters_milli) }))} />
+        {/if}
+      </section>
+    {/if}
+  </div>
+</main>
