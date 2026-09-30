@@ -1842,3 +1842,213 @@ async fn import_refuses_a_blob_over_the_upload_limit() {
     assert_eq!(count_files(&app).await, 0);
     assert!(!app.state.storage.blob_path(&sha).exists(), "the refused blob reached the disk");
 }
+
+/// A readable name for the row `entity_uuid` names, so the feed below can be written out as
+/// the archive describes it rather than as the random uuids the import minted.
+async fn label_of(app: &common::TestApp, entity: &str, uuid: &str) -> String {
+    let sql = match entity {
+        "object" => "SELECT name FROM objects WHERE client_uuid = $1",
+        "activity" => "SELECT title FROM activities WHERE client_uuid = $1",
+        "attachment" => "SELECT caption FROM attachments WHERE client_uuid = $1",
+        "file" => "SELECT original_name FROM files WHERE client_uuid = $1",
+        "reminder" => "SELECT title FROM reminders WHERE client_uuid = $1",
+        "object_type" => "SELECT name FROM object_types WHERE client_uuid = $1",
+        other => panic!("unexpected entity {other}"),
+    };
+    sqlx::query_scalar(sql).bind(uuid).fetch_one(&app.state.db).await.unwrap()
+}
+
+/// The fields `field_clock` holds for one row, in name order, with the clock they carry.
+async fn clocks_of(app: &common::TestApp, entity: &str, uuid: &str) -> Vec<(String, String, String)> {
+    sqlx::query_as(
+        "SELECT field, edited_at, device_id FROM field_clock \
+         WHERE entity = $1 AND entity_uuid = $2 ORDER BY field",
+    )
+    .bind(entity)
+    .bind(uuid)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap()
+}
+
+/// Pins the sync feed an import leaves behind, which the import's batched writes must not
+/// change: one `create` per row in the order the archive walks them (types; then per object:
+/// the object, each activity followed by its files and attachments, the object's own files and
+/// attachments, the cover `set`, the reminders), a file logged only where it is first stored,
+/// every entry on the import's one clock, one pull returning all of it in that order, and
+/// `field_clock` stamped for every whitelisted field exactly as a REST create stamps it.
+#[tokio::test]
+async fn an_import_logs_every_row_in_archive_order_on_one_clock() {
+    let app = common::spawn().await;
+    app.setup("ben", "correct horse").await;
+
+    // One row of each kind created over REST, as the reference for what a create stamps.
+    app.post_json("/types", &json!({ "name": "Ref type", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" })).await;
+    let reference = app.create_object(&app.client, "Ref", Some("km")).await;
+    let ref_activity = app.create_activity(&reference["id"], "Ref entry").await;
+    let res = app
+        .client
+        .post(app.url(&format!("/objects/{}/attachments", reference["id"])))
+        .multipart(
+            Form::new()
+                .part("file", Part::bytes(b"ref".to_vec()).file_name("ref.txt").mime_str("text/plain").unwrap())
+                .text("activity_id", ref_activity["id"].to_string()),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201, "{}", res.text().await.unwrap());
+    app.post_json(
+        &format!("/objects/{}/reminders", reference["id"]),
+        &json!({ "title": "Ref reminder", "due_counter": 5000 }),
+    )
+    .await;
+    let mut reference_fields: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let refs: Vec<(String, String)> = sqlx::query_as("SELECT entity, entity_uuid FROM changes WHERE op = 'create'")
+        .fetch_all(&app.state.db)
+        .await
+        .unwrap();
+    for (entity, uuid) in refs {
+        let fields = clocks_of(&app, &entity, &uuid).await.into_iter().map(|(f, _, _)| f).collect();
+        reference_fields.insert(entity, fields);
+    }
+    assert_eq!(reference_fields.len(), 6, "a reference row of every entity: {reference_fields:?}");
+    let before: i64 = sqlx::query_scalar("SELECT MAX(seq) FROM changes")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+
+    let photo = png();
+    let photo_sha = logb::files::sha256_hex(&photo);
+    let doc = b"owner's manual".to_vec();
+    let doc_sha = logb::files::sha256_hex(&doc);
+    let missing_sha = logb::files::sha256_hex(b"not in the archive");
+    let attachment = |sha: &str, name: &str, mime: &str, kind: &str, caption: &str| {
+        json!({
+            "sha256": sha, "original_name": name, "mime": mime, "kind": kind,
+            "caption": caption, "taken_at": null, "created_at": "2024-01-01T00:00:00Z"
+        })
+    };
+    let activity = |title: &str, attachments: serde_json::Value| {
+        json!({
+            "date": "2024-02-01", "category": "repair", "title": title, "notes": "",
+            "counter_value": null, "cost_cents": null, "created_at": "2024-02-01T00:00:00Z",
+            "attachments": attachments
+        })
+    };
+    let reminder = |title: &str, done_activity_index: Option<usize>| {
+        json!({
+            "title": title, "notes": "", "due_date": null, "due_counter": 5000,
+            "repeat_months": null, "repeat_counter": null,
+            "done_at": done_activity_index.map(|_| "2024-02-01T00:00:00Z"),
+            "done_activity_index": done_activity_index, "created_at": "2024-01-01T00:00:00Z"
+        })
+    };
+    let scooter = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    let merged = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    let mut golf = base_object();
+    golf["type"] = json!(format!("custom:{scooter}"));
+    golf["activities"] = json!([
+        activity("A0", json!([attachment(&photo_sha, "p.png", "image/png", "photo", "a0-photo")])),
+        activity("A1", json!([attachment(&photo_sha, "p.png", "image/png", "document", "a1-doc")])),
+    ]);
+    golf["attachments"] = json!([
+        attachment(&doc_sha, "m.txt", "text/plain", "document", "golf-doc"),
+        attachment(&missing_sha, "gone.txt", "text/plain", "document", "missing"),
+    ]);
+    // No object-level attachment carries the cover, so it is found among the activities' photos.
+    golf["cover_sha256"] = json!(photo_sha);
+    golf["reminders"] = json!([reminder("Oil", Some(1)), reminder("Tyres", None)]);
+    let mut bike = base_object();
+    bike["name"] = json!("Bike");
+    bike["type"] = json!(format!("custom:{merged}"));
+    bike["activities"] = json!([activity("B0", json!([]))]);
+    bike["attachments"] = json!([attachment(&photo_sha, "p.png", "image/png", "photo", "bike-photo")]);
+    bike["cover_sha256"] = json!(photo_sha);
+    let mut car = base_object();
+    car["name"] = json!("Car");
+    car["cover_sha256"] = json!(missing_sha);
+    let data = json!({
+        "version": 1, "exported_at": "2024-01-01T00:00:00Z", "currency": "EUR",
+        "types": [
+            { "client_uuid": scooter, "name": "Scooter", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" },
+            { "client_uuid": merged, "name": "ref TYPE", "icon": "e-bike", "categories": ["repair"], "counter_unit": "km" },
+        ],
+        "objects": [golf, bike, car],
+    });
+    let zip = zip_with_files(&data, &[(photo_sha.clone(), photo), (doc_sha.clone(), doc)]);
+    let counts = import_as(&app, &app.client, zip).await;
+    assert_eq!(counts["attachments"], 4, "{counts}");
+    assert_eq!(counts["types_merged"], 1, "{counts}");
+
+    type Row = (i64, String, String, String, Option<String>, Option<String>, String, String);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT seq, entity, entity_uuid, op, field, value, edited_at, device_id \
+         FROM changes WHERE seq > $1 ORDER BY seq",
+    )
+    .bind(before)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    let mut feed = Vec::new();
+    for (_, entity, uuid, op, field, value, _, _) in &rows {
+        let mut line = format!("{op} {entity} {}", label_of(&app, entity, uuid).await);
+        if let Some(field) = field {
+            let id: i64 = value.as_deref().unwrap().parse().unwrap();
+            let caption: String = sqlx::query_scalar("SELECT caption FROM attachments WHERE id = $1")
+                .bind(id)
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+            line.push_str(&format!(" {field}={caption}"));
+        }
+        feed.push(line);
+    }
+    assert_eq!(
+        feed,
+        [
+            "create object_type Scooter",
+            "create object Golf",
+            "create activity A0",
+            "create file p.png",
+            "create attachment a0-photo",
+            "create activity A1",
+            "create attachment a1-doc",
+            "create file m.txt",
+            "create attachment golf-doc",
+            "set object Golf cover_attachment_id=a0-photo",
+            "create reminder Oil",
+            "create reminder Tyres",
+            "create object Bike",
+            "create activity B0",
+            "create attachment bike-photo",
+            "set object Bike cover_attachment_id=bike-photo",
+            "create object Car",
+        ]
+    );
+    let edited_at = &rows[0].6;
+    assert!(rows.iter().all(|r| &r.6 == edited_at && r.7 == "rest"), "one clock for the whole import");
+    assert!(rows.windows(2).all(|w| w[0].0 < w[1].0), "seq increases down the feed");
+
+    // What a device following the log receives: the same entries, in the same order.
+    let pulled = app.pull(before).await;
+    let pulled_uuids: Vec<&str> = pulled["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["entity_uuid"].as_str().unwrap())
+        .collect();
+    let logged_uuids: Vec<&str> = rows.iter().map(|r| r.2.as_str()).collect();
+    assert_eq!(pulled_uuids, logged_uuids);
+    assert_eq!(pulled["next_seq"], rows.last().unwrap().0);
+
+    for (_, entity, uuid, op, ..) in rows.iter().filter(|r| r.3 == "create") {
+        let clocks = clocks_of(&app, entity, uuid).await;
+        let fields: Vec<String> = clocks.iter().map(|(f, _, _)| f.clone()).collect();
+        assert_eq!(&fields, &reference_fields[entity], "{op} {entity}: every whitelisted field is stamped");
+        assert!(
+            clocks.iter().all(|(_, at, device)| at == edited_at && device == "rest"),
+            "{entity}: stamped on the import's clock: {clocks:?}"
+        );
+    }
+}

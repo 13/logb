@@ -4,7 +4,7 @@
 //! next person can read the whole surface of the difference in under a minute, rather than
 //! discovering it one failing query at a time.
 //!
-//! There are seven, and items 2 to 4 and 7 need code here:
+//! There are eight, and items 2 to 4, 7 and 8 need code here:
 //!
 //! 1. Case-insensitive matching. Neither backend folds accents in SQL (SQLite's `LIKE` is
 //!    ASCII-only; PostgreSQL's `ILIKE` follows the cluster collation), so search folds in
@@ -30,6 +30,9 @@
 //!    now writes both on first start on either backend.
 //! 7. "Does this column contain this string" -- `contains`. The same question, spelled so each
 //!    backend answers it exactly and as fast as it can.
+//! 8. A statement with thousands of bind parameters -- `values_list`. SQLite treats `$1` as a
+//!    *named* parameter and looks every name up by a linear scan, so a long list is quadratic;
+//!    it is spelled with anonymous `?` there.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -83,6 +86,39 @@ impl Backend {
             Self::Sqlite => None,
             Self::Postgres => Some("SELECT pg_advisory_xact_lock(4479001)"),
         }
+    }
+
+    /// Which backend an open connection talks to, for code that holds a connection rather than
+    /// the `App` that knows it.
+    pub fn of_connection(conn: &sqlx::AnyConnection) -> Self {
+        if conn.backend_name() == <sqlx::Sqlite as sqlx::Database>::NAME {
+            Self::Sqlite
+        } else {
+            Self::Postgres
+        }
+    }
+
+    /// `VALUES`'s rows for a multi-row `INSERT`: `rows` rows of `width` parameters each, bound
+    /// in order, row by row. The statement must have no other parameters.
+    ///
+    /// PostgreSQL numbers them `$1, $2, ...`, as every other statement in this app does.
+    /// SQLite gets anonymous `?`: to it `$N` is a *named* parameter, and both SQLite's parser
+    /// (resolving each name) and sqlx's binding (`sqlite3_bind_parameter_name`, per parameter,
+    /// per execution) find a name by scanning the statement's whole list of them. That is
+    /// quadratic in the number of parameters -- about a second for one 32 000-parameter
+    /// statement, which made a batched import seven times slower than the per-row one it
+    /// replaced. An anonymous `?` has no name to look up and is bound by position.
+    pub fn values_list(&self, rows: usize, width: usize) -> String {
+        let row = |r: usize| -> String {
+            let params: Vec<String> = (1..=width)
+                .map(|c| match self {
+                    Self::Sqlite => "?".to_string(),
+                    Self::Postgres => format!("${}", r * width + c),
+                })
+                .collect();
+            format!("({})", params.join(", "))
+        };
+        (0..rows).map(row).collect::<Vec<_>>().join(", ")
     }
 
     /// SQLite sorts with `COLLATE NOCASE`; PostgreSQL sorts by `lower(...)`.
@@ -164,6 +200,12 @@ mod tests {
         assert_eq!(Backend::Postgres.contains("t", "$2"), "t LIKE $2 ESCAPE '\\'");
         assert_eq!(Backend::Sqlite.contains_param("50%_a\\b"), "50%_a\\b");
         assert_eq!(Backend::Postgres.contains_param("50%_a\\b"), "%50\\%\\_a\\\\b%");
+    }
+
+    #[test]
+    fn each_backend_spells_a_long_values_list_its_own_way() {
+        assert_eq!(Backend::Postgres.values_list(2, 3), "($1, $2, $3), ($4, $5, $6)");
+        assert_eq!(Backend::Sqlite.values_list(2, 3), "(?, ?, ?), (?, ?, ?)");
     }
 
     /// `BEGIN IMMEDIATE` is SQLite's spelling and PostgreSQL rejects it outright, so this is

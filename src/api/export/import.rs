@@ -249,6 +249,9 @@ pub(super) async fn import(
     // only).
     let edited_at = record::edited_at_now();
     let mut tx = db::begin_write(&state).await?;
+    // Every change the import makes, collected in the order the rows are described below and
+    // written in one go at the end (see `record::Log`).
+    let mut log = record::Log::default();
 
     // Types before objects, so every `custom:` key has somewhere to point. `type_uuids` maps the
     // archive's uuid to the one the type has in this account.
@@ -289,155 +292,460 @@ pub(super) async fn import(
             .bind(serde_json::to_string(&input.categories).unwrap_or_else(|_| "[]".into()))
             .bind(&input.counter_unit).bind(&now).bind(&now)
             .execute(&mut *tx).await?;
-        record::record_create(&mut tx, user.id, Entity::ObjectType, &uuid, &edited_at).await?;
+        log.create(Entity::ObjectType, uuid.clone());
         type_uuids.insert(archive_uuid, uuid);
         counts.types_created += 1;
     }
 
-    for o in data.objects {
-        let now = db::now();
-        let object_uuid = uuid::Uuid::new_v4().to_string();
-        let (ty, description) = resolve_type(&o, &type_uuids);
-        let (object_id,): (i64,) = sqlx::query_as(
-            "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
-            archived_at, cover_attachment_id, created_at, updated_at, client_uuid, tags, energy_price_milli, weight_unit, fuel_capacity_milli, \
-             resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id")
-            .bind(user.id).bind(o.name.trim()).bind(&ty).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&description)
-            .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&now)
-            .bind(&object_uuid).bind(normalised_tags(&o.tags)?).bind(o.energy_price_milli).bind(&o.weight_unit).bind(o.fuel_capacity_milli)
-            .bind(o.resource_unit.as_ref().or(o.fuel_unit.as_ref())).bind(&o.resource_kind).bind(&o.measurement_mode)
-            .bind(o.monthly_target_milli).bind(o.low_level_pct).bind(i64::from(o.private))
-            .fetch_one(&mut *tx).await?;
-        record::record_create(&mut tx, user.id, Entity::Object, &object_uuid, &edited_at).await?;
-        counts.objects += 1;
+    // The rest is written a table at a time, each in as few multi-row statements as the
+    // parameter limit allows, where it used to be a statement per row (and three more per row
+    // for its log). Every table's rows go in the order the archive walks them -- object by
+    // object; within one, each activity followed by its attachments, then the object's own --
+    // so every row is numbered as the one-at-a-time import numbered it, and the log below is
+    // written in that same order.
+    let objects = new_objects(&data.objects, &type_uuids)?;
+    counts.objects = objects.len();
+    let object_ids = insert_objects(&mut tx, user.id, &objects).await?;
 
-        let mut activity_ids = Vec::new();
-        for a in &o.activities {
-            let activity_uuid = uuid::Uuid::new_v4().to_string();
-            // Trimmed the same way a REST create trims them (`ActivityInput`'s `trim_place`,
-            // blank -> `None`), so an imported row stores the identical spelling a REST create
-            // of the same body would -- `validate_import` already ran this same trim over every
-            // activity to check the 80-character limit, but only to validate; its result never
-            // reached the row until now.
-            let from_place = crate::api::activities::trim_place(a.from_place.clone())?;
-            let to_place = crate::api::activities::trim_place(a.to_place.clone())?;
-            let (aid,): (i64,) = sqlx::query_as(
-                "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
-                 start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, \
-                 meter_reading_milli, period_start, period_end, estimated, meter_reset) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING id")
-                .bind(object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
-                .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(&now)
-                .bind(&activity_uuid).bind(normalised_tags(&a.tags)?)
-                .bind(a.start_counter).bind(&from_place).bind(&to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
-                .bind(a.charged_full).bind(a.weight_grams).bind(a.fuel_level_pct).bind(a.meter_reading_milli)
-                .bind(&a.period_start).bind(&a.period_end).bind(a.estimated).bind(a.meter_reset)
-                .fetch_one(&mut *tx).await?;
-            record::record_create(
-                &mut tx,
-                user.id,
-                Entity::Activity,
-                &activity_uuid,
-                &edited_at,
-            )
-            .await?;
-            activity_ids.push(aid);
-            counts.activities += 1;
-            for x in &a.attachments {
-                if import_attachment(
-                    &mut tx,
-                    &mut stored,
-                    user.id,
-                    (object_id, Some(aid)),
-                    x,
-                    &edited_at,
-                )
-                .await?
-                .is_some()
-                {
-                    counts.attachments += 1;
-                }
-            }
+    let activities = new_activities(&objects, &object_ids)?;
+    counts.activities = activities.len();
+    let activity_ids = insert_activities(&mut tx, &activities).await?;
+
+    let mut attachments = Vec::new();
+    for (oi, o) in data.objects.iter().enumerate() {
+        let first_activity = activities.partition_point(|a| a.object < oi);
+        for (ai, a) in o.activities.iter().enumerate() {
+            attachments.extend(a.attachments.iter().map(|x| (oi, Some(first_activity + ai), x)));
         }
-        let mut cover: Option<i64> = None;
-        for x in &o.attachments {
-            if let Some(att_id) = import_attachment(
-                &mut tx,
-                &mut stored,
-                user.id,
-                (object_id, None),
+        attachments.extend(o.attachments.iter().map(|x| (oi, None, x)));
+    }
+    let files = insert_files(&mut tx, &mut stored, user.id, &attachments).await?;
+    let attachments: Vec<NewAttachment> = attachments
+        .into_iter()
+        .filter_map(|(object, activity, x)| {
+            let file_id = *files.ids.get(x.sha256.as_str())?;
+            Some(NewAttachment {
+                object,
+                activity,
                 x,
-                &edited_at,
-            )
-            .await?
-            {
-                counts.attachments += 1;
-                if o.cover_sha256.as_deref() == Some(x.sha256.as_str()) {
-                    cover = Some(att_id);
-                }
-            }
-        }
-        if cover.is_none() {
-            if let Some(sha) = &o.cover_sha256 {
+                uuid: uuid::Uuid::new_v4().to_string(),
+                file_id,
+            })
+        })
+        .collect();
+    counts.attachments = attachments.len();
+    let attachment_ids =
+        insert_attachments(&mut tx, &attachments, &object_ids, &activity_ids).await?;
+
+    let mut covers: Vec<Option<i64>> = vec![None; objects.len()];
+    for (oi, o) in data.objects.iter().enumerate() {
+        let Some(sha) = &o.cover_sha256 else { continue };
+        let own = attachments
+            .iter()
+            .zip(&attachment_ids)
+            .find(|(a, _)| a.object == oi && a.activity.is_none() && &a.x.sha256 == sha);
+        covers[oi] = match own {
+            Some((_, id)) => Some(*id),
+            None => {
                 let row: Option<(i64,)> = sqlx::query_as(
                     "SELECT a.id FROM attachments a JOIN files f ON f.id = a.file_id \
                      WHERE a.object_id = $1 AND f.sha256 = $2 AND a.kind = 'photo' AND a.deleted_at IS NULL LIMIT 1")
-                    .bind(object_id).bind(sha).fetch_optional(&mut *tx).await?;
-                cover = row.map(|r| r.0);
+                    .bind(object_ids[oi]).bind(sha).fetch_optional(&mut *tx).await?;
+                row.map(|r| r.0)
             }
-        }
-        if let Some(c) = cover {
+        };
+        if let Some(c) = covers[oi] {
             sqlx::query(
                 "UPDATE objects SET cover_attachment_id = $1 WHERE id = $2 AND deleted_at IS NULL",
             )
             .bind(c)
-            .bind(object_id)
+            .bind(object_ids[oi])
             .execute(&mut *tx)
             .await?;
-            // A real change from the create above's NULL, so it gets its own `set` -- not
-            // folded into `record_create`, which only ever describes the row as it was
-            // when it was first written.
-            record::record_update(
-                &mut tx,
-                user.id,
-                Entity::Object,
-                &object_uuid,
-                &[("cover_attachment_id", json!(c))],
-                &edited_at,
-            )
-            .await?;
-        }
-        for r in &o.reminders {
-            let done_activity_id = r
-                .done_activity_index
-                .and_then(|i| activity_ids.get(i).copied());
-            let reminder_uuid = uuid::Uuid::new_v4().to_string();
-            sqlx::query(
-                "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit, schedule) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)")
-                .bind(object_id).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
-                .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(done_activity_id).bind(&r.created_at)
-                .bind(&r.snoozed_until)
-                .bind(&reminder_uuid)
-                .bind(&r.kind).bind(r.every_n).bind(&r.every_unit).bind(&r.schedule)
-                .execute(&mut *tx).await?;
-            record::record_create(
-                &mut tx,
-                user.id,
-                Entity::Reminder,
-                &reminder_uuid,
-                &edited_at,
-            )
-            .await?;
-            counts.reminders += 1;
         }
     }
+
+    let reminders = new_reminders(&data.objects, &activities, &activity_ids);
+    counts.reminders = reminders.len();
+    insert_reminders(&mut tx, &reminders, &object_ids).await?;
+
+    // The log, in the order the rows were described.
+    let (mut next_activity, mut next_attachment, mut next_reminder) = (0, 0, 0);
+    let mut log_attachments = |log: &mut record::Log, oi: usize, activity: Option<usize>| {
+        while let Some(a) = attachments.get(next_attachment).filter(|a| a.object == oi && a.activity == activity) {
+            if let Some(file_uuid) = files.logged_at.get(&next_attachment) {
+                log.create(Entity::File, file_uuid.clone());
+            }
+            log.create(Entity::Attachment, a.uuid.clone());
+            next_attachment += 1;
+        }
+    };
+    for (oi, object) in objects.iter().enumerate() {
+        log.create(Entity::Object, object.uuid.clone());
+        while activities.get(next_activity).is_some_and(|a| a.object == oi) {
+            log.create(Entity::Activity, activities[next_activity].uuid.clone());
+            log_attachments(&mut log, oi, Some(next_activity));
+            next_activity += 1;
+        }
+        log_attachments(&mut log, oi, None);
+        if let Some(c) = covers[oi] {
+            // A real change from the create above's NULL, so it gets its own `set` -- not
+            // folded into the create, which only ever describes the row as it was when it was
+            // first written.
+            log.update(Entity::Object, object.uuid.clone(), "cover_attachment_id", json!(c));
+        }
+        while reminders.get(next_reminder).is_some_and(|r| r.object == oi) {
+            log.create(Entity::Reminder, reminders[next_reminder].uuid.clone());
+            next_reminder += 1;
+        }
+    }
+    log.write(&mut tx, user.id, &edited_at).await?;
+
     // Every row inserted above, folded for search in one pass rather than one per INSERT.
     crate::search_text::refresh_objects(&mut tx, crate::search_text::Rows::UnfoldedOf(user.id)).await?;
     crate::search_text::refresh_activities(&mut tx, crate::search_text::Rows::UnfoldedOf(user.id)).await?;
     tx.commit().await?;
     Ok(Json(counts))
+}
+
+/// A multi-row `INSERT ... RETURNING` whose rows come back as `(id, key)` pairs.
+type Returning<'q> = sqlx::query::QueryAs<'q, Any, (i64, String), sqlx::any::AnyArguments>;
+
+/// Inserts `rows` with `head` (`INSERT INTO table (columns)`), `width` parameters a row, in as
+/// few statements as `record::rows_per_statement` allows, each ending in `tail` (a `RETURNING
+/// id, <key>`), and answers every returned key's id.
+///
+/// Keyed rather than positional: neither SQLite nor PostgreSQL promises that `RETURNING` hands
+/// rows back in `VALUES` order, only that each row it inserted is returned once.
+async fn insert_rows<'a, T>(
+    tx: &mut sqlx::AnyConnection,
+    (head, width, tail): (&str, usize, &str),
+    rows: &'a [T],
+    bind: impl Fn(Returning<'a>, &'a T) -> Returning<'a>,
+) -> Result<HashMap<String, i64>, AppError> {
+    let mut ids = HashMap::with_capacity(rows.len());
+    for chunk in rows.chunks(record::rows_per_statement(width)) {
+        let sql = format!("{head} VALUES {} {tail}", record::values_list(tx, chunk.len(), width));
+        let mut query: Returning<'a> = sqlx::query_as(sqlx::AssertSqlSafe(sql));
+        for row in chunk {
+            query = bind(query, row);
+        }
+        for (id, key) in query.fetch_all(&mut *tx).await? {
+            ids.insert(key, id);
+        }
+    }
+    Ok(ids)
+}
+
+/// An archive object as its row will be written.
+struct NewObject<'a> {
+    o: &'a ObjectExport,
+    uuid: String,
+    type_: String,
+    description: String,
+    tags: String,
+    now: String,
+}
+
+fn new_objects<'a>(
+    objects: &'a [ObjectExport],
+    type_uuids: &HashMap<String, String>,
+) -> Result<Vec<NewObject<'a>>, AppError> {
+    objects
+        .iter()
+        .map(|o| {
+            let (type_, description) = resolve_type(o, type_uuids);
+            Ok(NewObject {
+                o,
+                uuid: uuid::Uuid::new_v4().to_string(),
+                type_,
+                description,
+                tags: normalised_tags(&o.tags)?,
+                now: db::now(),
+            })
+        })
+        .collect()
+}
+
+/// The new objects' ids, in the order of `objects`. `cover_attachment_id` is left NULL: the
+/// cover is an attachment, which does not exist yet.
+async fn insert_objects(
+    tx: &mut sqlx::AnyConnection,
+    user_id: i64,
+    objects: &[NewObject<'_>],
+) -> Result<Vec<i64>, AppError> {
+    let ids = insert_rows(
+        tx,
+        (
+            "INSERT INTO objects (user_id, name, type, counter_unit, fuel_unit, description, purchase_date, purchase_price_cents, \
+             archived_at, created_at, updated_at, client_uuid, tags, energy_price_milli, weight_unit, fuel_capacity_milli, \
+             resource_unit, resource_kind, measurement_mode, monthly_target_milli, low_level_pct, private)",
+            22,
+            "RETURNING id, client_uuid",
+        ),
+        objects,
+        |q, n| {
+            let o = n.o;
+            q.bind(user_id).bind(o.name.trim()).bind(&n.type_).bind(&o.counter_unit).bind(&o.fuel_unit).bind(&n.description)
+                .bind(&o.purchase_date).bind(o.purchase_price_cents).bind(&o.archived_at).bind(&o.created_at).bind(&n.now)
+                .bind(&n.uuid).bind(&n.tags).bind(o.energy_price_milli).bind(&o.weight_unit).bind(o.fuel_capacity_milli)
+                .bind(o.resource_unit.as_ref().or(o.fuel_unit.as_ref())).bind(&o.resource_kind).bind(&o.measurement_mode)
+                .bind(o.monthly_target_milli).bind(o.low_level_pct).bind(i64::from(o.private))
+        },
+    )
+    .await?;
+    Ok(objects.iter().map(|n| ids[&n.uuid]).collect())
+}
+
+/// An archive activity as its row will be written, with the index of its object.
+struct NewActivity<'a> {
+    object: usize,
+    object_id: i64,
+    a: &'a ActivityExport,
+    uuid: String,
+    tags: String,
+    from_place: Option<String>,
+    to_place: Option<String>,
+    now: &'a str,
+}
+
+/// Every activity of every object, object by object.
+fn new_activities<'a>(
+    objects: &'a [NewObject<'a>],
+    object_ids: &[i64],
+) -> Result<Vec<NewActivity<'a>>, AppError> {
+    let mut out = Vec::new();
+    for (oi, n) in objects.iter().enumerate() {
+        for a in &n.o.activities {
+            out.push(NewActivity {
+                object: oi,
+                object_id: object_ids[oi],
+                a,
+                uuid: uuid::Uuid::new_v4().to_string(),
+                tags: normalised_tags(&a.tags)?,
+                // Trimmed the same way a REST create trims them (`ActivityInput`'s
+                // `trim_place`, blank -> `None`), so an imported row stores the identical
+                // spelling a REST create of the same body would -- `validate_import` already
+                // ran this same trim over every activity, but only to check the 80-character
+                // limit.
+                from_place: crate::api::activities::trim_place(a.from_place.clone())?,
+                to_place: crate::api::activities::trim_place(a.to_place.clone())?,
+                now: &n.now,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The new activities' ids, in the order of `activities`.
+async fn insert_activities(
+    tx: &mut sqlx::AnyConnection,
+    activities: &[NewActivity<'_>],
+) -> Result<Vec<i64>, AppError> {
+    let ids = insert_rows(
+        tx,
+        (
+            "INSERT INTO activities (object_id, date, category, title, notes, counter_value, cost_cents, quantity_milli, created_at, updated_at, client_uuid, tags, \
+             start_counter, from_place, to_place, duration_minutes, battery_used_pct, charged_full, weight_grams, fuel_level_pct, \
+             meter_reading_milli, period_start, period_end, estimated, meter_reset)",
+            25,
+            "RETURNING id, client_uuid",
+        ),
+        activities,
+        |q, n| {
+            let a = n.a;
+            q.bind(n.object_id).bind(&a.date).bind(&a.category).bind(a.title.trim()).bind(&a.notes)
+                .bind(a.counter_value).bind(a.cost_cents).bind(a.quantity_milli).bind(&a.created_at).bind(n.now)
+                .bind(&n.uuid).bind(&n.tags)
+                .bind(a.start_counter).bind(&n.from_place).bind(&n.to_place).bind(a.duration_minutes).bind(a.battery_used_pct)
+                .bind(a.charged_full).bind(a.weight_grams).bind(a.fuel_level_pct).bind(a.meter_reading_milli)
+                .bind(&a.period_start).bind(&a.period_end).bind(a.estimated).bind(a.meter_reset)
+        },
+    )
+    .await?;
+    Ok(activities.iter().map(|n| ids[&n.uuid]).collect())
+}
+
+/// An attachment of the archive, before its file is known: the index of its object, the index
+/// (into all the import's activities) of its activity if it has one, and the archive's entry.
+type ArchiveAttachment<'a> = (usize, Option<usize>, &'a AttachmentExport);
+
+/// The `files` rows the import's attachments point at, by sha256, and the uuid of each one the
+/// import created, under the index of the first attachment that names it -- which is where
+/// the one-at-a-time import logged it.
+struct Files<'a> {
+    ids: HashMap<&'a str, i64>,
+    logged_at: HashMap<usize, String>,
+}
+
+/// Finds or creates the `files` row of every attachment in `attachments`.
+///
+/// A blob the account already has is reused; one it does not have is stored if the archive
+/// carried it (`store_blobs` put it on disk), and an attachment whose blob is in neither place
+/// is left out -- it has no `ids` entry. A blob several attachments name gets one row.
+///
+/// The insert says `ON CONFLICT DO NOTHING` for a row whose (user_id, sha256) another writer
+/// took first -- a concurrent import, or an upload of the same bytes. `db::begin_write`
+/// serialises every write transaction, so today nothing can, but the import rides the rule
+/// anyway rather than trusting that the lock is never lifted (`tests/it/concurrency.rs`
+/// documents removing it as a mutation test): such a row is reused, as a cache hit, and left
+/// to whoever inserted it to log.
+async fn insert_files<'a>(
+    tx: &mut sqlx::AnyConnection,
+    stored: &mut StoredFiles<'_>,
+    user_id: i64,
+    attachments: &[ArchiveAttachment<'a>],
+) -> Result<Files<'a>, AppError> {
+    let existing: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, sha256 FROM files WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let existing: HashMap<String, i64> = existing.into_iter().map(|(id, sha)| (sha, id)).collect();
+    let mut ids: HashMap<&'a str, i64> = HashMap::new();
+    // (index of the first attachment naming it, sha256, uuid)
+    let mut new: Vec<(usize, &'a AttachmentExport, String)> = Vec::new();
+    let mut planned = std::collections::HashSet::new();
+    for (i, (_, _, x)) in attachments.iter().enumerate() {
+        let sha = x.sha256.as_str();
+        if let Some(id) = existing.get(sha) {
+            ids.insert(sha, *id);
+        } else if stored.blobs.contains_key(sha) && planned.insert(sha) {
+            new.push((i, *x, uuid::Uuid::new_v4().to_string()));
+        }
+    }
+    // Holding the write lock, before any new row names a blob: see `StoredFiles::restore`.
+    for (_, x, _) in &new {
+        stored.restore(&x.sha256).await?;
+    }
+    let blobs = &stored.blobs;
+    let now = db::now();
+    let inserted = insert_rows(
+        tx,
+        (
+            "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid)",
+            10,
+            "ON CONFLICT (user_id, sha256) DO NOTHING RETURNING id, sha256",
+        ),
+        &new,
+        |q, (_, x, uuid)| {
+            let blob = &blobs[&x.sha256];
+            q.bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(attachment_mime(x)).bind(blob.size)
+                .bind(blob.width).bind(blob.height)
+                .bind(x.taken_at.clone().or_else(|| blob.taken_at.clone())).bind(&now)
+                .bind(uuid)
+        },
+    )
+    .await?;
+    let mut logged_at = HashMap::new();
+    for (i, x, uuid) in new {
+        let sha = x.sha256.as_str();
+        let id = match inserted.get(sha) {
+            Some(id) => {
+                logged_at.insert(i, uuid);
+                *id
+            }
+            None => {
+                sqlx::query_scalar("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
+                    .bind(user_id)
+                    .bind(sha)
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
+        };
+        ids.insert(sha, id);
+    }
+    Ok(Files { ids, logged_at })
+}
+
+/// An archive attachment whose file is known, as its row will be written.
+struct NewAttachment<'a> {
+    object: usize,
+    activity: Option<usize>,
+    x: &'a AttachmentExport,
+    uuid: String,
+    file_id: i64,
+}
+
+/// The new attachments' ids, in the order of `attachments`.
+async fn insert_attachments(
+    tx: &mut sqlx::AnyConnection,
+    attachments: &[NewAttachment<'_>],
+    object_ids: &[i64],
+    activity_ids: &[i64],
+) -> Result<Vec<i64>, AppError> {
+    let ids = insert_rows(
+        tx,
+        (
+            "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid)",
+            7,
+            "RETURNING id, client_uuid",
+        ),
+        attachments,
+        |q, n| {
+            q.bind(object_ids[n.object]).bind(n.activity.map(|a| activity_ids[a])).bind(n.file_id)
+                .bind(&n.x.kind).bind(&n.x.caption).bind(&n.x.created_at).bind(&n.uuid)
+        },
+    )
+    .await?;
+    Ok(attachments.iter().map(|n| ids[&n.uuid]).collect())
+}
+
+/// An archive reminder as its row will be written, with the index of its object.
+struct NewReminder<'a> {
+    object: usize,
+    r: &'a ReminderExport,
+    uuid: String,
+    done_activity_id: Option<i64>,
+}
+
+/// Every reminder of every object, object by object. `done_activity_index` counts within the
+/// reminder's own object's activities.
+fn new_reminders<'a>(
+    objects: &'a [ObjectExport],
+    activities: &[NewActivity<'_>],
+    activity_ids: &[i64],
+) -> Vec<NewReminder<'a>> {
+    let mut out = Vec::new();
+    for (oi, o) in objects.iter().enumerate() {
+        let first = activities.partition_point(|a| a.object < oi);
+        let own = &activity_ids[first..first + o.activities.len()];
+        for r in &o.reminders {
+            out.push(NewReminder {
+                object: oi,
+                r,
+                uuid: uuid::Uuid::new_v4().to_string(),
+                done_activity_id: r.done_activity_index.and_then(|i| own.get(i).copied()),
+            });
+        }
+    }
+    out
+}
+
+async fn insert_reminders(
+    tx: &mut sqlx::AnyConnection,
+    reminders: &[NewReminder<'_>],
+    object_ids: &[i64],
+) -> Result<(), AppError> {
+    insert_rows(
+        tx,
+        (
+            "INSERT INTO reminders (object_id, title, notes, due_date, due_counter, repeat_months, repeat_counter, done_at, done_activity_id, created_at, snoozed_until, client_uuid, kind, every_n, every_unit, schedule)",
+            16,
+            "RETURNING id, client_uuid",
+        ),
+        reminders,
+        |q, n| {
+            let r = n.r;
+            q.bind(object_ids[n.object]).bind(r.title.trim()).bind(&r.notes).bind(&r.due_date).bind(r.due_counter)
+                .bind(r.repeat_months).bind(r.repeat_counter).bind(&r.done_at).bind(n.done_activity_id).bind(&r.created_at)
+                .bind(&r.snoozed_until)
+                .bind(&n.uuid)
+                .bind(&r.kind).bind(r.every_n).bind(&r.every_unit).bind(&r.schedule)
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Validates every object, activity, attachment and reminder in a parsed archive up
@@ -853,100 +1161,4 @@ async fn store_blob(state: App, sha: String, bytes: Bytes, is_image: bool) -> St
         taken_at: image.and_then(|i| i.taken_at),
     };
     Ok(Some((sha, blob)))
-}
-
-/// Returns the new attachment id, or None when the blob is missing from the archive.
-///
-/// `parent` is `(object_id, activity_id)` -- bundled to keep the argument count under
-/// clippy's threshold; the two only ever travel together, from the two call sites in `import`.
-async fn import_attachment(
-    tx: &mut sqlx::Transaction<'_, Any>,
-    stored: &mut StoredFiles<'_>,
-    user_id: i64,
-    parent: (i64, Option<i64>),
-    x: &AttachmentExport,
-    edited_at: &str,
-) -> Result<Option<i64>, AppError> {
-    let (object_id, activity_id) = parent;
-    let existing: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
-            .bind(user_id)
-            .bind(&x.sha256)
-            .fetch_optional(&mut **tx)
-            .await?;
-    let file_id = match existing {
-        Some((id,)) => id,
-        None => {
-            if !stored.blobs.contains_key(&x.sha256) {
-                return Ok(None);
-            }
-            stored.restore(&x.sha256).await?;
-            let blob = &stored.blobs[&x.sha256];
-            let file_uuid = uuid::Uuid::new_v4().to_string();
-            // The insert rides its own savepoint for the same reason `apply.rs`'s `set` arm
-            // does: PostgreSQL aborts the whole transaction on any error, so the re-query below
-            // -- which runs on this same transaction -- would itself fail with "current
-            // transaction is aborted" the moment it followed a bare, unrescued failed INSERT.
-            // SQLite rolls back only the failing statement by default, so the savepoint costs
-            // it nothing; on PostgreSQL it is what makes the recovery able to recover at all.
-            //
-            // This path is also reached only if a concurrent import of the same account
-            // manages to race this INSERT -- `db::begin_write`'s advisory lock on PostgreSQL
-            // (SQLite's single writer, always) serialises every write transaction, `import`
-            // included, so today nothing can. It rides the same rule as `apply.rs` anyway,
-            // rather than trusting that the lock is never lifted: `tests/it/concurrency.rs`
-            // documents removing it as a mutation test, and an unrescued arm here would have
-            // sprung back to life as a real 500 the moment that lock came off, on the one
-            // failure path this function could not otherwise exercise.
-            sqlx::query("SAVEPOINT logb_import_file")
-                .execute(&mut **tx)
-                .await?;
-            let inserted: Result<(i64,), sqlx::Error> = sqlx::query_as(
-                "INSERT INTO files (user_id, sha256, original_name, mime, size, width, height, taken_at, created_at, client_uuid) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id")
-                .bind(user_id).bind(&x.sha256).bind(&x.original_name).bind(attachment_mime(x)).bind(blob.size)
-                .bind(blob.width).bind(blob.height)
-                .bind(x.taken_at.clone().or_else(|| blob.taken_at.clone())).bind(db::now())
-                .bind(&file_uuid)
-                .fetch_one(&mut **tx).await;
-            let id = match inserted {
-                Ok((id,)) => {
-                    sqlx::query("RELEASE SAVEPOINT logb_import_file")
-                        .execute(&mut **tx)
-                        .await?;
-                    record::record_create(tx, user_id, Entity::File, &file_uuid, edited_at).await?;
-                    id
-                }
-                // Two concurrent imports (or an import racing a direct upload) of identical
-                // bytes for the same user trip UNIQUE(user_id, sha256). That's a cache hit,
-                // not an error -- reuse the row the winner just created, which was (or will
-                // be) logged by whichever request actually inserted it.
-                Err(e)
-                    if e.as_database_error()
-                        .is_some_and(|d| d.is_unique_violation()) =>
-                {
-                    sqlx::query("ROLLBACK TO SAVEPOINT logb_import_file")
-                        .execute(&mut **tx)
-                        .await?;
-                    let (id,): (i64,) =
-                        sqlx::query_as("SELECT id FROM files WHERE user_id = $1 AND sha256 = $2")
-                            .bind(user_id)
-                            .bind(&x.sha256)
-                            .fetch_one(&mut **tx)
-                            .await?;
-                    id
-                }
-                Err(e) => return Err(e.into()),
-            };
-            id
-        }
-    };
-    let attachment_uuid = uuid::Uuid::new_v4().to_string();
-    let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO attachments (object_id, activity_id, file_id, kind, caption, created_at, client_uuid) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id")
-        .bind(object_id).bind(activity_id).bind(file_id).bind(&x.kind).bind(&x.caption).bind(&x.created_at)
-        .bind(&attachment_uuid)
-        .fetch_one(&mut **tx).await?;
-    record::record_create(tx, user_id, Entity::Attachment, &attachment_uuid, edited_at).await?;
-    Ok(Some(id))
 }
