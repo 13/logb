@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { signInFresh } from './helpers';
+import { signIn, signInFresh } from './helpers';
 
 async function object(page: Page, data: Record<string, unknown>): Promise<number> {
   const res = await page.request.post('/api/objects', { data: { description: '', ...data } });
@@ -165,4 +165,54 @@ test('changing the password is one explicit action, and a password field can sho
   await expect(page.getByRole('status')).toHaveText('Password changed');
   await expect(page.getByLabel('Current password')).toHaveValue('');
   expect((await page.request.post('/api/auth/login', { data: { username, password: 'password456' } })).ok()).toBe(true);
+});
+
+test('signing in is a centred card, and the password can be shown while typing', async ({ page }) => {
+  // A fresh instance lands on setup instead; both screens share the card and the field.
+  await page.goto('/login');
+  await expect(page.getByTestId('auth-form')).toBeVisible();
+  const password = page.getByLabel(/^(Password|Passwort)$/);
+  await password.fill('secret words');
+  await expect(password).toHaveAttribute('type', 'password');
+  const toggle = page.getByRole('button', { name: 'Show password' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click();
+  await expect(password).toHaveAttribute('type', 'text');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(password).toHaveValue('secret words');
+  const box = (await toggle.boundingBox())!;
+  expect(box.width).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeGreaterThanOrEqual(44);
+});
+
+test.describe('the sign-in chunk not yet fetched', () => {
+  // No service worker: its precache would serve the chunk, and this is about the start it cannot.
+  test.use({ serviceWorkers: 'block' });
+
+  test('offline, sign-in waits for the connection instead of stranding the person', async ({ page, context }) => {
+    await signIn(page); // an instance with an administrator, so a signed-out start lands on /login
+    await page.request.post('/api/auth/logout');
+    await page.evaluate(() => sessionStorage.removeItem('logb.chunk-reload'));
+    // The connection drops just as the sign-in chunk is asked for.
+    let first = true;
+    await page.route(/\/assets\/Login-[^/]*\.js$/, async (route) => {
+      if (!first) return route.continue();
+      first = false;
+      await context.setOffline(true);
+      return route.abort();
+    });
+    await page.goto('/');
+    await expect.poll(() => first).toBe(false);
+    await expect(page.getByText(/^(Loading…|Lädt…)$/)).toBeVisible();
+    // For a second the page stays the app: a reload gone wrong ends on the browser's error page.
+    const since = Date.now();
+    await expect.poll(() => (page.url().startsWith('chrome-error:') ? -1 : Date.now() - since), { intervals: [100], timeout: 5_000 }).toBeGreaterThan(1_000);
+    await expect(page.getByText(/^(Loading…|Lädt…)$/)).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem('logb.chunk-reload'))).toBeNull();
+
+    await context.setOffline(false);
+    await expect(page.getByRole('heading', { name: /^(Sign in|Anmelden)$/ })).toBeVisible();
+    expect(page.url()).toContain('/login');
+    await expect(page.getByTestId('auth-form')).toBeVisible();
+  });
 });

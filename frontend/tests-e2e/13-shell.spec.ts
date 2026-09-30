@@ -153,7 +153,7 @@ test('Settings says which build this is', async ({ page }) => {
 test('the sign-in form sits in the middle of the screen', async ({ page }) => {
   await page.goto('/login');
   // First run lands on setup instead; both share the same centred layout.
-  const form = page.locator('main.auth form');
+  const form = page.getByTestId('auth-form');
   await expect(form).toBeVisible();
   const box = await form.boundingBox();
   const viewport = page.viewportSize();

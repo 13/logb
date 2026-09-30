@@ -13,12 +13,11 @@
     .replaceAll('#ffffff', 'currentColor');
 </script>
 
-<!-- Labelled rather than decorative by default: on Login this is the only thing naming the
-     application, since its heading is just "Sign in". Next to the sidebar wordmark it would
-     only say "LogB" twice, so that caller passes `decorative`. -->
+<!-- Labelled rather than decorative by default: on the auth card this is the only thing naming
+     the application. Next to the sidebar wordmark it would say "LogB" twice, so that caller
+     passes `decorative`. Amber ink, not the amber fill: the fill is 2.1:1 on the page. -->
 <svg
-  class="logo"
-  class:inline
+  class={['shrink-0 text-brand-ink', inline ? 'inline-block' : 'block']}
   viewBox="8 8 48 48"
   width={size}
   height={size}
@@ -26,16 +25,3 @@
   aria-label={decorative ? undefined : 'LogB'}
   aria-hidden={decorative ? 'true' : undefined}
 >{@html mark}</svg>
-
-<style>
-  .logo {
-    display: block;
-    margin: 0 auto var(--space-3);
-    color: var(--accent);
-    flex: none;
-  }
-  .logo.inline {
-    display: inline-block;
-    margin: 0;
-  }
-</style>

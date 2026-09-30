@@ -681,4 +681,5 @@ export default {
   'settings.sessions': 'Sessions',
   'login.show-password': 'Show password',
   'setup.password-hint': 'At least 8 characters.',
+  'setup.username-hint': 'At least 3 characters.',
 } as Record<string, string>;

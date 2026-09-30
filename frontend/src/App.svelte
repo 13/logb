@@ -6,8 +6,6 @@
   import { user, setupRequired, loadSession } from './stores/session';
   import { settings } from './stores/settings';
   import { locale, t } from './i18n';
-  import Setup from './routes/Setup.svelte';
-  import Login from './routes/Login.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import { api } from './lib/api';
   import { loadCustomTypes } from './lib/type-registry';
@@ -75,6 +73,9 @@
   const eager = (comp: Page): Loader => () => Promise.resolve({ default: comp });
   const routes: Array<[string, Loader]> = [
     ['/', eager(Dashboard)],
+    // Signed out only: their own small chunk, so a signed-in start never downloads them.
+    ['/login', () => import('./routes/Login.svelte')],
+    ['/setup', () => import('./routes/Setup.svelte')],
     ['/objects/new', () => import('./routes/ObjectForm.svelte')],
     ['/objects/:id', () => import('./routes/ObjectDetail.svelte')],
     ['/objects/:id/edit', () => import('./routes/ObjectForm.svelte')],
@@ -154,7 +155,9 @@
   // the first visit to each one does not wait on its chunk either.
   $effect(() => {
     if (!$user) return;
-    const warm = () => { for (const [, load] of routes) void load().catch(() => {}); };
+    // Not sign-in and setup: a signed-in person is sent away from them (the service worker has
+    // them for an offline sign-out all the same).
+    const warm = () => { for (const [p, load] of routes) if (p !== '/login' && p !== '/setup') void load().catch(() => {}); };
     const idle = (globalThis as { requestIdleCallback?: (fn: () => void) => number }).requestIdleCallback;
     const handle = idle ? idle(warm) : setTimeout(warm, 2000);
     return () => { if (!idle) clearTimeout(handle); };
@@ -162,11 +165,15 @@
 </script>
 
 {#if $user === undefined}
-  <main><p class="muted">{$t('nav.loading')}</p></main>
-{:else if $path === '/setup'}
-  <Setup />
-{:else if $path === '/login'}
-  <Login />
+  <main class="p-3"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
+{:else if $path === '/setup' || $path === '/login'}
+  <!-- The same loader as every page: a failed chunk reloads once, "Loading…" only if slow. -->
+  {#if current && page?.pattern === current.pattern}
+    {@const Page = page.comp}
+    <Page />
+  {:else if slow}
+    <main class="p-3"><p class="m-0 text-sm text-muted-foreground">{$t('nav.loading')}</p></main>
+  {/if}
 {:else if $user}
   <!-- The shell is for signed-in users. There is nowhere to navigate to before you are signed
        in, and a nav whose every destination bounces off the route guard is worse than no nav. -->

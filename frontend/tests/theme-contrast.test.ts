@@ -134,6 +134,9 @@ describe('tinted highlight contrast', () => {
       const bg = blend(ui('muted', theme), ui('card', theme), name === 'dark' ? 0.5 : 1);
       expect(contrastRatio(ui('destructive', theme), bg)).toBeGreaterThanOrEqual(4.5);
     });
+    it(`${name}: text on a filled button under the pointer (primary/80 over card) (>= 4.5:1)`, () => {
+      expect(contrastRatio(ui('primary-foreground', theme), blend(ui('primary', theme), ui('card', theme), 0.8))).toBeGreaterThanOrEqual(4.5);
+    });
     it(`${name}: brand-ink on the active nav item (primary/10 over card) (>= 4.5:1)`, () => {
       const bg = blend(ui('primary', theme), ui('card', theme), 0.1);
       expect(contrastRatio(ui('brand-ink', theme), bg)).toBeGreaterThanOrEqual(4.5);

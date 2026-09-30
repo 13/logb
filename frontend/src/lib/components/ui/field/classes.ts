@@ -21,3 +21,8 @@ export const chipClass =
  *  text that stays destructive on hover, where the ghost variant would turn it foreground. Its hover
  *  fill (muted, muted/50 in dark, over a card) is contrast-tested in theme-contrast.test.ts. */
 export const destructiveGhostClass = 'text-destructive hover:text-destructive';
+/** A filled amber button as a plain class string, for screens that must not load the Button
+ *  component (Login and Setup, the first screen of a fresh install). The ring sits on the page,
+ *  off the fill. */
+export const primaryButtonClass =
+  'inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-lg bg-primary px-4 text-base font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring';
