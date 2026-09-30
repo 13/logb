@@ -16,7 +16,7 @@
               class="relative before:absolute before:-inset-3 before:content-['']" />
   </span>
   <span class="flex min-w-0 flex-col">
-    <label for={id} class="flex min-h-11 cursor-pointer items-center text-base text-foreground">
+    <label for={id} class="flex min-h-11 cursor-pointer items-center py-2.5 text-base text-foreground">
       <span>{label}{#if detail}<span class="text-muted-foreground"> · {detail}</span>{/if}</span>
     </label>
     {#if hint}<p id={`${id}-hint`} class={`${hintClass} -mt-2`}>{hint}</p>{/if}

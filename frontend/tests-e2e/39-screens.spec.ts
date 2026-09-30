@@ -102,3 +102,31 @@ test('the settings hub groups its rows, each with its own icon, and says who is 
   await expect(page.getByRole('main').getByTestId('signed-in')).toContainText('Signed in as');
   await expect(page.getByTestId('about')).toContainText('Version');
 });
+
+test('appearance saves itself: a change applies at once and says so', async ({ page }) => {
+  await signInFresh(page, '39-appearance');
+  await page.goto('/settings/appearance');
+  await expect(page.getByRole('main').getByRole('button', { name: /Apply|Save/ })).toHaveCount(0);
+
+  await page.getByLabel('Theme').selectOption('dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('status')).toHaveText('Saved');
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json()).theme).toBe('dark');
+
+  // The device-only box sits level with its label (the audit found it misaligned).
+  const box = (await page.getByRole('checkbox', { name: 'Use these preferences only on this device' }).boundingBox())!;
+  const label = (await page.getByText('Use these preferences only on this device', { exact: true }).boundingBox())!;
+  expect(Math.abs(box.y + box.height / 2 - (label.y + label.height / 2))).toBeLessThan(4);
+});
+
+test('a change made just before leaving the page still reaches the server', async ({ page }) => {
+  await signInFresh(page, '39-flush');
+  await page.goto('/settings/appearance');
+  await page.getByLabel('Date format').selectOption('iso');
+  // Away within the 300 ms debounce, by the app's own back button.
+  await page.getByRole('main').getByRole('button', { name: 'Back' }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json()).dateFormat).toBe('iso');
+  await page.goto('/settings/appearance');
+  await expect(page.getByLabel('Date format')).toHaveValue('iso');
+});

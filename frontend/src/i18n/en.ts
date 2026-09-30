@@ -1,11 +1,9 @@
 export default {
   'settings.device-only': 'Use these preferences only on this device',
-  'settings.save-appearance': 'Apply appearance',
   'notify.delivery-hour': 'Daily delivery hour',
   'notify.delivery-timezone': 'Timezone for that hour',
   'notify.instance-timezone': "This instance's timezone",
   'notify.delivery-timezone-hint': 'The digest still covers the day as the instance counts it.',
-  'notify.save-hour': 'Apply delivery time',
   'notify.delivery-status': 'Delivery history',
   'notify.delivery-ok': 'Last success',
   'notify.delivery-error': 'Last attempt failed; retries are limited to three attempts per day.',
@@ -673,4 +671,9 @@ export default {
   'stats.vs': 'vs {period}',
   'stats.vs-none': 'Nothing spent in {year} to compare with',
   'stats.top-object': 'Top object',
+  'settings.saved-device': 'Saved on this device',
+  'settings.device-only-hint': 'Changes then stay on this device, and the account keeps what it had.',
+  'settings.currency-invalid': 'Use a three-letter code such as EUR.',
+  'notify.digest-title': 'Daily digest',
+  'notify.hour-invalid': 'Choose an hour from 0 to 23.',
 } as Record<string, string>;

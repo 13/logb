@@ -1,11 +1,9 @@
 export default {
   'settings.device-only': 'Diese Einstellungen nur auf diesem Gerät verwenden',
-  'settings.save-appearance': 'Darstellung übernehmen',
   'notify.delivery-hour': 'Tägliche Versandstunde',
   'notify.delivery-timezone': 'Zeitzone für diese Stunde',
   'notify.instance-timezone': 'Zeitzone dieser Instanz',
   'notify.delivery-timezone-hint': 'Der Tag der Zusammenfassung bleibt der Tag der Instanz.',
-  'notify.save-hour': 'Versandzeit übernehmen',
   'notify.delivery-status': 'Versandverlauf',
   'notify.delivery-ok': 'Zuletzt erfolgreich',
   'notify.delivery-error': 'Letzter Versuch fehlgeschlagen; höchstens drei Versuche pro Tag.',
@@ -673,4 +671,9 @@ export default {
   'stats.vs': 'gegenüber {period}',
   'stats.vs-none': 'Keine Ausgaben {year} zum Vergleich',
   'stats.top-object': 'Teuerstes Objekt',
+  'settings.saved-device': 'Auf diesem Gerät gespeichert',
+  'settings.device-only-hint': 'Änderungen bleiben dann auf diesem Gerät, das Konto behält seine Einstellungen.',
+  'settings.currency-invalid': 'Bitte einen dreistelligen Code wie EUR eingeben.',
+  'notify.digest-title': 'Tägliche Zusammenfassung',
+  'notify.hour-invalid': 'Bitte eine Stunde von 0 bis 23 wählen.',
 } as Record<string, string>;

@@ -16,8 +16,8 @@ test('appearance applied to the account reaches a device that has never seen it'
   await page.goto('/settings/appearance');
   await page.getByLabel('First day of the week').selectOption('sunday');
   await page.getByLabel('Date format').selectOption('iso');
-  await page.getByRole('button', { name: 'Apply appearance', exact: true }).click();
   await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json())).toMatchObject({ firstDayOfWeek: 'sunday', dateFormat: 'iso' });
 
   await forgetLocalPreferences(page);
   await expect(page.getByLabel('First day of the week')).toHaveValue('sunday');
@@ -28,13 +28,12 @@ test('a device-only choice stays on the device and leaves the account alone', as
   await signInFresh(page, '33-device');
   await page.goto('/settings/appearance');
   await page.getByLabel('Date format').selectOption('iso');
-  await page.getByRole('button', { name: 'Apply appearance', exact: true }).click();
   await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await (await page.request.get('/api/me/appearance')).json()).dateFormat).toBe('iso');
 
   await page.getByLabel('Use these preferences only on this device').check();
   await page.getByLabel('Date format').selectOption('dmy-dot');
-  await page.getByRole('button', { name: 'Apply appearance', exact: true }).click();
-  await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await expect(page.getByText('Saved on this device', { exact: true })).toBeVisible();
 
   // The account keeps what was applied before the override.
   const stored = await (await page.request.get('/api/me/appearance')).json();
@@ -56,8 +55,9 @@ test('a personal delivery hour and timezone are saved and read back', async ({ p
   await expect(hour).toHaveValue('8');
   await hour.fill('17');
   await page.getByLabel('Timezone for that hour').selectOption('America/New_York');
-  await page.getByRole('button', { name: 'Apply delivery time', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('Saved');
+  // Two quick changes are saved in order, the newest last: wait for the server to hold both.
+  await expect.poll(async () => (await (await page.request.get('/api/me/notifications')).json())).toMatchObject({ hour: 17, timezone: 'America/New_York' });
 
   await page.reload();
   await expect(page.getByLabel('Daily delivery hour')).toHaveValue('17');
