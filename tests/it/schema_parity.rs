@@ -206,7 +206,7 @@ fn unlisted_tables(backend: &str, schema: &Schema) -> Option<String> {
 /// the copy arrived -- so a table missing from it is copied nowhere *and* never compared. The
 /// copy reports success, the operator deletes the source, and the table is gone.
 ///
-/// Nothing in `src/copy.rs` can catch that: it takes a real database to say what tables the
+/// Nothing in `src/copy/` can catch that: it takes a real database to say what tables the
 /// schema has. This is that database. SQLite alone, so it runs on every suite run rather than
 /// only where a PostgreSQL server is configured; the same check is made against the PostgreSQL
 /// catalogue in the parity test below, which is also what fails if a table is ever added to one
@@ -216,7 +216,7 @@ async fn the_copy_lists_exactly_the_tables_the_schema_has() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = schema(&format!("sqlite://{}/logb.db?mode=rwc", dir.path().display())).await;
     if let Some(failure) = unlisted_tables("SQLite", &sqlite) {
-        panic!("{failure}\n\n`TABLES` in src/copy.rs has to name every one of them, and only \
+        panic!("{failure}\n\n`TABLES` in src/copy/mod.rs has to name every one of them, and only \
                 them, with each table after the ones its foreign keys point at");
     }
 }
