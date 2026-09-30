@@ -73,7 +73,9 @@
   const eager = (comp: Page): Loader => () => Promise.resolve({ default: comp });
   const routes: Array<[string, Loader]> = [
     ['/', eager(Dashboard)],
-    // Signed out only: their own small chunk, so an ordinary signed-in start never downloads them.
+    // Signed out only: their own small chunk, so an ordinary signed-in start does not fetch them
+    // to show its first screen (the service worker may still precache them in the background,
+    // like every other chunk).
     ['/login', () => import('./routes/Login.svelte')],
     ['/setup', () => import('./routes/Setup.svelte')],
     ['/objects/new', () => import('./routes/ObjectForm.svelte')],
